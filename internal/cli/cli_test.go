@@ -129,6 +129,107 @@ func TestExecuteInitSupportsCustomStateDir(t *testing.T) {
 	assertExists(t, "custom-state/rulesets/default.json")
 }
 
+func TestExecuteSetupDryRunPrintsPlanWithoutCreatingState(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"setup", "--endpoint", "198.211.99.116", "--dry-run"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"setup plan (dry-run)",
+		"endpoint: 198.211.99.116",
+		"wireguard port: 51820/udp",
+		"wireguard subnet: 10.66.0.0/24",
+		"would install required VPN packages",
+		"would not perform a full system upgrade",
+		"would enable firewall",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected setup output to contain %q, got %q", want, output)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if _, err := os.Stat(".vpnctl"); !os.IsNotExist(err) {
+		t.Fatalf("expected dry-run not to create .vpnctl, stat err: %v", err)
+	}
+}
+
+func TestExecuteSetupRequiresEndpoint(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"setup", "--dry-run"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "setup failed: --endpoint is required") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestExecuteSetupDryRunUsesCustomFlags(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{
+		"--state-dir", "custom-state",
+		"setup",
+		"--endpoint", "vpn.example.com",
+		"--port", "51821",
+		"--interface", "wg-vpn",
+		"--subnet", "10.10.10.0/24",
+		"--dns", "1.1.1.1, 8.8.8.8",
+		"--external-interface", "eth0",
+		"--ssh-port", "2222",
+		"--no-enable-ufw",
+		"--dry-run",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"state directory: custom-state",
+		"endpoint: vpn.example.com",
+		"wireguard interface: wg-vpn",
+		"wireguard port: 51821/udp",
+		"wireguard subnet: 10.10.10.0/24",
+		"client dns: 1.1.1.1, 8.8.8.8",
+		"external interface: eth0",
+		"ssh port allowed in firewall: 2222/tcp",
+		"enable firewall: false",
+		"would leave firewall disabled",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected setup output to contain %q, got %q", want, output)
+		}
+	}
+}
+
+func TestExecuteSetupWithoutDryRunIsNotImplementedYet(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"setup", "--endpoint", "198.211.99.116"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "setup without --dry-run is not implemented yet") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func assertExists(t *testing.T, path string) {
 	t.Helper()
 
