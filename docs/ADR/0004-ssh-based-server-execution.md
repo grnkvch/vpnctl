@@ -1,5 +1,7 @@
 # 0004: Use SSH-Based Server Execution
 
+Status: Superseded for the initial MVP by ADR 0007.
+
 ## Context
 
 The VPS already exists and SSH access already exists. The project should avoid
@@ -8,7 +10,10 @@ unnecessary moving parts while still applying server changes safely.
 ## Decision
 
 Use SSH to inspect and apply server-side changes. Do not introduce a persistent
-server-side vpnctl daemon in the initial implementation.
+server-side vpnctl daemon.
+
+This remains a future direction, but it is no longer part of the initial MVP.
+ADR 0007 selects a server-local execution model for the first implementation.
 
 ## Alternatives Considered
 

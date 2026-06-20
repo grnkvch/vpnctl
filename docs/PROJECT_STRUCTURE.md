@@ -79,22 +79,27 @@ ssh:
 
 ```text
 vpnctl init
-vpnctl server add
-vpnctl server render
-vpnctl server apply
+vpnctl setup
+vpnctl server init
+vpnctl server show
+vpnctl ruleset add
 vpnctl client create
+vpnctl client list
+vpnctl client show
 vpnctl client revoke
 vpnctl client rotate-keys
-vpnctl client regenerate-config
 vpnctl client delete
-vpnctl delivery export
+vpnctl client export
+vpnctl apply
 ```
 
 ## State Layout
 
 ```text
 .vpnctl/
-  state.yaml
+  state.json
+  rulesets/
+    default.json
   secrets/
     server.key
     clients/
@@ -108,3 +113,10 @@ vpnctl delivery export
 
 The `.vpnctl/secrets` directory should be ignored by Git by default unless the
 operator explicitly chooses encrypted secret storage later.
+
+Applied server configuration is separate from vpnctl state. For the default
+WireGuard interface, `vpnctl apply` writes the rendered server config to
+`/etc/wireguard/wg0.conf`.
+
+By default, `vpnctl server init` uses WireGuard subnet `10.66.0.0/24`; custom
+subnets can be supplied with `--subnet`.

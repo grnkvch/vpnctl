@@ -11,6 +11,8 @@ routing layer.
 Generate Mihomo / Clash-compatible configuration as the first routing-layer
 output format.
 
+ADR 0013 makes basic iPhone Clash Mi configuration generation part of the MVP.
+
 ## Alternatives Considered
 
 - WireGuard-only routing through AllowedIPs
@@ -29,5 +31,7 @@ proxy groups, and DNS behavior.
 
 - ClashConfig and Ruleset are first-class domain concepts.
 - WireGuard config generation remains separate from routing policy generation.
-- The first implementation should keep rulesets simple and deterministic.
+- The first implementation should include a basic deterministic Clash/Mihomo
+  profile for iPhone Clash Mi.
+- Rulesets should remain simple and deterministic.
 - OS-specific routing automation remains out of scope for the initial version.

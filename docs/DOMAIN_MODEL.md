@@ -16,6 +16,7 @@ Fields:
 - wireguard_interface
 - wireguard_port
 - wireguard_subnet
+- wireguard_server_ip
 - dns_servers
 - allowed_client_routes
 
@@ -72,15 +73,16 @@ Client config includes:
 
 - client private key
 - assigned address
-- DNS
+- DNS when custom DNS servers are configured
 - server public key
 - endpoint
-- allowed IPs
-- persistent keepalive
+- allowed IPs, defaulting to `0.0.0.0/0` for MVP client configs
+- persistent keepalive, defaulting to `25`
 
 ### ClashConfig
 
-Generated Mihomo / Clash-compatible routing configuration.
+Generated Mihomo / Clash-compatible routing configuration. Basic iPhone Clash
+Mi profile generation is part of the MVP.
 
 Fields:
 
@@ -91,6 +93,12 @@ Fields:
 - dns
 - mode
 
+MVP Clash Mi configs should route configured domains through the WireGuard proxy
+and leave non-matching traffic direct with a final `MATCH,DIRECT`.
+
+If custom DNS servers are configured, Clash Mi configs use them. Otherwise they
+use fallback DNS `1.1.1.1` and `8.8.8.8` and export must warn the operator.
+
 ### Ruleset
 
 Represents reusable routing rules for Clash/Mihomo.
@@ -99,9 +107,11 @@ Fields:
 
 - id
 - name
-- source
-- format
-- rules
+- type
+- domains
+
+MVP rulesets are editable JSON files under `.vpnctl/rulesets/`. The only
+supported MVP type is `domain-suffix`; unsupported types must fail validation.
 
 ### ConfigDelivery
 
@@ -131,6 +141,7 @@ delivery should require a separate ADR before implementation.
 Create:
 
 - allocate a unique client IP
+- allocate from the configured WireGuard subnet
 - generate key material
 - update local state
 - regenerate server and client configs

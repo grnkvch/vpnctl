@@ -8,9 +8,18 @@ temporary links, signed URLs, and one-time links.
 
 ## Decision
 
-Support local file export and QR code generation first. Defer temporary links,
-signed URLs, and one-time links until the threat model and hosting model are
-defined in a later ADR.
+Support local file export, WireGuard QR code generation, and an `scp` copy hint
+first.
+
+For the MVP:
+
+- WireGuard and Clash/Mihomo exports are written to local files on the server.
+- WireGuard exports can also be rendered as a terminal QR code.
+- After file export, vpnctl prints a non-secret `scp` hint showing how to copy
+  the generated file from the operator machine.
+
+Defer web-based delivery, temporary links, signed URLs, and one-time links until
+the threat model and hosting model are defined in a later ADR.
 
 ## Alternatives Considered
 
@@ -21,15 +30,17 @@ defined in a later ADR.
 
 ## Tradeoffs
 
-Local files and QR codes cover the most immediate personal-use workflows while
-keeping secret exposure limited and understandable.
+Local files, QR codes, and `scp` hints cover the most immediate personal-use
+workflows while keeping secret exposure limited and understandable.
 
-The cost is less convenience for remote enrollment until link-based delivery is
-designed.
+The cost is less convenience for iPhone and remote enrollment until web-based
+delivery is designed.
 
 ## Consequences
 
 - Delivery artifacts should be short-lived and clearly separated from state.
 - Export commands must avoid writing secrets to unexpected locations.
+- Export commands should print the generated file path and an `scp` hint.
+- Web-based delivery is a required post-MVP direction.
 - Link-based delivery requires a future ADR covering expiration, authentication,
   revocation, and logging.
