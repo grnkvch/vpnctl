@@ -28,7 +28,14 @@ type State struct {
 }
 
 type ServerState struct {
-	ID string `json:"id"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	PublicEndpoint     string   `json:"public_endpoint"`
+	WireGuardInterface string   `json:"wireguard_interface"`
+	WireGuardPort      int      `json:"wireguard_port"`
+	WireGuardSubnet    string   `json:"wireguard_subnet"`
+	DNSServers         []string `json:"dns_servers"`
+	ExternalInterface  string   `json:"external_interface,omitempty"`
 }
 
 type ClientState struct {

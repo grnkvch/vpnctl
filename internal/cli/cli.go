@@ -33,6 +33,8 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		return executeInit(args[1:], stateDir, stdout, stderr)
 	case "setup":
 		return executeSetup(args[1:], stateDir, stdout, stderr)
+	case "server":
+		return executeServer(args[1:], stateDir, stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vpnctl %s\n", version)
 		return 0
@@ -166,6 +168,93 @@ func executeSetup(args []string, stateDir string, stdout io.Writer, stderr io.Wr
 	return 1
 }
 
+func executeServer(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing server command")
+		return 2
+	}
+
+	switch args[0] {
+	case "init":
+		return executeServerInit(args[1:], stateDir, stdout, stderr)
+	case "-h", "--help", "help":
+		printServerHelp(stdout)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown server command: %s\n", args[0])
+		return 2
+	}
+}
+
+func executeServerInit(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	opts := setup.Defaults(stateDir)
+	force := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--endpoint":
+			value, ok := nextValue(args, &i, "--endpoint", stderr)
+			if !ok {
+				return 2
+			}
+			opts.Endpoint = value
+		case "--name":
+			value, ok := nextValue(args, &i, "--name", stderr)
+			if !ok {
+				return 2
+			}
+			opts.Name = value
+		case "--port":
+			value, ok := parsePortFlag(args, &i, "--port", stderr)
+			if !ok {
+				return 2
+			}
+			opts.Port = value
+		case "--interface":
+			value, ok := nextValue(args, &i, "--interface", stderr)
+			if !ok {
+				return 2
+			}
+			opts.Interface = value
+		case "--subnet":
+			value, ok := nextValue(args, &i, "--subnet", stderr)
+			if !ok {
+				return 2
+			}
+			opts.Subnet = value
+		case "--dns":
+			value, ok := nextValue(args, &i, "--dns", stderr)
+			if !ok {
+				return 2
+			}
+			opts.DNS = splitCSV(value)
+		case "--external-interface":
+			value, ok := nextValue(args, &i, "--external-interface", stderr)
+			if !ok {
+				return 2
+			}
+			opts.ExternalInterface = value
+		case "--force":
+			force = true
+		case "-h", "--help":
+			printServerInitHelp(stdout)
+			return 0
+		default:
+			fmt.Fprintf(stderr, "unknown server init flag: %s\n", args[i])
+			return 2
+		}
+	}
+
+	cfg := setup.ServerConfig(opts)
+	if err := state.ConfigureServer(stateDir, cfg, force); err != nil {
+		fmt.Fprintf(stderr, "server init failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "configured server %s in %s\n", cfg.Name, stateDir)
+	return 0
+}
+
 func nextValue(args []string, index *int, flag string, stderr io.Writer) (string, bool) {
 	if *index+1 >= len(args) {
 		fmt.Fprintf(stderr, "missing value for %s\n", flag)
@@ -213,7 +302,6 @@ Commands:
   version    Show version information
 
 Planned commands:
-  server init
   server show
   ruleset add
   client create
@@ -252,5 +340,34 @@ Flags:
   --ssh-port <port>             SSH port to allow in firewall (default 22)
   --no-enable-ufw               Do not enable firewall
   --dry-run                     Show planned actions without changing system
+`)
+}
+
+func printServerHelp(w io.Writer) {
+	fmt.Fprint(w, `Manage local server settings.
+
+Usage:
+  vpnctl server <command>
+
+Commands:
+  init    Configure server settings in local state
+`)
+}
+
+func printServerInitHelp(w io.Writer) {
+	fmt.Fprint(w, `Configure server settings in local state.
+
+Usage:
+  vpnctl server init --endpoint <host-or-ip> [flags]
+
+Flags:
+  --endpoint <host-or-ip>       Public endpoint used by clients
+  --name <name>                 Server name (default main)
+  --subnet <cidr>               WireGuard subnet (default 10.66.0.0/24)
+  --port <port>                 WireGuard UDP port (default 51820)
+  --interface <name>            WireGuard interface (default wg0)
+  --dns <ip-list>               Comma-separated client DNS servers
+  --external-interface <name>   External interface for NAT
+  --force                       Replace existing server settings
 `)
 }

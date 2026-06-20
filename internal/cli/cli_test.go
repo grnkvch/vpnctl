@@ -230,6 +230,87 @@ func TestExecuteSetupWithoutDryRunIsNotImplementedYet(t *testing.T) {
 	}
 }
 
+func TestExecuteServerInitWritesState(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{
+		"server", "init",
+		"--endpoint", "198.211.99.116",
+		"--subnet", "10.10.10.0/24",
+		"--dns", "1.1.1.1,8.8.8.8",
+		"--external-interface", "eth0",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "configured server main in .vpnctl") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(".vpnctl", "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	for _, want := range []string{
+		`"public_endpoint": "198.211.99.116"`,
+		`"wireguard_subnet": "10.10.10.0/24"`,
+		`"dns_servers": [`,
+		`"external_interface": "eth0"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected state to contain %q, got %s", want, string(data))
+		}
+	}
+}
+
+func TestExecuteServerInitRequiresForceToOverwrite(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected first server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"server", "init", "--endpoint", "203.0.113.10"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "server already configured") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"server", "init", "--endpoint", "203.0.113.10", "--force"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected force server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+}
+
+func TestExecuteServerInitValidatesEndpoint(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"server", "init"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "--endpoint is required") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func assertExists(t *testing.T, path string) {
 	t.Helper()
 

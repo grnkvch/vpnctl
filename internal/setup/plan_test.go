@@ -40,6 +40,22 @@ func TestValidateRequiresEndpoint(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidSubnetAndDNS(t *testing.T) {
+	opts := Defaults("")
+	opts.Endpoint = "198.211.99.116"
+	opts.Subnet = "not-cidr"
+
+	if err := opts.Validate(); err == nil {
+		t.Fatalf("expected invalid subnet error")
+	}
+
+	opts.Subnet = DefaultSubnet
+	opts.DNS = []string{"not-ip"}
+	if err := opts.Validate(); err == nil {
+		t.Fatalf("expected invalid DNS error")
+	}
+}
+
 func TestPrintDryRun(t *testing.T) {
 	opts := Defaults(".vpnctl")
 	opts.Endpoint = "198.211.99.116"

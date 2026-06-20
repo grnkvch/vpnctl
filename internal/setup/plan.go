@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/vgrinkevich/vpnctl/internal/state"
 )
 
 const (
-	DefaultName      = "main"
-	DefaultPort      = 51820
-	DefaultInterface = "wg0"
-	DefaultSubnet    = "10.66.0.0/24"
+	DefaultName      = state.DefaultServerName
+	DefaultPort      = state.DefaultWGPort
+	DefaultInterface = state.DefaultWGInterface
+	DefaultSubnet    = state.DefaultWGSubnet
 	DefaultSSHPort   = 22
-	DefaultStateDir  = ".vpnctl"
+	DefaultStateDir  = state.DefaultDir
 )
 
 type Options struct {
@@ -43,23 +45,24 @@ func Defaults(stateDir string) Options {
 	}
 }
 
+func ServerConfig(o Options) state.ServerConfig {
+	return state.ServerConfig{
+		ID:                 state.DefaultServerID,
+		Name:               o.Name,
+		PublicEndpoint:     o.Endpoint,
+		WireGuardPort:      o.Port,
+		WireGuardInterface: o.Interface,
+		WireGuardSubnet:    o.Subnet,
+		DNSServers:         append([]string(nil), o.DNS...),
+		ExternalInterface:  o.ExternalInterface,
+	}
+}
+
 func (o Options) Validate() error {
-	if strings.TrimSpace(o.Endpoint) == "" {
-		return fmt.Errorf("--endpoint is required")
-	}
-	if o.Port <= 0 || o.Port > 65535 {
-		return fmt.Errorf("--port must be between 1 and 65535")
-	}
 	if o.SSHPort <= 0 || o.SSHPort > 65535 {
 		return fmt.Errorf("--ssh-port must be between 1 and 65535")
 	}
-	if strings.TrimSpace(o.Interface) == "" {
-		return fmt.Errorf("--interface is required")
-	}
-	if strings.TrimSpace(o.Subnet) == "" {
-		return fmt.Errorf("--subnet is required")
-	}
-	return nil
+	return state.ValidateServerConfig(ServerConfig(o))
 }
 
 func PrintDryRun(w io.Writer, o Options) {
