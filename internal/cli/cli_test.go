@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -54,5 +56,83 @@ func TestExecuteUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown command: wat") {
 		t.Fatalf("expected unknown command error, got %q", stderr.String())
+	}
+}
+
+func TestExecuteInitCreatesStateLayout(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"init"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "initialized vpnctl state in .vpnctl") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+
+	assertExists(t, ".vpnctl/state.json")
+	assertExists(t, ".vpnctl/rulesets/default.json")
+	assertExists(t, ".vpnctl/secrets/clients")
+	assertExists(t, ".vpnctl/generated/wireguard")
+	assertExists(t, ".vpnctl/generated/mihomo")
+	assertExists(t, ".vpnctl/generated/delivery")
+	assertExists(t, ".vpnctl/.gitignore")
+}
+
+func TestExecuteInitIsIdempotent(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected first init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	statePath := filepath.Join(".vpnctl", "state.json")
+	original, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected second init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	current, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state after second init: %v", err)
+	}
+	if string(current) != string(original) {
+		t.Fatalf("expected state file to remain unchanged")
+	}
+}
+
+func TestExecuteInitSupportsCustomStateDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"--state-dir", "custom-state", "init"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	assertExists(t, "custom-state/state.json")
+	assertExists(t, "custom-state/rulesets/default.json")
+}
+
+func assertExists(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
 	}
 }
