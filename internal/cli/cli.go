@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/setup"
@@ -53,38 +53,39 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func parseGlobalFlags(args []string, stateDir *string, stderr io.Writer) ([]string, bool) {
-	for len(args) > 0 {
-		switch args[0] {
-		case "--state-dir":
-			if len(args) < 2 {
-				fmt.Fprintln(stderr, "missing value for --state-dir")
-				return nil, false
-			}
-			*stateDir = args[1]
-			args = args[2:]
-		default:
-			return args, true
-		}
+	fs := newFlagSet("vpnctl")
+	fs.StringVar(stateDir, "state-dir", state.DefaultDir, "state directory")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return nil, false
 	}
-	return args, true
+	if help {
+		return []string{"help"}, true
+	}
+	return fs.Args(), true
 }
 
 func executeInit(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
-	force := false
-	for _, arg := range args {
-		switch arg {
-		case "--force":
-			force = true
-		case "-h", "--help":
-			printInitHelp(stdout)
-			return 0
-		default:
-			fmt.Fprintf(stderr, "unknown init flag: %s\n", arg)
-			return 2
-		}
+	fs := newFlagSet("init")
+	force := fs.Bool("force", false, "rewrite default non-secret files")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printInitHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected init argument: %s\n", fs.Arg(0))
+		return 2
 	}
 
-	result, err := state.Init(stateDir, force)
+	result, err := state.Init(stateDir, *force)
 	if err != nil {
 		fmt.Fprintf(stderr, "init failed: %v\n", err)
 		return 1
@@ -96,77 +97,42 @@ func executeInit(args []string, stateDir string, stdout io.Writer, stderr io.Wri
 
 func executeSetup(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
 	opts := setup.Defaults(stateDir)
-	dryRun := false
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--endpoint":
-			value, ok := nextValue(args, &i, "--endpoint", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Endpoint = value
-		case "--name":
-			value, ok := nextValue(args, &i, "--name", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Name = value
-		case "--port":
-			value, ok := parsePortFlag(args, &i, "--port", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Port = value
-		case "--interface":
-			value, ok := nextValue(args, &i, "--interface", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Interface = value
-		case "--subnet":
-			value, ok := nextValue(args, &i, "--subnet", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Subnet = value
-		case "--dns":
-			value, ok := nextValue(args, &i, "--dns", stderr)
-			if !ok {
-				return 2
-			}
-			opts.DNS = splitCSV(value)
-		case "--external-interface":
-			value, ok := nextValue(args, &i, "--external-interface", stderr)
-			if !ok {
-				return 2
-			}
-			opts.ExternalInterface = value
-		case "--ssh-port":
-			value, ok := parsePortFlag(args, &i, "--ssh-port", stderr)
-			if !ok {
-				return 2
-			}
-			opts.SSHPort = value
-		case "--no-enable-ufw":
-			opts.EnableUFW = false
-		case "--dry-run":
-			dryRun = true
-		case "--yes":
-		case "-h", "--help":
-			printSetupHelp(stdout)
-			return 0
-		default:
-			fmt.Fprintf(stderr, "unknown setup flag: %s\n", args[i])
-			return 2
-		}
+	fs := newFlagSet("setup")
+	fs.StringVar(&opts.Endpoint, "endpoint", opts.Endpoint, "public endpoint")
+	fs.StringVar(&opts.Name, "name", opts.Name, "server name")
+	fs.IntVar(&opts.Port, "port", opts.Port, "WireGuard UDP port")
+	fs.StringVar(&opts.Interface, "interface", opts.Interface, "WireGuard interface")
+	fs.StringVar(&opts.Subnet, "subnet", opts.Subnet, "WireGuard subnet")
+	dns := fs.String("dns", "", "comma-separated client DNS servers")
+	fs.StringVar(&opts.ExternalInterface, "external-interface", opts.ExternalInterface, "external interface")
+	fs.IntVar(&opts.SSHPort, "ssh-port", opts.SSHPort, "SSH port to allow in firewall")
+	noEnableUFW := fs.Bool("no-enable-ufw", false, "do not enable firewall")
+	dryRun := fs.Bool("dry-run", false, "show planned actions without changing system")
+	fs.Bool("yes", false, "skip confirmation")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printSetupHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected setup argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	opts.DNS = splitCSV(*dns)
+	if *noEnableUFW {
+		opts.EnableUFW = false
 	}
 
 	if err := opts.Validate(); err != nil {
 		fmt.Fprintf(stderr, "setup failed: %v\n", err)
 		return 2
 	}
-	if dryRun {
+	if *dryRun {
 		setup.PrintDryRun(stdout, opts)
 		return 0
 	}
@@ -195,65 +161,33 @@ func executeServer(args []string, stateDir string, stdout io.Writer, stderr io.W
 
 func executeServerInit(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
 	opts := setup.Defaults(stateDir)
-	force := false
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--endpoint":
-			value, ok := nextValue(args, &i, "--endpoint", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Endpoint = value
-		case "--name":
-			value, ok := nextValue(args, &i, "--name", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Name = value
-		case "--port":
-			value, ok := parsePortFlag(args, &i, "--port", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Port = value
-		case "--interface":
-			value, ok := nextValue(args, &i, "--interface", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Interface = value
-		case "--subnet":
-			value, ok := nextValue(args, &i, "--subnet", stderr)
-			if !ok {
-				return 2
-			}
-			opts.Subnet = value
-		case "--dns":
-			value, ok := nextValue(args, &i, "--dns", stderr)
-			if !ok {
-				return 2
-			}
-			opts.DNS = splitCSV(value)
-		case "--external-interface":
-			value, ok := nextValue(args, &i, "--external-interface", stderr)
-			if !ok {
-				return 2
-			}
-			opts.ExternalInterface = value
-		case "--force":
-			force = true
-		case "-h", "--help":
-			printServerInitHelp(stdout)
-			return 0
-		default:
-			fmt.Fprintf(stderr, "unknown server init flag: %s\n", args[i])
-			return 2
-		}
+	fs := newFlagSet("server init")
+	fs.StringVar(&opts.Endpoint, "endpoint", opts.Endpoint, "public endpoint")
+	fs.StringVar(&opts.Name, "name", opts.Name, "server name")
+	fs.IntVar(&opts.Port, "port", opts.Port, "WireGuard UDP port")
+	fs.StringVar(&opts.Interface, "interface", opts.Interface, "WireGuard interface")
+	fs.StringVar(&opts.Subnet, "subnet", opts.Subnet, "WireGuard subnet")
+	dns := fs.String("dns", "", "comma-separated client DNS servers")
+	fs.StringVar(&opts.ExternalInterface, "external-interface", opts.ExternalInterface, "external interface")
+	force := fs.Bool("force", false, "replace existing server settings")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
 	}
+	if help {
+		printServerInitHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected server init argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	opts.DNS = splitCSV(*dns)
 
 	cfg := setup.ServerConfig(opts)
-	if err := state.ConfigureServer(stateDir, cfg, force); err != nil {
+	if err := state.ConfigureServer(stateDir, cfg, *force); err != nil {
 		fmt.Fprintf(stderr, "server init failed: %v\n", err)
 		return 1
 	}
@@ -281,42 +215,46 @@ func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.W
 }
 
 func executeClientCreate(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client create")
+	name := fs.String("name", "", "display name")
+	platform := fs.String("platform", state.DefaultClientPlatform, "platform metadata")
+	tags := fs.String("tags", "", "comma-separated tags")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientCreateHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
 		fmt.Fprintln(stderr, "missing client id")
 		return 2
 	}
-	cfg := state.ClientConfig{
-		ID:       args[0],
-		Platform: state.DefaultClientPlatform,
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client create argument: %s\n", fs.Arg(0))
+		return 2
 	}
-
-	for i := 1; i < len(args); i++ {
-		switch args[i] {
-		case "--name":
-			value, ok := nextValue(args, &i, "--name", stderr)
-			if !ok {
-				return 2
-			}
-			cfg.Name = value
-		case "--platform":
-			value, ok := nextValue(args, &i, "--platform", stderr)
-			if !ok {
-				return 2
-			}
-			cfg.Platform = value
-		case "--tags":
-			value, ok := nextValue(args, &i, "--tags", stderr)
-			if !ok {
-				return 2
-			}
-			cfg.Tags = splitCSV(value)
-		case "-h", "--help":
-			printClientCreateHelp(stdout)
-			return 0
-		default:
-			fmt.Fprintf(stderr, "unknown client create flag: %s\n", args[i])
-			return 2
-		}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client create argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	cfg := state.ClientConfig{
+		ID:       clientID,
+		Name:     *name,
+		Platform: *platform,
+		Tags:     splitCSV(*tags),
 	}
 
 	client, err := state.CreateClient(context.Background(), stateDir, cfg, newClientKeyGenerator())
@@ -326,28 +264,6 @@ func executeClientCreate(args []string, stateDir string, stdout io.Writer, stder
 	}
 	fmt.Fprintf(stdout, "created client %s with ip %s\n", client.ID, client.AssignedIP)
 	return 0
-}
-
-func nextValue(args []string, index *int, flag string, stderr io.Writer) (string, bool) {
-	if *index+1 >= len(args) {
-		fmt.Fprintf(stderr, "missing value for %s\n", flag)
-		return "", false
-	}
-	*index = *index + 1
-	return args[*index], true
-}
-
-func parsePortFlag(args []string, index *int, flag string, stderr io.Writer) (int, bool) {
-	value, ok := nextValue(args, index, flag, stderr)
-	if !ok {
-		return 0, false
-	}
-	port, err := strconv.Atoi(value)
-	if err != nil {
-		fmt.Fprintf(stderr, "invalid value for %s: %s\n", flag, value)
-		return 0, false
-	}
-	return port, true
 }
 
 func splitCSV(value string) []string {
@@ -360,6 +276,20 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+func parseFlags(fs *flag.FlagSet, args []string, stderr io.Writer) error {
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(stderr, err)
+		return err
+	}
+	return nil
 }
 
 func printHelp(w io.Writer) {

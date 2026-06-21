@@ -28,6 +28,23 @@ func TestExecuteWithoutArgsPrintsHelp(t *testing.T) {
 	}
 }
 
+func TestExecuteGlobalHelpPrintsHelpOnce(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"--help"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	if got := strings.Count(stdout.String(), "vpnctl manages a personal WireGuard VPN"); got != 1 {
+		t.Fatalf("expected help once, got %d occurrences in %q", got, stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
 func TestExecuteVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -360,6 +377,29 @@ func TestExecuteClientCreateWritesState(t *testing.T) {
 		}
 	}
 	assertExists(t, filepath.Join(".vpnctl", "secrets", "clients", "macbook.key"))
+}
+
+func TestExecuteClientCreateAllowsFlagsBeforeID(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"client", "create", "--platform", "ios", "iphone"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "created client iphone with ip 10.66.0.2") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
 }
 
 func TestExecuteClientCreateRequiresServer(t *testing.T) {
