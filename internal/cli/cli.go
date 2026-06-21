@@ -262,6 +262,8 @@ func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.W
 		return executeClientShow(args[1:], stateDir, stdout, stderr)
 	case "revoke":
 		return executeClientRevoke(args[1:], stateDir, stdout, stderr)
+	case "rotate-keys":
+		return executeClientRotateKeys(args[1:], stateDir, stdout, stderr)
 	case "export":
 		return executeClientExport(args[1:], stateDir, stdout, stderr)
 	case "-h", "--help", "help":
@@ -438,6 +440,49 @@ func executeClientRevoke(args []string, stateDir string, stdout io.Writer, stder
 		return 1
 	}
 	fmt.Fprintf(stdout, "revoked client %s\n", client.ID)
+	return 0
+}
+
+func executeClientRotateKeys(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client rotate-keys")
+	fs.Bool("yes", false, "skip confirmation")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientRotateKeysHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client rotate-keys argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client rotate-keys argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	client, err := state.RotateClientKeys(context.Background(), stateDir, clientID, newClientKeyGenerator())
+	if err != nil {
+		fmt.Fprintf(stderr, "client rotate-keys failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "rotated keys for client %s\n", client.ID)
 	return 0
 }
 
@@ -701,7 +746,6 @@ Commands:
 
 Planned commands:
   server show
-  client rotate-keys
   client delete
 `)
 }
@@ -788,6 +832,8 @@ Commands:
   list      List clients
   show      Show one client
   revoke    Revoke a client
+  rotate-keys
+            Rotate client WireGuard keys
   export    Export a client config
 `)
 }
@@ -832,6 +878,17 @@ Usage:
 
 Flags:
   --reason <text>    Revocation reason
+`)
+}
+
+func printClientRotateKeysHelp(w io.Writer) {
+	fmt.Fprint(w, `Rotate client WireGuard keys.
+
+Usage:
+  vpnctl client rotate-keys <client-id> [--yes]
+
+Flags:
+  --yes    Skip confirmation
 `)
 }
 

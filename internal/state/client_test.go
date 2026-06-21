@@ -185,6 +185,60 @@ func TestRevokeClientIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRotateClientKeysUpdatesPublicKeyAndSecret(t *testing.T) {
+	dir := configuredServerState(t, "10.66.0.0/24")
+	if _, err := CreateClient(context.Background(), dir, ClientConfig{ID: "iphone"}, validFakeClientKeyGenerator()); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	rotated, err := RotateClientKeys(context.Background(), dir, "iphone", rotatedFakeClientKeyGenerator())
+	if err != nil {
+		t.Fatalf("rotate client keys: %v", err)
+	}
+	if rotated.ID != "iphone" {
+		t.Fatalf("unexpected client id: %q", rotated.ID)
+	}
+	if rotated.Status != ClientStatusActive {
+		t.Fatalf("unexpected client status: %q", rotated.Status)
+	}
+	if rotated.AssignedIP != "10.66.0.2" {
+		t.Fatalf("unexpected assigned IP: %q", rotated.AssignedIP)
+	}
+	if rotated.WireGuardPublicKey != "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=" {
+		t.Fatalf("unexpected rotated public key: %q", rotated.WireGuardPublicKey)
+	}
+
+	privateKey, err := ReadClientPrivateKey(dir, "iphone")
+	if err != nil {
+		t.Fatalf("read rotated private key: %v", err)
+	}
+	if privateKey != "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=" {
+		t.Fatalf("unexpected rotated private key")
+	}
+
+	st, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if st.Clients[0].WireGuardPublicKey != rotated.WireGuardPublicKey {
+		t.Fatalf("state public key was not updated")
+	}
+}
+
+func TestRotateClientKeysRequiresActiveClient(t *testing.T) {
+	dir := configuredServerState(t, "10.66.0.0/24")
+	if _, err := CreateClient(context.Background(), dir, ClientConfig{ID: "iphone"}, validFakeClientKeyGenerator()); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if _, err := RevokeClient(dir, RevokeClientConfig{ID: "iphone"}); err != nil {
+		t.Fatalf("revoke client: %v", err)
+	}
+
+	if _, err := RotateClientKeys(context.Background(), dir, "iphone", rotatedFakeClientKeyGenerator()); err == nil {
+		t.Fatalf("expected inactive client error")
+	}
+}
+
 func TestCreateClientRequiresServer(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".vpnctl")
 	if _, err := Init(dir, false); err != nil {
@@ -236,5 +290,12 @@ func validFakeClientKeyGenerator() *fakeClientKeyGenerator {
 	return &fakeClientKeyGenerator{pair: ClientKeyPair{
 		PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		PublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+	}}
+}
+
+func rotatedFakeClientKeyGenerator() *fakeClientKeyGenerator {
+	return &fakeClientKeyGenerator{pair: ClientKeyPair{
+		PrivateKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+		PublicKey:  "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
 	}}
 }

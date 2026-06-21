@@ -186,6 +186,61 @@ func RevokeClient(dir string, cfg RevokeClientConfig) (ClientState, error) {
 	return ClientState{}, fmt.Errorf("client %q does not exist", cfg.ID)
 }
 
+func RotateClientKeys(ctx context.Context, dir string, id string, generator ClientKeyGenerator) (ClientState, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if strings.TrimSpace(id) == "" {
+		return ClientState{}, fmt.Errorf("client id is required")
+	}
+	if generator == nil {
+		return ClientState{}, fmt.Errorf("client key generator is required")
+	}
+	st, err := Load(dir)
+	if err != nil {
+		return ClientState{}, err
+	}
+	for i, client := range st.Clients {
+		if client.ID != id {
+			continue
+		}
+		if client.Status != ClientStatusActive {
+			return ClientState{}, fmt.Errorf("client %q is not active", id)
+		}
+		privateKeyPath := ClientPrivateKeyPath(dir, id)
+		oldPrivateKey, err := readSecret(privateKeyPath)
+		if err != nil {
+			return ClientState{}, fmt.Errorf("read existing client private key: %w", err)
+		}
+		if err := wireguard.ValidateKey(oldPrivateKey); err != nil {
+			return ClientState{}, fmt.Errorf("stored client private key is invalid: %w", err)
+		}
+
+		keyPair, err := generator.GenerateClientKeyPair(ctx)
+		if err != nil {
+			return ClientState{}, err
+		}
+		if err := wireguard.ValidateKey(keyPair.PrivateKey); err != nil {
+			return ClientState{}, fmt.Errorf("generated client private key is invalid: %w", err)
+		}
+		if err := wireguard.ValidateKey(keyPair.PublicKey); err != nil {
+			return ClientState{}, fmt.Errorf("generated client public key is invalid: %w", err)
+		}
+		if err := writeSecret(privateKeyPath, keyPair.PrivateKey); err != nil {
+			return ClientState{}, err
+		}
+
+		client.WireGuardPublicKey = keyPair.PublicKey
+		st.Clients[i] = client
+		if err := Save(dir, st); err != nil {
+			_ = writeSecret(privateKeyPath, oldPrivateKey)
+			return ClientState{}, err
+		}
+		return client, nil
+	}
+	return ClientState{}, fmt.Errorf("client %q does not exist", id)
+}
+
 func ValidateClientConfig(cfg ClientConfig) error {
 	if strings.TrimSpace(cfg.ID) == "" {
 		return fmt.Errorf("client id is required")

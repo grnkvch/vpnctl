@@ -543,6 +543,31 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 		t.Fatalf("client show leaked private key")
 	}
 
+	restoreRotated := stubClientKeyGenerator(rotatedClientKeyGenerator())
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "rotate-keys", "iphone", "--yes"}, &stdout, &stderr)
+	restoreRotated()
+	if code != 0 {
+		t.Fatalf("expected client rotate-keys to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "rotated keys for client iphone") {
+		t.Fatalf("unexpected rotate-keys stdout: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=") {
+		t.Fatalf("client rotate-keys leaked private key")
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected rotated client show to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "wireguard public key: AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=\n") {
+		t.Fatalf("expected rotated public key in show output, got %q", stdout.String())
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	code = Execute([]string{"client", "revoke", "iphone", "--reason", "lost"}, &stdout, &stderr)
@@ -816,6 +841,13 @@ func validClientKeyGenerator() state.ClientKeyGenerator {
 	return stubKeyGenerator{pair: state.ClientKeyPair{
 		PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		PublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+	}}
+}
+
+func rotatedClientKeyGenerator() state.ClientKeyGenerator {
+	return stubKeyGenerator{pair: state.ClientKeyPair{
+		PrivateKey: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+		PublicKey:  "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
 	}}
 }
 
