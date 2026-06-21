@@ -12,7 +12,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/state"
 )
 
-const version = "0.1.0-dev"
+var version = "0.1.0-dev"
 
 var newClientKeyGenerator = func() state.ClientKeyGenerator {
 	return setup.ClientKeyGenerator{}
