@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/app"
 	"github.com/vgrinkevich/vpnctl/internal/setup"
 	"github.com/vgrinkevich/vpnctl/internal/state"
 )
@@ -263,6 +264,75 @@ func TestExecuteSetupRunsSetup(t *testing.T) {
 	}
 }
 
+func TestExecuteApplyDryRunRunsApply(t *testing.T) {
+	restore := stubApplyRunner(func(_ context.Context, input app.ApplyInput) (app.ApplyResult, error) {
+		if input.StateDir != ".vpnctl" {
+			t.Fatalf("unexpected state dir: %q", input.StateDir)
+		}
+		if !input.DryRun {
+			t.Fatalf("expected dry-run")
+		}
+		if input.Stdout == nil {
+			t.Fatalf("expected stdout writer")
+		}
+		return app.ApplyResult{
+			StateDir:            input.StateDir,
+			ExternalInterface:   "eth0",
+			WireGuardConfigPath: "/etc/wireguard/wg0.conf",
+			ActivePeers:         1,
+		}, nil
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"apply", "--dry-run"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no CLI summary for dry-run, got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
+func TestExecuteApplyPrintsSummary(t *testing.T) {
+	restore := stubApplyRunner(func(_ context.Context, input app.ApplyInput) (app.ApplyResult, error) {
+		if input.DryRun {
+			t.Fatalf("did not expect dry-run")
+		}
+		return app.ApplyResult{
+			StateDir:            input.StateDir,
+			ExternalInterface:   "eth0",
+			WireGuardConfigPath: "/etc/wireguard/wg0.conf",
+			ActivePeers:         2,
+		}, nil
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"apply"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"applied WireGuard config to /etc/wireguard/wg0.conf",
+		"external interface: eth0",
+		"active peers: 2",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected stdout to contain %q, got %q", want, stdout.String())
+		}
+	}
+}
+
 func TestExecuteServerInitWritesState(t *testing.T) {
 	t.Chdir(t.TempDir())
 
@@ -412,6 +482,113 @@ func TestExecuteClientCreateAllowsFlagsBeforeID(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "created client iphone with ip 10.66.0.2") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestExecuteClientListShowAndRevoke(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"client", "create", "iphone", "--platform", "ios", "--tags", "phone,personal"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected iphone create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"client", "create", "macbook", "--platform", "macos"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected macbook create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"client", "list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client list to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"iphone\tactive\t10.66.0.2\tios\tiphone\n",
+		"macbook\tactive\t10.66.0.3\tmacos\tmacbook\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected client list to contain %q, got %q", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client show to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"id: iphone\n",
+		"platform: ios\n",
+		"status: active\n",
+		"assigned ip: 10.66.0.2\n",
+		"wireguard public key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n",
+		"tags: phone, personal\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected client show to contain %q, got %q", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+		t.Fatalf("client show leaked private key")
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "revoke", "iphone", "--reason", "lost"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client revoke to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "revoked client iphone") {
+		t.Fatalf("unexpected revoke stdout: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected revoked client show to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"status: revoked\n",
+		"revocation reason: lost\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected revoked client show to contain %q, got %q", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client list to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "iphone") {
+		t.Fatalf("expected revoked client to be hidden by default, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "macbook\tactive\t10.66.0.3\tmacos\tmacbook\n") {
+		t.Fatalf("expected active client in list, got %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "list", "--all"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client list --all to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "iphone\trevoked\t10.66.0.2\tios\tiphone\n") {
+		t.Fatalf("expected revoked client in list --all, got %q", stdout.String())
 	}
 }
 
@@ -657,6 +834,14 @@ func stubSetupRunner(runner func(context.Context, setup.Options, setup.Runtime) 
 	runSetup = runner
 	return func() {
 		runSetup = original
+	}
+}
+
+func stubApplyRunner(runner func(context.Context, app.ApplyInput) (app.ApplyResult, error)) func() {
+	original := runApply
+	runApply = runner
+	return func() {
+		runApply = original
 	}
 }
 

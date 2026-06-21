@@ -14,6 +14,8 @@ import (
 
 const (
 	ClientStatusActive    = "active"
+	ClientStatusRevoked   = "revoked"
+	ClientStatusDeleted   = "deleted"
 	DefaultClientPlatform = "generic"
 )
 
@@ -25,6 +27,12 @@ type ClientConfig struct {
 	Platform string
 	Tags     []string
 	Now      time.Time
+}
+
+type RevokeClientConfig struct {
+	ID     string
+	Reason string
+	Now    time.Time
 }
 
 type ClientKeyPair struct {
@@ -102,6 +110,80 @@ func CreateClient(ctx context.Context, dir string, cfg ClientConfig, generator C
 		return ClientState{}, err
 	}
 	return client, nil
+}
+
+func ListClients(dir string, includeAll bool) ([]ClientState, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	st, err := Load(dir)
+	if err != nil {
+		return nil, err
+	}
+	clients := make([]ClientState, 0, len(st.Clients))
+	for _, client := range st.Clients {
+		if includeAll || client.Status == ClientStatusActive {
+			clients = append(clients, client)
+		}
+	}
+	return clients, nil
+}
+
+func GetClient(dir string, id string) (ClientState, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if strings.TrimSpace(id) == "" {
+		return ClientState{}, fmt.Errorf("client id is required")
+	}
+	st, err := Load(dir)
+	if err != nil {
+		return ClientState{}, err
+	}
+	for _, client := range st.Clients {
+		if client.ID == id {
+			return client, nil
+		}
+	}
+	return ClientState{}, fmt.Errorf("client %q does not exist", id)
+}
+
+func RevokeClient(dir string, cfg RevokeClientConfig) (ClientState, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if strings.TrimSpace(cfg.ID) == "" {
+		return ClientState{}, fmt.Errorf("client id is required")
+	}
+	st, err := Load(dir)
+	if err != nil {
+		return ClientState{}, err
+	}
+	for i, client := range st.Clients {
+		if client.ID != cfg.ID {
+			continue
+		}
+		if client.Status == ClientStatusDeleted {
+			return ClientState{}, fmt.Errorf("client %q is deleted", cfg.ID)
+		}
+		if client.Status == ClientStatusRevoked {
+			return client, nil
+		}
+		revokedAt := cfg.Now
+		if revokedAt.IsZero() {
+			revokedAt = time.Now().UTC()
+		}
+		revokedAt = revokedAt.UTC()
+		client.Status = ClientStatusRevoked
+		client.RevokedAt = &revokedAt
+		client.RevocationReason = strings.TrimSpace(cfg.Reason)
+		st.Clients[i] = client
+		if err := Save(dir, st); err != nil {
+			return ClientState{}, err
+		}
+		return client, nil
+	}
+	return ClientState{}, fmt.Errorf("client %q does not exist", cfg.ID)
 }
 
 func ValidateClientConfig(cfg ClientConfig) error {

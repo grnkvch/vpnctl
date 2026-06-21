@@ -41,14 +41,16 @@ type ServerState struct {
 }
 
 type ClientState struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	Platform           string    `json:"platform"`
-	Status             string    `json:"status"`
-	AssignedIP         string    `json:"assigned_ip"`
-	WireGuardPublicKey string    `json:"wireguard_public_key"`
-	Tags               []string  `json:"tags,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	Platform           string     `json:"platform"`
+	Status             string     `json:"status"`
+	AssignedIP         string     `json:"assigned_ip"`
+	WireGuardPublicKey string     `json:"wireguard_public_key"`
+	Tags               []string   `json:"tags,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	RevokedAt          *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason   string     `json:"revocation_reason,omitempty"`
 }
 
 type Ruleset struct {

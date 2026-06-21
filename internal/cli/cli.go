@@ -19,6 +19,7 @@ var newClientKeyGenerator = func() state.ClientKeyGenerator {
 }
 
 var runSetup = setup.Run
+var runApply = app.Apply
 
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -41,6 +42,8 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		return executeInit(args[1:], stateDir, stdout, stderr)
 	case "setup":
 		return executeSetup(args[1:], stateDir, stdout, stderr)
+	case "apply":
+		return executeApply(args[1:], stateDir, stdout, stderr)
 	case "server":
 		return executeServer(args[1:], stateDir, stdout, stderr)
 	case "client":
@@ -55,6 +58,42 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+}
+
+func executeApply(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	fs := newFlagSet("apply")
+	dryRun := fs.Bool("dry-run", false, "show planned changes without writing system files")
+	fs.Bool("yes", false, "skip confirmation")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printApplyHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected apply argument: %s\n", fs.Arg(0))
+		return 2
+	}
+
+	result, err := runApply(context.Background(), app.ApplyInput{
+		StateDir: dirOrDefault(stateDir),
+		DryRun:   *dryRun,
+		Stdout:   stdout,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "apply failed: %v\n", err)
+		return 1
+	}
+	if !*dryRun {
+		fmt.Fprintf(stdout, "applied WireGuard config to %s\n", result.WireGuardConfigPath)
+		fmt.Fprintf(stdout, "external interface: %s\n", result.ExternalInterface)
+		fmt.Fprintf(stdout, "active peers: %d\n", result.ActivePeers)
+	}
+	return 0
 }
 
 func parseGlobalFlags(args []string, stateDir *string, stderr io.Writer) ([]string, bool) {
@@ -217,6 +256,12 @@ func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.W
 	switch args[0] {
 	case "create":
 		return executeClientCreate(args[1:], stateDir, stdout, stderr)
+	case "list":
+		return executeClientList(args[1:], stateDir, stdout, stderr)
+	case "show":
+		return executeClientShow(args[1:], stateDir, stdout, stderr)
+	case "revoke":
+		return executeClientRevoke(args[1:], stateDir, stdout, stderr)
 	case "export":
 		return executeClientExport(args[1:], stateDir, stdout, stderr)
 	case "-h", "--help", "help":
@@ -277,6 +322,122 @@ func executeClientCreate(args []string, stateDir string, stdout io.Writer, stder
 		return 1
 	}
 	fmt.Fprintf(stdout, "created client %s with ip %s\n", client.ID, client.AssignedIP)
+	return 0
+}
+
+func executeClientList(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	fs := newFlagSet("client list")
+	all := fs.Bool("all", false, "include revoked and deleted clients")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientListHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected client list argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	clients, err := state.ListClients(stateDir, *all)
+	if err != nil {
+		fmt.Fprintf(stderr, "client list failed: %v\n", err)
+		return 1
+	}
+	for _, client := range clients {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", client.ID, client.Status, client.AssignedIP, client.Platform, client.Name)
+	}
+	return 0
+}
+
+func executeClientShow(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client show")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientShowHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client show argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client show argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	client, err := state.GetClient(stateDir, clientID)
+	if err != nil {
+		fmt.Fprintf(stderr, "client show failed: %v\n", err)
+		return 1
+	}
+	printClient(stdout, client)
+	return 0
+}
+
+func executeClientRevoke(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client revoke")
+	reason := fs.String("reason", "", "revocation reason")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientRevokeHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client revoke argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client revoke argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	client, err := state.RevokeClient(stateDir, state.RevokeClientConfig{
+		ID:     clientID,
+		Reason: *reason,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "client revoke failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "revoked client %s\n", client.ID)
 	return 0
 }
 
@@ -474,6 +635,29 @@ func executeRulesetList(args []string, stateDir string, stdout io.Writer, stderr
 	return 0
 }
 
+func printClient(w io.Writer, client state.ClientState) {
+	fmt.Fprintf(w, "id: %s\n", client.ID)
+	fmt.Fprintf(w, "name: %s\n", client.Name)
+	fmt.Fprintf(w, "platform: %s\n", client.Platform)
+	fmt.Fprintf(w, "status: %s\n", client.Status)
+	fmt.Fprintf(w, "assigned ip: %s\n", client.AssignedIP)
+	fmt.Fprintf(w, "wireguard public key: %s\n", client.WireGuardPublicKey)
+	if len(client.Tags) > 0 {
+		fmt.Fprintf(w, "tags: %s\n", strings.Join(client.Tags, ", "))
+	} else {
+		fmt.Fprintln(w, "tags: <none>")
+	}
+	if !client.CreatedAt.IsZero() {
+		fmt.Fprintf(w, "created at: %s\n", client.CreatedAt.Format("2006-01-02T15:04:05Z07:00"))
+	}
+	if client.RevokedAt != nil && !client.RevokedAt.IsZero() {
+		fmt.Fprintf(w, "revoked at: %s\n", client.RevokedAt.Format("2006-01-02T15:04:05Z07:00"))
+	}
+	if client.RevocationReason != "" {
+		fmt.Fprintf(w, "revocation reason: %s\n", client.RevocationReason)
+	}
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -509,6 +693,7 @@ Usage:
 Commands:
   init       Initialize local vpnctl state
   setup      Preview or perform one-shot server setup
+  apply      Apply current server config to the local system
   client     Manage clients
   ruleset    Manage routing rulesets
   help       Show this help text
@@ -516,10 +701,8 @@ Commands:
 
 Planned commands:
   server show
-  client revoke
   client rotate-keys
   client delete
-  apply
 `)
 }
 
@@ -550,6 +733,18 @@ Flags:
   --ssh-port <port>             SSH port to allow in firewall (default 22)
   --no-enable-ufw               Do not enable firewall
   --dry-run                     Show planned actions without changing system
+`)
+}
+
+func printApplyHelp(w io.Writer) {
+	fmt.Fprint(w, `Apply current local server configuration to the system.
+
+Usage:
+  vpnctl apply [--dry-run]
+
+Flags:
+  --dry-run    Show planned changes without writing system files
+  --yes        Skip confirmation
 `)
 }
 
@@ -590,6 +785,9 @@ Usage:
 
 Commands:
   create    Create a new client
+  list      List clients
+  show      Show one client
+  revoke    Revoke a client
   export    Export a client config
 `)
 }
@@ -604,6 +802,36 @@ Flags:
   --name <name>           Display name (default client id)
   --platform <platform>   Platform metadata (default generic)
   --tags <tag-list>       Comma-separated tags
+`)
+}
+
+func printClientListHelp(w io.Writer) {
+	fmt.Fprint(w, `List clients.
+
+Usage:
+  vpnctl client list [--all]
+
+Flags:
+  --all    Include revoked and deleted clients
+`)
+}
+
+func printClientShowHelp(w io.Writer) {
+	fmt.Fprint(w, `Show one client.
+
+Usage:
+  vpnctl client show <client-id>
+`)
+}
+
+func printClientRevokeHelp(w io.Writer) {
+	fmt.Fprint(w, `Revoke a client.
+
+Usage:
+  vpnctl client revoke <client-id> [--reason <text>]
+
+Flags:
+  --reason <text>    Revocation reason
 `)
 }
 

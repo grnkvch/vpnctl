@@ -113,6 +113,78 @@ func TestCreateClientAllocatesNextAvailableIP(t *testing.T) {
 	}
 }
 
+func TestListGetAndRevokeClient(t *testing.T) {
+	dir := configuredServerState(t, "10.66.0.0/24")
+	gen := validFakeClientKeyGenerator()
+
+	first, err := CreateClient(context.Background(), dir, ClientConfig{ID: "iphone"}, gen)
+	if err != nil {
+		t.Fatalf("create first client: %v", err)
+	}
+	if _, err := CreateClient(context.Background(), dir, ClientConfig{ID: "macbook"}, gen); err != nil {
+		t.Fatalf("create second client: %v", err)
+	}
+
+	revokedAt := time.Date(2026, 6, 21, 11, 0, 0, 0, time.UTC)
+	revoked, err := RevokeClient(dir, RevokeClientConfig{ID: "iphone", Reason: "lost", Now: revokedAt})
+	if err != nil {
+		t.Fatalf("revoke client: %v", err)
+	}
+	if revoked.Status != ClientStatusRevoked {
+		t.Fatalf("unexpected revoked status: %q", revoked.Status)
+	}
+	if revoked.AssignedIP != first.AssignedIP {
+		t.Fatalf("revoke should preserve assigned IP")
+	}
+	if revoked.RevokedAt == nil || !revoked.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("unexpected revoked_at: %#v", revoked.RevokedAt)
+	}
+	if revoked.RevocationReason != "lost" {
+		t.Fatalf("unexpected revocation reason: %q", revoked.RevocationReason)
+	}
+
+	active, err := ListClients(dir, false)
+	if err != nil {
+		t.Fatalf("list active clients: %v", err)
+	}
+	if len(active) != 1 || active[0].ID != "macbook" {
+		t.Fatalf("unexpected active clients: %#v", active)
+	}
+
+	all, err := ListClients(dir, true)
+	if err != nil {
+		t.Fatalf("list all clients: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected two clients, got %#v", all)
+	}
+
+	got, err := GetClient(dir, "iphone")
+	if err != nil {
+		t.Fatalf("get client: %v", err)
+	}
+	if got.Status != ClientStatusRevoked {
+		t.Fatalf("unexpected client status: %q", got.Status)
+	}
+	if got.RevokedAt == nil || !got.RevokedAt.Equal(revokedAt) || got.RevocationReason != "lost" {
+		t.Fatalf("revocation metadata was not persisted: %#v", got)
+	}
+}
+
+func TestRevokeClientIsIdempotent(t *testing.T) {
+	dir := configuredServerState(t, "10.66.0.0/24")
+	gen := validFakeClientKeyGenerator()
+	if _, err := CreateClient(context.Background(), dir, ClientConfig{ID: "iphone"}, gen); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if _, err := RevokeClient(dir, RevokeClientConfig{ID: "iphone"}); err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	if _, err := RevokeClient(dir, RevokeClientConfig{ID: "iphone"}); err != nil {
+		t.Fatalf("second revoke: %v", err)
+	}
+}
+
 func TestCreateClientRequiresServer(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".vpnctl")
 	if _, err := Init(dir, false); err != nil {
