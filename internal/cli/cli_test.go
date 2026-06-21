@@ -465,6 +465,76 @@ func TestExecuteClientExportRequiresType(t *testing.T) {
 	}
 }
 
+func TestExecuteRulesetAddShowAndList(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Execute([]string{
+		"ruleset", "add", "custom-ai",
+		"--domain", "ChatGPT.com, openai.com,claude.ai",
+		"--name", "Custom AI",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected ruleset add to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "saved ruleset custom-ai with 3 domains") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(".vpnctl", "rulesets", "custom-ai.json"))
+	if err != nil {
+		t.Fatalf("read ruleset: %v", err)
+	}
+	for _, want := range []string{
+		`"id": "custom-ai"`,
+		`"name": "Custom AI"`,
+		`"type": "domain-suffix"`,
+		`"chatgpt.com"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected ruleset to contain %q, got %s", want, string(data))
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"ruleset", "show", "custom-ai"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected ruleset show to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "domains: chatgpt.com, openai.com, claude.ai") {
+		t.Fatalf("unexpected show output: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"ruleset", "list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected ruleset list to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "custom-ai\tdomain-suffix\t3 domains") {
+		t.Fatalf("unexpected list output: %q", stdout.String())
+	}
+}
+
+func TestExecuteRulesetAddRejectsInvalidType(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"ruleset", "add", "bad", "--type", "ip-cidr", "--domain", "chatgpt.com"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "unsupported ruleset type: ip-cidr") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestExecuteClientCreateRequiresServer(t *testing.T) {
 	t.Chdir(t.TempDir())
 	restore := stubClientKeyGenerator(validClientKeyGenerator())

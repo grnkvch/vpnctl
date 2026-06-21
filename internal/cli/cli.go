@@ -43,6 +43,8 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		return executeServer(args[1:], stateDir, stdout, stderr)
 	case "client":
 		return executeClient(args[1:], stateDir, stdout, stderr)
+	case "ruleset":
+		return executeRuleset(args[1:], stateDir, stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vpnctl %s\n", version)
 		return 0
@@ -334,6 +336,131 @@ func executeClientExport(args []string, stateDir string, stdout io.Writer, stder
 	return 0
 }
 
+func executeRuleset(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing ruleset command")
+		return 2
+	}
+
+	switch args[0] {
+	case "add":
+		return executeRulesetAdd(args[1:], stateDir, stdout, stderr)
+	case "show":
+		return executeRulesetShow(args[1:], stateDir, stdout, stderr)
+	case "list":
+		return executeRulesetList(args[1:], stateDir, stdout, stderr)
+	case "-h", "--help", "help":
+		printRulesetHelp(stdout)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown ruleset command: %s\n", args[0])
+		return 2
+	}
+}
+
+func executeRulesetAdd(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	rulesetID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		rulesetID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("ruleset add")
+	name := fs.String("name", "", "display name")
+	rulesetType := fs.String("type", state.RulesetTypeDomainSuffix, "ruleset type")
+	domains := fs.String("domain", "", "comma-separated domains")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printRulesetAddHelp(stdout)
+		return 0
+	}
+	if rulesetID == "" && fs.NArg() > 0 {
+		rulesetID = fs.Arg(0)
+	}
+	if rulesetID == "" {
+		fmt.Fprintln(stderr, "missing ruleset id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != rulesetID {
+		fmt.Fprintf(stderr, "unexpected ruleset add argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected ruleset add argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	if strings.TrimSpace(*domains) == "" {
+		fmt.Fprintln(stderr, "--domain is required")
+		return 2
+	}
+
+	ruleset, err := state.SaveRuleset(stateDir, state.RulesetConfig{
+		ID:      rulesetID,
+		Name:    *name,
+		Type:    *rulesetType,
+		Domains: splitCSV(*domains),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "ruleset add failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "saved ruleset %s with %d domains\n", ruleset.ID, len(ruleset.Domains))
+	return 0
+}
+
+func executeRulesetShow(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing ruleset id")
+		return 2
+	}
+	if len(args) > 1 {
+		fmt.Fprintf(stderr, "unexpected ruleset show argument: %s\n", args[1])
+		return 2
+	}
+	ruleset, err := state.LoadRuleset(stateDir, args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "ruleset show failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "id: %s\n", ruleset.ID)
+	fmt.Fprintf(stdout, "name: %s\n", ruleset.Name)
+	fmt.Fprintf(stdout, "type: %s\n", ruleset.Type)
+	fmt.Fprintf(stdout, "domains: %s\n", strings.Join(ruleset.Domains, ", "))
+	return 0
+}
+
+func executeRulesetList(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	fs := newFlagSet("ruleset list")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printRulesetListHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected ruleset list argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	rulesets, err := state.ListRulesets(stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "ruleset list failed: %v\n", err)
+		return 1
+	}
+	for _, ruleset := range rulesets {
+		fmt.Fprintf(stdout, "%s\t%s\t%d domains\n", ruleset.ID, ruleset.Type, len(ruleset.Domains))
+	}
+	return 0
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -370,12 +497,12 @@ Commands:
   init       Initialize local vpnctl state
   setup      Preview or perform one-shot server setup
   client     Manage clients
+  ruleset    Manage routing rulesets
   help       Show this help text
   version    Show version information
 
 Planned commands:
   server show
-  ruleset add
   client revoke
   client rotate-keys
   client delete
@@ -479,6 +606,40 @@ Flags:
   --qr                Render QR output (not implemented yet)
   --ruleset <id>      Ruleset id for Clash export (default default)
   --no-scp-hint       Do not print scp copy hint
+`)
+}
+
+func printRulesetHelp(w io.Writer) {
+	fmt.Fprint(w, `Manage routing rulesets.
+
+Usage:
+  vpnctl ruleset <command>
+
+Commands:
+  add     Create or replace a ruleset
+  show    Show one ruleset
+  list    List rulesets
+`)
+}
+
+func printRulesetAddHelp(w io.Writer) {
+	fmt.Fprint(w, `Create or replace a ruleset.
+
+Usage:
+  vpnctl ruleset add <ruleset-id> --domain <domains> [flags]
+
+Flags:
+  --domain <domains>   Comma-separated domains
+  --name <name>        Display name
+  --type <type>        Ruleset type (default domain-suffix)
+`)
+}
+
+func printRulesetListHelp(w io.Writer) {
+	fmt.Fprint(w, `List rulesets.
+
+Usage:
+  vpnctl ruleset list
 `)
 }
 

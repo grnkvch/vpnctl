@@ -116,7 +116,7 @@ func defaultRuleset() Ruleset {
 	return Ruleset{
 		ID:      "default",
 		Name:    "Default",
-		Type:    "domain-suffix",
+		Type:    RulesetTypeDomainSuffix,
 		Domains: append([]string(nil), defaultRulesetDomains...),
 	}
 }
