@@ -451,6 +451,62 @@ func TestExecuteClientExportWireGuardWritesConfig(t *testing.T) {
 	}
 }
 
+func TestExecuteClientExportClashWritesProfileAndWarning(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	st, err := state.Load(".vpnctl")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Server.WireGuardPublicKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+	if err := state.Save(".vpnctl", st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"client", "export", "iphone", "--type", "clash", "--ruleset", "default"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected clash export to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "wrote clash config to .vpnctl/generated/delivery/iphone.clash.yaml") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+		t.Fatalf("stdout leaked private key")
+	}
+	if !strings.Contains(stderr.String(), "warning: no custom DNS configured") {
+		t.Fatalf("expected fallback DNS warning, got %q", stderr.String())
+	}
+	data, err := os.ReadFile(filepath.Join(".vpnctl", "generated", "delivery", "iphone.clash.yaml"))
+	if err != nil {
+		t.Fatalf("read clash profile: %v", err)
+	}
+	for _, want := range []string{
+		"mode: rule\n",
+		"    private-key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"\n",
+		"  - DOMAIN-SUFFIX,chatgpt.com,VPN\n",
+		"  - MATCH,DIRECT\n",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected clash profile to contain %q, got:\n%s", want, string(data))
+		}
+	}
+}
+
 func TestExecuteClientExportRequiresType(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

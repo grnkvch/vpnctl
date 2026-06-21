@@ -282,7 +282,7 @@ func executeClientExport(args []string, stateDir string, stdout io.Writer, stder
 	exportType := fs.String("type", "", "export type")
 	output := fs.String("output", "", "output path")
 	qr := fs.Bool("qr", false, "render QR output")
-	fs.String("ruleset", "default", "ruleset id")
+	ruleset := fs.String("ruleset", app.DefaultRulesetID, "ruleset id")
 	noSCPHint := fs.Bool("no-scp-hint", false, "do not print scp hint")
 	var help bool
 	fs.BoolVar(&help, "h", false, "show help")
@@ -324,10 +324,14 @@ func executeClientExport(args []string, stateDir string, stdout io.Writer, stder
 		Type:     *exportType,
 		Output:   *output,
 		SCPHint:  !*noSCPHint,
+		Ruleset:  *ruleset,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "client export failed: %v\n", err)
 		return 1
+	}
+	if result.Warning != "" {
+		fmt.Fprintln(stderr, result.Warning)
 	}
 	fmt.Fprintf(stdout, "wrote %s config to %s\n", *exportType, result.Path)
 	if result.SCPHint != "" {
@@ -601,7 +605,7 @@ Usage:
   vpnctl client export <client-id> --type <type> [flags]
 
 Flags:
-  --type <type>       Export type: wireguard
+  --type <type>       Export type: wireguard, clash
   --output <path>     Output path
   --qr                Render QR output (not implemented yet)
   --ruleset <id>      Ruleset id for Clash export (default default)

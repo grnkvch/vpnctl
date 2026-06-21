@@ -79,6 +79,84 @@ func TestExportClientWireGuardSupportsCustomOutput(t *testing.T) {
 	}
 }
 
+func TestExportClientClashWritesProfile(t *testing.T) {
+	dir := configuredExportState(t)
+
+	result, err := ExportClient(ExportClientInput{
+		StateDir: dir,
+		ClientID: "iphone",
+		Type:     ExportTypeClash,
+		Ruleset:  DefaultRulesetID,
+	})
+	if err != nil {
+		t.Fatalf("export clash profile: %v", err)
+	}
+	if result.Path != filepath.Join(dir, "generated", "delivery", "iphone.clash.yaml") {
+		t.Fatalf("unexpected output path: %s", result.Path)
+	}
+	if result.Warning != "" {
+		t.Fatalf("unexpected warning: %q", result.Warning)
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("read clash profile: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"mode: rule\n",
+		"    - 1.1.1.1\n",
+		"    type: wireguard\n",
+		"    server: 198.211.99.116\n",
+		"    port: 51820\n",
+		"    ip: 10.66.0.2\n",
+		"    private-key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"\n",
+		"    public-key: \"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\"\n",
+		"    udp: true\n",
+		"      - 0.0.0.0/0\n",
+		"  - DOMAIN-SUFFIX,chatgpt.com,VPN\n",
+		"  - MATCH,DIRECT\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected clash profile to contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "MATCH,VPN") {
+		t.Fatalf("clash profile should not route all traffic through VPN:\n%s", got)
+	}
+}
+
+func TestExportClientClashUsesFallbackDNSWarning(t *testing.T) {
+	dir := configuredExportState(t)
+	st, err := state.Load(dir)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Server.DNSServers = nil
+	if err := state.Save(dir, st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	result, err := ExportClient(ExportClientInput{
+		StateDir: dir,
+		ClientID: "iphone",
+		Type:     ExportTypeClash,
+	})
+	if err != nil {
+		t.Fatalf("export clash profile: %v", err)
+	}
+	if result.Warning != ClashDNSWarning {
+		t.Fatalf("unexpected warning: %q", result.Warning)
+	}
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("read clash profile: %v", err)
+	}
+	if !strings.Contains(string(data), "    - 1.1.1.1\n    - 8.8.8.8\n") {
+		t.Fatalf("expected fallback DNS, got:\n%s", string(data))
+	}
+}
+
 func TestExportClientRequiresActiveClient(t *testing.T) {
 	dir := configuredExportState(t)
 	st, err := state.Load(dir)
