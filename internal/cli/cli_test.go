@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/setup"
 	"github.com/vgrinkevich/vpnctl/internal/state"
 )
 
@@ -236,17 +237,29 @@ func TestExecuteSetupDryRunUsesCustomFlags(t *testing.T) {
 	}
 }
 
-func TestExecuteSetupWithoutDryRunIsNotImplementedYet(t *testing.T) {
+func TestExecuteSetupRunsSetup(t *testing.T) {
+	restore := stubSetupRunner(func(_ context.Context, opts setup.Options, _ setup.Runtime) (setup.Result, error) {
+		if opts.Endpoint != "198.211.99.116" {
+			t.Fatalf("unexpected endpoint: %q", opts.Endpoint)
+		}
+		return setup.Result{
+			StateDir:            opts.StateDir,
+			ExternalInterface:   "eth0",
+			WireGuardConfigPath: "/etc/wireguard/wg0.conf",
+		}, nil
+	})
+	defer restore()
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	code := Execute([]string{"setup", "--endpoint", "198.211.99.116"}, &stdout, &stderr)
 
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "setup without --dry-run is not implemented yet") {
-		t.Fatalf("unexpected stderr: %q", stderr.String())
+	if !strings.Contains(stdout.String(), "wireguard config: /etc/wireguard/wg0.conf") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 }
 
@@ -636,6 +649,14 @@ func stubClientKeyGenerator(generator state.ClientKeyGenerator) func() {
 	}
 	return func() {
 		newClientKeyGenerator = original
+	}
+}
+
+func stubSetupRunner(runner func(context.Context, setup.Options, setup.Runtime) (setup.Result, error)) func() {
+	original := runSetup
+	runSetup = runner
+	return func() {
+		runSetup = original
 	}
 }
 

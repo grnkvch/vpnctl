@@ -18,6 +18,8 @@ var newClientKeyGenerator = func() state.ClientKeyGenerator {
 	return setup.ClientKeyGenerator{}
 }
 
+var runSetup = setup.Run
+
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	stateDir := state.DefaultDir
@@ -140,8 +142,15 @@ func executeSetup(args []string, stateDir string, stdout io.Writer, stderr io.Wr
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "setup without --dry-run is not implemented yet")
-	return 1
+	result, err := runSetup(context.Background(), opts, setup.Runtime{})
+	if err != nil {
+		fmt.Fprintf(stderr, "setup failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "configured server %s in %s\n", opts.Name, result.StateDir)
+	fmt.Fprintf(stdout, "wireguard config: %s\n", result.WireGuardConfigPath)
+	fmt.Fprintf(stdout, "external interface: %s\n", result.ExternalInterface)
+	return 0
 }
 
 func executeServer(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
