@@ -202,6 +202,8 @@ func executeServer(args []string, stateDir string, stdout io.Writer, stderr io.W
 	switch args[0] {
 	case "init":
 		return executeServerInit(args[1:], stateDir, stdout, stderr)
+	case "show":
+		return executeServerShow(args[1:], stateDir, stdout, stderr)
 	case "-h", "--help", "help":
 		printServerHelp(stdout)
 		return 0
@@ -245,6 +247,35 @@ func executeServerInit(args []string, stateDir string, stdout io.Writer, stderr 
 	}
 
 	fmt.Fprintf(stdout, "configured server %s in %s\n", cfg.Name, stateDir)
+	return 0
+}
+
+func executeServerShow(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	fs := newFlagSet("server show")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printServerShowHelp(stdout)
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "unexpected server show argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	st, err := state.Load(stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "server show failed: %v\n", err)
+		return 1
+	}
+	if st.Server == nil {
+		fmt.Fprintln(stderr, "server show failed: server is not configured")
+		return 1
+	}
+	printServer(stdout, *st.Server)
 	return 0
 }
 
@@ -757,6 +788,28 @@ func printClient(w io.Writer, client state.ClientState) {
 	}
 }
 
+func printServer(w io.Writer, server state.ServerState) {
+	fmt.Fprintf(w, "id: %s\n", server.ID)
+	fmt.Fprintf(w, "name: %s\n", server.Name)
+	fmt.Fprintf(w, "endpoint: %s\n", server.PublicEndpoint)
+	fmt.Fprintf(w, "wireguard interface: %s\n", server.WireGuardInterface)
+	fmt.Fprintf(w, "wireguard port: %d\n", server.WireGuardPort)
+	fmt.Fprintf(w, "wireguard subnet: %s\n", server.WireGuardSubnet)
+	if server.WireGuardPublicKey != "" {
+		fmt.Fprintf(w, "wireguard public key: %s\n", server.WireGuardPublicKey)
+	}
+	if len(server.DNSServers) > 0 {
+		fmt.Fprintf(w, "dns servers: %s\n", strings.Join(server.DNSServers, ", "))
+	} else {
+		fmt.Fprintln(w, "dns servers: <none>")
+	}
+	if server.ExternalInterface != "" {
+		fmt.Fprintf(w, "external interface: %s\n", server.ExternalInterface)
+	} else {
+		fmt.Fprintln(w, "external interface: <auto>")
+	}
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -793,13 +846,11 @@ Commands:
   init       Initialize local vpnctl state
   setup      Preview or perform one-shot server setup
   apply      Apply current server config to the local system
+  server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets
   help       Show this help text
   version    Show version information
-
-Planned commands:
-  server show
 `)
 }
 
@@ -853,6 +904,7 @@ Usage:
 
 Commands:
   init    Configure server settings in local state
+  show    Show non-secret server state
 `)
 }
 
@@ -871,6 +923,14 @@ Flags:
   --dns <ip-list>               Comma-separated client DNS servers
   --external-interface <name>   External interface for NAT
   --force                       Replace existing server settings
+`)
+}
+
+func printServerShowHelp(w io.Writer) {
+	fmt.Fprint(w, `Show non-secret server state.
+
+Usage:
+  vpnctl server show
 `)
 }
 

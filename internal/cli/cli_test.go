@@ -370,6 +370,45 @@ func TestExecuteServerInitWritesState(t *testing.T) {
 	}
 }
 
+func TestExecuteServerShowPrintsNonSecretState(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{
+		"server", "init",
+		"--endpoint", "198.211.99.116",
+		"--dns", "1.1.1.1,8.8.8.8",
+		"--external-interface", "eth0",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"server", "show"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected server show to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"id: main\n",
+		"name: main\n",
+		"endpoint: 198.211.99.116\n",
+		"wireguard interface: wg0\n",
+		"wireguard port: 51820\n",
+		"wireguard subnet: 10.66.0.0/24\n",
+		"dns servers: 1.1.1.1, 8.8.8.8\n",
+		"external interface: eth0\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected server show to contain %q, got %q", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "private") {
+		t.Fatalf("server show should not mention private keys: %q", stdout.String())
+	}
+}
+
 func TestExecuteServerInitRequiresForceToOverwrite(t *testing.T) {
 	t.Chdir(t.TempDir())
 
