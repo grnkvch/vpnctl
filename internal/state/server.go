@@ -56,6 +56,10 @@ func ConfigureServer(dir string, cfg ServerConfig, force bool) error {
 	if st.Server != nil && !force {
 		return fmt.Errorf("server already configured; use --force to replace it")
 	}
+	wireGuardPublicKey := ""
+	if st.Server != nil {
+		wireGuardPublicKey = st.Server.WireGuardPublicKey
+	}
 
 	st.Server = &ServerState{
 		ID:                 cfg.ID,
@@ -64,6 +68,7 @@ func ConfigureServer(dir string, cfg ServerConfig, force bool) error {
 		WireGuardInterface: cfg.WireGuardInterface,
 		WireGuardPort:      cfg.WireGuardPort,
 		WireGuardSubnet:    cfg.WireGuardSubnet,
+		WireGuardPublicKey: wireGuardPublicKey,
 		DNSServers:         append([]string(nil), cfg.DNSServers...),
 		ExternalInterface:  cfg.ExternalInterface,
 	}

@@ -76,6 +76,37 @@ func TestConfigureServerAllowsOverwriteWithForce(t *testing.T) {
 	}
 }
 
+func TestConfigureServerPreservesPublicKeyOnForce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".vpnctl")
+	cfg := DefaultServerConfig()
+	cfg.PublicEndpoint = "198.211.99.116"
+
+	if err := ConfigureServer(dir, cfg, false); err != nil {
+		t.Fatalf("configure server: %v", err)
+	}
+	st, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Server.WireGuardPublicKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+	if err := Save(dir, st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	cfg.PublicEndpoint = "203.0.113.10"
+	if err := ConfigureServer(dir, cfg, true); err != nil {
+		t.Fatalf("force configure server: %v", err)
+	}
+
+	st, err = Load(dir)
+	if err != nil {
+		t.Fatalf("load state after force: %v", err)
+	}
+	if st.Server.WireGuardPublicKey != "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" {
+		t.Fatalf("expected public key to be preserved")
+	}
+}
+
 func TestConfigureServerValidatesInput(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".vpnctl")
 	cfg := DefaultServerConfig()

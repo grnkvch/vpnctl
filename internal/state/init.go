@@ -34,6 +34,7 @@ type ServerState struct {
 	WireGuardInterface string   `json:"wireguard_interface"`
 	WireGuardPort      int      `json:"wireguard_port"`
 	WireGuardSubnet    string   `json:"wireguard_subnet"`
+	WireGuardPublicKey string   `json:"wireguard_public_key,omitempty"`
 	DNSServers         []string `json:"dns_servers"`
 	ExternalInterface  string   `json:"external_interface,omitempty"`
 }
