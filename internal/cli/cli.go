@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -11,6 +12,10 @@ import (
 )
 
 const version = "0.1.0-dev"
+
+var newClientKeyGenerator = func() state.ClientKeyGenerator {
+	return setup.ClientKeyGenerator{}
+}
 
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -35,6 +40,8 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		return executeSetup(args[1:], stateDir, stdout, stderr)
 	case "server":
 		return executeServer(args[1:], stateDir, stdout, stderr)
+	case "client":
+		return executeClient(args[1:], stateDir, stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vpnctl %s\n", version)
 		return 0
@@ -255,6 +262,72 @@ func executeServerInit(args []string, stateDir string, stdout io.Writer, stderr 
 	return 0
 }
 
+func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing client command")
+		return 2
+	}
+
+	switch args[0] {
+	case "create":
+		return executeClientCreate(args[1:], stateDir, stdout, stderr)
+	case "-h", "--help", "help":
+		printClientHelp(stdout)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown client command: %s\n", args[0])
+		return 2
+	}
+}
+
+func executeClientCreate(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	cfg := state.ClientConfig{
+		ID:       args[0],
+		Platform: state.DefaultClientPlatform,
+	}
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			value, ok := nextValue(args, &i, "--name", stderr)
+			if !ok {
+				return 2
+			}
+			cfg.Name = value
+		case "--platform":
+			value, ok := nextValue(args, &i, "--platform", stderr)
+			if !ok {
+				return 2
+			}
+			cfg.Platform = value
+		case "--tags":
+			value, ok := nextValue(args, &i, "--tags", stderr)
+			if !ok {
+				return 2
+			}
+			cfg.Tags = splitCSV(value)
+		case "-h", "--help":
+			printClientCreateHelp(stdout)
+			return 0
+		default:
+			fmt.Fprintf(stderr, "unknown client create flag: %s\n", args[i])
+			return 2
+		}
+	}
+
+	client, err := state.CreateClient(context.Background(), stateDir, cfg, newClientKeyGenerator())
+	if err != nil {
+		fmt.Fprintf(stderr, "client create failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "created client %s with ip %s\n", client.ID, client.AssignedIP)
+	return 0
+}
+
 func nextValue(args []string, index *int, flag string, stderr io.Writer) (string, bool) {
 	if *index+1 >= len(args) {
 		fmt.Fprintf(stderr, "missing value for %s\n", flag)
@@ -298,13 +371,13 @@ Usage:
 Commands:
   init       Initialize local vpnctl state
   setup      Preview or perform one-shot server setup
+  client     Manage clients
   help       Show this help text
   version    Show version information
 
 Planned commands:
   server show
   ruleset add
-  client create
   client revoke
   client rotate-keys
   client delete
@@ -369,5 +442,29 @@ Flags:
   --dns <ip-list>               Comma-separated client DNS servers
   --external-interface <name>   External interface for NAT
   --force                       Replace existing server settings
+`)
+}
+
+func printClientHelp(w io.Writer) {
+	fmt.Fprint(w, `Manage clients.
+
+Usage:
+  vpnctl client <command>
+
+Commands:
+  create    Create a new client
+`)
+}
+
+func printClientCreateHelp(w io.Writer) {
+	fmt.Fprint(w, `Create a new client.
+
+Usage:
+  vpnctl client create <client-id> [flags]
+
+Flags:
+  --name <name>           Display name (default client id)
+  --platform <platform>   Platform metadata (default generic)
+  --tags <tag-list>       Comma-separated tags
 `)
 }

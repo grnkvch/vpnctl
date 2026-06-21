@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vgrinkevich/vpnctl/internal/state"
 )
 
 func TestExecuteWithoutArgsPrintsHelp(t *testing.T) {
@@ -308,6 +311,102 @@ func TestExecuteServerInitValidatesEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--endpoint is required") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestExecuteClientCreateWritesState(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{
+		"client", "create", "macbook",
+		"--name", "Work MacBook",
+		"--platform", "macos",
+		"--tags", "laptop,personal",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "created client macbook with ip 10.66.0.2") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+		t.Fatalf("stdout leaked private key")
+	}
+
+	data, err := os.ReadFile(filepath.Join(".vpnctl", "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	for _, want := range []string{
+		`"id": "macbook"`,
+		`"name": "Work MacBook"`,
+		`"platform": "macos"`,
+		`"assigned_ip": "10.66.0.2"`,
+		`"wireguard_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected state to contain %q, got %s", want, string(data))
+		}
+	}
+	assertExists(t, filepath.Join(".vpnctl", "secrets", "clients", "macbook.key"))
+}
+
+func TestExecuteClientCreateRequiresServer(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "server is not configured") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+type stubKeyGenerator struct {
+	pair state.ClientKeyPair
+}
+
+func (g stubKeyGenerator) GenerateClientKeyPair(context.Context) (state.ClientKeyPair, error) {
+	return g.pair, nil
+}
+
+func validClientKeyGenerator() state.ClientKeyGenerator {
+	return stubKeyGenerator{pair: state.ClientKeyPair{
+		PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		PublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+	}}
+}
+
+func stubClientKeyGenerator(generator state.ClientKeyGenerator) func() {
+	original := newClientKeyGenerator
+	newClientKeyGenerator = func() state.ClientKeyGenerator {
+		return generator
+	}
+	return func() {
+		newClientKeyGenerator = original
 	}
 }
 

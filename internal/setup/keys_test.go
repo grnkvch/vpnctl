@@ -46,3 +46,22 @@ func TestServerKeyGeneratorUsesWireGuardRunner(t *testing.T) {
 		t.Fatalf("expected two wg calls, got %#v", runner.calls)
 	}
 }
+
+func TestClientKeyGeneratorUsesWireGuardRunner(t *testing.T) {
+	runner := &fakeWGRunner{}
+	generator := ClientKeyGenerator{Runner: runner}
+
+	got, err := generator.GenerateClientKeyPair(context.Background())
+	if err != nil {
+		t.Fatalf("generate client key pair: %v", err)
+	}
+	if got.PrivateKey != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
+		t.Fatalf("unexpected private key")
+	}
+	if got.PublicKey != "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" {
+		t.Fatalf("unexpected public key")
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected two wg calls, got %#v", runner.calls)
+	}
+}

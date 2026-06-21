@@ -91,6 +91,13 @@ func ServerPrivateKeyPath(dir string) string {
 	return filepath.Join(dir, "secrets", serverPrivateKeyFile)
 }
 
+func ClientPrivateKeyPath(dir string, clientID string) string {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	return filepath.Join(dir, "secrets", "clients", clientID+".key")
+}
+
 func readSecret(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -105,6 +112,13 @@ func writeSecret(path string, value string) error {
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("set permissions on secret %s: %w", path, err)
+	}
+	return nil
+}
+
+func removeSecret(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
