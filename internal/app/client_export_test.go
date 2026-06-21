@@ -79,6 +79,61 @@ func TestExportClientWireGuardSupportsCustomOutput(t *testing.T) {
 	}
 }
 
+func TestExportClientWireGuardWritesQR(t *testing.T) {
+	dir := configuredExportState(t)
+	runner := &fakeQRRunner{}
+
+	result, err := ExportClient(ExportClientInput{
+		StateDir: dir,
+		ClientID: "iphone",
+		Type:     ExportTypeWireGuard,
+		QR:       true,
+		QRRunner: runner,
+	})
+	if err != nil {
+		t.Fatalf("export client with QR: %v", err)
+	}
+	if result.QRPath != filepath.Join(dir, "generated", "delivery", "iphone.png") {
+		t.Fatalf("unexpected QR path: %s", result.QRPath)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one qrencode call, got %#v", runner.calls)
+	}
+	call := runner.calls[0]
+	if call.name != "qrencode" {
+		t.Fatalf("unexpected QR command: %s", call.name)
+	}
+	wantArgs := []string{"-o", result.QRPath, "-t", "PNG"}
+	if strings.Join(call.args, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("unexpected QR args: %#v", call.args)
+	}
+	if !strings.Contains(call.stdin, "PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n") {
+		t.Fatalf("expected QR stdin to contain WireGuard config, got:\n%s", call.stdin)
+	}
+
+	info, err := os.Stat(result.QRPath)
+	if err != nil {
+		t.Fatalf("stat QR output: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected QR mode 0600, got %o", got)
+	}
+}
+
+func TestExportClientRejectsQRForClash(t *testing.T) {
+	dir := configuredExportState(t)
+
+	_, err := ExportClient(ExportClientInput{
+		StateDir: dir,
+		ClientID: "iphone",
+		Type:     ExportTypeClash,
+		QR:       true,
+	})
+	if err == nil {
+		t.Fatalf("expected clash QR error")
+	}
+}
+
 func TestExportClientClashWritesProfile(t *testing.T) {
 	dir := configuredExportState(t)
 
@@ -232,4 +287,28 @@ func (fakeClientKeyGenerator) GenerateClientKeyPair(context.Context) (state.Clie
 		PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		PublicKey:  "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
 	}, nil
+}
+
+type fakeQRRunner struct {
+	calls []fakeQRCall
+}
+
+type fakeQRCall struct {
+	name  string
+	args  []string
+	stdin string
+}
+
+func (r *fakeQRRunner) Run(_ context.Context, name string, args []string, stdin string) (string, error) {
+	r.calls = append(r.calls, fakeQRCall{
+		name:  name,
+		args:  append([]string(nil), args...),
+		stdin: stdin,
+	})
+	if len(args) >= 2 && args[0] == "-o" {
+		if err := os.WriteFile(args[1], []byte("png"), 0o600); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
 }

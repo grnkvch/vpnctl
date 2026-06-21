@@ -20,6 +20,7 @@ var newClientKeyGenerator = func() state.ClientKeyGenerator {
 
 var runSetup = setup.Run
 var runApply = app.Apply
+var exportClient = app.ExportClient
 
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -577,18 +578,19 @@ func executeClientExport(args []string, stateDir string, stdout io.Writer, stder
 		fmt.Fprintln(stderr, "--type is required")
 		return 2
 	}
-	if *qr {
-		fmt.Fprintln(stderr, "client export --qr is not implemented yet")
-		return 1
+	if *qr && *exportType != app.ExportTypeWireGuard {
+		fmt.Fprintln(stderr, "client export --qr is valid only for --type wireguard")
+		return 2
 	}
 
-	result, err := app.ExportClient(app.ExportClientInput{
+	result, err := exportClient(app.ExportClientInput{
 		StateDir: dirOrDefault(stateDir),
 		ClientID: clientID,
 		Type:     *exportType,
 		Output:   *output,
 		SCPHint:  !*noSCPHint,
 		Ruleset:  *ruleset,
+		QR:       *qr,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "client export failed: %v\n", err)
@@ -598,6 +600,9 @@ func executeClientExport(args []string, stateDir string, stdout io.Writer, stder
 		fmt.Fprintln(stderr, result.Warning)
 	}
 	fmt.Fprintf(stdout, "wrote %s config to %s\n", *exportType, result.Path)
+	if result.QRPath != "" {
+		fmt.Fprintf(stdout, "wrote wireguard QR to %s\n", result.QRPath)
+	}
 	if result.SCPHint != "" {
 		fmt.Fprintf(stdout, "copy with: %s\n", result.SCPHint)
 	}
@@ -961,7 +966,7 @@ Usage:
 Flags:
   --type <type>       Export type: wireguard, clash
   --output <path>     Output path
-  --qr                Render QR output (not implemented yet)
+  --qr                Render WireGuard QR PNG
   --ruleset <id>      Ruleset id for Clash export (default default)
   --no-scp-hint       Do not print scp copy hint
 `)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,10 +29,13 @@ type ExportClientInput struct {
 	Output   string
 	SCPHint  bool
 	Ruleset  string
+	QR       bool
+	QRRunner wireguard.Runner
 }
 
 type ExportClientResult struct {
 	Path    string
+	QRPath  string
 	SCPHint string
 	Warning string
 }
@@ -42,6 +46,9 @@ func ExportClient(input ExportClientInput) (ExportClientResult, error) {
 	}
 	if input.Type != ExportTypeWireGuard && input.Type != ExportTypeClash {
 		return ExportClientResult{}, fmt.Errorf("unsupported export type: %s", input.Type)
+	}
+	if input.QR && input.Type != ExportTypeWireGuard {
+		return ExportClientResult{}, fmt.Errorf("--qr is valid only for wireguard export")
 	}
 	dir := input.StateDir
 	if dir == "" {
@@ -87,6 +94,12 @@ func ExportClient(input ExportClientInput) (ExportClientResult, error) {
 	}
 
 	result := ExportClientResult{Path: outputPath, Warning: warning}
+	if input.QR {
+		result.QRPath = qrOutputPath(outputPath)
+		if err := writeWireGuardQR(result.QRPath, config, input.QRRunner); err != nil {
+			return ExportClientResult{}, err
+		}
+	}
 	if input.SCPHint {
 		result.SCPHint = scpHint(st.Server.PublicEndpoint, outputPath)
 	}
@@ -193,6 +206,30 @@ func writeExport(path string, content string) error {
 		return fmt.Errorf("set export permissions: %w", err)
 	}
 	return nil
+}
+
+func writeWireGuardQR(path string, content string, runner wireguard.Runner) error {
+	if runner == nil {
+		runner = wireguard.ExecRunner{}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create QR directory: %w", err)
+	}
+	if _, err := runner.Run(context.Background(), "qrencode", []string{"-o", path, "-t", "PNG"}, content); err != nil {
+		return fmt.Errorf("generate WireGuard QR: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("set QR permissions: %w", err)
+	}
+	return nil
+}
+
+func qrOutputPath(configPath string) string {
+	ext := filepath.Ext(configPath)
+	if ext == "" {
+		return configPath + ".png"
+	}
+	return strings.TrimSuffix(configPath, ext) + ".png"
 }
 
 func scpHint(endpoint string, path string) string {

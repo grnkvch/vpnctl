@@ -769,6 +769,53 @@ func TestExecuteClientExportRequiresType(t *testing.T) {
 	}
 }
 
+func TestExecuteClientExportWireGuardWithQRUsesExporter(t *testing.T) {
+	restore := stubExportClient(func(input app.ExportClientInput) (app.ExportClientResult, error) {
+		if input.Type != app.ExportTypeWireGuard {
+			t.Fatalf("unexpected export type: %q", input.Type)
+		}
+		if !input.QR {
+			t.Fatalf("expected QR export")
+		}
+		return app.ExportClientResult{
+			Path:   ".vpnctl/generated/delivery/iphone.conf",
+			QRPath: ".vpnctl/generated/delivery/iphone.png",
+		}, nil
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"client", "export", "iphone", "--type", "wireguard", "--qr"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected client export --qr to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"wrote wireguard config to .vpnctl/generated/delivery/iphone.conf",
+		"wrote wireguard QR to .vpnctl/generated/delivery/iphone.png",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected stdout to contain %q, got %q", want, stdout.String())
+		}
+	}
+}
+
+func TestExecuteClientExportRejectsQRForClash(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"client", "export", "iphone", "--type", "clash", "--qr"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("expected usage exit code, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "client export --qr is valid only for --type wireguard") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestExecuteRulesetAddShowAndList(t *testing.T) {
 	t.Chdir(t.TempDir())
 
@@ -907,6 +954,14 @@ func stubApplyRunner(runner func(context.Context, app.ApplyInput) (app.ApplyResu
 	runApply = runner
 	return func() {
 		runApply = original
+	}
+}
+
+func stubExportClient(exporter func(app.ExportClientInput) (app.ExportClientResult, error)) func() {
+	original := exportClient
+	exportClient = exporter
+	return func() {
+		exportClient = original
 	}
 }
 
