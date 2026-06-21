@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/app"
 	"github.com/vgrinkevich/vpnctl/internal/setup"
 	"github.com/vgrinkevich/vpnctl/internal/state"
 )
@@ -205,6 +206,8 @@ func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.W
 	switch args[0] {
 	case "create":
 		return executeClientCreate(args[1:], stateDir, stdout, stderr)
+	case "export":
+		return executeClientExport(args[1:], stateDir, stdout, stderr)
 	case "-h", "--help", "help":
 		printClientHelp(stdout)
 		return 0
@@ -266,6 +269,71 @@ func executeClientCreate(args []string, stateDir string, stdout io.Writer, stder
 	return 0
 }
 
+func executeClientExport(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client export")
+	exportType := fs.String("type", "", "export type")
+	output := fs.String("output", "", "output path")
+	qr := fs.Bool("qr", false, "render QR output")
+	fs.String("ruleset", "default", "ruleset id")
+	noSCPHint := fs.Bool("no-scp-hint", false, "do not print scp hint")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientExportHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client export argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client export argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	if strings.TrimSpace(*exportType) == "" {
+		fmt.Fprintln(stderr, "--type is required")
+		return 2
+	}
+	if *qr {
+		fmt.Fprintln(stderr, "client export --qr is not implemented yet")
+		return 1
+	}
+
+	result, err := app.ExportClient(app.ExportClientInput{
+		StateDir: dirOrDefault(stateDir),
+		ClientID: clientID,
+		Type:     *exportType,
+		Output:   *output,
+		SCPHint:  !*noSCPHint,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "client export failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "wrote %s config to %s\n", *exportType, result.Path)
+	if result.SCPHint != "" {
+		fmt.Fprintf(stdout, "copy with: %s\n", result.SCPHint)
+	}
+	return 0
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -311,7 +379,6 @@ Planned commands:
   client revoke
   client rotate-keys
   client delete
-  client export
   apply
 `)
 }
@@ -383,6 +450,7 @@ Usage:
 
 Commands:
   create    Create a new client
+  export    Export a client config
 `)
 }
 
@@ -397,4 +465,26 @@ Flags:
   --platform <platform>   Platform metadata (default generic)
   --tags <tag-list>       Comma-separated tags
 `)
+}
+
+func printClientExportHelp(w io.Writer) {
+	fmt.Fprint(w, `Export a client config.
+
+Usage:
+  vpnctl client export <client-id> --type <type> [flags]
+
+Flags:
+  --type <type>       Export type: wireguard
+  --output <path>     Output path
+  --qr                Render QR output (not implemented yet)
+  --ruleset <id>      Ruleset id for Clash export (default default)
+  --no-scp-hint       Do not print scp copy hint
+`)
+}
+
+func dirOrDefault(dir string) string {
+	if dir == "" {
+		return state.DefaultDir
+	}
+	return dir
 }

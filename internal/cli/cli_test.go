@@ -402,6 +402,69 @@ func TestExecuteClientCreateAllowsFlagsBeforeID(t *testing.T) {
 	}
 }
 
+func TestExecuteClientExportWireGuardWritesConfig(t *testing.T) {
+	t.Chdir(t.TempDir())
+	restore := stubClientKeyGenerator(validClientKeyGenerator())
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	st, err := state.Load(".vpnctl")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Server.WireGuardPublicKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+	if err := state.Save(".vpnctl", st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Execute([]string{"client", "export", "iphone", "--type", "wireguard"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected client export to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "wrote wireguard config to .vpnctl/generated/delivery/iphone.conf") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "copy with: scp root@198.211.99.116:") {
+		t.Fatalf("expected scp hint, got %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+		t.Fatalf("stdout leaked private key")
+	}
+	data, err := os.ReadFile(filepath.Join(".vpnctl", "generated", "delivery", "iphone.conf"))
+	if err != nil {
+		t.Fatalf("read exported config: %v", err)
+	}
+	if !strings.Contains(string(data), "PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n") {
+		t.Fatalf("expected exported config to contain private key")
+	}
+}
+
+func TestExecuteClientExportRequiresType(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Execute([]string{"client", "export", "iphone"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "--type is required") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestExecuteClientCreateRequiresServer(t *testing.T) {
 	t.Chdir(t.TempDir())
 	restore := stubClientKeyGenerator(validClientKeyGenerator())

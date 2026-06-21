@@ -98,6 +98,17 @@ func ClientPrivateKeyPath(dir string, clientID string) string {
 	return filepath.Join(dir, "secrets", "clients", clientID+".key")
 }
 
+func ReadClientPrivateKey(dir string, clientID string) (string, error) {
+	privateKey, err := readSecret(ClientPrivateKeyPath(dir, clientID))
+	if err != nil {
+		return "", fmt.Errorf("read client private key: %w", err)
+	}
+	if err := wireguard.ValidateKey(privateKey); err != nil {
+		return "", fmt.Errorf("stored client private key is invalid: %w", err)
+	}
+	return privateKey, nil
+}
+
 func readSecret(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
