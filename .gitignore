@@ -1,0 +1,11 @@
+# Local release/build artifacts
+dist/
+vpnctl
+
+# vpnctl runtime state when used from the repository root
+.vpnctl/
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.tmp
