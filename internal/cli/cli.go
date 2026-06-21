@@ -264,6 +264,8 @@ func executeClient(args []string, stateDir string, stdout io.Writer, stderr io.W
 		return executeClientRevoke(args[1:], stateDir, stdout, stderr)
 	case "rotate-keys":
 		return executeClientRotateKeys(args[1:], stateDir, stdout, stderr)
+	case "delete":
+		return executeClientDelete(args[1:], stateDir, stdout, stderr)
 	case "export":
 		return executeClientExport(args[1:], stateDir, stdout, stderr)
 	case "-h", "--help", "help":
@@ -483,6 +485,53 @@ func executeClientRotateKeys(args []string, stateDir string, stdout io.Writer, s
 		return 1
 	}
 	fmt.Fprintf(stdout, "rotated keys for client %s\n", client.ID)
+	return 0
+}
+
+func executeClientDelete(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
+	clientID := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		clientID = args[0]
+		args = args[1:]
+	}
+
+	fs := newFlagSet("client delete")
+	yes := fs.Bool("yes", false, "confirm deletion")
+	var help bool
+	fs.BoolVar(&help, "h", false, "show help")
+	fs.BoolVar(&help, "help", false, "show help")
+	if err := parseFlags(fs, args, stderr); err != nil {
+		return 2
+	}
+	if help {
+		printClientDeleteHelp(stdout)
+		return 0
+	}
+	if clientID == "" && fs.NArg() > 0 {
+		clientID = fs.Arg(0)
+	}
+	if clientID == "" {
+		fmt.Fprintln(stderr, "missing client id")
+		return 2
+	}
+	if fs.NArg() > 0 && fs.Arg(0) != clientID {
+		fmt.Fprintf(stderr, "unexpected client delete argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "unexpected client delete argument: %s\n", fs.Arg(1))
+		return 2
+	}
+	if !*yes {
+		fmt.Fprintln(stderr, "client delete requires --yes")
+		return 1
+	}
+	client, err := state.DeleteClient(stateDir, state.DeleteClientConfig{ID: clientID})
+	if err != nil {
+		fmt.Fprintf(stderr, "client delete failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "deleted client %s\n", client.ID)
 	return 0
 }
 
@@ -746,7 +795,6 @@ Commands:
 
 Planned commands:
   server show
-  client delete
 `)
 }
 
@@ -834,6 +882,7 @@ Commands:
   revoke    Revoke a client
   rotate-keys
             Rotate client WireGuard keys
+  delete    Delete a client
   export    Export a client config
 `)
 }
@@ -889,6 +938,17 @@ Usage:
 
 Flags:
   --yes    Skip confirmation
+`)
+}
+
+func printClientDeleteHelp(w io.Writer) {
+	fmt.Fprint(w, `Delete a client.
+
+Usage:
+  vpnctl client delete <client-id> --yes
+
+Flags:
+  --yes    Confirm deletion
 `)
 }
 

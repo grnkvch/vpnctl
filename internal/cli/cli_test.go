@@ -615,6 +615,39 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 	if !strings.Contains(stdout.String(), "iphone\trevoked\t10.66.0.2\tios\tiphone\n") {
 		t.Fatalf("expected revoked client in list --all, got %q", stdout.String())
 	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "delete", "macbook"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected client delete without --yes to fail, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "client delete requires --yes") {
+		t.Fatalf("unexpected delete stderr: %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "delete", "macbook", "--yes"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client delete to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "deleted client macbook") {
+		t.Fatalf("unexpected delete stdout: %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(".vpnctl", "secrets", "clients", "macbook.key")); !os.IsNotExist(err) {
+		t.Fatalf("expected deleted client secret to be removed, stat err: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"client", "list", "--all"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected client list --all after delete to succeed, got %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "macbook\tdeleted\t10.66.0.3\tmacos\tmacbook\n") {
+		t.Fatalf("expected deleted client in list --all, got %q", stdout.String())
+	}
 }
 
 func TestExecuteClientExportWireGuardWritesConfig(t *testing.T) {

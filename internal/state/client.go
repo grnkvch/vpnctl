@@ -35,6 +35,10 @@ type RevokeClientConfig struct {
 	Now    time.Time
 }
 
+type DeleteClientConfig struct {
+	ID string
+}
+
 type ClientKeyPair struct {
 	PrivateKey string
 	PublicKey  string
@@ -239,6 +243,37 @@ func RotateClientKeys(ctx context.Context, dir string, id string, generator Clie
 		return client, nil
 	}
 	return ClientState{}, fmt.Errorf("client %q does not exist", id)
+}
+
+func DeleteClient(dir string, cfg DeleteClientConfig) (ClientState, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if strings.TrimSpace(cfg.ID) == "" {
+		return ClientState{}, fmt.Errorf("client id is required")
+	}
+	st, err := Load(dir)
+	if err != nil {
+		return ClientState{}, err
+	}
+	for i, client := range st.Clients {
+		if client.ID != cfg.ID {
+			continue
+		}
+		if client.Status == ClientStatusDeleted {
+			return client, nil
+		}
+		client.Status = ClientStatusDeleted
+		st.Clients[i] = client
+		if err := Save(dir, st); err != nil {
+			return ClientState{}, err
+		}
+		if err := removeSecret(ClientPrivateKeyPath(dir, cfg.ID)); err != nil {
+			return ClientState{}, fmt.Errorf("remove client private key: %w", err)
+		}
+		return client, nil
+	}
+	return ClientState{}, fmt.Errorf("client %q does not exist", cfg.ID)
 }
 
 func ValidateClientConfig(cfg ClientConfig) error {

@@ -239,6 +239,43 @@ func TestRotateClientKeysRequiresActiveClient(t *testing.T) {
 	}
 }
 
+func TestDeleteClientMarksDeletedAndRemovesSecret(t *testing.T) {
+	dir := configuredServerState(t, "10.66.0.0/24")
+	if _, err := CreateClient(context.Background(), dir, ClientConfig{ID: "iphone"}, validFakeClientKeyGenerator()); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	privateKeyPath := ClientPrivateKeyPath(dir, "iphone")
+	if _, err := os.Stat(privateKeyPath); err != nil {
+		t.Fatalf("expected client private key before delete: %v", err)
+	}
+
+	deleted, err := DeleteClient(dir, DeleteClientConfig{ID: "iphone"})
+	if err != nil {
+		t.Fatalf("delete client: %v", err)
+	}
+	if deleted.Status != ClientStatusDeleted {
+		t.Fatalf("unexpected deleted status: %q", deleted.Status)
+	}
+	if _, err := os.Stat(privateKeyPath); !os.IsNotExist(err) {
+		t.Fatalf("expected private key to be removed, stat err: %v", err)
+	}
+
+	active, err := ListClients(dir, false)
+	if err != nil {
+		t.Fatalf("list active clients: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("expected no active clients, got %#v", active)
+	}
+	all, err := ListClients(dir, true)
+	if err != nil {
+		t.Fatalf("list all clients: %v", err)
+	}
+	if len(all) != 1 || all[0].Status != ClientStatusDeleted {
+		t.Fatalf("expected deleted client in all list, got %#v", all)
+	}
+}
+
 func TestCreateClientRequiresServer(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".vpnctl")
 	if _, err := Init(dir, false); err != nil {
