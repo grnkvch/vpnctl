@@ -1,0 +1,7 @@
+table inet vpnctl_v2_spike_tunnel_capture {
+  chain output {
+    type filter hook output priority -300; policy accept;
+    ip daddr @GATEWAY_IP@ tcp dport 17000 counter comment "direct-frp"
+    ip daddr @GATEWAY_IP@ tcp dport 8443 counter comment "restricted-shadowtls"
+  }
+}

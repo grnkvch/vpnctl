@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "status": "spike-only",
+  "frp": {
+    "version": "0.69.0",
+    "asset": "frp_0.69.0_linux_amd64.tar.gz",
+    "url": "https://github.com/fatedier/frp/releases/download/v0.69.0/frp_0.69.0_linux_amd64.tar.gz",
+    "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e"
+  },
+  "ports": {
+    "server": 17000,
+    "client_admin": 17400,
+    "gateway_exposes": [18111, 18112],
+    "node_backends": [18121, 18122],
+    "authorization_plugin": 19091
+  },
+  "transport": {
+    "protocol": "tcp",
+    "wire_protocol": "v1",
+    "tcp_mux": true,
+    "pool_count": 0,
+    "normalized_login_pool_count": 1,
+    "pool_enforcement": "login-plugin-rewrite",
+    "tls_server_name": "vpnctl-tunnel-gateway",
+    "heartbeat_interval_seconds": 1,
+    "heartbeat_timeout_seconds": 4,
+    "revoke_bound_seconds": 6
+  },
+  "load": {
+    "streams_per_expose": 12,
+    "hold_seconds": 4,
+    "minimum_mem_available_kib": 65536
+  }
+}

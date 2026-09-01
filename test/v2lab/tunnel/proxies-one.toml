@@ -1,0 +1,7 @@
+[[proxies]]
+name = "node-a-expose-1"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 18121
+remotePort = 18111
+metadatas.generation = "1"

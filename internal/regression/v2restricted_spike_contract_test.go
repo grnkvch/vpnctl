@@ -132,7 +132,7 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 	}
 
 	limaTemplate := readContractFile(t, filepath.Join(repositoryRoot, "test", "v2lab", "lima.yaml"))
-	if strings.Count(limaTemplate, "guestIP: 0.0.0.0") != 6 || strings.Count(limaTemplate, "guestIPMustBeZero: false") != 6 {
+	if strings.Count(limaTemplate, "guestIP: 0.0.0.0") != 13 || strings.Count(limaTemplate, "guestIPMustBeZero: false") != 13 {
 		t.Error("Lima template must ignore wildcard-bound spike listeners without forwarding them to the host")
 	}
 	for _, port := range []string{"guestPort: 443", "guestPort: 1053", "guestPort: 8443", "guestPort: 17890", "guestPort: 18080", "guestPort: 19090"} {

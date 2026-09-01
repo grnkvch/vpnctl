@@ -1,0 +1,31 @@
+bindAddr = "@GATEWAY_IP@"
+bindPort = 17000
+proxyBindAddr = "127.0.0.1"
+maxPortsPerClient = 2
+detailedErrorsToClient = false
+
+allowPorts = [
+  { single = 18111 },
+  { single = 18112 }
+]
+
+log.to = "console"
+log.level = "info"
+log.disablePrintColor = true
+
+auth.method = "token"
+auth.tokenSource.type = "file"
+auth.tokenSource.file.path = "/etc/vpnctl-v2-spike/tunnel/bootstrap-token"
+
+transport.tcpMux = true
+transport.tcpMuxKeepaliveInterval = 5
+transport.heartbeatTimeout = 4
+transport.tls.force = true
+transport.tls.certFile = "/etc/vpnctl-v2-spike/tunnel/server.crt"
+transport.tls.keyFile = "/etc/vpnctl-v2-spike/tunnel/server.key"
+
+[[httpPlugins]]
+name = "vpnctl-authorizer"
+addr = "127.0.0.1:19091"
+path = "/handler"
+ops = ["Login", "NewProxy", "Ping"]

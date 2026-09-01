@@ -5,7 +5,7 @@ Defines secure outbound-only, per-node multiplexed reverse connectivity that let
 ## ADDED Requirements
 
 ### Requirement: One multiplexed tunnel per node
-Each joined private node SHALL maintain one persistent multiplexed reverse-tunnel connection for all of its exposes and SHALL not create one daemon, persistent connection, or permanent secret per expose. The gateway SHALL share server-side tunnel infrastructure across nodes while preserving node identity boundaries.
+Each joined private node SHALL maintain one persistent multiplexed reverse-tunnel connection for all of its exposes and SHALL not create one daemon, persistent connection, or permanent secret per expose. The selected provider SHALL keep its pre-created work-connection pool effectively zero and create expose streams on demand within the multiplexed connection. The gateway SHALL share server-side tunnel infrastructure across nodes while preserving node identity boundaries.
 
 #### Scenario: Add second expose
 - **WHEN** a node with one healthy expose creates another

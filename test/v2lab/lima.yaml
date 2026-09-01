@@ -21,6 +21,41 @@ networks:
   - lima: user-v2
 
 portForwards:
+  - guestPort: 17000
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 17400
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 18111
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 18112
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 18121
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 18122
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
+  - guestPort: 19091
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
+    proto: any
+    ignore: true
   - guestPort: 443
     guestIP: 0.0.0.0
     guestIPMustBeZero: false

@@ -1,0 +1,37 @@
+clientID = "vpnctl-node-a"
+serverAddr = "@GATEWAY_IP@"
+serverPort = 17000
+loginFailExit = false
+
+log.to = "console"
+log.level = "info"
+log.disablePrintColor = true
+
+auth.method = "token"
+auth.tokenSource.type = "file"
+auth.tokenSource.file.path = "/etc/vpnctl-v2-spike/tunnel/bootstrap-token"
+
+webServer.addr = "127.0.0.1"
+webServer.port = 17400
+webServer.user = "vpnctl-spike"
+webServer.password = "@ADMIN_PASSWORD@"
+webServer.pprofEnable = false
+
+transport.protocol = "tcp"
+transport.wireProtocol = "v1"
+transport.poolCount = 0
+transport.tcpMux = true
+transport.tcpMuxKeepaliveInterval = 5
+transport.heartbeatInterval = 1
+transport.heartbeatTimeout = 4
+transport.tls.enable = true
+transport.tls.disableCustomTLSFirstByte = true
+transport.tls.trustedCaFile = "/etc/vpnctl-v2-spike/tunnel/server.crt"
+transport.tls.serverName = "vpnctl-tunnel-gateway"
+@PROXY_URL@
+
+metadatas.node_id = "node-a"
+metadatas.generation = "1"
+metadatas.tunnel_token = "@TUNNEL_TOKEN@"
+
+includes = ["/etc/vpnctl-v2-spike/tunnel/proxies.toml"]

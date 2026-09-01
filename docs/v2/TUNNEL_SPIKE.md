@@ -1,0 +1,50 @@
+# Multiplexed reverse-tunnel spike
+
+Task 2.7 tests the development tunnel provider on the minimum gateway/node fixtures. It does not install production vpnctl services or expose a public port. The provider is pinned in `test/v2lab/tunnel/manifest.json`: frp `v0.69.0`, one shared internal-only frps, one frpc per node, TLS server verification, `tcpMux`, and an effective work-connection pool of zero. The official Linux/amd64 archive SHA-256 is verified before either binary is installed.
+
+The spike owns only these guest resources:
+
+- `/usr/local/libexec/vpnctl-v2-spike/{frps,frpc,tunnel-auth-plugin,tunnel-backend,tunnel-probe}` as applicable to each role;
+- `/etc/vpnctl-v2-spike/tunnel/` and `/var/lib/vpnctl-v2-spike-tunnel-auth/` with exact ownership markers;
+- `vpnctl-v2-spike-tunnel-{auth,server,client,backend}.service` on their respective roles;
+- gateway overlay `17000/TCP`, gateway loopback `18111/18112/19091`, and node loopback `17400/18121/18122`.
+
+Lima ignores every spike port for host forwarding. The orchestrator refuses drifted VM contracts, foreign files/listeners, missing owner markers, or unexpected forwarding. Every host/guest mutation and rollback is recorded in `docs/v2/HOST_CHANGELOG.md`.
+
+Prepare, inspect, and run the complete acceptance gate:
+
+```bash
+./scripts/v2tunnel-spike.sh prepare
+./scripts/v2tunnel-spike.sh status
+./scripts/v2tunnel-spike.sh verify
+```
+
+`verify` proves all of the following:
+
+- one persistent TLS/tcpMux connection carries 12 concurrent streams for each of two exposes;
+- adding and removing mappings uses loopback-only reload without replacing the frpc process or disturbing the other expose;
+- the local Login/NewProxy authorizer rejects revoked/old-generation identities and malicious/stale mappings, and fails closed when unavailable;
+- an untrusted TLS server never receives Login metadata;
+- restarting frps reconnects without restarting frpc; revocation closes the live connection and rejects retries;
+- standard transport reaches frps directly, while the manually selected restricted transport has exactly one frpc-to-Mihomo connection and sends steady-state tunnel traffic only through ShadowTLS `8443/TCP`;
+- the standard transport, node identity, mapping ownership, and authorization state are restored after the switch;
+- both 1-vCPU/512-MiB guests retain the manifest memory floor with zero unit OOM events.
+
+Generated credentials and evidence are mode-restricted and ignored under `artifacts/v2lab/tunnel-spike/`. The accepted run is summarized in `evidence-20260901T220258Z/summary.json`: effective pool zero, one persistent connection, two exposes, 24 concurrent streams, controller-state failure rejection, reconnect in 7 seconds, revoke in 2 seconds, standard direct traffic, and restricted steady-state `17000 = 0` plus ShadowTLS `8443 > 0`. Temporary `info` logs exist only while the disposable spike units are intentionally active; production logging remains default-off.
+
+## Pinned frp pool normalization
+
+frpc `v0.69.0` normalizes a declared `transport.poolCount = 0` to Login `pool_count = 1`. The local version-locked Login adapter accepts exactly that expected input after identity validation and returns otherwise unchanged Login content with `pool_count = 0` before frps creates the control session. Every other input is rejected. This uses frp's documented plugin content-replacement mechanism and keeps the provider's effective pool at zero; negative pool values are not used.
+
+This normalization is an internal provider-adapter detail, not part of the public expose model. A frp version change must update the pin and rerun the full contract before activation.
+
+## Provider decision
+
+Pinned frp `v0.69.0` is accepted as the replaceable development provider. OpenSSH reverse forwarding remains the fallback adapter if a future pinned frp version cannot pass multiplexing, authorization, no-pool, TLS, lifecycle, transport-switch, or resource gates. No fallback is activated automatically.
+
+Stop the temporary logging/runtime without deleting evidence, or remove only owner-verified spike resources:
+
+```bash
+./scripts/v2tunnel-spike.sh stop
+./scripts/v2tunnel-spike.sh uninstall
+```
