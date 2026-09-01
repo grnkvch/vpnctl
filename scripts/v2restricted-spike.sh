@@ -18,6 +18,7 @@ udp_echo_unit=vpnctl-v2-spike-udp-echo.service
 owner_value=vpnctl-v2-restricted-spike-v1
 owner_path=/etc/vpnctl-v2-spike/restricted/.owner
 capture_table=vpnctl_v2_spike_uot_capture
+benchmark_probe_pid=
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 
 usage() {
@@ -26,6 +27,7 @@ Usage:
   scripts/v2restricted-spike.sh prepare
   scripts/v2restricted-spike.sh verify [evidence-directory]
   scripts/v2restricted-spike.sh reconnect [evidence-directory]
+  scripts/v2restricted-spike.sh benchmark [evidence-directory]
   scripts/v2restricted-spike.sh render-client <gateway-address> [output-file]
   scripts/v2restricted-spike.sh status
   scripts/v2restricted-spike.sh stop
@@ -219,6 +221,7 @@ install_gateway() {
   install_common "$gateway_instance" "$binary"
   copy_to_guest_tmp "$gateway_instance" \
     "$generated_root/gateway.yaml" \
+    "$fixture_root/telegram-api.json" \
     "$fixture_root/udp_echo.py" \
     "$fixture_root/systemd/$gateway_unit" \
     "$fixture_root/systemd/$echo_unit" \
@@ -233,6 +236,7 @@ install_gateway() {
   limactl shell --tty=false "$gateway_instance" -- sudo chmod 0644 /var/lib/vpnctl-v2-spike-echo/probe.txt
   limactl shell --tty=false "$gateway_instance" -- sudo /usr/local/libexec/vpnctl-v2-spike/mihomo -t -d /var/lib/vpnctl-v2-spike-gateway -f /etc/vpnctl-v2-spike/restricted/gateway.yaml
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl daemon-reload
+  limactl shell --tty=false "$gateway_instance" -- sudo install -m 0644 /tmp/telegram-api.json /var/lib/vpnctl-v2-spike-echo/telegram-api.json
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl restart "$echo_unit" "$udp_echo_unit" "$gateway_unit"
 }
 
@@ -241,9 +245,13 @@ install_node() {
   install_common "$node_instance" "$binary"
   copy_to_guest_tmp "$node_instance" \
     "$generated_root/node.yaml" \
+    "$fixture_root/http_benchmark.py" \
+    "$fixture_root/udp_benchmark.py" \
     "$fixture_root/udp_probe.py" \
     "$fixture_root/systemd/$node_unit"
   limactl shell --tty=false "$node_instance" -- sudo install -m 0755 /tmp/udp_probe.py /usr/local/libexec/vpnctl-v2-spike/udp-probe
+  limactl shell --tty=false "$node_instance" -- sudo install -m 0755 /tmp/udp_benchmark.py /usr/local/libexec/vpnctl-v2-spike/udp-benchmark
+  limactl shell --tty=false "$node_instance" -- sudo install -m 0755 /tmp/http_benchmark.py /usr/local/libexec/vpnctl-v2-spike/http-benchmark
   limactl shell --tty=false "$node_instance" -- sudo install -m 0600 /tmp/node.yaml /etc/vpnctl-v2-spike/restricted/node.yaml
   limactl shell --tty=false "$node_instance" -- sudo install -m 0644 "/tmp/$node_unit" "/etc/systemd/system/$node_unit"
   limactl shell --tty=false "$node_instance" -- sudo install -d -m 0700 /var/lib/vpnctl-v2-spike-node
@@ -580,6 +588,159 @@ reconnect() {
   printf 'restricted reconnect evidence: %s\n' "$evidence_dir/summary.json"
 }
 
+udp_benchmark() {
+  local profile=$1
+  local count=$2
+  local payload_bytes=$3
+  local interval_ms=$4
+  local timeout=${5:-5}
+  limactl shell --tty=false "$node_instance" -- /usr/local/libexec/vpnctl-v2-spike/udp-benchmark \
+    --profile "$profile" \
+    --proxy 127.0.0.1:17890 \
+    --target 127.0.0.1:18080 \
+    --count "$count" \
+    --payload-bytes "$payload_bytes" \
+    --interval-ms "$interval_ms" \
+    --timeout "$timeout"
+}
+
+http_benchmark() {
+  local expected_sha256=$1
+  limactl shell --tty=false "$node_instance" -- /usr/local/libexec/vpnctl-v2-spike/http-benchmark \
+    --profile telegram-bot-api-like-tcp \
+    --proxy 127.0.0.1:17890 \
+    --target http://127.0.0.1:18080/telegram-api.json \
+    --expected-sha256 "$expected_sha256" \
+    --count 50 \
+    --timeout 8
+}
+
+benchmark_cleanup() {
+  if [ -n "$benchmark_probe_pid" ] && kill -0 "$benchmark_probe_pid" >/dev/null 2>&1; then
+    kill "$benchmark_probe_pid" >/dev/null 2>&1 || true
+    wait "$benchmark_probe_pid" >/dev/null 2>&1 || true
+  fi
+  benchmark_probe_pid=
+  "$repository_root/scripts/v2lab.sh" fault node clear >/dev/null 2>&1 || true
+  capture_clear
+  select_proxy RESTRICTED-VALID >/dev/null 2>&1 || true
+  select_udp_guard RESTRICTED >/dev/null 2>&1 || true
+}
+
+benchmark() {
+  local evidence_dir=${1:-"$artifact_root/benchmark-$(date -u +%Y%m%dT%H%M%SZ)"}
+  local expected_sha256 protected_tcp native_node_udp direct_loopback_udp native_gateway_udp
+  mkdir -p "$evidence_dir"
+  chmod 0700 "$evidence_dir"
+  wait_for_services
+  select_proxy RESTRICTED-VALID
+  select_udp_guard RESTRICTED
+  "$repository_root/scripts/v2lab.sh" fault node clear
+  trap 'benchmark_cleanup' EXIT
+  capture_start
+
+  expected_sha256=$(shasum -a 256 "$fixture_root/telegram-api.json" | awk '{print $1}')
+  http_benchmark "$expected_sha256" > "$evidence_dir/telegram-bot-api-like-tcp.json"
+  udp_benchmark dns-sized-steady 150 64 20 5 > "$evidence_dir/dns-sized-steady.json"
+  udp_benchmark small-interactive-steady 100 256 50 5 > "$evidence_dir/small-interactive-steady.json"
+  udp_benchmark mtu-safe-steady 100 1200 50 5 > "$evidence_dir/mtu-safe-steady.json"
+  udp_benchmark mtu-safe-burst-observational 500 1200 1 8 > "$evidence_dir/mtu-safe-burst-observational.json"
+  udp_benchmark hol-baseline 300 256 10 5 > "$evidence_dir/hol-baseline.json"
+
+  udp_benchmark hol-250ms-peer-partition 300 256 10 8 > "$evidence_dir/hol-250ms-peer-partition.json" &
+  benchmark_probe_pid=$!
+  sleep 0.5
+  "$repository_root/scripts/v2lab.sh" fault node partition
+  sleep 0.25
+  "$repository_root/scripts/v2lab.sh" fault node clear
+  if ! wait "$benchmark_probe_pid"; then
+    echo "head-of-line benchmark process failed" >&2
+    exit 1
+  fi
+  benchmark_probe_pid=
+  udp_benchmark post-fault-recovery 50 256 20 5 > "$evidence_dir/post-fault-recovery.json"
+
+  jq -e '.status == "passed" and .requests == 50 and .success == 50 and .failures == 0' \
+    "$evidence_dir/telegram-bot-api-like-tcp.json" >/dev/null
+  local profile
+  for profile in dns-sized-steady small-interactive-steady mtu-safe-steady hol-baseline post-fault-recovery; do
+    jq -e '.status == "passed" and .received == .sent and .lost == 0 and .invalid == 0' \
+      "$evidence_dir/$profile.json" >/dev/null
+  done
+  jq -e --slurpfile baseline "$evidence_dir/hol-baseline.json" '
+    .received > 0 and
+    .responses_over_100ms > 0 and
+    .rtt_ms.max >= 200 and
+    (.rtt_ms.max - $baseline[0].rtt_ms.max) >= 100
+  ' "$evidence_dir/hol-250ms-peer-partition.json" >/dev/null
+
+  capture_snapshot "$evidence_dir" benchmark
+  protected_tcp=$(capture_packets "$evidence_dir/benchmark-node-nft.txt" protected-tcp)
+  native_node_udp=$(capture_packets "$evidence_dir/benchmark-node-nft.txt" native-udp-leak)
+  direct_loopback_udp=$(capture_packets "$evidence_dir/benchmark-node-nft.txt" direct-loopback-leak)
+  native_gateway_udp=$(capture_packets "$evidence_dir/benchmark-gateway-nft.txt" native-node-udp)
+  if [ "${protected_tcp:-0}" -eq 0 ] || [ "${native_node_udp:-0}" -ne 0 ] || \
+     [ "${direct_loopback_udp:-0}" -ne 0 ] || [ "${native_gateway_udp:-0}" -ne 0 ]; then
+    echo "benchmark capture did not retain TCP-only outer transport" >&2
+    exit 1
+  fi
+  capture_clear
+  "$repository_root/scripts/v2lab.sh" report "$evidence_dir/resources"
+
+  jq -n \
+    --slurpfile telegram "$evidence_dir/telegram-bot-api-like-tcp.json" \
+    --slurpfile dns "$evidence_dir/dns-sized-steady.json" \
+    --slurpfile interactive "$evidence_dir/small-interactive-steady.json" \
+    --slurpfile mtu "$evidence_dir/mtu-safe-steady.json" \
+    --slurpfile burst "$evidence_dir/mtu-safe-burst-observational.json" \
+    --slurpfile baseline "$evidence_dir/hol-baseline.json" \
+    --slurpfile impaired "$evidence_dir/hol-250ms-peer-partition.json" \
+    --slurpfile recovery "$evidence_dir/post-fault-recovery.json" \
+    --argjson protected_tcp_packets "${protected_tcp:-0}" \
+    '{
+      schema_version: 1,
+      status: "passed",
+      environment: {gateway: "1 vCPU/512 MiB/10 GiB", node: "1 vCPU/512 MiB/10 GiB"},
+      telegram_bot_api_like_tcp: $telegram[0],
+      udp: {
+        dns_sized_steady: $dns[0],
+        small_interactive_steady: $interactive[0],
+        mtu_safe_steady: $mtu[0],
+        mtu_safe_burst_observational: $burst[0],
+        head_of_line: {
+          baseline: $baseline[0],
+          peer_partition_ms: 250,
+          impaired: $impaired[0],
+          observed: true
+        },
+        post_fault_recovery: $recovery[0]
+      },
+      supported_functional_bounds: {
+        path_condition: "healthy restricted path",
+        single_uot_association_profiles: [
+          {application_payload_bytes: 64, packets_per_second: 50},
+          {application_payload_bytes: 256, packets_per_second: 20},
+          {application_payload_bytes: 1200, packets_per_second: 20}
+        ],
+        required_result: "all probe responses within the bounded validation timeout",
+        service_level_objective: false
+      },
+      no_performance_guarantee: [
+        "voice or video calls",
+        "gaming",
+        "QUIC or HTTP/3",
+        "bulk or sustained high-rate UDP",
+        "UDP during loss, reordering, congestion, or path interruption",
+        "payloads above the tested 1200-byte application datagram"
+      ],
+      outer_transport: {protected_tcp_packets: $protected_tcp_packets, native_udp_packets: 0}
+    }' > "$evidence_dir/summary.json"
+  select_proxy RESTRICTED-VALID
+  select_udp_guard RESTRICTED
+  trap - EXIT
+  printf 'restricted benchmark evidence: %s\n' "$evidence_dir/summary.json"
+}
+
 render_client() {
   local address=${1:?gateway address is required}
   local output=${2:-"$artifact_root/clash-mi-$address.yaml"}
@@ -626,6 +787,8 @@ uninstall_role() {
   limactl shell --tty=false "$instance" -- sudo rm -f \
     /usr/local/libexec/vpnctl-v2-spike/mihomo \
     /usr/local/libexec/vpnctl-v2-spike/udp-echo \
+    /usr/local/libexec/vpnctl-v2-spike/http-benchmark \
+    /usr/local/libexec/vpnctl-v2-spike/udp-benchmark \
     /usr/local/libexec/vpnctl-v2-spike/udp-probe
   limactl shell --tty=false "$instance" -- sudo rmdir /usr/local/libexec/vpnctl-v2-spike 2>/dev/null || true
   limactl shell --tty=false "$instance" -- sudo systemctl daemon-reload
@@ -642,6 +805,7 @@ case "$command" in
   prepare) prepare ;;
   verify) verify "${2:-}" ;;
   reconnect) reconnect "${2:-}" ;;
+  benchmark) benchmark "${2:-}" ;;
   render-client) render_client "${2:-}" "${3:-}" ;;
   status) status ;;
   stop) stop_spike ;;

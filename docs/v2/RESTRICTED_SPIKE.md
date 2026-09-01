@@ -1,10 +1,10 @@
 # Restricted transport spikes
 
-Tasks 2.2 and 2.3 test the development candidate only; they do not make the restricted transport production-ready. The candidate is pinned in `test/v2lab/restricted/manifest.json`: Mihomo `v1.19.30`, Shadowsocks 2022 AES-256-GCM, ShadowTLS v3 strict over `8443/TCP`, and Shadowsocks UDP-over-TCP v2. The official archive SHA-256 is verified before a binary is copied into either lab VM.
+Tasks 2.2 through 2.4 test the development candidate only; they do not make the restricted transport production-ready. The candidate is pinned in `test/v2lab/restricted/manifest.json`: Mihomo `v1.19.30`, Shadowsocks 2022 AES-256-GCM, ShadowTLS v3 strict over `8443/TCP`, and Shadowsocks UDP-over-TCP v2. The official archive SHA-256 is verified before a binary is copied into either lab VM.
 
 The spike owns only these guest resources:
 
-- `/usr/local/libexec/vpnctl-v2-spike/{mihomo,udp-echo,udp-probe}` as applicable to each role;
+- `/usr/local/libexec/vpnctl-v2-spike/{mihomo,udp-echo,udp-probe,udp-benchmark,http-benchmark}` as applicable to each role;
 - `/etc/vpnctl-v2-spike/restricted/` with an ownership marker;
 - `vpnctl-v2-spike-restricted-{gateway,node}.service`, `vpnctl-v2-spike-echo.service`, and `vpnctl-v2-spike-udp-echo.service`;
 - their systemd state paths;
@@ -18,6 +18,7 @@ Prepare the pinned candidate and run its automated TCP, DNS, UDP-over-TCP, stric
 ./scripts/v2restricted-spike.sh prepare
 ./scripts/v2restricted-spike.sh verify
 ./scripts/v2restricted-spike.sh reconnect
+./scripts/v2restricted-spike.sh benchmark
 ```
 
 `verify` proves all of the following:
@@ -32,6 +33,8 @@ Prepare the pinned candidate and run its automated TCP, DNS, UDP-over-TCP, stric
 
 The capture tables use the exact temporary name `inet vpnctl_v2_spike_uot_capture` and are deleted by a trap on success or failure. The generated evidence and credentials are mode-restricted and ignored under `artifacts/v2lab/restricted-spike/`. Temporary `info` logs exist only inside the disposable fixtures for this explicit spike; production logging remains default-off.
 
+`benchmark` runs a synthetic small Bot API-shaped selected-TCP profile, three healthy request/response UDP profiles, an unsupported high-rate observation, and matching UoT streams before/during a 250 ms lab-owned node-to-gateway partition. Its trap removes only the exact fault/capture state and restores both selectors. See [the task 2.4 report](spikes/RESTRICTED_UDP_BENCHMARK.md) for measured bounds and the explicit no-performance-guarantee decision.
+
 ## Provider safety result
 
 Mihomo does not by itself provide the required fail-closed behavior when a selected Shadowsocks outbound lacks UDP capability: without an explicit readiness guard, a matched UDP flow can be attempted through `DIRECT`. Production integration must therefore render an explicit selected-UDP reject path and combine it with the independent kernel leak guard. Merely setting `udp: false` is not a safety mechanism.
@@ -44,7 +47,7 @@ Mihomo-on-Linux compatibility is not accepted as evidence for actual Clash Mi. A
 ./scripts/v2restricted-spike.sh render-client 203.0.113.10
 ```
 
-The default output is mode `0600` under the ignored artifact directory. Before v2.0, transfer it to an actual supported Clash Mi installation and record the app/platform version plus sanitized results for import, selected TCP, selected DNS, selected UoT, strict wrong-host rejection, no fail-direct behavior, and reconnect. Tasks 2.2 and 2.3 are complete on their automated development gates; the candidate remains non-production-ready until this deployed-service release gate passes.
+The default output is mode `0600` under the ignored artifact directory. Before v2.0, transfer it to an actual supported Clash Mi installation and record the app/platform version plus sanitized results for import, selected TCP, selected DNS, selected UoT, strict wrong-host rejection, no fail-direct behavior, and reconnect. Tasks 2.2 through 2.4 are complete on their automated development gates; the candidate remains non-production-ready until this deployed-service release gate passes.
 
 Stop the spike without deleting evidence, or remove only owner-verified guest resources:
 

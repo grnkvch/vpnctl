@@ -177,6 +177,8 @@ The release manifest pins component versions, capabilities, and config schema. B
 
 Passing the automated development gates qualifies the candidate for continued implementation, but does not make it production-ready. Before v2.0 release, the complete stack must be tested against an actually deployed gateway and node with a supported Clash Mi client for profile import, selected TCP, proxy-bound DNS, UoT, fail-closed behavior, and reconnect. If the candidate fails either gate, the transport interface and product behavior stay; another DPI-resistant provider must pass the same suite. There is no product-facing Shadowsocks or ShadowTLS configuration surface.
 
+The task 2.4 benchmark accepts restricted UoT only as best-effort functional UDP on a healthy path. Its regression floor is one UoT association completing bounded request/response probes at 64 bytes/50 packets per second, 256 bytes/20 packets per second, and 1200 bytes/20 packets per second. These are compatibility points, not SLOs. Restricted has no latency, throughput, concurrency, or availability guarantee for voice/video, gaming, QUIC/HTTP3, bulk/high-rate UDP, adverse paths, or payloads above 1200 bytes; standard WireGuard remains the explicit manual alternative.
+
 ### 9. Treat the handshake host as pinned versioned desired state
 
 The signed bundle carries an ordered list with stable candidate IDs and hostnames. Init probes TLS 1.3, certificate validity, reachability, and bounded latency and persists the first success. Runtime health never mutates the selection.

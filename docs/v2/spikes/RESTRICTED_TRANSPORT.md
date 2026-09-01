@@ -1,6 +1,6 @@
-# Restricted transport candidate — tasks 2.2 and 2.3
+# Restricted transport candidate — tasks 2.2 through 2.4
 
-Status: **automated gateway/Linux-node TCP, DNS, UoT, fail-closed, and reconnect gates passed; deployed Clash Mi release gate pending**.
+Status: **automated gateway/Linux-node TCP, DNS, UoT, fail-closed, reconnect, and workload/HOL gates passed; deployed Clash Mi release gate pending**.
 
 Tested on 2026-09-01 with two Ubuntu 24.04 amd64 fixtures constrained to 1 vCPU, 512 MiB configured RAM, 10 GiB configured disk, and 1 GiB managed swap. The candidate is Mihomo `v1.19.30` (`linux amd64`, Go 1.26.6) with Shadowsocks `2022-blake3-aes-256-gcm`, embedded ShadowTLS v3, and Shadowsocks UoT v2. The downloaded release archive matched SHA-256 `cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84`.
 
@@ -24,10 +24,16 @@ Raw ignored evidence is under:
 - `artifacts/v2lab/restricted-spike/uot-final-isolated/`;
 - `artifacts/v2lab/restricted-spike/uot-reconnect-final-isolated/`.
 
-## Remaining acceptance and performance work
+## Workload and head-of-line decision
+
+Task 2.4 accepted restricted UoT as best-effort functional selected UDP, not as a performance transport. Healthy one-association request/response profiles completed without loss at 64 bytes/50 pps, 256 bytes/20 pps, and 1200 bytes/20 pps. A 1200-byte/1000 pps observation lost 81.4%, and a controlled 250 ms peer partition raised the identical 256-byte/100 pps stream from 67.861 ms to 911.094 ms p95 while losing 12% within the bounded window.
+
+The exact method, metrics, functional bounds, Telegram TCP boundary, and unsupported workloads are recorded in [RESTRICTED_UDP_BENCHMARK.md](RESTRICTED_UDP_BENCHMARK.md). There is no restricted performance guarantee for voice/video, gaming, QUIC/HTTP3, bulk/high-rate UDP, adverse paths, or payloads above 1200 bytes. Standard WireGuard remains the only manually selected alternative for predictable latency-sensitive UDP.
+
+## Remaining acceptance work
 
 The candidate is not production-approved until task 16.11 runs the same pinned profile against an actually deployed gateway/node and supported Clash Mi, including selected TCP, DNS, UoT, strict-host failure, fail-closed behavior, and reconnect.
 
-UDP head-of-line behavior and representative Telegram/general UDP workloads belong to task 2.4. The broader DNS-mode choice belongs to task 2.9.
+The broader DNS-mode choice belongs to task 2.9. Full Telegram ingress/tunnel and several-hundred-user capacity belong to tasks 2.5-2.7 and 16.9; this task's synthetic Telegram-shaped TCP probe is not a substitute.
 
 Primary references: [Mihomo v1.19.30 release](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.30), [Mihomo Shadowsocks outbound](https://wiki.metacubex.one/en/config/proxies/ss/), [Mihomo Shadowsocks listener](https://wiki.metacubex.one/en/config/inbound/listeners/ss/), [Mihomo DNS proxy selection](https://wiki.metacubex.one/en/config/dns/), and [ShadowTLS v3 strict TLS 1.3 behavior](https://github.com/ihciah/shadow-tls/blob/master/docs/protocol-v3-en.md).

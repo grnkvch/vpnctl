@@ -82,6 +82,7 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 		"capture_table=vpnctl_v2_spike_uot_capture", "selected UDP unexpectedly succeeded while UoT was disabled",
 		"select_udp_guard REJECT-DROP", "broken-uot-proxy.json", "native UDP while UoT was disabled",
 		"clash-mi-mihomo-validation.txt", "outage_probe_failed", "udp_over_tcp_recovered", "uninstall_role",
+		"benchmark) benchmark", "hol-250ms-peer-partition", "no_performance_guarantee", "fault node clear",
 	} {
 		if !strings.Contains(orchestrator, guard) {
 			t.Errorf("restricted spike orchestrator is missing %q", guard)
@@ -93,6 +94,25 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 		if !strings.Contains(udpProbe, required) {
 			t.Errorf("UDP-over-TCP probe is missing %q", required)
 		}
+	}
+
+	udpBenchmark := readContractFile(t, filepath.Join(fixtureRoot, "udp_benchmark.py"))
+	for _, required := range []string{
+		"SOCKS5 UDP associate", "PAYLOAD_HEADER", "responses_over_100ms", "out_of_order", "rtt_ms",
+	} {
+		if !strings.Contains(udpBenchmark, required) {
+			t.Errorf("UDP-over-TCP benchmark is missing %q", required)
+		}
+	}
+
+	httpBenchmark := readContractFile(t, filepath.Join(fixtureRoot, "http_benchmark.py"))
+	for _, required := range []string{"HTTPConnection", "expected-sha256", "requests_per_second", "latency_ms"} {
+		if !strings.Contains(httpBenchmark, required) {
+			t.Errorf("API-like TCP benchmark is missing %q", required)
+		}
+	}
+	if telegramFixture := readContractFile(t, filepath.Join(fixtureRoot, "telegram-api.json")); !strings.Contains(telegramFixture, "vpnctl-v2-telegram-bot-api-like-response") {
+		t.Error("Telegram Bot API-like fixture does not identify its synthetic scope")
 	}
 
 	for _, fixture := range []string{"node-uot-capture.nft.tmpl", "gateway-uot-capture.nft.tmpl"} {

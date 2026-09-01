@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "result": {
+    "fixture": "vpnctl-v2-telegram-bot-api-like-response",
+    "update_id": 900000001,
+    "message": {
+      "message_id": 42,
+      "date": 1788278400,
+      "chat": {
+        "id": 100000001,
+        "type": "private"
+      },
+      "from": {
+        "id": 200000001,
+        "is_bot": false,
+        "language_code": "en"
+      },
+      "text": "Synthetic payload for transport benchmarking; no Telegram credentials or production API are used."
+    }
+  }
+}
