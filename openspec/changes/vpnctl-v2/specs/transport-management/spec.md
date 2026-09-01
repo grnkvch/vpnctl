@@ -62,7 +62,7 @@ Restricted selected UDP SHALL be encapsulated with UDP-over-TCP inside the same 
 - **THEN** status shows restricted pending and standard remains active until explicit apply
 
 ### Requirement: Restricted transport acceptance contract
-The selected restricted implementation SHALL pass live end-to-end tests with the pinned node/gateway component and actual supported Clash Mi client for selected TCP, DNS, and UDP-over-TCP. It SHALL pass resource tests on Ubuntu 24.04 with 1 vCPU/512 MB and security validation of strict DPI-resistant mode before v2.0 release. Until those gates pass, a candidate stack SHALL not be described as production-ready restricted transport.
+The selected restricted implementation SHALL pass live end-to-end tests against an actually deployed gateway and node with an actual supported Clash Mi client for selected TCP, DNS, and UDP-over-TCP. It SHALL pass resource tests on Ubuntu 24.04 with 1 vCPU/512 MB and security validation of strict DPI-resistant mode before v2.0 release. Automated gateway/Linux-node spikes MAY qualify a candidate for continued implementation, but MUST NOT satisfy or waive the deployed-client release gate. Until those gates pass, a candidate stack SHALL not be described as production-ready restricted transport.
 
 #### Scenario: Candidate fails Clash Mi UDP test
 - **WHEN** the pinned restricted stack cannot carry selected UDP through Clash Mi without policy leakage

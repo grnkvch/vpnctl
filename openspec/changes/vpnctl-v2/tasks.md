@@ -11,17 +11,17 @@
 ## 2. Blocking Technical Spikes
 
 - [x] 2.1 Create a reproducible Ubuntu 24.04 amd64 test environment constrained to 1 vCPU, 512 MB RAM, and 10 GB disk with network-fault controls; verify a documented command boots gateway/node fixtures and records CPU, RSS, disk, sockets, and latency.
-- [ ] 2.2 Prototype pinned Mihomo with Shadowsocks + ShadowTLS v3 strict for gateway, Linux node, and actual Clash Mi; verify selected TCP and DNS E2E, handshake-host behavior, reconnect, and captured resource evidence.
+- [x] 2.2 Prototype pinned Mihomo with Shadowsocks + ShadowTLS v3 strict for gateway and Linux node, render and validate the Clash-compatible profile with pinned Mihomo, and verify selected TCP plus proxy-bound DNS E2E, handshake-host behavior, reconnect, and captured resource evidence; defer execution on actual Clash Mi to the deployed-service release gate.
 - [ ] 2.3 Extend the restricted prototype with Mihomo UDP-over-TCP and close `8443/UDP`; verify selected UDP reaches the gateway only through protected TCP and blocks without any direct/native-UDP leak when UoT is broken.
 - [ ] 2.4 Benchmark restricted UDP head-of-line behavior and representative Telegram plus general UDP workloads; verify the report defines supported functional bounds and explicitly records workloads with no performance guarantee.
 - [ ] 2.5 Prototype nginx IP-only self-signed RSA ingress with Telegram Bot API compatibility; verify TLS 1.2/1.3, five-year certificate acceptance, SAN/CN IP identity, HTTP/1.1+HTTP/2, and a real webhook registration/request flow.
 - [ ] 2.6 Stress the nginx prototype for streaming without request-body disk files, hard/per-expose limits, graceful reload, concurrency, and `404`/`413`/`503`/`504`; verify measured safe defaults fit the minimum gateway or document the Caddy fallback decision.
 - [ ] 2.7 Prototype pinned frp with one shared frps, one frpc per node, `tcpMux`, no pool, dynamic mapping reload, local Login/NewProxy authorization, TLS, reconnect, revoke, and transport switch; verify one persistent connection carries multiple expose streams within the resource budget.
 - [ ] 2.8 Prototype nftables hooks, fwmark allocation, conntrack retention, policy routes, TUN readiness guard, recovery allowlist, ingress-response symmetry, and atomic rollback; verify boot/crash/restart/uninstall fault tests show no selected TCP/UDP/IPv6 direct leak and no unrelated-node traffic breakage.
-- [ ] 2.9 Prototype systemd-resolved integration and candidate Mihomo DNS modes with Linux applications and Clash Mi; verify selected/direct query separation, gateway-DNS failure, cache behavior, classic port-53 capture, and clean restoration select one documented mode.
+- [ ] 2.9 Prototype systemd-resolved integration and candidate Mihomo DNS modes with Linux applications and rendered Clash-compatible profiles validated by pinned Mihomo; verify selected/direct query separation, gateway-DNS failure, cache behavior, classic port-53 capture, and clean restoration select one documented mode, deferring actual Clash Mi DNS behavior to task 16.11.
 - [ ] 2.10 Prototype the Ed25519 control CA/leaf and enrollment-signature formats plus HTTPS/1.1 JSON RPC limits; verify Go/OpenSSL interoperability, URI SAN validation, renewal/overlap, signed transcript replay resistance, and bounded malformed-request behavior.
 - [ ] 2.11 Select and benchmark backup KDF/AEAD parameters under 512 MB RAM; verify encryption/decryption, wrong-passphrase authentication failure, corruption detection, and documented memory/time bounds.
-- [ ] 2.12 Consolidate spike outcomes into ADRs and a pinned component/limit manifest; verify every conditional provider and open design parameter has an accepted value or an explicitly selected fallback before dependent production tasks start.
+- [ ] 2.12 Consolidate spike outcomes into ADRs and a pinned component/limit manifest; verify every conditional provider and open design parameter has a development-accepted value or explicitly selected fallback and every deferred deployed-service gate is assigned to section 16 before dependent production tasks start.
 
 ## 3. Versioned Model, Store, and Secrets
 
@@ -80,7 +80,7 @@
 - [ ] 7.6 Implement atomic full policy set/clear for current node and explicit client target, including unknown/empty validation and pending node policy; verify no incremental or automatic assignment path exists.
 - [ ] 7.7 Implement client add/list/show with immutable identity, unique name, stable address, explicit atomic initial presets, and secret-free views; verify at least five isolated clients and duplicate/unknown failures.
 - [ ] 7.8 Migrate the v1 WireGuard renderer into v2 deterministic full-tunnel export; verify byte/semantic golden compatibility, default DNS behavior, key/address preservation, and independence from preset changes.
-- [ ] 7.9 Implement Clash/Mihomo export from normalized policy and split DNS, initially with standard and later restricted alternatives; verify Clash Mi parses the profile, selected rules end in gateway-or-block semantics, and unmatched traffic ends direct.
+- [ ] 7.9 Implement Clash/Mihomo export from normalized policy and split DNS, initially with standard and later restricted alternatives; verify pinned Mihomo parses the rendered Clash-compatible profile, selected rules end in gateway-or-block semantics, and unmatched traffic ends direct, deferring import into actual Clash Mi to task 16.11.
 - [ ] 7.10 Implement managed/custom export paths, `0600` files, `0700` directories, atomic overwrite rules, `--force`, scp hints, generation metadata, and no stdout profile; verify file/permission/staleness/output tests.
 - [ ] 7.11 Implement client policy/credential staleness, rotation, immediate revoke, delete-after-revoke, and export deletion; verify old profiles stop connecting and full-tunnel WireGuard does not become stale on preset-only edits.
 - [ ] 7.12 Implement client/client, client/node, and node/node gateway isolation rules tied to active identities; verify packet-level lateral attempts are blocked while internet egress works.
@@ -190,7 +190,7 @@
 
 ## 16. End-to-End, Security, Capacity, and Release Gate
 
-- [ ] 16.1 Automate the one-gateway personal VPN happy paths for selective Clash Mi and full-tunnel WireGuard, including scp-only delivery; verify iOS/Clash-compatible and WireGuard clients reach expected direct/proxied destinations.
+- [ ] 16.1 Automate the one-gateway personal VPN happy paths for a selective Clash-compatible profile and full-tunnel WireGuard, including scp-only delivery; verify pinned Mihomo and WireGuard clients reach expected direct/proxied destinations, deferring actual iOS/Clash Mi execution to task 16.11.
 - [ ] 16.2 Automate gateway init plus new-SSH watchdog confirmation, invite, node init, restricted join with Telegram preset, and first expose happy path; verify the accepted minimal commands work without hidden defaults.
 - [ ] 16.3 Run equivalent standard-node and manual standard↔restricted test/switch/defer flows; verify no automatic fallback, one active steady-state transport, selected TCP/UDP fail-closed, and unrelated direct continuity.
 - [ ] 16.4 Run multi-node, multi-client, multi-expose isolation and authorization tests; verify no lateral networking, credential reuse, mapping impersonation, or cross-resource removal.
@@ -200,4 +200,4 @@
 - [ ] 16.8 Run update/rollback and backup/restore E2E for same and changed public IPs across supported protocol windows; verify data-plane compatibility, explicit interruptions, and complete required-action lists.
 - [ ] 16.9 Run sustained minimum-gateway load for one Telegram node serving the defined several-hundred-user profile and five clients; verify controller idle RSS target, total memory/swap, CPU, disk, connection limits, latency, reconnect, and no OOM/deadlock.
 - [ ] 16.10 Document installation, happy paths, policy/DNS classification boundary, restricted UDP limitations, webhook registration responsibility, status/doctor/logging, backup/update/removal, migration, and troubleshooting; verify every documented command is executed in docs tests and no backlog feature is advertised.
-- [ ] 16.11 Re-run the requirement traceability audit, strict OpenSpec validation, full Go/unit/integration/E2E/security/resource/migration suites, release artifact verification, and manual Clash Mi/Telegram checks; verify every non-backlog requirement is green before labeling the release v2.0.
+- [ ] 16.11 Re-run the requirement traceability audit, strict OpenSpec validation, full Go/unit/integration/E2E/security/resource/migration suites, and release artifact verification; against an actually deployed gateway and node, manually verify supported Clash Mi profile import, selected TCP, proxy-bound DNS, UoT, strict wrong-host rejection, no fail-direct behavior, reconnect, and the Telegram flow; verify every non-backlog requirement is green before labeling the release v2.0.

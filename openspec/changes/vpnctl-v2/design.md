@@ -162,20 +162,20 @@ Exact nftables hook names, priorities, mark masks, and interaction tests with sy
 
 Alternative considered: rely solely on Mihomo TUN auto-route. If Mihomo crashes during boot or reload, kernel routing can send traffic direct before userspace restores policy.
 
-### 8. Use Mihomo as the initial routing/restricted provider, gated by live tests
+### 8. Use Mihomo as the initial routing/restricted provider, gated by development and deployed-service tests
 
 The initial provider uses Mihomo for node TUN classification and DNS, a native Shadowsocks listener plus ShadowTLS v3 strict wrapping on the gateway, and a Shadowsocks outbound with ShadowTLS on nodes/Clash clients. Selected UDP in restricted mode uses Mihomo UDP-over-TCP inside Shadowsocks/ShadowTLS; there is no listener on `8443/UDP`.
 
 The provider exposes `Prepare`, `Validate`, `StartTest`, `Activate`, `Drain`, `Rollback`, and health/probe methods. Standard mode uses WireGuard and presents the same internal gateway destinations to control and tunnel clients. Both provider configs exist, but a node activation record selects one. Test creates isolated transient routes/connections and cannot mutate the production mark or tunnel generation.
 
-The release manifest pins component versions, capabilities, and config schema. Before implementation depends on the candidate, a live spike must prove:
+The release manifest pins component versions, capabilities, and config schema. Before dependent implementation uses each candidate capability, reproducible gateway/Linux-node development spikes must prove:
 
-- gateway/node and actual Clash Mi selected TCP and DNS;
+- selected TCP and proxy-bound DNS end-to-end plus validation of the rendered Clash-compatible profile with the pinned Mihomo version;
 - UoT end-to-end and fail-closed behavior with `8443/UDP` closed;
 - ShadowTLS v3 strict behavior and handshake-host validation;
 - memory/CPU/reconnect under the minimum host.
 
-If the candidate fails, the transport interface and product behavior stay; another DPI-resistant provider must pass the same suite. There is no product-facing Shadowsocks or ShadowTLS configuration surface.
+Passing the automated development gates qualifies the candidate for continued implementation, but does not make it production-ready. Before v2.0 release, the complete stack must be tested against an actually deployed gateway and node with a supported Clash Mi client for profile import, selected TCP, proxy-bound DNS, UoT, fail-closed behavior, and reconnect. If the candidate fails either gate, the transport interface and product behavior stay; another DPI-resistant provider must pass the same suite. There is no product-facing Shadowsocks or ShadowTLS configuration surface.
 
 ### 9. Treat the handshake host as pinned versioned desired state
 
@@ -241,7 +241,7 @@ The node routing provider runs one local resolver endpoint and installs a system
 
 The local resolver evaluates normalized selector domains. In `policy` mode, selected queries use an internal gateway resolver reachable only through the active transport; other queries use saved/direct IPv4 upstreams. In compatibility `direct` mode all client lookup behavior follows the v1-compatible direct model. The gateway resolver is shared and forwards to authoritative gateway upstreams, initially `1.1.1.1` and `8.8.8.8`.
 
-The Mihomo DNS-mode spike selects fake-IP versus redir-host/other concrete settings by testing Clash Mi, Linux applications, cache behavior, route classification, and failure. That choice is an internal renderer detail as long as externally specified split/fail-closed semantics hold.
+The Mihomo DNS-mode development spike selects fake-IP versus redir-host/other concrete settings by testing Linux applications, rendered Clash-compatible profiles with the pinned Mihomo version, cache behavior, route classification, and failure. Actual Clash Mi DNS behavior is verified later against the deployed service as part of the v2.0 release gate. The selected mode is an internal renderer detail as long as externally specified split/fail-closed semantics hold.
 
 Alternative considered: one DNS daemon per node on the gateway. Node count is small but separate processes add memory and lifecycle cost without an isolation requirement that cannot be enforced logically.
 
@@ -312,7 +312,7 @@ Alternative considered: let each command define output and consent ad hoc. That 
 ## Migration Plan
 
 1. Freeze v1 regression fixtures for client keys, addresses, WireGuard full-tunnel export, Clash selective export, rulesets, installer artifacts, and current UFW behavior.
-2. Complete the restricted, nginx, frp, nftables/routing, DNS-mode, control-crypto, and minimum-host spikes. Record chosen versions, limits, mark layout, cryptographic/KDF parameters, and provider acceptance evidence before dependent production code.
+2. Complete the restricted, nginx, frp, nftables/routing, DNS-mode, control-crypto, and minimum-host development spikes. Record chosen versions, limits, mark layout, cryptographic/KDF parameters, development-candidate acceptance evidence, and every deferred deployed-service release gate before dependent production code.
 3. Introduce the v2 model/store/controller and system-owned layout behind new `init` flows without mutating v1 installations. Implement atomic state migrations and render/apply harnesses.
 4. Deliver a gateway-only internal vertical foundation: preflight, watchdog-confirmed firewall, control PKI, both transport listeners, DNS, component supervision, status/doctor, and rollback.
 5. Add personal-client v1 behavior through the v2 model and prove exports against golden fixtures before removing reliance on cwd state.

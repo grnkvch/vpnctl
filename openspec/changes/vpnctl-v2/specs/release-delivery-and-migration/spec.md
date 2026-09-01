@@ -86,7 +86,7 @@ v2.0 SHALL support a gateway with 1 vCPU, 512 MB RAM, and 10 GB disk for one pri
 - **THEN** it remains stable within documented CPU, memory, disk, connection, and latency acceptance bounds
 
 ### Requirement: Full non-backlog release gate
-v2.0 SHALL not be declared complete until every requirement in all capabilities of this change is implemented, all mandatory restricted-transport, ingress, reverse-tunnel, firewall/control, resource, security, and Clash Mi spikes pass, v1 behavior is preserved or deliberately migrated, and the full unit/integration/E2E/resource/migration suite passes. Internal vertical slices SHALL be ordering and risk-reduction milestones only and MUST NOT reduce the v2.0 scope.
+v2.0 SHALL not be declared complete until every requirement in all capabilities of this change is implemented, all mandatory restricted-transport, ingress, reverse-tunnel, firewall/control, resource, and security spikes pass, actual supported Clash Mi passes its manual acceptance suite against an actually deployed service, v1 behavior is preserved or deliberately migrated, and the full unit/integration/E2E/resource/migration suite passes. Internal vertical slices and automated development-candidate gates SHALL be ordering and risk-reduction milestones only and MUST NOT reduce or waive the v2.0 scope.
 
 #### Scenario: Vertical slice passes before remaining capabilities
 - **WHEN** one node, restricted Telegram egress, and one webhook expose pass E2E but other non-backlog requirements remain incomplete
