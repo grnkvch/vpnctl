@@ -10,7 +10,7 @@
 
 ## 2. Blocking Technical Spikes
 
-- [ ] 2.1 Create a reproducible Ubuntu 24.04 amd64 test environment constrained to 1 vCPU, 512 MB RAM, and 10 GB disk with network-fault controls; verify a documented command boots gateway/node fixtures and records CPU, RSS, disk, sockets, and latency.
+- [x] 2.1 Create a reproducible Ubuntu 24.04 amd64 test environment constrained to 1 vCPU, 512 MB RAM, and 10 GB disk with network-fault controls; verify a documented command boots gateway/node fixtures and records CPU, RSS, disk, sockets, and latency.
 - [ ] 2.2 Prototype pinned Mihomo with Shadowsocks + ShadowTLS v3 strict for gateway, Linux node, and actual Clash Mi; verify selected TCP and DNS E2E, handshake-host behavior, reconnect, and captured resource evidence.
 - [ ] 2.3 Extend the restricted prototype with Mihomo UDP-over-TCP and close `8443/UDP`; verify selected UDP reaches the gateway only through protected TCP and blocks without any direct/native-UDP leak when UoT is broken.
 - [ ] 2.4 Benchmark restricted UDP head-of-line behavior and representative Telegram plus general UDP workloads; verify the report defines supported functional bounds and explicitly records workloads with no performance guarantee.

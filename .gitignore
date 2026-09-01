@@ -9,3 +9,4 @@ vpnctl
 .DS_Store
 *.swp
 *.tmp
+artifacts/v2lab/
