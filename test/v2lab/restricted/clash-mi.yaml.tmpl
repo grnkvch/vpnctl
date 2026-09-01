@@ -18,7 +18,9 @@ proxies:
     port: 8443
     cipher: 2022-blake3-aes-256-gcm
     password: "@SS_PASSWORD@"
-    udp: false
+    udp: true
+    udp-over-tcp: true
+    udp-over-tcp-version: 2
     plugin: shadow-tls
     client-fingerprint: chrome
     plugin-opts:

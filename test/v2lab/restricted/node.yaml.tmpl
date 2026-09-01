@@ -25,7 +25,9 @@ proxies:
     port: 8443
     cipher: 2022-blake3-aes-256-gcm
     password: "@SS_PASSWORD@"
-    udp: false
+    udp: true
+    udp-over-tcp: true
+    udp-over-tcp-version: 2
     plugin: shadow-tls
     client-fingerprint: chrome
     plugin-opts:
@@ -39,11 +41,28 @@ proxies:
     port: 8443
     cipher: 2022-blake3-aes-256-gcm
     password: "@SS_PASSWORD@"
-    udp: false
+    udp: true
+    udp-over-tcp: true
+    udp-over-tcp-version: 2
     plugin: shadow-tls
     client-fingerprint: chrome
     plugin-opts:
       host: "www.apple.com"
+      password: "@SHADOW_TLS_PASSWORD@"
+      version: 3
+      strict-mode: true
+  - name: RESTRICTED-UOT-BLOCKED
+    type: ss
+    server: "@GATEWAY_IP@"
+    port: 8443
+    cipher: 2022-blake3-aes-256-gcm
+    password: "@SS_PASSWORD@"
+    udp: false
+    udp-over-tcp: false
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: "@HANDSHAKE_HOST@"
       password: "@SHADOW_TLS_PASSWORD@"
       version: 3
       strict-mode: true
@@ -54,8 +73,15 @@ proxy-groups:
     proxies:
       - RESTRICTED-VALID
       - RESTRICTED-WRONG-HOST
+      - RESTRICTED-UOT-BLOCKED
+  - name: RESTRICTED-UDP
+    type: select
+    proxies:
+      - RESTRICTED
+      - REJECT-DROP
 
 rules:
+  - AND,((NETWORK,UDP),(IP-CIDR,127.0.0.1/32)),RESTRICTED-UDP
   - IP-CIDR,127.0.0.1/32,RESTRICTED,no-resolve
   - DOMAIN-SUFFIX,example.com,RESTRICTED
   - MATCH,DIRECT

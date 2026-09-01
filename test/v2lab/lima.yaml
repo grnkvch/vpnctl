@@ -22,18 +22,28 @@ networks:
 
 portForwards:
   - guestPort: 1053
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
     proto: any
     ignore: true
   - guestPort: 8443
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
     proto: any
     ignore: true
   - guestPort: 17890
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
     proto: any
     ignore: true
   - guestPort: 18080
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
     proto: any
     ignore: true
   - guestPort: 19090
+    guestIP: 0.0.0.0
+    guestIPMustBeZero: false
     proto: any
     ignore: true
 

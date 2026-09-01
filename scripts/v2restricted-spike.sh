@@ -14,8 +14,10 @@ node_instance=vpnctl-v2-node
 gateway_unit=vpnctl-v2-spike-restricted-gateway.service
 node_unit=vpnctl-v2-spike-restricted-node.service
 echo_unit=vpnctl-v2-spike-echo.service
+udp_echo_unit=vpnctl-v2-spike-udp-echo.service
 owner_value=vpnctl-v2-restricted-spike-v1
 owner_path=/etc/vpnctl-v2-spike/restricted/.owner
+capture_table=vpnctl_v2_spike_uot_capture
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 
 usage() {
@@ -63,7 +65,13 @@ assert_forward_ignored() {
   local instance=$1
   local port=$2
   if ! instance_json "$instance" | jq -e --argjson port "$port" '
-    any(.config.portForwards[]?; .guestPort == $port and .ignore == true)
+    any(.config.portForwards[]?;
+      .guestPort == $port and
+      .guestIP == "0.0.0.0" and
+      .guestIPMustBeZero == false and
+      .proto == "any" and
+      .ignore == true
+    )
   ' >/dev/null; then
     echo "refusing to expose spike port $port through Lima host forwarding on $instance" >&2
     exit 3
@@ -100,6 +108,7 @@ render_template() {
   local destination=$2
   local gateway_ip=$3
   local client_gateway_address=$4
+  local node_ip=${5:-}
   local handshake_host temporary
   handshake_host=$(manifest_value '.handshake_hosts.selected_for_spike')
   temporary="$destination.tmp.$$"
@@ -109,6 +118,7 @@ render_template() {
     -e "s|@HANDSHAKE_HOST@|$handshake_host|g" \
     -e "s|@GATEWAY_IP@|$gateway_ip|g" \
     -e "s|@CLIENT_GATEWAY_ADDRESS@|$client_gateway_address|g" \
+    -e "s|@NODE_IP@|$node_ip|g" \
     "$source" > "$temporary"
   chmod 0600 "$temporary"
   mv "$temporary" "$destination"
@@ -116,10 +126,13 @@ render_template() {
 
 render_lab_configs() {
   local gateway_ip=$1
+  local node_ip=$2
   ensure_credentials
-  render_template "$fixture_root/gateway.yaml.tmpl" "$generated_root/gateway.yaml" "$gateway_ip" "$gateway_ip"
-  render_template "$fixture_root/node.yaml.tmpl" "$generated_root/node.yaml" "$gateway_ip" "$gateway_ip"
-  render_template "$fixture_root/clash-mi.yaml.tmpl" "$generated_root/clash-mi-lab.yaml" "$gateway_ip" "$gateway_ip"
+  render_template "$fixture_root/gateway.yaml.tmpl" "$generated_root/gateway.yaml" "$gateway_ip" "$gateway_ip" "$node_ip"
+  render_template "$fixture_root/node.yaml.tmpl" "$generated_root/node.yaml" "$gateway_ip" "$gateway_ip" "$node_ip"
+  render_template "$fixture_root/clash-mi.yaml.tmpl" "$generated_root/clash-mi-lab.yaml" "$gateway_ip" "$gateway_ip" "$node_ip"
+  render_template "$fixture_root/node-uot-capture.nft.tmpl" "$generated_root/node-uot-capture.nft" "$gateway_ip" "$gateway_ip" "$node_ip"
+  render_template "$fixture_root/gateway-uot-capture.nft.tmpl" "$generated_root/gateway-uot-capture.nft" "$gateway_ip" "$gateway_ip" "$node_ip"
 }
 
 verify_archive() {
@@ -206,17 +219,21 @@ install_gateway() {
   install_common "$gateway_instance" "$binary"
   copy_to_guest_tmp "$gateway_instance" \
     "$generated_root/gateway.yaml" \
+    "$fixture_root/udp_echo.py" \
     "$fixture_root/systemd/$gateway_unit" \
-    "$fixture_root/systemd/$echo_unit"
+    "$fixture_root/systemd/$echo_unit" \
+    "$fixture_root/systemd/$udp_echo_unit"
+  limactl shell --tty=false "$gateway_instance" -- sudo install -m 0755 /tmp/udp_echo.py /usr/local/libexec/vpnctl-v2-spike/udp-echo
   limactl shell --tty=false "$gateway_instance" -- sudo install -m 0600 /tmp/gateway.yaml /etc/vpnctl-v2-spike/restricted/gateway.yaml
   limactl shell --tty=false "$gateway_instance" -- sudo install -m 0644 "/tmp/$gateway_unit" "/etc/systemd/system/$gateway_unit"
   limactl shell --tty=false "$gateway_instance" -- sudo install -m 0644 "/tmp/$echo_unit" "/etc/systemd/system/$echo_unit"
+  limactl shell --tty=false "$gateway_instance" -- sudo install -m 0644 "/tmp/$udp_echo_unit" "/etc/systemd/system/$udp_echo_unit"
   limactl shell --tty=false "$gateway_instance" -- sudo install -d -m 0700 /var/lib/vpnctl-v2-spike-gateway /var/lib/vpnctl-v2-spike-echo
   limactl shell --tty=false "$gateway_instance" -- sudo sh -c "printf '%s\\n' 'vpnctl-v2-shadowtls-ok' > /var/lib/vpnctl-v2-spike-echo/probe.txt"
   limactl shell --tty=false "$gateway_instance" -- sudo chmod 0644 /var/lib/vpnctl-v2-spike-echo/probe.txt
   limactl shell --tty=false "$gateway_instance" -- sudo /usr/local/libexec/vpnctl-v2-spike/mihomo -t -d /var/lib/vpnctl-v2-spike-gateway -f /etc/vpnctl-v2-spike/restricted/gateway.yaml
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl daemon-reload
-  limactl shell --tty=false "$gateway_instance" -- sudo systemctl restart "$echo_unit" "$gateway_unit"
+  limactl shell --tty=false "$gateway_instance" -- sudo systemctl restart "$echo_unit" "$udp_echo_unit" "$gateway_unit"
 }
 
 install_node() {
@@ -224,7 +241,9 @@ install_node() {
   install_common "$node_instance" "$binary"
   copy_to_guest_tmp "$node_instance" \
     "$generated_root/node.yaml" \
+    "$fixture_root/udp_probe.py" \
     "$fixture_root/systemd/$node_unit"
+  limactl shell --tty=false "$node_instance" -- sudo install -m 0755 /tmp/udp_probe.py /usr/local/libexec/vpnctl-v2-spike/udp-probe
   limactl shell --tty=false "$node_instance" -- sudo install -m 0600 /tmp/node.yaml /etc/vpnctl-v2-spike/restricted/node.yaml
   limactl shell --tty=false "$node_instance" -- sudo install -m 0644 "/tmp/$node_unit" "/etc/systemd/system/$node_unit"
   limactl shell --tty=false "$node_instance" -- sudo install -d -m 0700 /var/lib/vpnctl-v2-spike-node
@@ -238,6 +257,7 @@ wait_for_services() {
   for attempt in $(seq 1 20); do
     if limactl shell --tty=false "$gateway_instance" -- systemctl is-active --quiet "$gateway_unit" && \
        limactl shell --tty=false "$gateway_instance" -- systemctl is-active --quiet "$echo_unit" && \
+       limactl shell --tty=false "$gateway_instance" -- systemctl is-active --quiet "$udp_echo_unit" && \
        limactl shell --tty=false "$node_instance" -- systemctl is-active --quiet "$node_unit"; then
       if limactl shell --tty=false "$node_instance" -- curl -fsS --max-time 2 http://127.0.0.1:19090/version >/dev/null; then
         return
@@ -260,7 +280,7 @@ validate_handshake_host() {
 }
 
 prepare() {
-  local gateway_ip binary
+  local gateway_ip node_ip binary
   assert_lab_instance "$gateway_instance"
   assert_lab_instance "$node_instance"
   for port in 8443 18080; do assert_forward_ignored "$gateway_instance" "$port"; done
@@ -269,16 +289,23 @@ prepare() {
   assert_owned_or_absent "$node_instance"
   assert_port_free_or_owned "$gateway_instance" "$gateway_unit" tcp 8443
   assert_port_free_or_owned "$gateway_instance" "$echo_unit" tcp 18080
+  assert_port_free_or_owned "$gateway_instance" "$udp_echo_unit" udp 18080
   assert_port_free_or_owned "$node_instance" "$node_unit" tcp 1053
   assert_port_free_or_owned "$node_instance" "$node_unit" udp 1053
   assert_port_free_or_owned "$node_instance" "$node_unit" tcp 17890
   assert_port_free_or_owned "$node_instance" "$node_unit" tcp 19090
+  assert_port_free_or_owned "$node_instance" "$udp_echo_unit" udp 18080
   gateway_ip=$(lab_ip "$gateway_instance")
   if [ -z "$gateway_ip" ]; then
     echo "gateway lab IP was not found" >&2
     exit 4
   fi
-  render_lab_configs "$gateway_ip"
+  node_ip=$(lab_ip "$node_instance")
+  if [ -z "$node_ip" ]; then
+    echo "node lab IP was not found" >&2
+    exit 4
+  fi
+  render_lab_configs "$gateway_ip" "$node_ip"
   validate_handshake_host "$artifact_root/handshake-host.txt"
   binary=$(fetch_mihomo)
   install_gateway "$binary"
@@ -292,21 +319,112 @@ proxy_get() {
     --noproxy "" --proxy http://127.0.0.1:17890 http://127.0.0.1:18080/probe.txt
 }
 
-select_proxy() {
-  local name=$1
+select_group() {
+  local group=$1
+  local name=$2
   local payload
   payload=$(jq -nc --arg name "$name" '{name: $name}')
   limactl shell --tty=false "$node_instance" -- curl -fsS --max-time 3 \
     -X PUT -H 'Content-Type: application/json' --data "$payload" \
-    http://127.0.0.1:19090/proxies/RESTRICTED >/dev/null
+    "http://127.0.0.1:19090/proxies/$group" >/dev/null
+}
+
+select_proxy() {
+  select_group RESTRICTED "$1"
+}
+
+select_udp_guard() {
+  select_group RESTRICTED-UDP "$1"
+}
+
+proxy_state() {
+  local name=$1
+  limactl shell --tty=false "$node_instance" -- curl -fsS --max-time 3 \
+    "http://127.0.0.1:19090/proxies/$name"
+}
+
+udp_probe() {
+  local timeout=${1:-5}
+  limactl shell --tty=false "$node_instance" -- /usr/local/libexec/vpnctl-v2-spike/udp-probe \
+    --proxy 127.0.0.1:17890 \
+    --target 127.0.0.1:18080 \
+    --payload vpnctl-v2-uot-ok \
+    --timeout "$timeout"
+}
+
+capture_table_exists() {
+  local instance=$1
+  limactl shell --tty=false "$instance" -- sudo nft list table inet "$capture_table" >/dev/null 2>&1
+}
+
+capture_clear() {
+  local instance
+  for instance in "$node_instance" "$gateway_instance"; do
+    if capture_table_exists "$instance"; then
+      limactl shell --tty=false "$instance" -- sudo nft delete table inet "$capture_table"
+    fi
+  done
+}
+
+capture_start() {
+  local instance
+  for instance in "$node_instance" "$gateway_instance"; do
+    if capture_table_exists "$instance"; then
+      echo "refusing to replace existing nftables capture table on $instance: $capture_table" >&2
+      exit 3
+    fi
+  done
+  copy_to_guest_tmp "$node_instance" "$generated_root/node-uot-capture.nft"
+  copy_to_guest_tmp "$gateway_instance" "$generated_root/gateway-uot-capture.nft"
+  if ! limactl shell --tty=false "$node_instance" -- sudo nft -f /tmp/node-uot-capture.nft; then
+    capture_clear
+    return 1
+  fi
+  if ! limactl shell --tty=false "$gateway_instance" -- sudo nft -f /tmp/gateway-uot-capture.nft; then
+    capture_clear
+    return 1
+  fi
+  limactl shell --tty=false "$node_instance" -- sudo rm -f /tmp/node-uot-capture.nft
+  limactl shell --tty=false "$gateway_instance" -- sudo rm -f /tmp/gateway-uot-capture.nft
+}
+
+capture_snapshot() {
+  local evidence_dir=$1
+  local phase=$2
+  limactl shell --tty=false "$node_instance" -- sudo nft list table inet "$capture_table" > "$evidence_dir/$phase-node-nft.txt"
+  limactl shell --tty=false "$gateway_instance" -- sudo nft list table inet "$capture_table" > "$evidence_dir/$phase-gateway-nft.txt"
+}
+
+capture_packets() {
+  local file=$1
+  local marker=$2
+  awk -v marker="$marker" '
+    index($0, "comment \"" marker "\"") {
+      for (field = 1; field <= NF; field++) {
+        if ($field == "packets") {
+          print $(field + 1)
+          exit
+        }
+      }
+    }
+  ' "$file"
 }
 
 verify() {
   local evidence_dir=${1:-"$artifact_root/evidence-$(date -u +%Y%m%dT%H%M%SZ)"}
-  local proxied dns_answer
+  local gateway_ip proxied dns_answer selected_udp
+  local positive_tcp positive_node_udp positive_loopback_udp positive_gateway_udp
+  local broken_tcp broken_node_udp broken_loopback_udp broken_gateway_udp
   mkdir -p "$evidence_dir"
   chmod 0700 "$evidence_dir"
   wait_for_services
+  gateway_ip=$(lab_ip "$gateway_instance")
+  if [ -z "$gateway_ip" ]; then
+    echo "gateway lab IP was not found" >&2
+    exit 4
+  fi
+  select_proxy RESTRICTED-VALID
+  select_udp_guard RESTRICTED
   if limactl shell --tty=false "$node_instance" -- curl -fsS --max-time 3 http://127.0.0.1:18080/probe.txt >/dev/null 2>&1; then
     echo "direct node access unexpectedly reached the gateway loopback probe" >&2
     exit 1
@@ -333,6 +451,58 @@ verify() {
     echo "restricted transport did not recover after restoring the pinned host" >&2
     exit 1
   fi
+  capture_start
+  trap 'capture_clear; select_proxy RESTRICTED-VALID >/dev/null 2>&1 || true; select_udp_guard RESTRICTED >/dev/null 2>&1 || true' EXIT
+  selected_udp=$(udp_probe)
+  if [ "$selected_udp" != vpnctl-v2-uot-ok ]; then
+    echo "selected UDP did not traverse restricted UDP-over-TCP" >&2
+    exit 1
+  fi
+  capture_snapshot "$evidence_dir" positive-uot
+  positive_tcp=$(capture_packets "$evidence_dir/positive-uot-node-nft.txt" protected-tcp)
+  positive_node_udp=$(capture_packets "$evidence_dir/positive-uot-node-nft.txt" native-udp-leak)
+  positive_loopback_udp=$(capture_packets "$evidence_dir/positive-uot-node-nft.txt" direct-loopback-leak)
+  positive_gateway_udp=$(capture_packets "$evidence_dir/positive-uot-gateway-nft.txt" native-node-udp)
+  if [ "${positive_tcp:-0}" -eq 0 ] || [ "${positive_node_udp:-0}" -ne 0 ] || \
+     [ "${positive_loopback_udp:-0}" -ne 0 ] || [ "${positive_gateway_udp:-0}" -ne 0 ]; then
+    echo "positive UoT capture did not prove TCP-only outer transport" >&2
+    exit 1
+  fi
+  capture_clear
+
+  select_proxy RESTRICTED-UOT-BLOCKED
+  select_udp_guard REJECT-DROP
+  proxy_state RESTRICTED-UOT-BLOCKED > "$evidence_dir/broken-uot-proxy.json"
+  proxy_state RESTRICTED-UDP > "$evidence_dir/broken-uot-guard.json"
+  jq -e '.udp == false and .uot == false' "$evidence_dir/broken-uot-proxy.json" >/dev/null
+  jq -e '.now == "REJECT-DROP"' "$evidence_dir/broken-uot-guard.json" >/dev/null
+  capture_start
+  if [ "$(proxy_get)" != vpnctl-v2-shadowtls-ok ]; then
+    echo "UoT-disabled negative control did not preserve selected TCP" >&2
+    exit 1
+  fi
+  if udp_probe 2 >/dev/null 2>&1; then
+    echo "selected UDP unexpectedly succeeded while UoT was disabled" >&2
+    exit 1
+  fi
+  capture_snapshot "$evidence_dir" broken-uot
+  broken_tcp=$(capture_packets "$evidence_dir/broken-uot-node-nft.txt" protected-tcp)
+  broken_node_udp=$(capture_packets "$evidence_dir/broken-uot-node-nft.txt" native-udp-leak)
+  broken_loopback_udp=$(capture_packets "$evidence_dir/broken-uot-node-nft.txt" direct-loopback-leak)
+  broken_gateway_udp=$(capture_packets "$evidence_dir/broken-uot-gateway-nft.txt" native-node-udp)
+  if [ "${broken_tcp:-0}" -eq 0 ]; then
+    echo "UoT-disabled negative control did not retain protected TCP packets" >&2
+    exit 1
+  fi
+  if [ "${broken_node_udp:-0}" -ne 0 ] || [ "${broken_loopback_udp:-0}" -ne 0 ] || \
+     [ "${broken_gateway_udp:-0}" -ne 0 ]; then
+    echo "selected UDP leaked through native UDP while UoT was disabled" >&2
+    exit 1
+  fi
+  capture_clear
+  select_proxy RESTRICTED-VALID
+  select_udp_guard RESTRICTED
+  trap - EXIT
   copy_to_guest_tmp "$node_instance" "$generated_root/clash-mi-lab.yaml"
   trap 'limactl shell --tty=false "$node_instance" -- sudo rm -f /tmp/clash-mi-lab.yaml >/dev/null 2>&1 || true' EXIT
   limactl shell --tty=false "$node_instance" -- sudo chmod 0600 /tmp/clash-mi-lab.yaml
@@ -355,19 +525,24 @@ verify() {
   jq -n \
     --arg status passed \
     --arg tcp_probe "$proxied" \
+    --arg udp_probe "$selected_udp" \
     --arg dns_answer "$dns_answer" \
     --arg handshake_host "$(manifest_value '.handshake_hosts.selected_for_spike')" \
-    '{schema_version: 1, status: $status, selected_tcp: $tcp_probe, selected_dns_a: ($dns_answer | split("\n")), handshake_host: $handshake_host, strict_wrong_host_rejected: true, restricted_udp_listener: false}' \
+    --argjson positive_tcp_packets "${positive_tcp:-0}" \
+    --argjson broken_tcp_packets "${broken_tcp:-0}" \
+    '{schema_version: 1, status: $status, selected_tcp: $tcp_probe, selected_udp: $udp_probe, selected_dns_a: ($dns_answer | split("\n")), handshake_host: $handshake_host, strict_wrong_host_rejected: true, udp_over_tcp_version: 2, protected_tcp_packets: {positive: $positive_tcp_packets, broken_control: $broken_tcp_packets}, native_udp_packets: {positive_node_gateway: 0, positive_node_loopback: 0, positive_gateway_input: 0, broken_node_gateway: 0, broken_node_loopback: 0, broken_gateway_input: 0}, broken_uot_blocked: true, restricted_udp_listener: false}' \
     > "$evidence_dir/summary.json"
   printf 'restricted spike evidence: %s\n' "$evidence_dir/summary.json"
 }
 
 reconnect() {
   local evidence_dir=${1:-"$artifact_root/reconnect-$(date -u +%Y%m%dT%H%M%SZ)"}
-  local attempt recovered_at=0
+  local attempt recovered_at=0 udp_recovered_at=0
   mkdir -p "$evidence_dir"
   chmod 0700 "$evidence_dir"
   wait_for_services
+  select_proxy RESTRICTED-VALID
+  select_udp_guard RESTRICTED
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$gateway_unit"
   trap 'limactl shell --tty=false "$gateway_instance" -- sudo systemctl start "$gateway_unit" >/dev/null 2>&1 || true' EXIT
   if proxy_get >/dev/null 2>&1; then
@@ -387,9 +562,20 @@ reconnect() {
     echo "node did not reconnect after gateway restart" >&2
     exit 1
   fi
+  for attempt in $(seq 1 5); do
+    if [ "$(udp_probe 3 2>/dev/null || true)" = vpnctl-v2-uot-ok ]; then
+      udp_recovered_at=$attempt
+      break
+    fi
+    sleep 1
+  done
+  if [ "$udp_recovered_at" -eq 0 ]; then
+    echo "UDP-over-TCP did not recover after gateway restart" >&2
+    exit 1
+  fi
   "$repository_root/scripts/v2lab.sh" report "$evidence_dir/resources"
-  jq -n --argjson recovered_after_attempts "$recovered_at" \
-    '{schema_version: 1, outage_probe_failed: true, node_restart_required: false, recovered_after_attempts: $recovered_after_attempts}' \
+  jq -n --argjson recovered_after_attempts "$recovered_at" --argjson udp_recovered_after_attempts "$udp_recovered_at" \
+    '{schema_version: 1, outage_probe_failed: true, node_restart_required: false, recovered_after_attempts: $recovered_after_attempts, udp_over_tcp_recovered: true, udp_recovered_after_attempts: $udp_recovered_after_attempts}' \
     > "$evidence_dir/summary.json"
   printf 'restricted reconnect evidence: %s\n' "$evidence_dir/summary.json"
 }
@@ -410,7 +596,7 @@ render_client() {
 status() {
   assert_lab_instance "$gateway_instance"
   assert_lab_instance "$node_instance"
-  limactl shell --tty=false "$gateway_instance" -- systemctl status --no-pager "$echo_unit" "$gateway_unit"
+  limactl shell --tty=false "$gateway_instance" -- systemctl status --no-pager "$echo_unit" "$udp_echo_unit" "$gateway_unit"
   limactl shell --tty=false "$node_instance" -- systemctl status --no-pager "$node_unit"
 }
 
@@ -418,7 +604,8 @@ stop_spike() {
   assert_owned_or_absent "$gateway_instance"
   assert_owned_or_absent "$node_instance"
   limactl shell --tty=false "$node_instance" -- sudo systemctl stop "$node_unit"
-  limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$gateway_unit" "$echo_unit"
+  limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$gateway_unit" "$udp_echo_unit" "$echo_unit"
+  capture_clear
 }
 
 uninstall_role() {
@@ -436,14 +623,18 @@ uninstall_role() {
   done
   limactl shell --tty=false "$instance" -- sudo rm -f /etc/vpnctl-v2-spike/restricted/gateway.yaml /etc/vpnctl-v2-spike/restricted/node.yaml "$owner_path"
   limactl shell --tty=false "$instance" -- sudo rmdir /etc/vpnctl-v2-spike/restricted /etc/vpnctl-v2-spike 2>/dev/null || true
-  limactl shell --tty=false "$instance" -- sudo rm -f /usr/local/libexec/vpnctl-v2-spike/mihomo
+  limactl shell --tty=false "$instance" -- sudo rm -f \
+    /usr/local/libexec/vpnctl-v2-spike/mihomo \
+    /usr/local/libexec/vpnctl-v2-spike/udp-echo \
+    /usr/local/libexec/vpnctl-v2-spike/udp-probe
   limactl shell --tty=false "$instance" -- sudo rmdir /usr/local/libexec/vpnctl-v2-spike 2>/dev/null || true
   limactl shell --tty=false "$instance" -- sudo systemctl daemon-reload
 }
 
 uninstall_spike() {
   uninstall_role "$node_instance" "$node_unit"
-  uninstall_role "$gateway_instance" "$gateway_unit" "$echo_unit"
+  uninstall_role "$gateway_instance" "$gateway_unit" "$echo_unit" "$udp_echo_unit"
+  capture_clear
 }
 
 command=${1:-}

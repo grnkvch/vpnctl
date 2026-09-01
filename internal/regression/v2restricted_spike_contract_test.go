@@ -23,6 +23,8 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 			Port              int  `json:"port"`
 			ShadowTLSVersion  int  `json:"shadow_tls_version"`
 			StrictMode        bool `json:"strict_mode"`
+			UDPOverTCP        bool `json:"udp_over_tcp"`
+			UDPOverTCPVersion int  `json:"udp_over_tcp_version"`
 			NativeUDPListener bool `json:"native_udp_listener"`
 		} `json:"transport"`
 	}
@@ -35,7 +37,8 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 	if len(manifest.Mihomo.SHA256) != 64 {
 		t.Fatalf("restricted candidate SHA-256 is not pinned: %q", manifest.Mihomo.SHA256)
 	}
-	if manifest.Transport.Port != 8443 || manifest.Transport.ShadowTLSVersion != 3 || !manifest.Transport.StrictMode || manifest.Transport.NativeUDPListener {
+	if manifest.Transport.Port != 8443 || manifest.Transport.ShadowTLSVersion != 3 || !manifest.Transport.StrictMode ||
+		!manifest.Transport.UDPOverTCP || manifest.Transport.UDPOverTCPVersion != 2 || manifest.Transport.NativeUDPListener {
 		t.Fatalf("unexpected restricted transport contract: %+v", manifest.Transport)
 	}
 
@@ -53,6 +56,8 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 	for _, required := range []string{
 		"bind-address: 127.0.0.1", "https://1.1.1.1/dns-query#RESTRICTED",
 		"plugin: shadow-tls", "strict-mode: true", "RESTRICTED-WRONG-HOST",
+		"udp-over-tcp: true", "udp-over-tcp-version: 2", "RESTRICTED-UOT-BLOCKED", "RESTRICTED-UDP",
+		"REJECT-DROP", "AND,((NETWORK,UDP),(IP-CIDR,127.0.0.1/32)),RESTRICTED-UDP",
 		"IP-CIDR,127.0.0.1/32,RESTRICTED,no-resolve", "MATCH,DIRECT",
 	} {
 		if !strings.Contains(node, required) {
@@ -62,7 +67,8 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 
 	client := readContractFile(t, filepath.Join(fixtureRoot, "clash-mi.yaml.tmpl"))
 	for _, required := range []string{
-		"@CLIENT_GATEWAY_ADDRESS@", "strict-mode: true", "DOMAIN-SUFFIX,example.com,RESTRICTED", "MATCH,DIRECT",
+		"@CLIENT_GATEWAY_ADDRESS@", "strict-mode: true", "udp-over-tcp: true", "udp-over-tcp-version: 2",
+		"DOMAIN-SUFFIX,example.com,RESTRICTED", "MATCH,DIRECT",
 	} {
 		if !strings.Contains(client, required) {
 			t.Errorf("Clash Mi restricted template is missing %q", required)
@@ -73,14 +79,42 @@ func TestV2RestrictedSpikeContract(t *testing.T) {
 	for _, guard := range []string{
 		"assert_forward_ignored", "assert_owned_or_absent", "assert_port_free_or_owned",
 		"strict ShadowTLS unexpectedly accepted", "mihomo --> 1.1.1.1:443 using RESTRICTED[RESTRICTED-VALID]",
-		"clash-mi-mihomo-validation.txt", "outage_probe_failed", "uninstall_role",
+		"capture_table=vpnctl_v2_spike_uot_capture", "selected UDP unexpectedly succeeded while UoT was disabled",
+		"select_udp_guard REJECT-DROP", "broken-uot-proxy.json", "native UDP while UoT was disabled",
+		"clash-mi-mihomo-validation.txt", "outage_probe_failed", "udp_over_tcp_recovered", "uninstall_role",
 	} {
 		if !strings.Contains(orchestrator, guard) {
 			t.Errorf("restricted spike orchestrator is missing %q", guard)
 		}
 	}
 
+	udpProbe := readContractFile(t, filepath.Join(fixtureRoot, "udp_probe.py"))
+	for _, required := range []string{"SOCKS_VERSION = 5", "SOCKS5 UDP associate", "parse_udp_response"} {
+		if !strings.Contains(udpProbe, required) {
+			t.Errorf("UDP-over-TCP probe is missing %q", required)
+		}
+	}
+
+	for _, fixture := range []string{"node-uot-capture.nft.tmpl", "gateway-uot-capture.nft.tmpl"} {
+		capture := readContractFile(t, filepath.Join(fixtureRoot, fixture))
+		if !strings.Contains(capture, "table inet vpnctl_v2_spike_uot_capture") || !strings.Contains(capture, "counter") {
+			t.Errorf("UoT capture fixture %s does not have an owned counter table", fixture)
+		}
+	}
+	if capture := readContractFile(t, filepath.Join(fixtureRoot, "node-uot-capture.nft.tmpl")); !strings.Contains(capture, "direct-loopback-leak") {
+		t.Error("node UoT capture does not detect direct fallback to the loopback test target")
+	}
+	for _, unit := range []string{"vpnctl-v2-spike-restricted-gateway.service", "vpnctl-v2-spike-restricted-node.service"} {
+		contents := readContractFile(t, filepath.Join(fixtureRoot, "systemd", unit))
+		if !strings.Contains(contents, "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK") {
+			t.Errorf("restricted unit %s does not permit Mihomo route lookup via AF_NETLINK", unit)
+		}
+	}
+
 	limaTemplate := readContractFile(t, filepath.Join(repositoryRoot, "test", "v2lab", "lima.yaml"))
+	if strings.Count(limaTemplate, "guestIP: 0.0.0.0") != 5 || strings.Count(limaTemplate, "guestIPMustBeZero: false") != 5 {
+		t.Error("Lima template must ignore wildcard-bound spike listeners without forwarding them to the host")
+	}
 	for _, port := range []string{"guestPort: 1053", "guestPort: 8443", "guestPort: 17890", "guestPort: 18080", "guestPort: 19090"} {
 		if !strings.Contains(limaTemplate, port) {
 			t.Errorf("Lima template is missing forwarding isolation for %q", port)

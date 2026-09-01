@@ -1,0 +1,6 @@
+table inet vpnctl_v2_spike_uot_capture {
+  chain input {
+    type filter hook input priority 0; policy accept;
+    ip saddr @NODE_IP@ udp dport 18080 counter drop comment "native-node-udp"
+  }
+}

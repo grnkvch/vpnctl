@@ -1,0 +1,8 @@
+table inet vpnctl_v2_spike_uot_capture {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    ip daddr @GATEWAY_IP@ tcp dport 8443 counter comment "protected-tcp"
+    ip daddr @GATEWAY_IP@ meta l4proto udp counter comment "native-udp-leak"
+    ip daddr 127.0.0.1 udp dport 18080 counter comment "direct-loopback-leak"
+  }
+}
