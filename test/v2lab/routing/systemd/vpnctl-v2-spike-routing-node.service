@@ -1,0 +1,26 @@
+[Unit]
+Description=vpnctl v2 routing node ingress fixture
+After=network.target
+
+[Service]
+Type=simple
+NetworkNamespacePath=/run/netns/vpnctl-v2-rnode
+ExecStart=/usr/local/libexec/vpnctl-v2-spike-routing/backend --state /run/vpnctl-v2-spike-routing/node.json --tcp 10.202.0.2:18082=node-ingress
+Restart=on-failure
+RestartSec=1s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/run/vpnctl-v2-spike-routing
+MemoryMax=32M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

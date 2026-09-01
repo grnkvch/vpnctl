@@ -1,0 +1,36 @@
+[Unit]
+Description=vpnctl v2 managed TUN routing engine spike
+Requires=vpnctl-v2-spike-routing-guard.service
+After=vpnctl-v2-spike-routing-guard.service
+
+[Service]
+Type=simple
+NetworkNamespacePath=/run/netns/vpnctl-v2-rnode
+ExecStartPre=/usr/local/libexec/vpnctl-v2-spike-routing/policy not-ready
+ExecStart=/usr/local/libexec/vpnctl-v2-spike-routing/mihomo -d /etc/vpnctl-v2-spike/routing
+ExecStartPost=/usr/local/libexec/vpnctl-v2-spike-routing/policy wait-ready
+ExecStopPost=/usr/local/libexec/vpnctl-v2-spike-routing/policy not-ready
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=20s
+TimeoutStopSec=10s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadOnlyPaths=/etc/vpnctl-v2-spike/routing
+ReadWritePaths=/run/vpnctl-v2-spike-routing
+MemoryMax=128M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

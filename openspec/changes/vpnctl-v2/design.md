@@ -154,11 +154,13 @@ Alternative considered: raw Mihomo configuration. It exposes implementation acti
 
 ### 7. Build fail-closed routing from nftables marks, policy routes, TUN readiness, and a recovery allowlist
 
-The node owns one `inet vpnctl` table and dedicated routing tables/fwmarks. A mark namespace distinguishes already classified direct connections, selected connections, vpnctl recovery/control traffic, and ingress responses. Conntrack marks retain safe decisions for established flows. The routing service reports ready only after TUN, rules, DNS, active outbound, and mandatory probes are available.
+The node owns one `inet vpnctl` table and dedicated routing tables/fwmarks. The accepted internal allocation reserves only the high byte `0xff000000`: direct `0x01000000`, selected `0x02000000`, vpnctl recovery/active-outbound `0x03000000`, and ingress-response `0x04000000`; the lower 24 bits are retained in the conntrack mark. Only these exact high-byte values are restored. Route-output and prerouting hooks run at mangle priority `-150`, after conntrack association at `-200`, so local mark changes can trigger a route lookup and ingress replies can recover their gateway decision before strict reverse-path validation.
+
+RPDB priorities `10000`, `10010`, and `10020` route recovery, ingress responses, and selected application traffic respectively. Internal tables `20001` and `20002` are the selected/TUN and gateway tables. The selected table always has an unreachable default at metric `42760`; readiness adds the managed TUN default at metric `10` before atomically switching the nftables readiness chain to ready, and switches the chain back before removing that route. These numbers are internal conflict-checked defaults, not public API.
 
 The guard chain exists before routing-engine startup. While not ready, it permits established flows with retained direct classification and a minimal resolved gateway recovery allowlist, then drops new application egress. Once ready, selected flows are marked for the TUN/active transport; selected-path failure drops rather than reclassifies them. IPv6 is either equivalently classified and carried or rejected for selected destinations; v2 does not enable an unmanaged direct fallback.
 
-Exact nftables hook names, priorities, mark masks, and interaction tests with systemd-resolved are fixed by the mandatory firewall/routing spike before implementation. The spike must demonstrate boot, crash, restart, uninstall, transport switch, and ingress-response symmetry. These values remain internal and can change without changing the selector or fail-closed specs.
+The routing spike fixed the hook/mark allocation above and demonstrated injected rollback, boot, crash, restart, uninstall, lower-mark/foreign-table coexistence, and ingress-response symmetry. The guard is an independent systemd unit that exists before the routing engine; activation loads policy rules before nftables classification, ready transition installs the TUN route before switching the nftables chain, and teardown reverses those safety boundaries. Interaction tests with systemd-resolved remain part of the DNS-mode spike. These values remain internal and can change without changing the selector or fail-closed specs.
 
 Alternative considered: rely solely on Mihomo TUN auto-route. If Mihomo crashes during boot or reload, kernel routing can send traffic direct before userspace restores policy.
 
@@ -336,5 +338,5 @@ Rollback during development and update uses the prior bundle, state snapshot, an
 
 ## Open Questions
 
-- Exact nftables hook priorities, fwmark bit allocation, and Mihomo DNS mode are selected by the mandatory leak-prevention spike; externally visible fail-closed and split-DNS behavior is already fixed.
+- Exact Mihomo/systemd-resolved DNS mode is selected by the mandatory DNS spike; externally visible fail-closed and split-DNS behavior is already fixed. The nftables hook, fwmark, and RPDB candidates are now fixed in decision 7.
 - Exact control RPC size/time limits, numeric CLI exit codes, backup KDF parameters, backup-age warning threshold, and low-frequency command spelling are frozen in their dedicated contract tasks and fixtures before the corresponding implementation is merged.

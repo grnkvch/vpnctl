@@ -1,0 +1,95 @@
+table inet vpnctl_v2_spike_routing {
+  set selected_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { 203.0.113.10 }
+  }
+
+  set selected_v6 {
+    type ipv6_addr
+    flags interval
+    elements = { 2001:db8:1::10 }
+  }
+
+  counter selected_ipv4 {}
+  counter selected_ipv6_drop {}
+  counter selected_retained {}
+  counter direct_new {}
+  counter direct_retained {}
+  counter recovery_new {}
+  counter recovery_marked {}
+  counter prerouting_restored {}
+  counter output_restored {}
+  counter ingress_marked {}
+  counter ingress_restored {}
+  counter foreign_bits_preserved {}
+  counter not_ready_drop {}
+
+  chain prerouting_mangle {
+    type filter hook prerouting priority mangle; policy accept;
+
+    ct mark & 0xff000000 == 0x01000000 meta mark set ct mark counter name prerouting_restored
+    ct mark & 0xff000000 == 0x02000000 meta mark set ct mark counter name prerouting_restored
+    ct mark & 0xff000000 == 0x03000000 meta mark set ct mark counter name prerouting_restored
+    ct mark & 0xff000000 == 0x04000000 meta mark set ct mark counter name prerouting_restored
+
+    iifname "v2gateway0" ct state new tcp dport 18082 \
+      meta mark set (meta mark & 0x00ffffff) | 0x04000000 \
+      ct mark set meta mark \
+      counter name ingress_marked
+  }
+
+  chain output_mangle {
+    type route hook output priority mangle; policy accept;
+
+    oifname "lo" return
+
+    meta mark & 0xff000000 == 0x03000000 \
+      ct mark set meta mark \
+      counter name recovery_marked return
+
+    ct mark & 0xff000000 == 0x01000000 meta mark set ct mark counter name output_restored
+    ct mark & 0xff000000 == 0x02000000 meta mark set ct mark counter name output_restored
+    ct mark & 0xff000000 == 0x03000000 meta mark set ct mark counter name output_restored
+    ct mark & 0xff000000 == 0x04000000 meta mark set ct mark counter name output_restored
+
+    meta mark & 0xff000000 == 0x04000000 counter name ingress_restored return
+    meta mark & 0xff000000 == 0x03000000 counter name recovery_marked return
+
+    ip daddr 10.202.0.1 tcp dport 19000 \
+      meta mark set (meta mark & 0x00ffffff) | 0x03000000 \
+      ct mark set meta mark \
+      counter name recovery_new return
+
+    jump readiness
+  }
+
+  chain readiness {
+    jump not_ready
+  }
+
+  chain not_ready {
+    ct state established,related meta mark & 0xff000000 == 0x01000000 \
+      counter name direct_retained return
+    counter name not_ready_drop drop
+  }
+
+  chain ready {
+    ct state established,related meta mark & 0xff000000 == 0x02000000 \
+      counter name selected_retained return
+    ct state established,related meta mark & 0xff000000 == 0x01000000 \
+      counter name direct_retained return
+
+    ip6 daddr @selected_v6 counter name selected_ipv6_drop drop
+
+    ip daddr @selected_v4 \
+      meta mark set (meta mark & 0x00ffffff) | 0x02000000 \
+      ct mark set meta mark \
+      counter name selected_ipv4 return
+
+    meta mark set (meta mark & 0x00ffffff) | 0x01000000
+    ct mark set meta mark
+    meta mark & 0x00ffffff == 0x00001234 counter name foreign_bits_preserved
+    counter name direct_new return
+  }
+}

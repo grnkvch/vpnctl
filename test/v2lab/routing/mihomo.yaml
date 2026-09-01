@@ -1,0 +1,26 @@
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: silent
+ipv6: false
+geodata-loader: memconservative
+geo-auto-update: false
+
+tun:
+  enable: true
+  device: v2tun0
+  stack: system
+  auto-route: false
+  auto-detect-interface: false
+  dns-hijack: []
+  mtu: 1400
+
+proxies:
+  - name: GATEWAY-EGRESS
+    type: direct
+    udp: true
+    interface-name: v2gateway0
+    routing-mark: 50331648
+
+rules:
+  - MATCH,GATEWAY-EGRESS

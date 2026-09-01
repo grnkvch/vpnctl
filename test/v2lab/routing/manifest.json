@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "status": "spike-only",
+  "mihomo": {
+    "version": "v1.19.30",
+    "asset": "mihomo-linux-amd64-v1.19.30.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-v1.19.30.gz",
+    "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
+  },
+  "network_namespaces": {
+    "node": "vpnctl-v2-rnode",
+    "direct": "vpnctl-v2-rdirect",
+    "gateway": "vpnctl-v2-rgateway"
+  },
+  "marks": {
+    "mask": "0xff000000",
+    "direct": "0x01000000",
+    "selected": "0x02000000",
+    "recovery": "0x03000000",
+    "ingress_response": "0x04000000",
+    "preserved_mask": "0x00ffffff"
+  },
+  "routing": {
+    "recovery_rule_priority": 10000,
+    "ingress_rule_priority": 10010,
+    "selected_rule_priority": 10020,
+    "selected_table": 20001,
+    "gateway_table": 20002,
+    "unreachable_metric": 42760,
+    "tun_metric": 10
+  },
+  "nftables": {
+    "family": "inet",
+    "table": "vpnctl_v2_spike_routing",
+    "prerouting_priority": -150,
+    "output_priority": -150
+  },
+  "targets": {
+    "selected_ipv4": "203.0.113.10",
+    "direct_ipv4": "203.0.113.20",
+    "selected_ipv6": "2001:db8:1::10",
+    "direct_ipv6": "2001:db8:1::20",
+    "echo_port": 18080,
+    "ingress_port": 18082,
+    "recovery_port": 19000
+  },
+  "timing": {
+    "probe_timeout_seconds": 1,
+    "engine_restart_seconds": 10,
+    "ready_timeout_seconds": 15
+  }
+}
