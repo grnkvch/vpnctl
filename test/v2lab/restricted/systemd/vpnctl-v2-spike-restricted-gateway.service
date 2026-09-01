@@ -1,0 +1,24 @@
+[Unit]
+Description=vpnctl v2 restricted transport gateway spike
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/vpnctl-v2-spike/mihomo -d /var/lib/vpnctl-v2-spike-gateway -f /etc/vpnctl-v2-spike/restricted/gateway.yaml
+Restart=on-failure
+RestartSec=1s
+StateDirectory=vpnctl-v2-spike-gateway
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=384M
+
+[Install]
+WantedBy=multi-user.target

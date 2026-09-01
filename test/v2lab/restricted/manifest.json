@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "status": "spike-only",
+  "mihomo": {
+    "version": "v1.19.30",
+    "asset": "mihomo-linux-amd64-v1.19.30.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-v1.19.30.gz",
+    "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84",
+    "size_bytes": 18868732
+  },
+  "transport": {
+    "port": 8443,
+    "protocol": "tcp",
+    "cipher": "2022-blake3-aes-256-gcm",
+    "shadow_tls_version": 3,
+    "strict_mode": true,
+    "native_udp_listener": false
+  },
+  "handshake_hosts": {
+    "list_version": 1,
+    "candidates": [
+      "www.microsoft.com",
+      "www.apple.com",
+      "www.cloudflare.com"
+    ],
+    "selected_for_spike": "www.microsoft.com"
+  }
+}

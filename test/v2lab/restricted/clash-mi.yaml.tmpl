@@ -1,0 +1,39 @@
+mode: rule
+
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: redir-host
+  default-nameserver:
+    - 1.1.1.1
+  proxy-server-nameserver:
+    - 1.1.1.1
+  nameserver:
+    - "https://1.1.1.1/dns-query#RESTRICTED"
+
+proxies:
+  - name: RESTRICTED-SS
+    type: ss
+    server: "@CLIENT_GATEWAY_ADDRESS@"
+    port: 8443
+    cipher: 2022-blake3-aes-256-gcm
+    password: "@SS_PASSWORD@"
+    udp: false
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: "@HANDSHAKE_HOST@"
+      password: "@SHADOW_TLS_PASSWORD@"
+      version: 3
+      strict-mode: true
+
+proxy-groups:
+  - name: RESTRICTED
+    type: select
+    proxies:
+      - RESTRICTED-SS
+
+rules:
+  - DOMAIN-SUFFIX,example.com,RESTRICTED
+  - DOMAIN-SUFFIX,api.ipify.org,RESTRICTED
+  - MATCH,DIRECT

@@ -69,3 +69,42 @@ This journal records development-host mutations made while implementing and vali
 - Final Lima metadata: both lab fixtures are `Running`, `qemu`, `x86_64`, 1 vCPU, 536870912 bytes configured RAM, and 10737418240 bytes configured disk. The foreign `realty-front-docker-vm` was observed as `Running` but was not started, stopped, edited, or otherwise targeted by any lab command.
 - Current rollback: `./scripts/v2lab.sh down` stops only contract-matching lab fixtures. After their stopped state is verified, `./scripts/v2lab.sh destroy` deletes only those fixtures. The fixtures remain running for the immediately following transport spikes.
 - Status: complete; no network fault remains active.
+
+## 2026-09-01 — Restricted transport spike preparation
+
+### Planned Lima forwarding isolation
+
+- Requested mutation: stop only `vpnctl-v2-gateway` and `vpnctl-v2-node`, add ignore rules for guest ports `1053`, `8443`, `17890`, `18080`, and `19090` to both exact instance configurations as applicable, then restart only those fixtures.
+- Reason: prevent Lima's dynamic forwarder from creating development-host listeners when the guest spike starts its services.
+- Conflict scope: only the two contract-matching lab instance configurations and their temporary downtime. The foreign `realty-front-docker-vm` is not a command target.
+- Preflight: verify exact names, QEMU/amd64, 1 vCPU, 512 MiB, 10 GiB, pinned image digest, rootless network, and current running state before stopping or editing.
+- Rollback: stop the two exact lab fixtures, remove only the five matching `portForwards` entries with a separately reviewed `limactl edit`, and restart. Keeping the ignore rules is safe and preferred because it prevents host exposure; deleting/recreating the fixtures from the versioned template produces the same isolated state.
+- First stop result: no VM changed state because Lima 2.2 rejected a multi-name `stop` invocation before acting. The lab orchestrator was corrected to invoke `stop`/`delete` once per already contract-validated exact instance.
+- Retry result: both exact fixtures stopped cleanly. Five `proto:any` ignore entries were added to each stopped configuration and a read-only snapshot confirmed the entries before restart.
+- Boot observation: the already-created fixtures embed the original idempotent-but-networked provision script, so this restart repeats `apt update/install` and adds several minutes of amd64-emulated boot time. The versioned template now writes `/var/lib/vpnctl-v2-lab.provisioned` after success and skips package networking on subsequent boots of newly created fixtures. Existing fixtures are not edited out-of-band; they retain the old hook until safely recreated from the template.
+- Restart result: both fixtures returned to `READY` and produced `artifacts/v2lab/20260901-port-isolation/summary.json`. No spike listeners exist yet; the ignore rules will be verified again after service start by checking both Lima metadata and host listeners.
+- Status: complete; both fixtures running with forwarding isolation.
+
+### Planned Mihomo/ShadowTLS candidate installation
+
+- Requested mutation: download the official pinned Mihomo `v1.19.30` amd64 gzip into ignored `artifacts/v2lab/cache/`, verify SHA-256 `cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84`, and install the binary, generated configs, three systemd units, and three state directories only inside the two lab fixtures.
+- Guest ownership: all paths use `vpnctl-v2-spike` names and `/etc/vpnctl-v2-spike/restricted/.owner`; existing paths without the exact marker and occupied ports are hard conflicts. Units are started but not enabled.
+- Listener scope: gateway `8443/TCP` plus `127.0.0.1:18080`; node `127.0.0.1:{1053,17890,19090}`. Lima ignore rules prevent host forwarding. No `8443/UDP` listener is configured.
+- External dependency: `www.microsoft.com:443`, already observed from the gateway with TLS 1.3 and valid certificate verification, is pinned for the spike. No automatic fallback is used.
+- Logging: `info` is a temporary explicit opt-in inside disposable fixtures for test evidence. Credentials and generated client profiles remain mode `0600` under ignored artifacts and are not recorded in this journal.
+- Rollback: `./scripts/v2restricted-spike.sh stop` stops only the exact units. `uninstall` first verifies the marker, then stops/cleans those units and removes only their exact unit, config, binary, and systemd-managed state paths. Deleting the two lab fixtures remains the full fallback. Host cache/evidence removal is manual and must target the exact ignored directory.
+- Result: the official 18,868,732-byte archive was downloaded and checksum-verified; both rendered configs passed pinned `mihomo -t`; owner-marked files and three non-enabled units were installed and reached active state.
+- Host isolation verification: with all guest services running, `lsof` found no development-host TCP listener on `1053`, `8443`, `17890`, `18080`, or `19090`.
+- Status: installed and running inside the two fixtures; no host listener created.
+
+### Planned restricted E2E and reconnect mutations
+
+- Requested runtime mutations: temporarily select the deliberately wrong ShadowTLS host in the node's in-memory `RESTRICTED` group, require strict failure, restore the pinned selection, then separately stop and restart only `vpnctl-v2-spike-restricted-gateway.service` to verify node reconnect.
+- Persistence/conflict scope: no generated config or desired state changes; the selection is controller-memory-only. A shell trap restores `RESTRICTED-VALID` on every exit. The reconnect trap restarts the exact gateway spike unit on every exit.
+- Verification: selected TCP reaches only the gateway-loopback token, selected DNS returns through the proxy-bound DoH upstream, wrong-host strict mode fails, correct host recovers, gateway outage fails, restart recovers without node restart, and resource/socket evidence is captured under ignored artifacts.
+- Rollback: restore `RESTRICTED-VALID`; start the exact gateway unit; if either cannot be confirmed, stop all three spike units with `./scripts/v2restricted-spike.sh stop` while preserving evidence.
+- Automated E2E result: passed at `artifacts/v2lab/restricted-spike/evidence-final/`. The gateway-loopback token was unreachable direct and reachable through restricted; the proxy-bound DoH request returned A records; temporary `www.apple.com` selection failed certificate validation; pinned `www.microsoft.com` recovered; `8443/UDP` was absent.
+- Reconnect result: passed at `artifacts/v2lab/restricted-spike/reconnect-final/`. The outage probe failed while the exact gateway unit was stopped, recovery succeeded on the first bounded attempt, gateway Mihomo changed PID `2200 → 2375`, and node Mihomo remained PID `2178`.
+- Resource snapshot: gateway/node Mihomo RSS was approximately 38/46 MiB; total guest RSS approximately 307/304 MiB. Both guests retained 1 GiB swap and healthy peer connectivity.
+- Cleanup verification: the in-memory selection is `RESTRICTED-VALID`; the gateway unit is running; the temporary secret-bearing `/tmp/clash-mi-lab.yaml` was removed. No fault or wrong-host selection remains active.
+- Status: automated mutations complete and restored to the intended running spike state. Actual Clash Mi compatibility remains a manual product gate, so OpenSpec task 2.2 is not marked complete.

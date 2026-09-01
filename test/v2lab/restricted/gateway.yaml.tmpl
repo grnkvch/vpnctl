@@ -1,0 +1,23 @@
+mode: rule
+log-level: info
+ipv6: false
+
+listeners:
+  - name: vpnctl-restricted-in
+    type: shadowsocks
+    listen: 0.0.0.0
+    port: 8443
+    cipher: 2022-blake3-aes-256-gcm
+    password: "@SS_PASSWORD@"
+    udp: false
+    shadow-tls:
+      enable: true
+      version: 3
+      users:
+        - name: vpnctl-node
+          password: "@SHADOW_TLS_PASSWORD@"
+      handshake:
+        dest: "@HANDSHAKE_HOST@:443"
+
+rules:
+  - MATCH,DIRECT

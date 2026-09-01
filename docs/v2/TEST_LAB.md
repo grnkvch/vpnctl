@@ -14,6 +14,8 @@ Boot both fixtures and immediately capture baseline evidence:
 
 The command validates the template, creates or starts both VMs, installs the lab helpers, and writes timestamped JSON under `artifacts/v2lab/`. `summary.json` contains OS/architecture, vCPU and memory limits, swap, disk capacity, CPU/load sample, total and top-process RSS, listening/connected TCP+UDP sockets, guest addresses, peer latency, and packet loss. Re-run measurement without recreating the VMs with:
 
+Package provisioning records `/var/lib/vpnctl-v2-lab.provisioned` only after a successful install. Fixtures created from the current template therefore skip network package work on later boots.
+
 ```bash
 ./scripts/v2lab.sh report
 ```

@@ -3,6 +3,11 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+provision_marker=/var/lib/vpnctl-v2-lab.provisioned
+if [ -f "$provision_marker" ]; then
+  exit 0
+fi
+
 swap_path=/var/lib/vpnctl-v2-lab.swap
 if ! swapon --noheadings --show=NAME | grep -Fxq "$swap_path"; then
   if [ ! -f "$swap_path" ]; then
@@ -31,3 +36,4 @@ apt-get install -y --no-install-recommends \
   procps \
   wireguard-tools
 rm -rf /var/lib/apt/lists/*
+install -m 0444 /dev/null "$provision_marker"

@@ -85,7 +85,9 @@ operate_existing_instances() {
       fi
     done
   fi
-  limactl "$operation" "${instances[@]}"
+  for instance in "${instances[@]}"; do
+    limactl "$operation" "$instance"
+  done
 }
 
 start_instance() {

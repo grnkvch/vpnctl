@@ -50,7 +50,7 @@ func TestV2MinimumHostLabContract(t *testing.T) {
 	}
 	for _, guard := range []string{
 		"assert_instance_contract", "refusing to operate on non-lab or drifted Lima instance",
-		"refusing to delete running lab instance", "operate_existing_instances",
+		"refusing to delete running lab instance", "operate_existing_instances", `limactl "$operation" "$instance"`,
 	} {
 		if !strings.Contains(orchestratorScript, guard) {
 			t.Errorf("v2 lab orchestration is missing conflict guard %q", guard)
@@ -65,6 +65,10 @@ func TestV2MinimumHostLabContract(t *testing.T) {
 		if !strings.Contains(reportScript, metric) {
 			t.Errorf("v2 lab report does not capture %q", metric)
 		}
+	}
+	provisionScript := readContractFile(t, files[1])
+	if !strings.Contains(provisionScript, "vpnctl-v2-lab.provisioned") {
+		t.Error("v2 lab provisioning must be one-time after a successful install")
 	}
 
 	faultScript := readContractFile(t, files[3])

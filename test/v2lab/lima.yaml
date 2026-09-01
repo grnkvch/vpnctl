@@ -20,6 +20,23 @@ upgradePackages: false
 networks:
   - lima: user-v2
 
+portForwards:
+  - guestPort: 1053
+    proto: any
+    ignore: true
+  - guestPort: 8443
+    proto: any
+    ignore: true
+  - guestPort: 17890
+    proto: any
+    ignore: true
+  - guestPort: 18080
+    proto: any
+    ignore: true
+  - guestPort: 19090
+    proto: any
+    ignore: true
+
 provision:
   - mode: system
     file:

@@ -1,0 +1,61 @@
+mixed-port: 17890
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: info
+ipv6: false
+external-controller: 127.0.0.1:19090
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: redir-host
+  default-nameserver:
+    - 1.1.1.1
+  proxy-server-nameserver:
+    - 1.1.1.1
+  nameserver:
+    - "https://1.1.1.1/dns-query#RESTRICTED"
+
+proxies:
+  - name: RESTRICTED-VALID
+    type: ss
+    server: "@GATEWAY_IP@"
+    port: 8443
+    cipher: 2022-blake3-aes-256-gcm
+    password: "@SS_PASSWORD@"
+    udp: false
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: "@HANDSHAKE_HOST@"
+      password: "@SHADOW_TLS_PASSWORD@"
+      version: 3
+      strict-mode: true
+  - name: RESTRICTED-WRONG-HOST
+    type: ss
+    server: "@GATEWAY_IP@"
+    port: 8443
+    cipher: 2022-blake3-aes-256-gcm
+    password: "@SS_PASSWORD@"
+    udp: false
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: "www.apple.com"
+      password: "@SHADOW_TLS_PASSWORD@"
+      version: 3
+      strict-mode: true
+
+proxy-groups:
+  - name: RESTRICTED
+    type: select
+    proxies:
+      - RESTRICTED-VALID
+      - RESTRICTED-WRONG-HOST
+
+rules:
+  - IP-CIDR,127.0.0.1/32,RESTRICTED,no-resolve
+  - DOMAIN-SUFFIX,example.com,RESTRICTED
+  - MATCH,DIRECT
