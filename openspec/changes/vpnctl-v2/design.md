@@ -1,0 +1,331 @@
+## Context
+
+See [proposal.md](./proposal.md) for motivation and the capability specs for normative behavior. The current repository is a small Go CLI whose v1 state lives under the working directory and whose main data plane is WireGuard with generated Clash/Mihomo profiles. v2 keeps Go and reusable v1 renderers, but introduces system-owned state, two host roles, a long-running gateway controller, several independently supervised data-plane processes, cross-host operations, and security-sensitive lifecycle flows.
+
+The target is intentionally constrained: Ubuntu 24.04 amd64, systemd, root, nftables, kernel WireGuard, `/dev/net/tun`, systemd-resolved, one dedicated gateway, and application-host private nodes. The minimum gateway has 1 vCPU, 512 MB RAM, and 10 GB disk, so process count, idle memory, reconnect behavior, and bounded proxying are architectural constraints rather than later optimization.
+
+The v2 behavior is fixed, but three implementation choices remain conditional on measured gates: Mihomo + Shadowsocks + ShadowTLS v3 for restricted transport, nginx for public ingress, and frp for reverse tunneling. The architecture therefore treats them as replaceable adapters while the first delivery path validates those candidates before building dependent production integration.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- Preserve one statically linked Go `vpnctl` entry point while separating CLI, controller, reconciliation, state, platform, and data-plane-provider boundaries.
+- Make the gateway the authoritative writer without introducing a permanently running private-node management agent.
+- Keep applied forwarding alive through controller restarts and make every mutation generation-guarded, idempotent, staged, and recoverable.
+- Make leak prevention and SSH access recovery enforceable below the routing/controller processes that can fail.
+- Use a normalized desired-state model that does not expose nginx, frp, or Mihomo syntax as public configuration.
+- Prove the complete stack on the minimum VPS and actual Clash Mi before v2.0 release.
+
+**Non-Goals:**
+
+- A plugin SDK or user-selectable component matrix. Provider boundaries exist for maintainability and fallback, not as public configuration.
+- Distributed consensus or strict two-host atomicity. The design uses a single authoritative writer and reconcilable sagas.
+- Compatibility with arbitrary pre-existing gateway network stacks or user applications on the gateway.
+- A long-running node control agent, remote laptop controller, public management API, or multi-tenant authorization model.
+- Finalizing every low-frequency command spelling in code before a CLI-contract pass. Accepted happy paths and behavior remain fixed; the command-tree pass can shorten names without changing resource semantics.
+
+## Decisions
+
+### 1. Retain Go and split the repository by domain and execution boundary
+
+The repository remains one Go module and produces one `vpnctl` binary. The same binary exposes CLI entry points and can run private internal service modes selected only by systemd unit arguments; those internal modes are not public API.
+
+Proposed package boundaries:
+
+```text
+cmd/vpnctl                 public entry point
+internal/cli               role-aware command registry, consent, human/JSON output
+internal/model             versioned desired/applied domain objects and invariants
+internal/store             atomic JSON state, secrets, snapshots, locks, migrations
+internal/controller        gateway Unix-socket API, mutation serialization, reconcile
+internal/control           HTTPS/mTLS RPC schemas, protocol negotiation, idempotency
+internal/enrollment        invite, enroll, recovery and PKI workflows
+internal/platform/linux    capability discovery, nftables, routes, DNS, systemd, swap
+internal/render            deterministic derived configs and hash manifests
+internal/transport         standard/restricted provider interfaces and health probes
+internal/routing           presets, matcher IR, marks, fail-closed policy, split DNS
+internal/ingress           expose model, TLS material, proxy provider and limits
+internal/tunnel            tunnel provider, mapping authorization and allocation
+internal/operations        plan/apply/repair sagas, watchdog transactions, diagnostics
+internal/lifecycle         update, backup/restore, uninstall/purge
+internal/output            redacted results, stable JSON envelopes and exit categories
+```
+
+Existing v1 WireGuard, Mihomo, state, and client code is migrated behind these boundaries rather than edited in place until it implicitly supports both models. Tests that encode v1 client behavior are retained as regression fixtures.
+
+Alternative considered: separate `vpnctl-gateway` and `vpnctl-node` binaries. It reduces some conditional startup code but complicates one-bundle delivery and operator mental model without meaningful memory savings because only selected internal service modes run. One binary was explicitly chosen.
+
+### 2. Use a gateway controller plus independent systemd data-plane units
+
+Gateway CLI connects to `/run/vpnctl/control.sock`; node CLI makes a short-lived mTLS RPC over the active overlay path. Only the gateway controller writes authoritative state. Each mutation is serialized through one controller queue/lock and converted into a plan before execution.
+
+Long-lived forwarding is owned by independent units with generated immutable-at-generation configs and `Restart=on-failure`. The exact unit set is provider-dependent, but the initial layout is:
+
+```text
+gateway:
+  vpnctl-controller.service
+  vpnctl-standard.service
+  vpnctl-restricted.service
+  vpnctl-dns.service
+  vpnctl-tunnel-server.service
+  nginx.service with vpnctl-owned config/override
+
+node:
+  vpnctl-routing.service
+  vpnctl-standard.service
+  vpnctl-tunnel-client.service
+  systemd-resolved drop-in + vpnctl nftables/routes
+
+transactional:
+  vpnctl-watchdog@<transaction>.service + timer
+```
+
+The restricted node outbound and routing engine are expected to share a Mihomo process if the spike proves that arrangement safe and measurable. A controller restart reads state and observes units/config hashes; it does not restart healthy units or converge pending/drift automatically.
+
+Alternative considered: embed reverse proxy, tunnel, DNS, routing, and transports in the controller. This reduces unit count but makes a management bug or upgrade a forwarding outage and prevents independent restart/rollback.
+
+### 3. Separate desired state, applied observations, pending operations, and secrets
+
+`/var/lib/vpnctl/state.json` contains a versioned envelope and normalized non-secret resources. The gateway model contains:
+
+- host identity, role, explicit public IP, pools, interfaces, SSH source and installed component manifest;
+- nodes, clients, immutable IDs, names, allocated IPs, lifecycle and credential generations;
+- normalized effective presets, assignments, DNS inputs and active generation;
+- active/standby transport intent, pinned handshake host, exposes and managed tunnel endpoints;
+- public/control certificate metadata, pending operations, rollback snapshot metadata, logging opt-ins, backup metadata;
+- per-node bounded idempotency records containing only non-sensitive result summaries.
+
+Secrets are separate files below `/var/lib/vpnctl/secrets` and are referenced by opaque IDs. Node-local state holds role, immutable node ID, gateway endpoint/trust, last known gateway generation, pending request ID/result, local component/config hashes, original DNS state, and local secret references. Export artifacts and portable backups are not part of authoritative state and carry source-generation metadata.
+
+Every state write follows decode → schema/invariant validation → write temporary sibling → fsync file → atomic rename → fsync directory. One prior generation and operation-scoped snapshots are retained with bounded cleanup. Config renderers are pure functions of normalized state plus secret references, and every generated artifact has a content hash used for drift detection.
+
+Alternative considered: SQLite. It improves ad-hoc queries and transactional indexing but adds schema and backup complexity without benefit at the expected resource cardinality. Serialized JSON behind a sole writer is adequate for v2.
+
+### 4. Model operations as generation-guarded commands and reconcilable sagas
+
+The common mutation pipeline is:
+
+```text
+parse/authorize/consent
+  → load generation and discover owned actual state
+  → validate complete candidate + conflicts
+  → render deterministic plan
+  → persist request_id/pending operation
+  → stage local and remote artifacts
+  → activate in safe dependency order
+  → health-check
+  → commit authoritative generation
+  → bounded drain/cleanup old generation
+```
+
+Local activation uses atomic file replacement, component-native validation, reload/restart only when its hash changed, and local rollback on a proven failure. Cross-host operations are sagas with per-step generation/phase records. The gateway publishes public ingress last; node rotation and transport switch keep old and new generations concurrently only during staging/drain.
+
+If a response is lost, the node retains `request_id` until a definitive result. The gateway's idempotency entry returns the prior result. If the entry is too old, a resource-specific reconciliation compares desired generation and stable IDs instead of replaying the command. Stale expected generations return conflict and require the operator to review a fresh plan.
+
+`--defer` writes candidate intent and pending metadata on the gateway; it is not an offline queue. `apply` only advances pending intent. `repair` constructs a separate explicit plan from desired-vs-owned actual drift. Unknown resources never enter automatic repair targets.
+
+Alternative considered: two-phase commit across hosts. A node or network can disappear indefinitely after prepare, so it cannot guarantee atomicity and would add locks requiring manual recovery. Durable sagas match the actual failure model.
+
+### 5. Implement lockout protection below controller lifetime
+
+Lockout-risk plans first serialize the current vpnctl nftables table, owned routes, rules, and sysctls into a root-only transaction directory. The CLI then installs and starts a systemd watchdog service/timer whose rollback executable and input do not depend on the controller or initiating process.
+
+The candidate nftables ruleset is loaded atomically. The transaction file records originating SSH connection identifiers and the post-change start time. `vpnctl confirm <id>` verifies it is called through an SSH connection established after activation and that its server port matches the allowed listener. Only then does it write a one-time commit marker and stop the timer. The timer restores only saved vpnctl-owned resources after 120 seconds or on explicit failed checks.
+
+UFW/firewalld and incompatible external routing are preflight conflicts. The one-time v1 migration owns translation/removal of known v1 UFW rules; ordinary v2 apply never edits unknown UFW/firewalld state.
+
+Alternative considered: rely on atomic nftables apply and the original SSH connection. Existing sessions can survive while all new SYN packets are blocked, so this cannot prove recoverability.
+
+### 6. Use one matcher intermediate representation for node and client policy
+
+Preset YAML is parsed into a versioned selector AST, validated as a complete set, normalized into order-independent include/exclude sets, and compiled into an implementation-neutral matcher IR. v2 starts with the matcher subset needed by v1 Clash exports, especially domain suffix and supported IP/CIDR selectors. The IR has no action primitive: a match always means `gateway-or-block`, while no match means direct.
+
+The same IR feeds:
+
+- node Mihomo routing/TUN configuration;
+- nftables fail-closed sets/marks and IPv6 leak guard;
+- shared gateway DNS selection metadata;
+- generated Clash/Mihomo rules and split-DNS sections.
+
+Preset source and normalized effective generation are separate. Manual edits become pending only through validate/apply. Built-in template updates use a three-way merge of embedded base, current user source, and new embedded template; unsafe merge returns conflict.
+
+Alternative considered: raw Mihomo configuration. It exposes implementation actions capable of bypassing fail-closed guarantees and makes equivalent Linux/client compilation impossible to validate.
+
+### 7. Build fail-closed routing from nftables marks, policy routes, TUN readiness, and a recovery allowlist
+
+The node owns one `inet vpnctl` table and dedicated routing tables/fwmarks. A mark namespace distinguishes already classified direct connections, selected connections, vpnctl recovery/control traffic, and ingress responses. Conntrack marks retain safe decisions for established flows. The routing service reports ready only after TUN, rules, DNS, active outbound, and mandatory probes are available.
+
+The guard chain exists before routing-engine startup. While not ready, it permits established flows with retained direct classification and a minimal resolved gateway recovery allowlist, then drops new application egress. Once ready, selected flows are marked for the TUN/active transport; selected-path failure drops rather than reclassifies them. IPv6 is either equivalently classified and carried or rejected for selected destinations; v2 does not enable an unmanaged direct fallback.
+
+Exact nftables hook names, priorities, mark masks, and interaction tests with systemd-resolved are fixed by the mandatory firewall/routing spike before implementation. The spike must demonstrate boot, crash, restart, uninstall, transport switch, and ingress-response symmetry. These values remain internal and can change without changing the selector or fail-closed specs.
+
+Alternative considered: rely solely on Mihomo TUN auto-route. If Mihomo crashes during boot or reload, kernel routing can send traffic direct before userspace restores policy.
+
+### 8. Use Mihomo as the initial routing/restricted provider, gated by live tests
+
+The initial provider uses Mihomo for node TUN classification and DNS, a native Shadowsocks listener plus ShadowTLS v3 strict wrapping on the gateway, and a Shadowsocks outbound with ShadowTLS on nodes/Clash clients. Selected UDP in restricted mode uses Mihomo UDP-over-TCP inside Shadowsocks/ShadowTLS; there is no listener on `8443/UDP`.
+
+The provider exposes `Prepare`, `Validate`, `StartTest`, `Activate`, `Drain`, `Rollback`, and health/probe methods. Standard mode uses WireGuard and presents the same internal gateway destinations to control and tunnel clients. Both provider configs exist, but a node activation record selects one. Test creates isolated transient routes/connections and cannot mutate the production mark or tunnel generation.
+
+The release manifest pins component versions, capabilities, and config schema. Before implementation depends on the candidate, a live spike must prove:
+
+- gateway/node and actual Clash Mi selected TCP and DNS;
+- UoT end-to-end and fail-closed behavior with `8443/UDP` closed;
+- ShadowTLS v3 strict behavior and handshake-host validation;
+- memory/CPU/reconnect under the minimum host.
+
+If the candidate fails, the transport interface and product behavior stay; another DPI-resistant provider must pass the same suite. There is no product-facing Shadowsocks or ShadowTLS configuration surface.
+
+### 9. Treat the handshake host as pinned versioned desired state
+
+The signed bundle carries an ordered list with stable candidate IDs and hostnames. Init probes TLS 1.3, certificate validity, reachability, and bounded latency and persists the first success. Runtime health never mutates the selection.
+
+Replacement is a saga with `prepare` and `commit`: validate candidate, render impacted node/client generations, show impact, stage reachable nodes, then explicitly commit the single gateway host. Old configs are flagged stale; one rollback snapshot is retained. If the old path cannot carry control, the node-local SSH recovery command validates a manually provided candidate against gateway authoritative pending state before replacing only local transport configuration.
+
+Alternative considered: automatic multi-host SNI fallback. It hides transport changes, complicates ShadowTLS demultiplexing, and conflicts with the manual-only transport contract.
+
+### 10. Authenticate enrollment with a stable gateway identity separate from ingress TLS
+
+Gateway init creates three independent trust domains:
+
+1. public ingress RSA certificate/key for ordinary IP HTTPS;
+2. internal control CA and leaf certificates for overlay mTLS;
+3. stable enrollment signing key used to authenticate bootstrap/recovery responses.
+
+The opaque invite is a compact versioned, base64url-encoded envelope containing public metadata plus a 256-bit random secret. It is transferred through trusted SSH and therefore does not need to hide its public fields, but it is never accepted via argv. The node connects to the reserved HTTPS endpoint and verifies the response signature against the enrollment-key fingerprint carried by the invite. HTTPS still protects passive observation using the current ingress certificate; the signed transcript prevents a substituted public certificate or proxy from impersonating the gateway. The transcript binds invite ID, endpoint, node ID, CSR hashes, requested transport/presets, expiry, and nonces.
+
+After successful compare-and-consume of the invite-secret hash, the gateway returns the control CA chain, client certificate, gateway overlay address, both transport public configurations, tunnel credential material intended for the node, and signed normalized assignment. The node writes all secret material atomically before acknowledging commit. Recovery uses a distinct token purpose and binds an existing active node ID and current generation.
+
+Alternative considered: pin the public ingress certificate fingerprint. That would couple node trust bootstrap to a certificate that must rotate independently for external webhook registrations. Alternative considered: expose the internal control CA leaf directly on public 443. It mixes trust roles and complicates a future domain/ACME frontend.
+
+### 11. Use Ed25519 for internal identity and RSA only for public ingress compatibility
+
+The control CA, gateway control leaf, node control keys, and enrollment signing key use Ed25519. Certificate serials are random 128-bit values; URI SANs use a versioned namespace such as `urn:vpnctl:node:<uuid>`. Public ingress remains RSA-2048/SHA-256 with IP SAN and CN for provider compatibility. Tunnel and restricted symmetric credentials use 256 bits from the kernel CSPRNG. Private-key writes use `openat`-style no-follow semantics, mode `0600`, and atomic replacement in a mode-`0700` directory.
+
+CA and leaf validity, renewal windows, authoritative generation checks, and manual CA overlap follow the specs. Revocation is enforced from state on every new control/tunnel login rather than relying on CRLs.
+
+Alternative considered: RSA for all PKI. It is more widely compatible but consumes more storage/CPU and is unnecessary for vpnctl-to-vpnctl TLS on the fixed platform. The public edge keeps RSA where external compatibility matters.
+
+### 12. Version the control RPC as a small explicit operation registry
+
+The controller exposes HTTPS/1.1 endpoints under an internal version prefix, for example `/rpc/v1/<operation>`, with one bounded JSON request and response per command. A common envelope includes protocol major/minor, request ID, expected state generation, node ID, credential generation, timestamp/nonce, operation discriminator, and typed payload. Responses include result category, authoritative generation, resource IDs, warnings, required actions, and a redacted result hash.
+
+The server negotiates only compiled supported majors and rejects unknown fields where security-sensitive semantics could be ambiguous; additive minor response fields are ignored safely by older clients. Read operations do not create idempotency records. Mutation records are pruned per node by both age and count.
+
+Alternative considered: gRPC. The operations are rare, short-lived, and non-streaming, so HTTP/JSON is easier to inspect, fixture-test, and keep within a small static binary. Alternative considered: a custom encrypted binary protocol. mTLS already supplies a reviewed secure channel.
+
+### 13. Use nginx as the first replaceable ingress provider
+
+The normalized ingress model stores certificate identity, exact/prefix route, expose ID, internal endpoint, method-neutral proxy settings, body limit, upstream timeout, lifecycle, and generation. It contains no nginx directives.
+
+The nginx provider renders one complete owned configuration tree, clears untrusted forwarding headers, sets trusted connection metadata, enables TLS 1.2/1.3 and ALPN HTTP/1.1+HTTP/2, disables disk request buffering, bounds connection/request/header/body/timeouts, maps reserved internal routes before user routes, and points each expose at a loopback-only tunnel endpoint. Activation runs nginx config validation, atomically swaps the generated tree, and requests graceful reload. A failed reload restores the prior tree.
+
+nginx is installed from Ubuntu 24.04 apt and vpnctl owns its generated config and service override because the gateway is dedicated. A mandatory prototype verifies Telegram IP-only self-signed RSA behavior, certificate lifetime, streaming without body temp files, concurrency/body limits, and `404`/`413`/`503`/`504` outcomes at minimum resources. If it fails, a Caddy provider may replace it while preserving the normalized model and tests.
+
+Alternative considered: an in-process Go reverse proxy. It removes nginx but increases controller/data-plane coupling and requires vpnctl to own HTTP/2 limits, graceful reload, and edge hardening. Alternative considered: Caddy first. Its ACME strengths are outside IP-only v2 and its minimum-host resource profile is less predictable until measured.
+
+### 14. Use frp as the first replaceable multiplexed tunnel provider
+
+The initial tunnel provider pins frp and configures one shared internal-only `frps`, one `frpc` per node, `tcpMux` enabled, connection pooling disabled, dashboards and unused/public proxy types disabled. Each expose gets a stable loopback port from a persisted allocator.
+
+The gateway controller serves local-only frp `Login` and `NewProxy` authorization hooks. `Login` validates immutable node ID, current tunnel token hash/generation, and active lifecycle. `NewProxy` additionally validates the deterministic proxy name, TCP type, and exact loopback port against authoritative expose state. `frpc` configuration uses atomic render and loopback-only dynamic reload. The tunnel has TLS server verification in addition to its active outer transport.
+
+A mandatory prototype measures true one-connection multiplexing, dynamic add/remove, reconnect backoff, plugin behavior, immediate revoke, mapping generation validation, transport switch, and minimum-host memory. If frp fails, OpenSSH reverse forwarding is the fallback adapter, accepting more orchestration work; rathole is rejected because its current connection model does not meet required multiplexing.
+
+Alternative considered: one reverse SSH process per expose. It is operationally familiar but violates the bounded process/connection model and makes authorization/config updates more expensive.
+
+### 15. Integrate split DNS through a shared gateway resolver and node-local managed resolver
+
+The node routing provider runs one local resolver endpoint and installs a systemd-resolved drop-in pointing host DNS at it. Original link/global DNS state is captured before activation. Ordinary port-53 traffic is redirected within vpnctl-owned rules so applications that bypass resolved but use classic DNS follow the same classification boundary.
+
+The local resolver evaluates normalized selector domains. In `policy` mode, selected queries use an internal gateway resolver reachable only through the active transport; other queries use saved/direct IPv4 upstreams. In compatibility `direct` mode all client lookup behavior follows the v1-compatible direct model. The gateway resolver is shared and forwards to authoritative gateway upstreams, initially `1.1.1.1` and `8.8.8.8`.
+
+The Mihomo DNS-mode spike selects fake-IP versus redir-host/other concrete settings by testing Clash Mi, Linux applications, cache behavior, route classification, and failure. That choice is an internal renderer detail as long as externally specified split/fail-closed semantics hold.
+
+Alternative considered: one DNS daemon per node on the gateway. Node count is small but separate processes add memory and lifecycle cost without an isolation requirement that cannot be enforced logically.
+
+### 16. Compile ingress and tunnel changes from a single expose resource
+
+An expose has one immutable ID, owner node ID, optional unique name, normalized upstream, route mode/path, safe limit overrides, tunnel endpoint allocation, desired generation, and readiness. Its transaction ordering is:
+
+```text
+validate path/upstream/limits
+  → allocate/stage loopback endpoint
+  → authorize and activate tunnel mapping
+  → verify tunnel and local upstream
+  → render/validate/reload ingress route last
+```
+
+Creation can commit as `degraded` if the application is down, but the route always targets the correct unavailable mapping and returns `503`; it never points elsewhere. Removal reverses ordering: unpublish, bounded drain, remove mapping, release port. Node revoke first unpublishes all routes, invalidates tunnel/control/transport generations, and then closes connections.
+
+### 17. Keep observability explicit, time-bounded, and redacted at the source
+
+All components start with expanded vpnctl logging disabled. The controller persists opt-in sessions as scope, level, destinations, and absolute expiry, then renders component-specific logging configuration and timers. Journald is the default temporary destination; optional files use bounded rotation.
+
+Redaction occurs before formatter/destination: secrets, tokens, private keys, Authorization/Cookie/provider secret headers, request/response bodies, full expose paths, and raw RPC payloads never enter a log record. Idempotency and audit summaries use stable resource IDs, operation types, generations, status, and hashes. `status` only reads cached/process metadata; `doctor` is the sole general probe runner and tags all synthetic traffic.
+
+Alternative considered: error logging always enabled. The agreed product contract is no vpnctl expanded logging by default, so even error detail requires a bounded opt-in; service health and last exit codes remain available as passive state rather than content logs.
+
+### 18. Deliver releases and rollback as a manifest-governed unit
+
+The release manifest includes vpnctl version, supported control versions, state-schema range, target OS/arch, each bundled component version/hash/capabilities, compatible apt package ranges, handshake-host list version, and whether migrations are backward reversible. The release archive and manifest are signed; the installer and updater verify signature and hashes before mutation.
+
+Update downloads or consumes the full target bundle, validates fleet protocol window gateway-first, stages binaries in versioned directories, snapshots state, and atomically changes a `current` link/metadata only after preflight. Component config migrations are rendered before service changes. Rollback returns to the saved version only when the manifest marks all applied state migrations reversible.
+
+The gateway portable backup is separate from update snapshots. Use an authenticated streaming archive with a versioned header, random salt/nonce, a memory-hard passphrase KDF, and AEAD encryption; concrete parameters are selected and fixture-tested during the backup task against the 512 MB host. The decrypted manifest lists entries and hashes, allowing full authentication/schema validation before restore mutation. Node private keys are structurally absent.
+
+Alternative considered: download data-plane binaries independently during apply. This makes a desired generation non-reproducible and breaks offline transfer and rollback guarantees.
+
+### 19. Treat CLI grammar and JSON schemas as generated contracts
+
+The CLI layer uses one role-aware command registry containing availability, consent class, dry-run/defer support, arguments, result type, and exit mapping. Accepted high-frequency commands and happy paths from the specs are retained. Before feature implementation expands the surface, a dedicated CLI-contract task reviews the full tree to remove redundant role/target arguments and freezes:
+
+- command and option names for v2.0;
+- exact numeric exit codes behind the stable categories;
+- per-result JSON Schema documents and `schema_version` policy;
+- stdin/TTY behavior for secret and typed prompts;
+- a machine-readable redaction classification for every output field.
+
+Golden tests cover human output shape, one-document JSON stdout, stderr separation, no-secret output, role errors, consent, and idempotent aliases if any. This pass can shorten command spelling but cannot change capability behavior, accepted minimal happy paths, or security confirmation rules.
+
+Alternative considered: let each command define output and consent ad hoc. That produces incompatible automation and is especially dangerous around hidden tokens and destructive operations.
+
+## Risks / Trade-offs
+
+- **[512 MB gateway may not sustain all candidate daemons]** → Run spikes before provider integration, enforce shared daemons and hard concurrency limits, measure idle and representative load, offer managed swap, and keep nginx/frp fallback adapters.
+- **[UDP-over-TCP performs poorly for latency-sensitive traffic]** → Guarantee functional selected UDP and leak prevention, publish no gaming/voice performance promise, benchmark head-of-line effects, and keep standard WireGuard as the manually selected alternative.
+- **[DPI-resistant candidate changes upstream syntax or behavior]** → Pin binaries/config schemas in the signed manifest, test the exact release bundle, expose only a transport behavior abstraction, and require an explicit upgrade plan.
+- **[Handshake hosts are external dependencies]** → Ship a versioned ordered list, validate and pin one, report degradation, and require a staged manual replacement with SSH recovery; do not conceal changes through auto-fallback.
+- **[Kernel hook ordering can leak or break unrelated node traffic]** → Make nftables/routing priority selection a blocking spike, own a single table and mark namespace, test boot/crash/uninstall and foreign-state conflicts, and fail preflight when safe coexistence cannot be proven.
+- **[Control CA compromise has fleet-wide impact]** → Store root-only, exclude plaintext export, include only encrypted backups, validate active identity generations per request, support staged CA rotation, and keep public ingress identity separate.
+- **[Enrollment on public 443 is exposed to scanning and replay]** → Use high-entropy single-use short-lived tokens, hashed server storage, rate/size/time bounds, signed transcripts, atomic consume, reserved paths, and no general public management endpoint.
+- **[Cross-host failure leaves mixed generations]** → Persist operation phases on both sides, use stable IDs and expected generations, activate public routing last, preserve old generation until confirm, and reconcile instead of blind rollback/retry.
+- **[Node without a resident control agent cannot be remotely converged]** → Keep commands node-local by product contract, make gateway state authoritative, expose pending/required actions clearly, and allow already applied data plane to survive.
+- **[Self-signed IP certificate expires or is rejected by a provider]** → Gate the five-year RSA profile with live Telegram tests, warn 180 days ahead, keep rotation manual, and produce explicit re-registration actions.
+- **[nginx may buffer request bodies to disk under some settings]** → Assert generated directives and verify with filesystem-observed E2E tests before acceptance; switch provider if the contract cannot be met.
+- **[frp plugin failure can weaken per-node isolation]** → Keep frps internal-only, deny by default on plugin timeout/error, validate every login/mapping against generation, disable shared-token-only auth, and test malicious announcements.
+- **[No default logs makes incident diagnosis harder]** → Preserve passive health/exit metadata, provide bounded doctor probes, and make scoped logging easy to enable while enforcing source redaction and automatic expiry.
+- **[Manual public IP and manual external actions add operator work]** → Keep them explicit because automatic discovery and third-party credential storage would weaken correctness/ownership; return complete copy-ready commands and `requires_action` lists.
+- **[Large v2 scope increases integration risk]** → Sequence implementation by risk gates and vertical slices, but retain a single release gate requiring every non-backlog capability and migration test.
+
+## Migration Plan
+
+1. Freeze v1 regression fixtures for client keys, addresses, WireGuard full-tunnel export, Clash selective export, rulesets, installer artifacts, and current UFW behavior.
+2. Complete the restricted, nginx, frp, nftables/routing, DNS-mode, control-crypto, and minimum-host spikes. Record chosen versions, limits, mark layout, cryptographic/KDF parameters, and provider acceptance evidence before dependent production code.
+3. Introduce the v2 model/store/controller and system-owned layout behind new `init` flows without mutating v1 installations. Implement atomic state migrations and render/apply harnesses.
+4. Deliver a gateway-only internal vertical foundation: preflight, watchdog-confirmed firewall, control PKI, both transport listeners, DNS, component supervision, status/doctor, and rollback.
+5. Add personal-client v1 behavior through the v2 model and prove exports against golden fixtures before removing reliance on cwd state.
+6. Add invite/join and one private node with standard transport, then restricted transport/UoT and fail-closed routing/DNS. Exercise lost-response, controller-down, transport-down, routing-crash, and credential-rotation cases.
+7. Add authenticated multiplexed reverse tunnel and one expose, then managed HTTPS ingress/certificate/limits and multi-node/multi-expose isolation.
+8. Add pending/apply/repair, logging, backup/restore, update/rollback, uninstall/purge, and all destructive/required-action flows.
+9. Run the separate one-time migration tool in a maintenance window. It snapshots v1 state, validates conversion, installs v2 gateway resources with watchdog protection, preserves client identities/addresses/keys, replaces known v1 UFW ownership, verifies clients, and retains a rollback package until operator acceptance. Downtime is permitted.
+10. Run the complete E2E, adversarial security, fault-injection, migration, and minimum-capacity suites. Release v2.0 only after every non-backlog spec passes.
+
+Rollback during development and update uses the prior bundle, state snapshot, and generated configs when the manifest declares migration reversibility. The migration tool provides a separate documented v1 rollback until the operator accepts v2 and removes the migration snapshot. Purge is intentionally not rollbackable; portable encrypted backups are the recovery boundary.
+
+## Open Questions
+
+- Exact safe ingress connection, header, body, timeout, HTTP/2 stream, and drain defaults are selected from the mandatory nginx/Telegram/minimum-host benchmark; the two-level limit model is already fixed.
+- Exact nftables hook priorities, fwmark bit allocation, and Mihomo DNS mode are selected by the mandatory leak-prevention spike; externally visible fail-closed and split-DNS behavior is already fixed.
+- Exact control RPC size/time limits, numeric CLI exit codes, backup KDF parameters, backup-age warning threshold, and low-frequency command spelling are frozen in their dedicated contract tasks and fixtures before the corresponding implementation is merged.
