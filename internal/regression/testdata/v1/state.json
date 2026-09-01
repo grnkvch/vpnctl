@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "server": {
+    "id": "main",
+    "name": "main",
+    "public_endpoint": "198.211.99.116",
+    "wireguard_interface": "wg0",
+    "wireguard_port": 51820,
+    "wireguard_subnet": "10.66.0.0/24",
+    "wireguard_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+    "dns_servers": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ],
+    "external_interface": "eth0"
+  },
+  "clients": [
+    {
+      "id": "iphone",
+      "name": "iPhone",
+      "platform": "ios",
+      "status": "active",
+      "assigned_ip": "10.66.0.2",
+      "wireguard_public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+      "tags": [
+        "personal"
+      ],
+      "created_at": "2024-01-02T03:04:05Z"
+    }
+  ]
+}

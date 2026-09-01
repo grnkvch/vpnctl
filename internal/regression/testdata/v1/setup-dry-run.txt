@@ -1,0 +1,24 @@
+setup plan (dry-run)
+state directory: .vpnctl
+endpoint: 198.211.99.116
+wireguard interface: wg0
+wireguard port: 51820/udp
+wireguard subnet: 10.66.0.0/24
+client dns: <system default for WireGuard>
+external interface: <auto-detect>
+ssh port allowed in firewall: 22/tcp
+enable firewall: true
+
+- would initialize vpnctl state if needed
+- would verify supported Ubuntu platform
+- would install required VPN packages
+- would not perform a full system upgrade
+- would generate server WireGuard keys
+- would enable IPv4 forwarding
+- would detect external network interface if not provided
+- would write WireGuard server configuration
+- would configure NAT and forwarding for VPN clients
+- would allow SSH and WireGuard in firewall
+- would start and enable WireGuard service
+- would verify WireGuard status
+- would enable firewall

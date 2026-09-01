@@ -1,0 +1,11 @@
+apt update
+apt install -y wireguard qrencode ufw
+ip route get 1.1.1.1
+sysctl --system
+ufw allow 22/tcp
+ufw allow 51820/udp
+ufw --force enable
+systemctl enable wg-quick@wg0
+systemctl restart wg-quick@wg0
+systemctl is-active wg-quick@wg0
+wg show

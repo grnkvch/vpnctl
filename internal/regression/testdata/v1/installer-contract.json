@@ -1,0 +1,20 @@
+{
+  "install_script_contains": [
+    "linux/x86_64|linux/amd64",
+    "asset=\"vpnctl_linux_amd64.tar.gz\"",
+    "checksum_file=\"checksums.txt\"",
+    "extracted=\"$tmp_dir/vpnctl_linux_amd64/vpnctl\"",
+    "install_dir=\"${VPNCTL_INSTALL_DIR:-/usr/local/bin}\"",
+    "binary_name=\"${VPNCTL_BINARY:-vpnctl}\"",
+    "sha256sum -c -",
+    "shasum -a 256 -c -"
+  ],
+  "release_script_contains": [
+    "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build",
+    "./cmd/vpnctl",
+    "cp README.md \"$work_dir/README.md\"",
+    "cp docs/CLI_SPEC.md \"$work_dir/CLI_SPEC.md\"",
+    "archive=\"$dist_dir/vpnctl_linux_amd64.tar.gz\"",
+    "checksums=\"$dist_dir/checksums.txt\""
+  ]
+}

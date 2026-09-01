@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/validation-v1.schema.json",
+  "title": "vpnctl v2 validation result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["validate", "preset.validate"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["valid", "issues"],
+          "properties": {
+            "valid": { "type": "boolean" },
+            "issues": {
+              "type": "array",
+              "items": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

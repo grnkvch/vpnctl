@@ -1,12 +1,12 @@
 ## 1. Baseline and Public Contracts
 
-- [ ] 1.1 Capture v1 golden fixtures for WireGuard full-tunnel export, Clash Mi selective export, client keys/IPs, rulesets, installer artifacts, and UFW setup; verify current `go test ./...` plus fixture replay passes before v2 refactoring.
-- [ ] 1.2 Build a requirement-to-test traceability table covering every requirement and scenario in all ten v2 specs; verify no spec requirement lacks an assigned unit, integration, E2E, spike, or manual compatibility check.
-- [ ] 1.3 Finalize the v2 command tree from the accepted happy paths, removing redundant role/target arguments without changing behavior; verify a checked-in CLI contract lists role availability, arguments, consent class, `--dry-run`/`--defer` support, and examples for every command.
-- [ ] 1.4 Freeze numeric exit codes for success, validation, conflict, unavailable/degraded, and internal error; verify table-driven CLI tests map every result category to the documented code.
-- [ ] 1.5 Define versioned JSON Schemas for common result envelopes and each command result, including `schema_version`, identifiers, status, warnings, and `requires_action`; verify all examples validate and sensitive fields are schema-forbidden.
-- [ ] 1.6 Define TTY/stdin rules for hidden invite/recovery tokens, backup passphrases, yes/no prompts, typed confirmations, and `--yes`; verify golden tests cover interactive and non-interactive refusal paths.
-- [ ] 1.7 Create the v2 Go package skeleton and dependency-direction checks described in design.md; verify `go list ./...`, static analysis, and the existing v1 tests pass without production behavior changes.
+- [x] 1.1 Capture v1 golden fixtures for WireGuard full-tunnel export, Clash Mi selective export, client keys/IPs, rulesets, installer artifacts, and UFW setup; verify current `go test ./...` plus fixture replay passes before v2 refactoring.
+- [x] 1.2 Build a requirement-to-test traceability table covering every requirement and scenario in all ten v2 specs; verify no spec requirement lacks an assigned unit, integration, E2E, spike, or manual compatibility check.
+- [x] 1.3 Finalize the v2 command tree from the accepted happy paths, removing redundant role/target arguments without changing behavior; verify a checked-in CLI contract lists role availability, arguments, consent class, `--dry-run`/`--defer` support, and examples for every command.
+- [x] 1.4 Freeze numeric exit codes for success, validation, conflict, unavailable/degraded, and internal error; verify table-driven CLI tests map every result category to the documented code.
+- [x] 1.5 Define versioned JSON Schemas for common result envelopes and each command result, including `schema_version`, identifiers, status, warnings, and `requires_action`; verify all examples validate and sensitive fields are schema-forbidden.
+- [x] 1.6 Define TTY/stdin rules for hidden invite/recovery tokens, backup passphrases, yes/no prompts, typed confirmations, and `--yes`; verify golden tests cover interactive and non-interactive refusal paths.
+- [x] 1.7 Create the v2 Go package skeleton and dependency-direction checks described in design.md; verify `go list ./...`, static analysis, and the existing v1 tests pass without production behavior changes.
 
 ## 2. Blocking Technical Spikes
 

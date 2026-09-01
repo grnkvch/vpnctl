@@ -1,0 +1,7 @@
+# vpnctl v2 JSON result schemas
+
+The v2 CLI emits schema version `1` for the lifetime of the v2 major version. Additive optional fields may be introduced without changing that number; removing, renaming, changing the type of a field, or making an optional field required needs a new result schema version.
+
+`common-result-v1.schema.json` defines the mandatory envelope. Files in `results/` constrain the command IDs and `data` shape for every JSON-capable command listed in `docs/v2/CLI_CONTRACT.md`. `examples-v1.json` contains one validating result for every such registry row.
+
+The schemas intentionally reject unknown top-level fields and sensitive field names recursively. Tokens, secrets, private keys, authorization material, passphrases, request/response bodies, and sensitive webhook/probe URLs are never JSON result fields. Commands that must reveal or consume a secret use the separate TTY flow.

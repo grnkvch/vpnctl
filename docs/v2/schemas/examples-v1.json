@@ -1,0 +1,1147 @@
+{
+  "schema_version": 1,
+  "examples": [
+    {
+      "registry_command": "vpnctl init --gateway",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "init.gateway",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl init --node",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "init.node",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl confirm <transaction-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "confirm",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl status",
+      "result_schema": "status-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "status",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "role": "gateway",
+          "overall": "healthy",
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl doctor [scope]",
+      "result_schema": "diagnostic-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "doctor",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "scope": "default",
+          "checks": [
+            {
+              "name": "control",
+              "status": "passed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl validate",
+      "result_schema": "validation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "validate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "valid": true,
+          "issues": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl plan",
+      "result_schema": "plan-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "plan",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "impact": "none",
+          "changes": [],
+          "drift": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl apply",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "apply",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl repair",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "repair",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl invite <node-name>",
+      "result_schema": "secret-issue-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "invite",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "displayed_to_tty": true,
+          "expires_at": "2026-09-01T12:15:00Z"
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl invite cancel <invite-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "invite.cancel",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl join <transport> [preset...]",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "join",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node list",
+      "result_schema": "collection-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.list",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "items": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node show <name-or-id>",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node revoke <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.revoke",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node delete <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.delete",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node rotate",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.rotate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node recover <name-or-id>",
+      "result_schema": "secret-issue-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.recover",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "displayed_to_tty": true,
+          "expires_at": "2026-09-01T12:15:00Z"
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl node recover",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "node.recover",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client add <name> [preset...]",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.add",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client list",
+      "result_schema": "collection-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.list",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "items": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client show <name-or-id>",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client revoke <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.revoke",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client delete <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.delete",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client rotate <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.rotate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl client export <name-or-id> <format>",
+      "result_schema": "export-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "client.export",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "output_path": "/var/lib/vpnctl/exports/example",
+          "file_mode": "0600",
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl preset list",
+      "result_schema": "collection-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "preset.list",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "items": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl preset show <name>",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "preset.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl preset validate",
+      "result_schema": "validation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "preset.validate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "valid": true,
+          "issues": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl preset diff",
+      "result_schema": "plan-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "preset.diff",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "impact": "none",
+          "changes": [],
+          "drift": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl preset update <name>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "preset.update",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy show",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy show --client <name-or-id>",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy set <preset...>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.set",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy set <preset...> --client <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.set",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy clear",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.clear",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl policy clear --client <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "policy.clear",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl dns show",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "dns.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl dns set <IPv4...>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "dns.set",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl dns reset",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "dns.reset",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport test <transport>",
+      "result_schema": "diagnostic-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.test",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "scope": "default",
+          "checks": [
+            {
+              "name": "control",
+              "status": "passed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport switch <transport>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.switch",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport host show",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.host.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport host prepare <host>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.host.prepare",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport host commit",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.host.commit",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport host rollback",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.host.rollback",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl transport host recover <host>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "transport.host.recover",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl expose <upstream>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "expose",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl expose list",
+      "result_schema": "collection-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "expose.list",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "items": []
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl expose show <name-or-id>",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "expose.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl expose remove <name-or-id>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "expose.remove",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl cert show",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "cert.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl cert export [output-path]",
+      "result_schema": "export-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "cert.export",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "output_path": "/var/lib/vpnctl/exports/example",
+          "file_mode": "0600",
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl cert rotate",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "cert.rotate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl trust show",
+      "result_schema": "resource-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "trust.show",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "resource": {}
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl trust rotate",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "trust.rotate",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl trust commit",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "trust.commit",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl trust rollback",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "trust.rollback",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl log status",
+      "result_schema": "status-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "log.status",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "role": "gateway",
+          "overall": "healthy",
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl log enable <scope>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "log.enable",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl log disable <scope>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "log.disable",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl backup [archive-path]",
+      "result_schema": "artifact-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "backup",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "output_path": "/var/lib/vpnctl/backups/example.backup",
+          "file_mode": "0600",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl restore <archive-path>",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "restore",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl update [version]",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "update",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl update rollback",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "update.rollback",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl uninstall",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "uninstall",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    },
+    {
+      "registry_command": "vpnctl purge",
+      "result_schema": "operation-v1",
+      "result": {
+        "schema_version": 1,
+        "command": "purge",
+        "status": "ok",
+        "exit_category": "success",
+        "resource_ids": {},
+        "warnings": [],
+        "requires_action": [],
+        "data": {
+          "changed": false,
+          "generation": 1
+        }
+      }
+    }
+  ]
+}

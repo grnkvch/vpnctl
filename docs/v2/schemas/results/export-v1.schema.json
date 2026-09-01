@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/export-v1.schema.json",
+  "title": "vpnctl v2 local export result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["cert.export", "client.export"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["output_path", "file_mode"],
+          "properties": {
+            "output_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "file_mode": { "const": "0600" },
+            "generation": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  ]
+}

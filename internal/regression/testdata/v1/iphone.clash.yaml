@@ -1,0 +1,33 @@
+mode: rule
+
+dns:
+  enable: true
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+
+proxies:
+  - name: DO-WG
+    type: wireguard
+    server: 198.211.99.116
+    port: 51820
+    ip: 10.66.0.2
+    private-key: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+    public-key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+    mtu: 1420
+    udp: true
+    allowed-ips:
+      - 0.0.0.0/0
+
+proxy-groups:
+  - name: VPN
+    type: select
+    proxies:
+      - DO-WG
+
+rules:
+  - DOMAIN-SUFFIX,chatgpt.com,VPN
+  - DOMAIN-SUFFIX,openai.com,VPN
+  - DOMAIN-SUFFIX,claude.ai,VPN
+  - DOMAIN-SUFFIX,anthropic.com,VPN
+  - MATCH,DIRECT

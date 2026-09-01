@@ -84,11 +84,10 @@ managed ingress: Internet → Gateway:443 → Private node application
 
 ### 3. Installation, роли и публичный CLI
 
-- На текущей стадии фиксируется behavior contract, а не окончательная CLI
-  grammar. Примеры команд в snapshot являются рабочими иллюстрациями, если
-  конкретное имя отдельно не названо принятым решением. Перед реализацией CLI
-  command tree будет пересмотрен целиком с целью уменьшить verbosity и число
-  обязательных аргументов без потери явности.
+- Публичная CLI grammar v2.0 заморожена в `docs/v2/CLI_CONTRACT.md`. Этот
+  machine-checked registry является authoritative для command names, role
+  availability, arguments, consent, `--dry-run`/`--defer` и examples; более
+  ранние иллюстрации в snapshot читаются через этот контракт.
 - Верхний уровень CLI использует hybrid model: частые workflows являются
   короткими top-level commands (`init`, `invite`, `join`, `expose`, `status`,
   `doctor`, `plan`, `apply`, `repair`, `backup`, `restore`, `update`,
@@ -384,6 +383,9 @@ vpnctl policy clear --client <name-or-id>
   ротирует весь согласованный node credential set. Control CA также не
   ротируется автоматически: его замена является отдельной staged operation с
   временным доверием old и new CA для всех affected nodes.
+- Public ingress identity остаётся в namespace `cert`, а control CA lifecycle
+  намеренно отделён в `vpnctl trust show|rotate|commit|rollback`, чтобы одна
+  операция не могла неявно затронуть оба trust domains.
 - Во время join node локально создаёт Ed25519 control private key и передаёт
   gateway только CSR. Выданный client certificate содержит immutable node ID в
   URI SAN; изменяемое node name не является authorization identity. Gateway
@@ -589,20 +591,22 @@ vpnctl preset update <name> [--defer]
 - DNS grammar:
 
 ```text
-# gateway
+# gateway: selected-path upstreams
 vpnctl dns show
-vpnctl dns set gateway <IPv4>...
-vpnctl dns reset gateway
+vpnctl dns set <IPv4>...
+vpnctl dns reset
 
-# private node
+# private node: direct-path upstreams
 vpnctl dns show
-vpnctl dns set direct <IPv4>...
-vpnctl dns reset direct
+vpnctl dns set <IPv4>...
+vpnctl dns reset
 ```
 
-- `reset gateway` возвращает defaults `1.1.1.1 8.8.8.8`; `reset direct`
-  повторно обнаруживает underlying system resolvers, исключая vpnctl local
-  stub. v2.0 принимает только IPv4 resolver addresses.
+- Scope следует уже известной роли host и не повторяется аргументом: gateway
+  управляет selected-path upstreams, private node — direct-path upstreams.
+  Gateway `reset` возвращает defaults `1.1.1.1 8.8.8.8`; node `reset` повторно
+  обнаруживает underlying system resolvers, исключая vpnctl local stub. v2.0
+  принимает только IPv4 resolver addresses.
 - Clash/Mihomo client export должен выражать эквивалентную split-DNS policy в
   пределах возможностей целевого клиента; расхождения capability должны быть
   видимы при export/validate, а не приводить к молчаливому ослаблению policy.
@@ -717,8 +721,10 @@ selected UDP ─ UDP-over-TCP ┘
   выбранный gateway host через emergency recovery flow. Host не является
   secret; существующая node identity сохраняется. Такой recovery не требует
   повторного invite/join и не открывает public management API.
-- Точная CLI grammar операций prepare/commit/rollback и emergency local update
-  будет определена при финальном пересмотре command tree.
+- Gateway использует `vpnctl transport host show|prepare|commit|rollback`, а
+  private node — emergency `vpnctl transport host recover <host>`. В каждый
+  момент допускается одна staged replacement, поэтому commit/rollback не
+  повторяют operation target.
 - Источники статического spike:
   [Mihomo Shadowsocks outbound](https://wiki.metacubex.one/en/config/proxies/ss/),
   [Mihomo Shadowsocks listener](https://wiki.metacubex.one/en/config/inbound/listeners/ss/),
@@ -860,8 +866,8 @@ https://PUBLIC_GATEWAY_IP/telegram/webhook
 - TLS завершается на gateway. Path и query string сохраняются без переписывания
   при передаче приложению.
 - Несколько exposes разделяют один `443/TCP` через разные paths. Path matching
-  поддерживает два behavior modes: `exact` по умолчанию для webhook и явный
-  `prefix` opt-in для API subtree. Конкретная CLI grammar будет выбрана позднее.
+  поддерживает `exact` по умолчанию для webhook и явный `--prefix` opt-in для
+  API subtree.
 - Ambiguous/overlapping routes отклоняются. Prefix
   `/.well-known/vpnctl/` зарезервирован для внутренних endpoints и недоступен
   пользовательским exposes.

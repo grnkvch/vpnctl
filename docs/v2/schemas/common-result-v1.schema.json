@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/common-result-v1.schema.json",
+  "title": "vpnctl v2 common command result envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "command",
+    "status",
+    "exit_category",
+    "resource_ids",
+    "warnings",
+    "requires_action",
+    "data"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)*$"
+    },
+    "status": {
+      "enum": ["ok", "pending", "degraded", "failed"]
+    },
+    "exit_category": {
+      "enum": ["success", "validation", "conflict", "unavailable", "internal"]
+    },
+    "resource_ids": { "$ref": "#/$defs/resource_ids" },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/message" }
+    },
+    "requires_action": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "data": { "$ref": "#/$defs/safe_object" }
+  },
+  "$defs": {
+    "safe_key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "not": {
+        "pattern": "(^|_)(secret|token|private_key|authorization|passphrase|password|request_body|response_body|webhook_path|public_url|probe_url)($|_)"
+      }
+    },
+    "safe_value": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/safe_value" }
+        },
+        { "$ref": "#/$defs/safe_object" }
+      ]
+    },
+    "safe_object": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/safe_key" },
+      "additionalProperties": { "$ref": "#/$defs/safe_value" }
+    },
+    "resource_ids": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/safe_key" },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "resource_ids": { "$ref": "#/$defs/resource_ids" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "resource_ids": { "$ref": "#/$defs/resource_ids" }
+      }
+    }
+  }
+}

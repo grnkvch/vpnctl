@@ -1,0 +1,77 @@
+[
+  {
+    "name": "interactive yes-no prompts visibly",
+    "request": { "kind": "confirm", "has_tty": true },
+    "want": { "action": "prompt", "channel": "/dev/tty", "hidden": false, "reads": 1, "reason": "" }
+  },
+  {
+    "name": "non-interactive yes-no refuses",
+    "request": { "kind": "confirm", "has_tty": false },
+    "want": { "action": "refuse", "channel": "none", "hidden": false, "reads": 0, "reason": "confirmation_requires_tty_or_yes" }
+  },
+  {
+    "name": "yes permits non-interactive yes-no",
+    "request": { "kind": "confirm", "has_tty": false, "yes": true },
+    "want": { "action": "proceed", "channel": "none", "hidden": false, "reads": 0, "reason": "" }
+  },
+  {
+    "name": "dry-run skips yes-no",
+    "request": { "kind": "confirm", "has_tty": false, "dry_run": true },
+    "want": { "action": "proceed", "channel": "none", "hidden": false, "reads": 0, "reason": "" }
+  },
+  {
+    "name": "typed ignores yes and prompts",
+    "request": { "kind": "typed", "has_tty": true, "yes": true },
+    "want": { "action": "prompt", "channel": "/dev/tty", "hidden": false, "reads": 1, "reason": "" }
+  },
+  {
+    "name": "typed non-interactive refuses even with yes",
+    "request": { "kind": "typed", "has_tty": false, "yes": true },
+    "want": { "action": "refuse", "channel": "none", "hidden": false, "reads": 0, "reason": "typed_confirmation_requires_tty" }
+  },
+  {
+    "name": "dry-run skips typed consent",
+    "request": { "kind": "typed", "has_tty": false, "dry_run": true },
+    "want": { "action": "proceed", "channel": "none", "hidden": false, "reads": 0, "reason": "" }
+  },
+  {
+    "name": "invite or recovery token reads hidden tty",
+    "request": { "kind": "secret_once", "has_tty": true },
+    "want": { "action": "prompt", "channel": "/dev/tty", "hidden": true, "reads": 1, "reason": "" }
+  },
+  {
+    "name": "secret input ignores yes and refuses without tty",
+    "request": { "kind": "secret_once", "has_tty": false, "yes": true },
+    "want": { "action": "refuse", "channel": "none", "hidden": false, "reads": 0, "reason": "secret_input_requires_tty" }
+  },
+  {
+    "name": "dry-run still reads required existing secret",
+    "request": { "kind": "secret_once", "has_tty": true, "dry_run": true },
+    "want": { "action": "prompt", "channel": "/dev/tty", "hidden": true, "reads": 1, "reason": "" }
+  },
+  {
+    "name": "backup passphrase reads two hidden values",
+    "request": { "kind": "secret_twice", "has_tty": true },
+    "want": { "action": "prompt", "channel": "/dev/tty", "hidden": true, "reads": 2, "reason": "" }
+  },
+  {
+    "name": "dry-run backup does not request new passphrase",
+    "request": { "kind": "secret_twice", "has_tty": false, "dry_run": true },
+    "want": { "action": "proceed", "channel": "none", "hidden": false, "reads": 0, "reason": "" }
+  },
+  {
+    "name": "one-time token is written only to tty",
+    "request": { "kind": "secret_output_once", "has_tty": true },
+    "want": { "action": "write", "channel": "/dev/tty", "hidden": false, "reads": 0, "reason": "" }
+  },
+  {
+    "name": "one-time token refuses without tty",
+    "request": { "kind": "secret_output_once", "has_tty": false },
+    "want": { "action": "refuse", "channel": "none", "hidden": false, "reads": 0, "reason": "secret_output_requires_tty" }
+  },
+  {
+    "name": "dry-run never creates or displays token",
+    "request": { "kind": "secret_output_once", "has_tty": false, "dry_run": true },
+    "want": { "action": "proceed", "channel": "none", "hidden": false, "reads": 0, "reason": "" }
+  }
+]

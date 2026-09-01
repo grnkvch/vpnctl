@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/diagnostic-v1.schema.json",
+  "title": "vpnctl v2 active diagnostic result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["doctor", "transport.test"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "checks"],
+          "properties": {
+            "scope": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "status"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "status": { "enum": ["passed", "failed", "skipped"] },
+                  "detail": { "type": "string", "maxLength": 4096 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

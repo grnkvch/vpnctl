@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/plan-v1.schema.json",
+  "title": "vpnctl v2 plan or diff result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["plan", "preset.diff"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["impact", "changes", "drift"],
+          "properties": {
+            "impact": { "enum": ["none", "availability", "destructive"] },
+            "changes": {
+              "type": "array",
+              "items": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" }
+            },
+            "drift": {
+              "type": "array",
+              "items": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "default",
+  "name": "Default",
+  "type": "domain-suffix",
+  "domains": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
+}

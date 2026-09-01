@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/artifact-v1.schema.json",
+  "title": "vpnctl v2 generated archive result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["backup"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["output_path", "file_mode", "sha256"],
+          "properties": {
+            "output_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "file_mode": { "const": "0600" },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      }
+    }
+  ]
+}

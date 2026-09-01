@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/operation-v1.schema.json",
+  "title": "vpnctl v2 mutation or convergence result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": {
+          "enum": [
+            "apply", "cert.rotate", "client.add", "client.delete", "client.revoke", "client.rotate",
+            "confirm", "dns.reset", "dns.set", "expose", "expose.remove", "init.gateway", "init.node",
+            "invite.cancel", "join", "log.disable", "log.enable", "node.delete", "node.recover",
+            "node.revoke", "node.rotate", "policy.clear", "policy.set", "preset.update", "purge", "repair",
+            "restore", "transport.host.commit", "transport.host.prepare", "transport.host.recover",
+            "transport.host.rollback", "transport.switch", "trust.commit", "trust.rollback", "trust.rotate",
+            "uninstall", "update", "update.rollback"
+          ]
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["changed"],
+          "properties": {
+            "changed": { "type": "boolean" },
+            "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "generation": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  ]
+}

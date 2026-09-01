@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vpnctl.dev/schemas/v2/results/collection-v1.schema.json",
+  "title": "vpnctl v2 collection result",
+  "allOf": [
+    { "$ref": "../common-result-v1.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "command": { "enum": ["client.list", "expose.list", "node.list", "preset.list"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["items"],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
