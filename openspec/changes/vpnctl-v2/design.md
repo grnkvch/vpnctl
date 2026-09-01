@@ -227,6 +227,8 @@ nginx is installed from Ubuntu 24.04 apt and vpnctl owns its generated config an
 
 The task 2.5 development candidate pins Ubuntu `nginx 1.24.0-2ubuntu7.17` and its package checksum. RSA-2048/SHA-256 with an IPv4 SAN/CN and 1825-day lifetime passed local TLS 1.2/1.3 plus HTTP/1.1/2 proxying on the minimum fixtures, public-certificate-only export, and the token-safe provider harness contract. This qualifies nginx for continued implementation. The actual Telegram `setWebhook` certificate upload, incoming request, and five-year provider acceptance are deliberately deferred to task 16.11 against an actually deployed gateway and node; until that release gate passes, nginx is not described as production-ready.
 
+The task 2.6 minimum-host stress gate selects 256 nginx worker connections, a hard 64 concurrent ingress requests and 64 HTTP/2 streams per gateway, and a default 40 concurrent requests per expose. The body model uses an 8 MiB gateway maximum with a 1 MiB expose default; upstream timeout uses a 15-second default with a 60-second maximum; graceful worker shutdown is bounded at 10 seconds; large request headers are bounded to four 8 KiB buffers. Every generated proxy location must compile both gateway and expose connection limits because nginx stops inheriting the parent limit when a child declares its own. Requests above concurrency limits return `503` without queueing. The gate observed a 3 MiB streaming upload reaching its upstream before completion with no body temp file, exact `404`/`413`/`503`/`504`, graceful generation handoff, about 6 MiB ingress cgroup peak, zero OOM events, and safe guest headroom. nginx therefore remains the selected development provider and the Caddy fallback is not activated.
+
 Alternative considered: an in-process Go reverse proxy. It removes nginx but increases controller/data-plane coupling and requires vpnctl to own HTTP/2 limits, graceful reload, and edge hardening. Alternative considered: Caddy first. Its ACME strengths are outside IP-only v2 and its minimum-host resource profile is less predictable until measured.
 
 ### 14. Use frp as the first replaceable multiplexed tunnel provider
@@ -330,6 +332,5 @@ Rollback during development and update uses the prior bundle, state snapshot, an
 
 ## Open Questions
 
-- Exact safe ingress connection, header, body, timeout, HTTP/2 stream, and drain defaults are selected from the mandatory nginx/Telegram/minimum-host benchmark; the two-level limit model is already fixed.
 - Exact nftables hook priorities, fwmark bit allocation, and Mihomo DNS mode are selected by the mandatory leak-prevention spike; externally visible fail-closed and split-DNS behavior is already fixed.
 - Exact control RPC size/time limits, numeric CLI exit codes, backup KDF parameters, backup-age warning threshold, and low-frequency command spelling are frozen in their dedicated contract tasks and fixtures before the corresponding implementation is merged.

@@ -55,6 +55,7 @@ The regression test fails when a spec scenario is added, removed, or renamed wit
 | `managed-https-ingress` | Private-node expose creation | Non-loopback without opt-in | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |
 | `managed-https-ingress` | Exact paths by default | Overlapping prefix | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |
 | `managed-https-ingress` | Stable public ingress certificate | Export public certificate | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |
+| `managed-https-ingress` | Staged ingress-provider acceptance | Local ingress candidate passes | spike, e2e, manual-compatibility | 2.5-2.6, 12.11, 16.11 |
 | `managed-https-ingress` | Public certificate inspection and manual rotation | Rotate certificate with active webhooks | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |
 | `managed-https-ingress` | TLS and HTTP protocol boundary | Obsolete TLS client | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |
 | `managed-https-ingress` | Forwarding header safety | Spoofed client address header | spike, integration, e2e, manual-compatibility | 2.5-2.6, 12.1-12.11, 16.6, 16.11 |

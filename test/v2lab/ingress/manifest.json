@@ -22,5 +22,26 @@
   "protocols": {
     "tls": ["1.2", "1.3"],
     "http": ["1.1", "2"]
+  },
+  "limits": {
+    "worker_connections": 256,
+    "gateway_concurrent_requests": 64,
+    "http2_concurrent_streams": 64,
+    "expose_default_concurrent_requests": 40,
+    "gateway_body_bytes": 8388608,
+    "expose_default_body_bytes": 1048576,
+    "expose_default_upstream_timeout_seconds": 15,
+    "expose_max_upstream_timeout_seconds": 60,
+    "graceful_shutdown_seconds": 10,
+    "large_header_buffers": {
+      "count": 4,
+      "bytes": 8192
+    }
+  },
+  "streaming": {
+    "request_buffering": false,
+    "response_buffering": false,
+    "response_temp_files": false,
+    "upstream_retry": false
   }
 }
