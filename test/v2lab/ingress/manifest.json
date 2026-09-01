@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "status": "spike-only",
+  "nginx": {
+    "source": "ubuntu-24.04-noble-updates",
+    "version": "1.24.0-2ubuntu7.17",
+    "package_sha256": "84bd95140500fa4d10e11383eac5c864ea7dff24fcca80c442b8449fcc65240c",
+    "http2_syntax": "listen-parameter"
+  },
+  "certificate": {
+    "key_algorithm": "RSA",
+    "key_bits": 2048,
+    "signature_algorithm": "SHA-256",
+    "validity_days": 1825,
+    "identity": "manual-ipv4-san-and-cn"
+  },
+  "listeners": {
+    "public_https_tcp": 443,
+    "public_https_udp": false,
+    "loopback_upstream_tcp": 18081
+  },
+  "protocols": {
+    "tls": ["1.2", "1.3"],
+    "http": ["1.1", "2"]
+  }
+}

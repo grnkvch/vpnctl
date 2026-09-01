@@ -1,0 +1,28 @@
+[Unit]
+Description=vpnctl v2 IP-only nginx ingress spike
+After=network-online.target vpnctl-v2-spike-webhook.service
+Wants=network-online.target vpnctl-v2-spike-webhook.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/nginx -t -q -p /etc/vpnctl-v2-spike/ingress/ -c nginx.conf
+ExecStart=/usr/sbin/nginx -p /etc/vpnctl-v2-spike/ingress/ -c nginx.conf -g "daemon off;"
+ExecReload=/usr/sbin/nginx -p /etc/vpnctl-v2-spike/ingress/ -c nginx.conf -s reload
+Restart=on-failure
+RestartSec=1s
+RuntimeDirectory=vpnctl-v2-spike-ingress
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+{
+  "update_id": 900000002,
+  "message": {
+    "message_id": 43,
+    "date": 1788278400,
+    "chat": {
+      "id": 100000001,
+      "type": "private"
+    },
+    "from": {
+      "id": 200000001,
+      "is_bot": false,
+      "language_code": "en"
+    },
+    "text": "Synthetic Telegram webhook update for vpnctl v2 ingress transport verification."
+  }
+}
