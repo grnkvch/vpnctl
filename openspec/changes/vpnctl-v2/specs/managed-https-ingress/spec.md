@@ -30,11 +30,18 @@ An expose SHALL use an exact path by default; `--prefix` SHALL explicitly reques
 - **THEN** creation fails without changing either route
 
 ### Requirement: Stable public ingress certificate
-Gateway initialization SHALL generate a stable self-signed RSA-2048/SHA-256 public certificate whose public IPv4 appears as an IP-type SAN and, for compatibility, in the CN. Its default lifetime SHALL be five years subject to Telegram compatibility acceptance. The private key SHALL remain root-only; `cert export` SHALL copy only the public certificate, defaulting to `/var/lib/vpnctl/exports/gateway.crt`.
+Gateway initialization SHALL generate a stable self-signed RSA-2048/SHA-256 public certificate whose public IPv4 appears as an IP-type SAN and, for compatibility, in the CN. Its default lifetime SHALL be five years subject to the deployed-service Telegram compatibility gate. The private key SHALL remain root-only; `cert export` SHALL copy only the public certificate, defaulting to `/var/lib/vpnctl/exports/gateway.crt`.
 
 #### Scenario: Export public certificate
 - **WHEN** the operator runs `vpnctl cert export`
 - **THEN** a public PEM certificate is written at the managed path and no private key is included or printed
+
+### Requirement: Staged ingress-provider acceptance
+Automated local development tests SHALL verify the pinned reverse proxy, RSA certificate shape and lifetime, IPv4 SAN/CN identity, TLS 1.2/1.3, HTTP/1.1/2 forwarding, and a token-safe Telegram registration harness before dependent ingress implementation continues. These tests MAY qualify the candidate for development but MUST NOT waive the v2.0 release gate. Before release, the harness SHALL run against an actually deployed gateway and node, register the exported public certificate through Telegram `setWebhook`, verify a real incoming request, and remove only the registration it created. Bot tokens MUST NOT be accepted through argv, environment variables, files, logs, or JSON output.
+
+#### Scenario: Local ingress candidate passes
+- **WHEN** all automated local ingress checks pass without contacting Telegram
+- **THEN** dependent implementation may continue while the provider acceptance remains pending and nginx is not described as production-ready
 
 ### Requirement: Public certificate inspection and manual rotation
 Gateway-only `cert show` SHALL display public IP, fingerprint, validity, and expiration warnings. `cert rotate` SHALL be manual-only, require confirmation, show all affected exposes, allow short downtime, issue a new public certificate, and return a required-action list to re-register external webhooks. It SHALL not support defer or automatically contact webhook providers.
