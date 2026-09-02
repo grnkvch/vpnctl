@@ -229,6 +229,22 @@ vpnctl client export <name-or-id> <clash|wireguard>
 - `list` показывает active и revoked records; deleted records отсутствуют.
   `revoke` применяется немедленно, требует подтверждения и не поддерживает
   `--defer`; `delete` разрешён только после revoke.
+- Client-add plan не генерирует credentials и привязан к state generation,
+  следующему свободному client-pool IPv4 и, при initial presets, hash полного
+  source set. Commit создаёт уникальный UUID, active standard WireGuard
+  transport и optional generation-1 policy одной state-транзакцией; без preset
+  arguments policy отсутствует и assignment является явным пустым массивом.
+- Приватный WireGuard key хранится только под owner-specific opaque secret ref.
+  При доказанном pre-commit state failure staged key удаляется; при uncertain
+  committed outcome он сохраняется, чтобы не оставить активную identity без
+  credential. `client list/show` не имеют secret-store read dependency и не
+  возвращают private/public keys, refs или profile content.
+- `client show` возвращает non-secret address/assignment, credential и policy
+  generation numbers, lifecycle, active transport health и export state.
+  До появления artifact metadata это явное `not-exported`; `current/stale`
+  подключаются в задачах export lifecycle. State-level acceptance пяти clients
+  проверяет разные identity/address/credential owners; packet-level lateral
+  isolation остаётся отдельной задачей 7.12.
 - `rotate` сохраняет identity name и overlay IP, но требует нового export и
   ручной замены профиля. Export format является positional argument, поэтому
   отдельный `--type` отсутствует.
