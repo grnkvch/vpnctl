@@ -331,6 +331,12 @@ vpnctl policy clear --client <name-or-id>
   JSON contract поверх HTTPS/1.1 с mutual TLS. gRPC и собственный Noise/binary
   protocol в v2 не используются: control operations редкие, небольшие и не
   требуют streaming.
+- Зафиксированные control RPC bounds: TLS 1.3 и ALPN HTTP/1.1 only, request body
+  до 64 KiB, response до 256 KiB, headers до 8 KiB, JSON depth до 32,
+  `2s` read-header и `5s` read-body/write/idle timeouts, не более 16 одновременно
+  принятых connections. Unknown/duplicate fields, trailing JSON, wrong media
+  type/path/method, oversized input/output и TLS без корректного client
+  certificate отклоняются до operation dispatch.
 - Control endpoint слушает только vpnctl internal overlay и не публикуется на
   public gateway interfaces. Каждая node command создаёт bounded short-lived
   connection; постоянный node agent для control plane по-прежнему не нужен.
@@ -391,6 +397,20 @@ vpnctl policy clear --client <name-or-id>
   URI SAN; изменяемое node name не является authorization identity. Gateway
   server certificate подписан тем же control CA, а trust anchor/fingerprint
   доставляется node внутри invite.
+- Control keys хранятся как PKCS#8 PEM, certificates/CSR — X.509/PKCS#10 PEM.
+  Node CSR обязан иметь Ed25519 signature и ровно один canonical URI SAN
+  `urn:vpnctl:node:<uuid>`; gateway строит issued SAN из authoritative ID, а не
+  доверяет CN. Gateway leaf содержит `urn:vpnctl:gateway:<uuid>` и IP SAN
+  внутреннего overlay address. Certificate serial — положительные случайные
+  не более 128 bits.
+- Enrollment response подписывается отдельным Ed25519 key по формату
+  `vpnctl-enrollment-transcript-v1`: domain-separated length-prefixed frames
+  связывают purpose, invite/endpoint/node IDs, issued/expiry, 128-bit nonces,
+  transport, normalized presets, named public-key/CSR SHA-256 hashes и
+  assignment hash. Envelope содержит algorithm, SHA-256 fingerprint DER SPKI и
+  base64url transcript/signature. Допустимый clock skew — 120s; replay key
+  атомарно consume'ится вместе с одноразовым invite. Invite secret остаётся
+  отдельным случайным 256-bit значением.
 - Controller после обычной CA validation дополнительно проверяет active node
   record и credential generation в authoritative state. Поэтому `node revoke`
   немедленно блокирует новый control request без ожидания CRL/expiration.
