@@ -1,0 +1,13 @@
+OK client.export
+client id: cccccccc-cccc-4ccc-8ccc-cccccccccccc
+operation id: op-7K3M2P
+file mode: 0600
+generation: 12
+output path: /var/lib/vpnctl/exports/clients/iphone.clash.yaml
+warning certificate_expiring: The gateway certificate expires in 30 days.
+  certificate id: eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee
+action copy_client_profile: Copy the exported profile to the client device.
+  client id: cccccccc-cccc-4ccc-8ccc-cccccccccccc
+  scp root@203.0.113.10:/var/lib/vpnctl/exports/clients/iphone.clash.yaml .
+action register_webhook: Register the webhook in the application project after deployment.
+  telegram-bot register-webhook --host 203.0.113.10 --certificate gateway.crt
