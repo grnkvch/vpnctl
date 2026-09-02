@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "manifest_id": "vpnctl-v2-development-baseline",
+  "status": "development-accepted",
+  "scope": "Blocking spike selections for dependent v2 implementation; this is not a v2.0 release approval.",
+  "source_manifests": [
+    {
+      "path": "test/v2lab/lima.yaml",
+      "sha256": "0471a9cadd371122dd8697960360be8e8e2cf7ae4f962d103ed7578cd0f01d46"
+    },
+    {
+      "path": "test/v2lab/restricted/manifest.json",
+      "sha256": "01299bfe43f3b8d06144139ea030c37adfa4b5d7c9b5b6d66066ce9476dc3dd2"
+    },
+    {
+      "path": "test/v2lab/ingress/manifest.json",
+      "sha256": "51452902a806c811d19527cede1c3b6cff019ecc6ef5a90c8fdc54012236e481"
+    },
+    {
+      "path": "test/v2lab/tunnel/manifest.json",
+      "sha256": "6064677a7292383750e39f4563d84bb5e7a4c8be3fdbfb7ef52d34c1f14ef835"
+    },
+    {
+      "path": "test/v2lab/routing/manifest.json",
+      "sha256": "7ff6bcb3125e6372a905405af98f1cae022a9cf6bd62e5f7ef99b0a25b19f776"
+    },
+    {
+      "path": "test/v2lab/dns/manifest.json",
+      "sha256": "d4ef1b35068422ff971f7449667e31ca93ee2f45d09ada37fdc993bc1c63352c"
+    },
+    {
+      "path": "test/v2lab/control/manifest.json",
+      "sha256": "6f620e5e1ed805ca8e501f33732759ba7d94a0df10634b77a462574f9bea2009"
+    },
+    {
+      "path": "test/v2lab/backup/manifest.json",
+      "sha256": "1661e5e8f0997ee1aa217f775ac6c97d8c29bb0c62826faf9f1322533c2b9981"
+    },
+    {
+      "path": "docs/v2/CLI_CONTRACT.md",
+      "sha256": "b3a3732396b33dbece2a9540617ac30cada93b1a64d27ce92afd48fae4c3e441"
+    }
+  ],
+  "decision_records": [
+    "docs/ADR/0019-v2-development-providers.md",
+    "docs/ADR/0020-v2-routing-and-split-dns.md",
+    "docs/ADR/0021-v2-security-limits-and-release-gates.md"
+  ],
+  "target": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64",
+    "init_system": "systemd",
+    "minimum_vcpu": 1,
+    "minimum_memory_bytes": 536870912,
+    "minimum_disk_bytes": 10737418240,
+    "lab_managed_swap_bytes": 1073741824,
+    "product_swap_mode": "optional-explicit-confirmation",
+    "lab_image": {
+      "url": "https://cloud-images.ubuntu.com/releases/noble/release-20260518/ubuntu-24.04-server-cloudimg-amd64.img",
+      "sha256": "53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7"
+    }
+  },
+  "conditional_providers": [
+    {
+      "capability": "restricted-transport-and-routing",
+      "selected": "mihomo-v1.19.30",
+      "status": "development-accepted",
+      "fallback": {
+        "selected": "replaceable-dpi-resistant-provider",
+        "status": "inactive",
+        "activation": "manual architecture change followed by the same development and deployed-client gates"
+      },
+      "release_gate": "16.11"
+    },
+    {
+      "capability": "ip-only-https-ingress",
+      "selected": "ubuntu-nginx-1.24.0-2ubuntu7.17",
+      "status": "development-accepted",
+      "fallback": {
+        "selected": "caddy",
+        "status": "inactive",
+        "activation": "manual provider change followed by the same streaming, limit, resource, and Telegram gates"
+      },
+      "release_gate": "16.11"
+    },
+    {
+      "capability": "multiplexed-reverse-tunnel",
+      "selected": "frp-0.69.0",
+      "status": "development-accepted",
+      "fallback": {
+        "selected": "openssh-reverse-forwarding",
+        "status": "inactive",
+        "activation": "manual provider change followed by the same multiplexing, authorization, lifecycle, transport, and resource gates"
+      },
+      "release_gate": "16.6"
+    }
+  ],
+  "components": {
+    "mihomo": {
+      "version": "v1.19.30",
+      "asset": "mihomo-linux-amd64-v1.19.30.gz",
+      "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84",
+      "capabilities": [
+        "tun-routing",
+        "redir-host-split-dns",
+        "shadowsocks-2022-blake3-aes-256-gcm",
+        "shadowtls-v3-strict",
+        "uot-v2"
+      ],
+      "upgrade_policy": "pin exact asset and rerun tasks 2.2-2.4, 2.8-2.9, and task 16.11 before activation"
+    },
+    "nginx": {
+      "version": "1.24.0-2ubuntu7.17",
+      "source": "ubuntu-24.04-noble-updates",
+      "package_sha256": "84bd95140500fa4d10e11383eac5c864ea7dff24fcca80c442b8449fcc65240c",
+      "http2_syntax": "listen-parameter",
+      "upgrade_policy": "pin compatible apt version and rerun tasks 2.5-2.6, 12.11, and task 16.11 before activation"
+    },
+    "frp": {
+      "version": "0.69.0",
+      "asset": "frp_0.69.0_linux_amd64.tar.gz",
+      "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e",
+      "pool_login_normalization": "declared-0-arrives-as-1-and-is-authoritatively-rewritten-to-0",
+      "upgrade_policy": "pin exact asset and rerun task 2.7 plus tunnel E2E before activation"
+    },
+    "systemd_resolved": {
+      "ubuntu_version_prefix": "255",
+      "integration": "owned-dropin-global-route-domain-and-exact-state-restoration"
+    },
+    "nftables": {
+      "source": "ubuntu-24.04-system-component",
+      "ownership": "one-vpnctl-inet-table-with-conflict-preflight"
+    },
+    "wireguard": {
+      "source": "ubuntu-24.04-kernel-and-tools",
+      "role": "standard-transport",
+      "version_policy": "release manifest pins the compatible Ubuntu package/kernel range"
+    },
+    "go_crypto": {
+      "module": "golang.org/x/crypto",
+      "version": "v0.55.0",
+      "module_sum": "h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M="
+    }
+  },
+  "limits": {
+    "public_network": {
+      "https_tcp": 443,
+      "restricted_tcp": 8443,
+      "wireguard_udp": 51820,
+      "https_udp_open": false,
+      "restricted_udp_open": false
+    },
+    "address_pools": {
+      "clients_ipv4": "10.66.0.0/24",
+      "nodes_ipv4": "10.67.0.0/24",
+      "full_ipv6_supported": false,
+      "selected_ipv6_fail_closed": true
+    },
+    "restricted_transport": {
+      "cipher": "2022-blake3-aes-256-gcm",
+      "shadowtls_version": 3,
+      "strict": true,
+      "uot_version": 2,
+      "handshake_host_list_version": 1,
+      "initial_candidates": [
+        "www.microsoft.com",
+        "www.apple.com",
+        "www.cloudflare.com"
+      ],
+      "development_selected_host": "www.microsoft.com",
+      "automatic_host_fallback": false,
+      "automatic_transport_fallback": false,
+      "functional_udp_floor": [
+        {"payload_bytes": 64, "packets_per_second": 50},
+        {"payload_bytes": 256, "packets_per_second": 20},
+        {"payload_bytes": 1200, "packets_per_second": 20}
+      ],
+      "performance_slo": false
+    },
+    "routing": {
+      "mark_mask": "0xff000000",
+      "direct_mark": "0x01000000",
+      "selected_mark": "0x02000000",
+      "recovery_mark": "0x03000000",
+      "ingress_response_mark": "0x04000000",
+      "preserved_mark_mask": "0x00ffffff",
+      "nft_output_priority": -150,
+      "nft_prerouting_priority": -150,
+      "recovery_rule_priority": 10000,
+      "ingress_rule_priority": 10010,
+      "selected_rule_priority": 10020,
+      "selected_table": 20001,
+      "gateway_table": 20002,
+      "unreachable_metric": 42760,
+      "tun_metric": 10,
+      "watchdog_seconds": 120
+    },
+    "dns": {
+      "policy_mode": "policy-redir-host",
+      "compatibility_mode": "direct-redir-host",
+      "local_listener": "127.0.0.1:1053",
+      "global_route_domain": "~.",
+      "selected_direct_fallback": false,
+      "classic_udp_tcp_53_capture": true,
+      "cache_capacity_entries": 4096,
+      "stale_validated_answer_ttl_seconds": 1,
+      "fake_ip_mode_selected": false
+    },
+    "ingress": {
+      "worker_connections": 256,
+      "gateway_concurrent_requests": 64,
+      "http2_concurrent_streams": 64,
+      "expose_default_concurrent_requests": 40,
+      "gateway_body_bytes": 8388608,
+      "expose_default_body_bytes": 1048576,
+      "expose_default_upstream_timeout_seconds": 15,
+      "expose_max_upstream_timeout_seconds": 60,
+      "graceful_shutdown_seconds": 10,
+      "large_header_buffer_count": 4,
+      "large_header_buffer_bytes": 8192,
+      "request_buffering": false,
+      "response_buffering": false,
+      "upstream_retry": false
+    },
+    "public_certificate": {
+      "key_algorithm": "RSA",
+      "key_bits": 2048,
+      "signature_algorithm": "SHA-256",
+      "validity_days": 1825,
+      "warning_days": 180,
+      "identity": "manual-public-ipv4-san-and-cn",
+      "rotation": "manual"
+    },
+    "reverse_tunnel": {
+      "internal_server_tcp": 17000,
+      "tcp_mux": true,
+      "effective_pool_count": 0,
+      "frpc_per_node": 1,
+      "frps_per_gateway": 1,
+      "heartbeat_interval_seconds": 1,
+      "heartbeat_timeout_seconds": 4,
+      "revoke_bound_seconds": 6,
+      "development_streams_per_expose": 12,
+      "development_exposes": 2,
+      "minimum_mem_available_kib": 65536
+    },
+    "control_identity": {
+      "algorithm": "Ed25519",
+      "serial_bits_maximum": 128,
+      "ca_validity_days": 3650,
+      "leaf_validity_days": 1825,
+      "renewal_warning_days": 180,
+      "private_key_encoding": "PKCS8-PEM",
+      "node_uri_template": "urn:vpnctl:node:<uuid>",
+      "gateway_uri_template": "urn:vpnctl:gateway:<uuid>"
+    },
+    "enrollment": {
+      "transcript": "vpnctl-enrollment-transcript-v1",
+      "signature": "Ed25519",
+      "invite_secret_bytes": 32,
+      "node_nonce_bytes": 16,
+      "gateway_nonce_bytes": 16,
+      "invite_ttl_seconds": 900,
+      "clock_skew_seconds": 120
+    },
+    "control_rpc": {
+      "protocol": "1.0",
+      "path_prefix": "/rpc/v1/",
+      "tls_minimum": "1.3",
+      "http": "1.1",
+      "request_bytes": 65536,
+      "response_bytes": 262144,
+      "header_bytes": 8192,
+      "max_json_depth": 32,
+      "read_header_seconds": 2,
+      "read_body_seconds": 5,
+      "write_seconds": 5,
+      "idle_seconds": 5,
+      "max_concurrent_connections": 16
+    },
+    "backup": {
+      "format": "vpnctl-backup-v1",
+      "kdf": "argon2id-v19",
+      "memory_kib": 65536,
+      "time": 3,
+      "lanes": 4,
+      "salt_bytes": 16,
+      "key_bytes": 32,
+      "aead": "xchacha20-poly1305",
+      "nonce_bytes": 24,
+      "nonce_prefix_bytes": 16,
+      "tag_bytes": 16,
+      "chunk_bytes": 1048576,
+      "maximum_restore_memory_kib": 131072,
+      "maximum_restore_time": 6,
+      "maximum_restore_lanes": 4,
+      "maximum_restore_chunk_bytes": 4194304,
+      "selected_kdf_max_milliseconds": 2000,
+      "selected_kdf_max_rss_kib": 131072,
+      "process_max_rss_kib": 262144,
+      "warning_age_days": 30,
+      "scheduled": false,
+      "remote_delivery": false
+    },
+    "operations": {
+      "idempotency_max_age_days": 30,
+      "idempotency_max_records_per_node": 1024,
+      "logging_default_enabled": false,
+      "logging_opt_in_max_seconds": 3600
+    }
+  },
+  "resolved_design_parameters": [
+    "conditional-provider-selection",
+    "component-versions-and-hashes",
+    "minimum-host-envelope",
+    "public-port-allocation",
+    "restricted-uot-functional-boundary",
+    "handshake-host-selection-semantics",
+    "nftables-hooks-marks-and-rpdb",
+    "split-dns-mode-and-cache-semantics",
+    "ingress-provider-and-limits",
+    "reverse-tunnel-provider-and-pool-normalization",
+    "control-pki-enrollment-and-rpc-limits",
+    "backup-kdf-aead-and-resource-limits",
+    "backup-warning-age",
+    "numeric-cli-exit-codes",
+    "public-command-tree"
+  ],
+  "unresolved_design_parameters": [],
+  "deferred_release_gates": [
+    {
+      "id": "minimum-gateway-target-capacity",
+      "task": "16.9",
+      "blocks_v2_release": true,
+      "scope": "one Telegram node serving the defined several-hundred-user profile plus five personal clients under sustained load"
+    },
+    {
+      "id": "deployed-clash-mi",
+      "task": "16.11",
+      "blocks_v2_release": true,
+      "scope": "actual supported Clash Mi import, selected TCP, proxy-bound DNS, UoT, strict wrong-host rejection, fail-closed behavior, and reconnect against deployed gateway/node"
+    },
+    {
+      "id": "deployed-telegram-webhook",
+      "task": "16.11",
+      "blocks_v2_release": true,
+      "scope": "register the IP-only five-year public certificate, receive a real webhook request, validate forwarding, and remove only the test registration"
+    }
+  ]
+}

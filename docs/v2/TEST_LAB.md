@@ -38,4 +38,4 @@ Network faults are always explicit and role-scoped:
 
 The latency/loss helper owns the dedicated `1abc:` qdisc handle on the peer-route interface; partitioning owns only the `inet vpnctl_v2_lab_fault` table. `clear` removes those exact controls. Before any existing exact-name VM is started, inspected, stopped, or deleted, the orchestrator verifies QEMU/amd64, resource limits, pinned image digest, and rootless network. A mismatch exits as a conflict instead of operating on the instance.
 
-Use `./scripts/v2lab.sh shell gateway` or `shell node` for an interactive guest shell, `down` to stop both persistent fixtures, and explicit `destroy` to delete them. Generated evidence is intentionally untracked; accepted spike results are summarized in versioned ADRs and manifests.
+Use `./scripts/v2lab.sh shell gateway` or `shell node` for an interactive guest shell, `down` to stop both persistent fixtures, and explicit `destroy` to delete them. Generated evidence is intentionally untracked; accepted spike results are summarized in versioned ADRs and the pinned [v2 component/limit manifest](COMPONENT_LIMITS.v1.json).
