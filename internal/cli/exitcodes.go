@@ -1,14 +1,16 @@
 package cli
 
+import "github.com/vgrinkevich/vpnctl/internal/output"
+
 // ResultCategory is the stable v2 process-result category used by every public command.
-type ResultCategory string
+type ResultCategory = output.ExitCategory
 
 const (
-	ResultSuccess     ResultCategory = "success"
-	ResultValidation  ResultCategory = "validation"
-	ResultConflict    ResultCategory = "conflict"
-	ResultUnavailable ResultCategory = "unavailable"
-	ResultInternal    ResultCategory = "internal"
+	ResultSuccess     ResultCategory = output.CategorySuccess
+	ResultValidation  ResultCategory = output.CategoryValidation
+	ResultConflict    ResultCategory = output.CategoryConflict
+	ResultUnavailable ResultCategory = output.CategoryUnavailable
+	ResultInternal    ResultCategory = output.CategoryInternal
 )
 
 const (

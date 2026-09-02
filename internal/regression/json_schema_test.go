@@ -2,8 +2,10 @@ package regression
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,7 +13,80 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/vgrinkevich/vpnctl/internal/cli"
+	"github.com/vgrinkevich/vpnctl/internal/output"
 )
+
+func TestV2EmitterCoversEveryResultFamilyAndKeepsStreamsSeparate(t *testing.T) {
+	t.Parallel()
+
+	examples := readV2JSONExamples(t)
+	resolved := make(map[string]*jsonschema.Resolved)
+	seenFamilies := make(map[string]struct{})
+	for registryCommand, example := range examples {
+		raw, err := json.Marshal(example.Result)
+		if err != nil {
+			t.Fatalf("marshal example %s: %v", registryCommand, err)
+		}
+		var result output.Result
+		if err := json.Unmarshal(raw, &result); err != nil {
+			t.Fatalf("decode example %s into result model: %v", registryCommand, err)
+		}
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		emitter, err := cli.NewResultEmitter(&stdout, &stderr, true)
+		if err != nil {
+			t.Fatalf("create emitter for %s: %v", registryCommand, err)
+		}
+		if err := emitter.Progress("fixture progress"); err != nil {
+			t.Fatalf("emit progress for %s: %v", registryCommand, err)
+		}
+		exitCode, err := emitter.Emit(result)
+		if err != nil {
+			t.Errorf("emit %s: %v", registryCommand, err)
+			continue
+		}
+		if exitCode != cli.ExitSuccess {
+			t.Errorf("example %s exit code = %d, want %d", registryCommand, exitCode, cli.ExitSuccess)
+		}
+		if stderr.String() != "fixture progress\n" {
+			t.Errorf("example %s stderr = %q", registryCommand, stderr.String())
+		}
+		if bytes.Contains(stdout.Bytes(), []byte("fixture progress")) {
+			t.Errorf("example %s leaked progress into JSON stdout", registryCommand)
+		}
+
+		decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+		var document map[string]any
+		if err := decoder.Decode(&document); err != nil {
+			t.Errorf("decode emitted %s document: %v", registryCommand, err)
+			continue
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			t.Errorf("emitted %s contains more than one JSON document: %v", registryCommand, err)
+		}
+		schema := resolved[example.ResultSchema]
+		if schema == nil {
+			schema = resolveV2ResultSchema(t, example.ResultSchema)
+			resolved[example.ResultSchema] = schema
+		}
+		if err := schema.Validate(document); err != nil {
+			t.Errorf("emitted %s does not validate against %s: %v", registryCommand, example.ResultSchema, err)
+		}
+		seenFamilies[example.ResultSchema] = struct{}{}
+	}
+
+	for _, family := range []string{
+		"artifact-v1", "collection-v1", "diagnostic-v1", "export-v1", "operation-v1",
+		"plan-v1", "resource-v1", "secret-issue-v1", "status-v1", "validation-v1",
+	} {
+		if _, found := seenFamilies[family]; !found {
+			t.Errorf("result family %s was not exercised through the emitter", family)
+		}
+	}
+}
 
 func TestV2JSONResultExamplesValidateAndCoverCLI(t *testing.T) {
 	t.Parallel()

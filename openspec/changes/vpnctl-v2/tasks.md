@@ -39,7 +39,7 @@
 
 - [x] 4.1 Implement the role-aware command registry from the frozen contract; verify every command rejects unsupported host roles before state or system mutation.
 - [x] 4.2 Implement the common result model and concise human renderer; verify golden output contains identifiers, warnings, required actions, and copy-ready commands without profiles or secrets.
-- [ ] 4.3 Implement one-document JSON stdout, stderr progress separation, schema versions, and stable exit mapping; verify every command family passes schema and stream-separation integration tests.
+- [x] 4.3 Implement one-document JSON stdout, stderr progress separation, schema versions, and stable exit mapping; verify every command family passes schema and stream-separation integration tests.
 - [ ] 4.4 Implement centralized redaction metadata and secret/sensitive-path types that cannot use ordinary formatters; verify fuzz and golden tests do not expose tokens, keys, authorization headers, bodies, or webhook paths.
 - [ ] 4.5 Implement impact-based consent, `--yes`, typed confirmation, hidden input, and non-interactive refusal; verify the consent matrix from task 1.3 is exhaustively tested.
 - [ ] 4.6 Implement common `--dry-run` and supported `--defer` plumbing without treating JSON mode as consent; verify dry-run creates neither pending state nor files and defer requires an authoritative gateway write.
