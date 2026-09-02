@@ -23,6 +23,7 @@ func TestDefaultPaths(t *testing.T) {
 		BackupsDir:        "/var/lib/vpnctl/backups",
 		SnapshotsDir:      "/var/lib/vpnctl/snapshots",
 		OperationsDir:     "/var/lib/vpnctl/operations",
+		WatchdogDir:       "/var/lib/vpnctl/operations/watchdog",
 
 		RuntimeDir:    "/run/vpnctl",
 		ControlSocket: "/run/vpnctl/control.sock",
@@ -60,24 +61,26 @@ func TestNewPathsUsesExplicitTestRoot(t *testing.T) {
 		t.Fatalf("Root = %q, want %q", paths.Root, root)
 	}
 	want := map[string]string{
-		"config":  filepath.Join(root, "etc", "vpnctl"),
-		"presets": filepath.Join(root, "etc", "vpnctl", "presets.d"),
-		"state":   filepath.Join(root, "var", "lib", "vpnctl", "state.json"),
-		"secrets": filepath.Join(root, "var", "lib", "vpnctl", "secrets"),
-		"exports": filepath.Join(root, "var", "lib", "vpnctl", "exports"),
-		"backups": filepath.Join(root, "var", "lib", "vpnctl", "backups"),
-		"runtime": filepath.Join(root, "run", "vpnctl"),
-		"socket":  filepath.Join(root, "run", "vpnctl", "control.sock"),
+		"config":   filepath.Join(root, "etc", "vpnctl"),
+		"presets":  filepath.Join(root, "etc", "vpnctl", "presets.d"),
+		"state":    filepath.Join(root, "var", "lib", "vpnctl", "state.json"),
+		"secrets":  filepath.Join(root, "var", "lib", "vpnctl", "secrets"),
+		"exports":  filepath.Join(root, "var", "lib", "vpnctl", "exports"),
+		"backups":  filepath.Join(root, "var", "lib", "vpnctl", "backups"),
+		"watchdog": filepath.Join(root, "var", "lib", "vpnctl", "operations", "watchdog"),
+		"runtime":  filepath.Join(root, "run", "vpnctl"),
+		"socket":   filepath.Join(root, "run", "vpnctl", "control.sock"),
 	}
 	got := map[string]string{
-		"config":  paths.ConfigDir,
-		"presets": paths.PresetsDir,
-		"state":   paths.StateFile,
-		"secrets": paths.SecretsDir,
-		"exports": paths.ExportsDir,
-		"backups": paths.BackupsDir,
-		"runtime": paths.RuntimeDir,
-		"socket":  paths.ControlSocket,
+		"config":   paths.ConfigDir,
+		"presets":  paths.PresetsDir,
+		"state":    paths.StateFile,
+		"secrets":  paths.SecretsDir,
+		"exports":  paths.ExportsDir,
+		"backups":  paths.BackupsDir,
+		"watchdog": paths.WatchdogDir,
+		"runtime":  paths.RuntimeDir,
+		"socket":   paths.ControlSocket,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NewPaths()\nwant: %#v\n got: %#v", want, got)

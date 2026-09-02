@@ -20,6 +20,7 @@ type Paths struct {
 	BackupsDir        string
 	SnapshotsDir      string
 	OperationsDir     string
+	WatchdogDir       string
 
 	RuntimeDir    string
 	ControlSocket string
@@ -60,6 +61,7 @@ func NewPaths(root string) (Paths, error) {
 		BackupsDir:        filepath.Join(stateDir, "backups"),
 		SnapshotsDir:      filepath.Join(stateDir, "snapshots"),
 		OperationsDir:     filepath.Join(stateDir, "operations"),
+		WatchdogDir:       filepath.Join(stateDir, "operations", "watchdog"),
 
 		RuntimeDir:    runtimeDir,
 		ControlSocket: filepath.Join(runtimeDir, "control.sock"),

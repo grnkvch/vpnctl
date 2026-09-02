@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/app"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/setup"
 	"github.com/vgrinkevich/vpnctl/internal/state"
 )
@@ -21,9 +22,13 @@ var newClientKeyGenerator = func() state.ClientKeyGenerator {
 var runSetup = setup.Run
 var runApply = app.Apply
 var exportClient = app.ExportClient
+var runInternalWatchdogRollback = operations.RunDefaultWatchdogRollback
 
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "__watchdog-rollback" {
+		return executeInternalWatchdogRollback(args[1:], stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -59,6 +64,18 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+}
+
+func executeInternalWatchdogRollback(args []string, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "internal watchdog rollback requires one transaction ID")
+		return 2
+	}
+	if err := runInternalWatchdogRollback(context.Background(), args[0]); err != nil {
+		fmt.Fprintf(stderr, "watchdog rollback failed: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func executeApply(args []string, stateDir string, stdout io.Writer, stderr io.Writer) int {
