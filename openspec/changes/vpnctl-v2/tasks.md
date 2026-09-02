@@ -50,7 +50,7 @@
 - [x] 5.2 Implement explicit public IPv4 and CIDR/interface validation with no external IP lookup; verify missing/invalid IP and overlapping pool cases fail before mutation.
 - [x] 5.3 Implement fail-closed SSH port discovery from `SSH_CONNECTION` plus active listener cross-check and verified `--ssh-port`; verify non-SSH, mismatch, ambiguity, non-22, and explicit-port fixtures.
 - [x] 5.4 Implement vpnctl-owned nftables table rendering with default-deny gateway inbound, established/related, loopback, SSH from `0.0.0.0/0`, fixed listeners, isolation, forwarding, and NAT; verify packet-level namespace tests and preservation of foreign tables.
-- [ ] 5.5 Implement preflight conflicts for UFW/firewalld, reserved ports, incompatible routes/TUN/WireGuard, and unmanaged reverse proxies while permitting non-conflicting foreign resources; verify conflicts produce actionable plans and zero mutation.
+- [x] 5.5 Implement preflight conflicts for UFW/firewalld, reserved ports, incompatible routes/TUN/WireGuard, and unmanaged reverse proxies while permitting non-conflicting foreign resources; verify conflicts produce actionable plans and zero mutation.
 - [ ] 5.6 Implement the controller-independent systemd watchdog snapshot/rollback executable and 120-second timer; verify controller/CLI kill and timeout restore only prior vpnctl rules, routes, rules, and sysctls.
 - [ ] 5.7 Implement `vpnctl confirm <id>` with one-time IDs and proof of a newly established post-activation SSH session; verify original-session, reused-ID, wrong-port, expired, and successful-new-session cases.
 - [ ] 5.8 Implement role-scoped systemd unit/config installation and `Restart=on-failure`; verify gateway and node init never install or start the other role's services.
