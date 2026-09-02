@@ -126,6 +126,24 @@ func TestRPCServerRejectsPublicBindingAndNonMTLSClients(t *testing.T) {
 	assertTypedRPCFailure(t, response, "invalid_identity")
 }
 
+func TestRPCServerRequiresRequestAuthorizer(t *testing.T) {
+	t.Parallel()
+
+	material, _ := rpcTestIdentities(t)
+	protocols, err := NewRPCProtocolRegistryFromVersions([]string{"1.0"}, map[int]RPCHandler{1: successRPCHandler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewRPCServer(RPCServerConfig{
+		GatewayID: testGatewayID, NodeCIDR: "127.0.0.0/8",
+		CertificatePEM: material.GatewayCertificatePEM, PrivateKeyPEM: material.GatewayPrivateKeyPEM,
+		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols,
+	})
+	if err == nil || !strings.Contains(err.Error(), "authorizer") {
+		t.Fatalf("NewRPCServer() without authorizer error = %v", err)
+	}
+}
+
 func TestRPCServerRejectsAmbiguousMalformedAndOversizedRequests(t *testing.T) {
 	t.Parallel()
 
@@ -350,7 +368,7 @@ func newTestRPCServer(t *testing.T, material GatewayControlMaterial, limits rpcL
 	server, err := newRPCServer(RPCServerConfig{
 		GatewayID: testGatewayID, NodeCIDR: "127.0.0.0/8",
 		CertificatePEM: material.GatewayCertificatePEM, PrivateKeyPEM: material.GatewayPrivateKeyPEM,
-		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols,
+		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols, Authorizer: allowAllRPCAuthorizer(),
 	}, limits)
 	if err != nil {
 		t.Fatal(err)
@@ -425,6 +443,12 @@ func validRPCRequest(now time.Time) RPCRequest {
 func successRPCHandler() RPCHandler {
 	return RPCHandlerFunc(func(context.Context, RPCPeer, RPCRequest) (RPCHandlerResult, error) {
 		return RPCHandlerResult{StatusCode: http.StatusOK, Response: NewRPCResponse("success", 42, json.RawMessage(`{"ok":true}`))}, nil
+	})
+}
+
+func allowAllRPCAuthorizer() RPCAuthorizer {
+	return RPCAuthorizerFunc(func(context.Context, RPCPeer, RPCRequest) (RPCAuthorization, error) {
+		return RPCAuthorization{Authorized: true}, nil
 	})
 }
 

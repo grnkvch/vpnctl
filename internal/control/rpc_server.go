@@ -26,6 +26,7 @@ type RPCServerConfig struct {
 	PrivateKeyPEM          []byte
 	ClientCACertificatePEM []byte
 	Protocols              *RPCProtocolRegistry
+	Authorizer             RPCAuthorizer
 	Now                    func() time.Time
 }
 
@@ -43,6 +44,7 @@ type rpcLimits struct {
 type RPCServer struct {
 	overlayIPv4 string
 	protocols   *RPCProtocolRegistry
+	authorizer  RPCAuthorizer
 	now         func() time.Time
 	tlsConfig   *tls.Config
 	limits      rpcLimits
@@ -53,8 +55,8 @@ func NewRPCServer(config RPCServerConfig) (*RPCServer, error) {
 }
 
 func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) {
-	if config.Protocols == nil {
-		return nil, fmt.Errorf("control RPC protocol registry is required")
+	if config.Protocols == nil || config.Authorizer == nil {
+		return nil, fmt.Errorf("control RPC protocol registry and authorizer are required")
 	}
 	overlayIPv4, err := GatewayOverlayIPv4(config.NodeCIDR)
 	if err != nil {
@@ -89,7 +91,7 @@ func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) 
 		return nil, fmt.Errorf("verify gateway control TLS identity: %w", err)
 	}
 	return &RPCServer{
-		overlayIPv4: overlayIPv4, protocols: config.Protocols, now: config.Now, limits: limits,
+		overlayIPv4: overlayIPv4, protocols: config.Protocols, authorizer: config.Authorizer, now: config.Now, limits: limits,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
@@ -118,7 +120,7 @@ func (server *RPCServer) Serve(ctx context.Context, listener net.Listener) error
 	if ctx == nil {
 		return fmt.Errorf("context is required")
 	}
-	if server == nil || server.protocols == nil || server.tlsConfig == nil {
+	if server == nil || server.protocols == nil || server.authorizer == nil || server.tlsConfig == nil {
 		return fmt.Errorf("control RPC server is incomplete")
 	}
 	if listener == nil {
@@ -225,6 +227,20 @@ func (server *RPCServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 	}
 	handlerContext, cancel := context.WithTimeout(request.Context(), server.limits.writeTimeout)
 	defer cancel()
+	authorization, err := server.authorizer.AuthorizeRPC(handlerContext, peer, envelope)
+	if err != nil {
+		server.writeResponse(writer, http.StatusInternalServerError, rpcFailureForVersion(envelope, "internal", "authorization_failed", "the control RPC identity could not be authorized"))
+		return
+	}
+	if !authorization.Authorized {
+		if validateRPCHandlerResult(authorization.Denial) != nil || authorization.Denial.Response.ProtocolMajor != envelope.ProtocolMajor ||
+			authorization.Denial.Response.ProtocolMinor != envelope.ProtocolMinor {
+			server.writeResponse(writer, http.StatusInternalServerError, rpcFailureForVersion(envelope, "internal", "authorization_failed", "the control RPC identity could not be authorized"))
+			return
+		}
+		server.writeResponse(writer, authorization.Denial.StatusCode, authorization.Denial.Response)
+		return
+	}
 	result, err := server.protocols.HandleRPC(handlerContext, peer, envelope)
 	if err != nil {
 		server.writeResponse(writer, http.StatusInternalServerError, rpcFailure("internal", "handler_failed", "the control RPC request could not be completed"))

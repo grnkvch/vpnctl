@@ -92,6 +92,24 @@ func (handler RPCHandlerFunc) HandleRPC(ctx context.Context, peer RPCPeer, reque
 	return handler(ctx, peer, request)
 }
 
+type RPCAuthorization struct {
+	Authorized bool
+	Denial     RPCHandlerResult
+}
+
+// RPCAuthorizer is invoked for every decoded, identity-bound request before
+// protocol operation dispatch. Implementations must fail closed when their
+// authoritative identity state is unavailable.
+type RPCAuthorizer interface {
+	AuthorizeRPC(context.Context, RPCPeer, RPCRequest) (RPCAuthorization, error)
+}
+
+type RPCAuthorizerFunc func(context.Context, RPCPeer, RPCRequest) (RPCAuthorization, error)
+
+func (authorizer RPCAuthorizerFunc) AuthorizeRPC(ctx context.Context, peer RPCPeer, request RPCRequest) (RPCAuthorization, error) {
+	return authorizer(ctx, peer, request)
+}
+
 func NewRPCResponse(category string, authoritativeGeneration uint64, data json.RawMessage) RPCResponse {
 	if len(data) == 0 {
 		data = json.RawMessage(`{}`)

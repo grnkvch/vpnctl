@@ -103,7 +103,7 @@ func TestRPCGatewayFirstRollingCompatibilityOverMTLS(t *testing.T) {
 	server, err := newRPCServer(RPCServerConfig{
 		GatewayID: testGatewayID, NodeCIDR: "127.0.0.0/8",
 		CertificatePEM: material.GatewayCertificatePEM, PrivateKeyPEM: material.GatewayPrivateKeyPEM,
-		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols,
+		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols, Authorizer: allowAllRPCAuthorizer(),
 	}, defaultRPCLimits())
 	if err != nil {
 		t.Fatal(err)
