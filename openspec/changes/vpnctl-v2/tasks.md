@@ -60,7 +60,7 @@
 
 ## 6. Gateway Controller and Control Plane
 
-- [ ] 6.1 Implement the controller process, Unix socket permissions, serialized mutation execution, passive observation, and graceful restart; verify concurrent local mutations serialize and data-plane mock units continue through controller restart.
+- [x] 6.1 Implement the controller process, Unix socket permissions, serialized mutation execution, passive observation, and graceful restart; verify concurrent local mutations serialize and data-plane mock units continue through controller restart.
 - [ ] 6.2 Implement Ed25519 control CA, gateway leaf, enrollment identity, node CSR issuance, random serials, URI SANs, root-only storage, and distinct public ingress identity; verify certificate-chain and identity-boundary tests.
 - [ ] 6.3 Implement internal-overlay-only HTTPS/1.1 mTLS server/client with strict JSON schemas, deadlines, size limits, and short-lived node CLI connections; verify public binding is absent and malformed/oversized requests fail boundedly.
 - [ ] 6.4 Implement protocol `major.minor` negotiation independent of binary versions and current/previous-major server dispatch; verify additive-minor fixtures, breaking-major rejection, and gateway-first rolling compatibility.

@@ -41,6 +41,15 @@ func RenderGatewayRoleInstallation(binaryPath string) (RoleInstallationRequest, 
 	units := make([]RoleUnitFile, 0, len(names))
 	for _, name := range names {
 		mode := modes[name]
+		serviceIsolation := ""
+		if mode == "gateway-controller" {
+			serviceIsolation = `RuntimeDirectory=vpnctl
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+TimeoutStopSec=30s
+`
+		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s
 After=network-online.target
@@ -61,15 +70,19 @@ PrivateTmp=true
 ReadWritePaths=/var/lib/vpnctl /run/vpnctl
 MemoryMax=128M
 TasksMax=128
+%s
 
 [Install]
 WantedBy=multi-user.target
-`, mode, mode, binaryPath, mode)
+`, mode, mode, binaryPath, mode, serviceIsolation)
 		units = append(units, RoleUnitFile{Name: name, Content: []byte(content), Enable: true, Start: true})
 	}
 	request := RoleInstallationRequest{
 		Role: model.RoleGateway, Units: units,
-		Configs: []RoleConfigFile{{Name: "bootstrap.conf", Content: []byte(gatewayBootstrapConfig)}},
+		Configs: []RoleConfigFile{
+			{Name: "bootstrap.conf", Content: []byte(gatewayBootstrapConfig)},
+			{Name: "gateway-controller.ready", Content: []byte("schema_version=1\n")},
+		},
 	}
 	return request, nil
 }

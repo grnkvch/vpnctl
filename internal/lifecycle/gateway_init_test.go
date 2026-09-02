@@ -334,6 +334,9 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "gateway", "bootstrap.conf")); err != nil {
 		t.Fatalf("gateway bootstrap config is missing: %v", err)
 	}
+	if info, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "gateway", "gateway-controller.ready")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("gateway controller readiness marker = %v, %v", info, err)
+	}
 	before := append([]string(nil), runner.calls...)
 	second, err := initializer.Plan(context.Background(), validGatewayInitInput())
 	if err != nil {

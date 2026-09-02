@@ -26,6 +26,9 @@ var runInternalWatchdogRollback = operations.RunDefaultWatchdogRollback
 
 // Execute runs the vpnctl command and returns a process exit code.
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "__service" {
+		return executeInternalService(args[1:], stderr)
+	}
 	if isGatewayInitInvocation(args) {
 		return executeGatewayInit(args, stdout, stderr)
 	}

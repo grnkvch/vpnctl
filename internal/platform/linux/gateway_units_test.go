@@ -33,17 +33,27 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 		if !unit.Enable || !unit.Start {
 			t.Errorf("gateway unit %s is not enabled and started", unit.Name)
 		}
+		if unit.Name == "vpnctl-controller.service" {
+			for _, required := range []string{"RuntimeDirectory=vpnctl", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes", "UMask=0077", "TimeoutStopSec=30s"} {
+				if !strings.Contains(content, required) {
+					t.Errorf("controller unit missing %q", required)
+				}
+			}
+		}
 	}
 	if want := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(names, want) {
 		t.Fatalf("gateway rendered units = %v, want %v", names, want)
 	}
-	if len(request.Configs) != 1 || request.Configs[0].Name != "bootstrap.conf" {
+	if len(request.Configs) != 2 || request.Configs[0].Name != "bootstrap.conf" || request.Configs[1].Name != "gateway-controller.ready" {
 		t.Fatalf("gateway configs = %+v", request.Configs)
 	}
 	for _, fixed := range []string{"public_https_tcp=443", "restricted_tcp=8443", "standard_udp=51820", "pki_status=unprovisioned"} {
 		if !strings.Contains(string(request.Configs[0].Content), fixed) {
 			t.Errorf("bootstrap config missing %q", fixed)
 		}
+	}
+	if string(request.Configs[1].Content) != "schema_version=1\n" {
+		t.Fatalf("controller readiness content = %q", request.Configs[1].Content)
 	}
 }
 
