@@ -77,7 +77,7 @@
 - [x] 7.3 Implement include-minus-exclude and cross-preset union normalization with order independence; verify property tests cover reordered files/rules and cross-preset reselection.
 - [x] 7.4 Implement preset list/show/validate/diff and assigned-preset deletion guard; verify manual invalid edits leave the prior effective generation active.
 - [x] 7.5 Implement reviewed three-way built-in template update with user additions/exclusions preservation, immediate/deferred apply, and merge conflicts; verify safe and unsafe merge fixtures.
-- [ ] 7.6 Implement atomic full policy set/clear for current node and explicit client target, including unknown/empty validation and pending node policy; verify no incremental or automatic assignment path exists.
+- [x] 7.6 Implement atomic full policy set/clear for current node and explicit client target, including unknown/empty validation and pending node policy; verify no incremental or automatic assignment path exists.
 - [ ] 7.7 Implement client add/list/show with immutable identity, unique name, stable address, explicit atomic initial presets, and secret-free views; verify at least five isolated clients and duplicate/unknown failures.
 - [ ] 7.8 Migrate the v1 WireGuard renderer into v2 deterministic full-tunnel export; verify byte/semantic golden compatibility, default DNS behavior, key/address preservation, and independence from preset changes.
 - [ ] 7.9 Implement Clash/Mihomo export from normalized policy and split DNS, initially with standard and later restricted alternatives; verify pinned Mihomo parses the rendered Clash-compatible profile, selected rules end in gateway-or-block semantics, and unmatched traffic ends direct, deferring import into actual Clash Mi to task 16.11.

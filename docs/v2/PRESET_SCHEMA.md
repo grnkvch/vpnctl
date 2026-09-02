@@ -98,3 +98,35 @@ unchanged. A state-write failure proven to have left the old generation active
 restores the exact prior YAML (or removes an explicitly restored file); an
 uncertain/committed write is reported without attempting a destructive blind
 rollback.
+
+## Atomic policy assignment
+
+Policy mutation has only two forms: `set` replaces the complete assignment and
+`clear` explicitly publishes an empty assignment. Preset names are canonicalized
+and sorted. Empty `set`, duplicates, unknown effective presets, and a selected
+preset whose current source is absent or invalid fail before authoritative state
+is written. Planning is bound to both the gateway state generation and complete
+source-set hash, so an intervening state or source edit makes the plan stale.
+Pending valid source edits are not activated implicitly: policy selectors are
+compiled from the last effective preset generation stored in gateway state.
+
+A client is always addressed explicitly by immutable ID or unique name. A
+changed client assignment returns `requires client re-export`; artifact stale
+tracking and deletion are implemented with the export lifecycle. A node command
+uses only the immutable identity of the authenticated current node and has no
+public arbitrary-node selector.
+
+Gateway state is the desired node policy, while node-local state is the last
+applied policy. Deferred replacement advances only gateway state and leaves the
+local state bytes unchanged. Immediate replacement commits desired state first
+and then applies it locally. If local persistence fails, desired state remains
+committed and the result is pending rather than pretending to roll the gateway
+back. Repeating the same non-deferred replacement applies that already-committed
+desired policy even when the gateway step is a semantic no-op. Gateway and local
+policy generations are independent monotonic counters; node trust records the
+last observed gateway state generation.
+
+There is no incremental add/remove method, automatic default assignment, or
+automatic reconciliation path. The public registry contains only explicit
+policy show, full set, and clear commands for current-node and explicit-client
+forms.

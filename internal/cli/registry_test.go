@@ -44,6 +44,34 @@ func TestV2RegistryMatchesEveryFrozenContractRow(t *testing.T) {
 	}
 }
 
+func TestV2RegistryExposesOnlyExplicitFullPolicyReplacement(t *testing.T) {
+	t.Parallel()
+
+	registry := V2CommandRegistry()
+	for _, forbidden := range []string{"policy.add.node", "policy.add.gateway", "policy.remove.node", "policy.remove.gateway", "policy.auto", "policy.assign.default"} {
+		if spec, found := registry.Lookup(forbidden); found {
+			t.Errorf("forbidden incremental or automatic policy path is registered: %#v", spec)
+		}
+	}
+	want := map[string]struct{}{
+		"policy.show.node": {}, "policy.show.gateway": {},
+		"policy.set.node": {}, "policy.set.gateway": {},
+		"policy.clear.node": {}, "policy.clear.gateway": {},
+	}
+	for _, spec := range registry.Commands() {
+		if !strings.HasPrefix(spec.ID, "policy.") {
+			continue
+		}
+		if _, found := want[spec.ID]; !found {
+			t.Errorf("unexpected policy command path: %s (%s)", spec.ID, spec.Syntax)
+		}
+		delete(want, spec.ID)
+	}
+	if len(want) != 0 {
+		t.Errorf("required explicit policy command paths are absent: %v", want)
+	}
+}
+
 func TestEveryV2CommandIsRoleGuardedBeforeHandler(t *testing.T) {
 	t.Parallel()
 

@@ -275,6 +275,20 @@ vpnctl policy clear --client <name-or-id>
   последний Clash export помечается `stale`, а result содержит
   `requires_action: re-export`. Full-tunnel WireGuard export от preset policy не
   зависит и stale не становится.
+- Gateway хранит desired node policy, а node-local state — последнее реально
+  applied значение. Deferred policy меняет только gateway generation. Immediate
+  policy сначала коммитит desired state, затем применяет его на node; ошибка
+  локального применения оставляет явный pending result и не откатывает уже
+  принятый gateway desired state. Повтор того же `set` без `--defer` применяет
+  pending desired state, даже если gateway mutation уже является no-op.
+- Gateway и node-local policy generations являются независимыми монотонными
+  счётчиками. Связь поколений отслеживается через
+  `GatewayTrust.LastKnownGatewayGeneration`; gateway generation нельзя просто
+  копировать в local policy generation после нескольких deferred замен.
+- Policy plan привязан к gateway state generation и hash полного набора source
+  preset-файлов. Он использует только последнее effective preset-состояние и не
+  активирует валидные pending edits неявно. Selected preset обязан иметь один
+  валидный source; пустой/duplicate/unknown/invalid input не меняет state.
 - Gateway dedicated: конфликт занятых портов или несовместимой системной
   конфигурации является preflight error, а не попыткой автоматически сосуществовать
   с произвольным nginx/Caddy/WireGuard/firewall setup.
