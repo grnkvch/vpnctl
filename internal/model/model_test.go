@@ -346,6 +346,40 @@ func TestStandaloneVersionedModelCodecs(t *testing.T) {
 	}
 }
 
+func TestSecretReferenceJSONBoundary(t *testing.T) {
+	t.Parallel()
+
+	reference, err := ParseSecretRef("control-key:gateway")
+	if err != nil {
+		t.Fatalf("ParseSecretRef() error = %v", err)
+	}
+	kind, id, err := reference.Parts()
+	if err != nil || kind != "control-key" || id != "gateway" {
+		t.Fatalf("SecretRef.Parts() = %q, %q, %v", kind, id, err)
+	}
+	constructed, err := NewSecretRef(kind, id)
+	if err != nil || constructed != reference {
+		t.Fatalf("NewSecretRef() = %q, %v", constructed, err)
+	}
+	for _, invalid := range []string{"", "missing-separator", "../key:value", "key:../value", "UPPER:key"} {
+		if _, err := ParseSecretRef(invalid); err == nil {
+			t.Errorf("ParseSecretRef(%q) error = nil", invalid)
+		}
+	}
+
+	state := gatewayState()
+	encoded, err := EncodeState(state)
+	if err != nil {
+		t.Fatalf("EncodeState() error = %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"credential_ref": "secret:node-standard"`)) {
+		t.Fatal("encoded state omitted the opaque secret reference")
+	}
+	if bytes.Contains(encoded, []byte("raw-private-material-canary")) {
+		t.Fatal("encoded state contains raw secret material")
+	}
+}
+
 func gatewayState() State {
 	created := utc(2026, time.September, 2, 10, 0)
 	return State{
@@ -516,7 +550,7 @@ func policy(kind TargetKind, id string) Policy {
 	}
 }
 
-func standardTransport(kind TargetKind, id string, state TransportState, credentialRef string) Transport {
+func standardTransport(kind TargetKind, id string, state TransportState, credentialRef SecretRef) Transport {
 	return Transport{
 		SchemaVersion:        ResourceSchemaVersion,
 		OwnerKind:            kind,
@@ -533,7 +567,7 @@ func standardTransport(kind TargetKind, id string, state TransportState, credent
 	}
 }
 
-func restrictedTransport(kind TargetKind, id string, state TransportState, credentialRef string) Transport {
+func restrictedTransport(kind TargetKind, id string, state TransportState, credentialRef SecretRef) Transport {
 	return Transport{
 		SchemaVersion:        ResourceSchemaVersion,
 		OwnerKind:            kind,
@@ -550,7 +584,7 @@ func restrictedTransport(kind TargetKind, id string, state TransportState, crede
 	}
 }
 
-func certificate(id string, kind CertificateKind, ownerKind, ownerID, certificateRef, privateKeyRef string, notBefore, notAfter time.Time) Certificate {
+func certificate(id string, kind CertificateKind, ownerKind, ownerID, certificateRef string, privateKeyRef SecretRef, notBefore, notAfter time.Time) Certificate {
 	return Certificate{
 		SchemaVersion:  ResourceSchemaVersion,
 		ID:             id,

@@ -161,6 +161,8 @@ const (
 	BackupComplete BackupState = "complete"
 )
 
+type SecretRef string
+
 type State struct {
 	SchemaVersion int               `json:"schema_version"`
 	Generation    uint64            `json:"generation"`
@@ -272,7 +274,7 @@ type Transport struct {
 	Protocol             NetworkProtocol `json:"protocol"`
 	Port                 int             `json:"port"`
 	CredentialGeneration uint64          `json:"credential_generation"`
-	CredentialRef        string          `json:"credential_ref"`
+	CredentialRef        SecretRef       `json:"credential_ref"`
 	PublicKey            string          `json:"public_key,omitempty"`
 	HandshakeHost        string          `json:"handshake_host,omitempty"`
 	ConfigHash           string          `json:"config_hash"`
@@ -310,7 +312,7 @@ type Certificate struct {
 	WarningDays    int             `json:"warning_days"`
 	Generation     uint64          `json:"generation"`
 	CertificateRef string          `json:"certificate_ref"`
-	PrivateKeyRef  string          `json:"private_key_ref,omitempty"`
+	PrivateKeyRef  SecretRef       `json:"private_key_ref,omitempty"`
 }
 
 type Operation struct {

@@ -493,7 +493,7 @@ func (transport Transport) Validate() error {
 	if transport.CredentialGeneration == 0 {
 		return invalid("credential_generation", "must be positive")
 	}
-	if err := validateOpaqueRef("credential_ref", transport.CredentialRef); err != nil {
+	if err := validateOpaqueRef("credential_ref", string(transport.CredentialRef)); err != nil {
 		return err
 	}
 	if err := validateHash("config_hash", transport.ConfigHash); err != nil {
@@ -615,7 +615,7 @@ func (certificate Certificate) Validate() error {
 		return err
 	}
 	if certificate.PrivateKeyRef != "" {
-		if err := validateOpaqueRef("private_key_ref", certificate.PrivateKeyRef); err != nil {
+		if err := validateOpaqueRef("private_key_ref", string(certificate.PrivateKeyRef)); err != nil {
 			return err
 		}
 	}
