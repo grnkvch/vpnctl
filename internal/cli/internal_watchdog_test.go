@@ -19,7 +19,7 @@ func TestInternalWatchdogRollbackModeIsHiddenAndStrict(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	id := "12345678-1234-4234-8234-123456789abc"
+	id := "fw-00000A"
 	if code := Execute([]string{"__watchdog-rollback", id}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Execute(internal) code = %d, stderr = %q", code, stderr.String())
 	}

@@ -15,6 +15,8 @@ func TestV2WatchdogHarnessContract(t *testing.T) {
 		"assert_lab_instance", "assert_other_spikes_inactive", "assert_owned_or_absent",
 		"arm-kill", "kill -KILL", "wait_for_rollback", "timer-start-monotonic-nsec",
 		"monotonic_elapsed_nsec", "120000000000",
+		"verify-confirm", "arm-original-attempt", "ControlMaster=no", "ControlPath=none",
+		"original-session.json", "new-session.json", "reused-id.json", "transaction_id_used",
 		"capture_owned", "capture_foreign", "assert_capture_equal", "assert_foreign_equal",
 		"trap 'cleanup_internal; cleanup_host_build' EXIT",
 	} {

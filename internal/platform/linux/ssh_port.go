@@ -99,7 +99,9 @@ func ResolveSSHPort(input SSHPortInput, snapshot HostSnapshot) (SSHPortPlan, err
 	return SSHPortPlan{}, sshPortError("connection_mismatch", fmt.Sprintf("SSH_CONNECTION server %s:%d does not match an active sshd or systemd TCP listener", connection.ServerAddress, connection.ServerPort), candidates)
 }
 
-func parseSSHConnection(value string) (SSHConnection, error) {
+// ParseSSHConnection parses the kernel-provided OpenSSH connection tuple.
+// Callers still need a process-ancestry or listener proof before trusting it.
+func ParseSSHConnection(value string) (SSHConnection, error) {
 	fields := strings.Fields(value)
 	if len(fields) == 0 {
 		return SSHConnection{}, sshPortError("not_ssh", "SSH_CONNECTION is absent; run gateway init over SSH or provide --ssh-port", nil)
@@ -129,6 +131,10 @@ func parseSSHConnection(value string) (SSHConnection, error) {
 		ServerAddress: serverAddress.String(),
 		ServerPort:    serverPort,
 	}, nil
+}
+
+func parseSSHConnection(value string) (SSHConnection, error) {
+	return ParseSSHConnection(value)
 }
 
 func parseConnectionAddress(value string) (netip.Addr, error) {

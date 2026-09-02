@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
+	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"golang.org/x/sys/unix"
@@ -16,9 +22,14 @@ import (
 
 const timerStartMonotonicPath = "/tmp/vpnctl-v2-watchdog-test/timer-start-monotonic-nsec"
 
+const (
+	testVPNCTLBinaryPath = "/usr/local/libexec/vpnctl-v2-watchdog-test/vpnctl"
+	originalResultPath   = "/tmp/vpnctl-v2-watchdog-test/original-session.json"
+)
+
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: watchdog-helper <render-units|elapsed|monotonic|arm-kill>")
+		fatal("usage: watchdog-helper <render-units|elapsed|monotonic|write-gateway-state|arm-original-attempt|arm-kill>")
 	}
 	switch os.Args[1] {
 	case "render-units":
@@ -60,9 +71,118 @@ func main() {
 		if err := armAndKill(); err != nil {
 			fatal(err.Error())
 		}
+	case "write-gateway-state":
+		if len(os.Args) != 2 {
+			fatal("usage: watchdog-helper write-gateway-state")
+		}
+		if err := writeGatewayState(); err != nil {
+			fatal(err.Error())
+		}
+	case "arm-original-attempt":
+		if len(os.Args) != 2 {
+			fatal("usage: watchdog-helper arm-original-attempt")
+		}
+		if err := armAndRejectOriginalSession(); err != nil {
+			fatal(err.Error())
+		}
 	default:
 		fatal("unknown watchdog helper command")
 	}
+}
+
+func writeGatewayState() error {
+	paths := store.DefaultPaths()
+	stateStore, err := store.NewStateStore(paths)
+	if err != nil {
+		return err
+	}
+	initializedAt := time.Now().UTC()
+	state := model.State{
+		SchemaVersion: model.StateSchemaVersion,
+		Generation:    1,
+		Host: model.Host{
+			SchemaVersion: model.ResourceSchemaVersion,
+			ID:            "12345678-1234-4234-8234-123456789abc", Role: model.RoleGateway,
+			OS: "ubuntu", OSVersion: "24.04", Architecture: "amd64", InitializedAt: initializedAt,
+			PublicIPv4: "203.0.113.10", ExternalInterface: "eth0", SSHPort: 22,
+			ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+		},
+		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
+		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
+		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{},
+		Components: model.ComponentManifest{
+			SchemaVersion: model.ComponentManifestSchemaVersion, ManifestVersion: 1,
+			VPNCTLVersion: "v2.0.0-dev", ControlProtocols: []string{"1.0"},
+			StateSchemaMinimum: 1, StateSchemaMaximum: 1,
+			TargetOS: "ubuntu 24.04", TargetArchitecture: "amd64", HandshakeHostListVersion: 1,
+			MigrationReversible: true,
+			Components: []model.ComponentPin{{
+				Name: "vpnctl", Version: "v2.0.0-dev", Source: "bundle:vpnctl", Bundled: true,
+				SHA256: strings.Repeat("1", 64), Capabilities: []string{"cli", "controller"},
+			}},
+		},
+	}
+	return stateStore.Save(0, state)
+}
+
+func armAndRejectOriginalSession() error {
+	rawConnection := os.Getenv("SSH_CONNECTION")
+	connection, err := linuxplatform.ParseSSHConnection(rawConnection)
+	if err != nil {
+		return err
+	}
+	watchdog, err := operations.NewWatchdog(
+		store.DefaultPaths(),
+		linuxplatform.NewOSNetworkManager(),
+		operations.NewSystemdWatchdogSupervisor(linuxplatform.OSProbeRunner{}),
+	)
+	if err != nil {
+		return err
+	}
+	transaction, err := watchdog.Arm(context.Background(), operations.WatchdogArmInput{
+		AllowedSSHPort: connection.ServerPort,
+		Origin:         &connection,
+		NetworkScope: linuxplatform.OwnedNetworkScope{Sysctls: []string{
+			"net.ipv4.conf.all.accept_redirects",
+			"net.ipv4.conf.all.rp_filter",
+			"net.ipv4.conf.all.src_valid_mark",
+			"net.ipv4.ip_forward",
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	if err := applyCandidate(); err != nil {
+		return err
+	}
+	if err := watchdog.MarkActivated(context.Background(), transaction.ID); err != nil {
+		return err
+	}
+	command := exec.Command(testVPNCTLBinaryPath, "confirm", transaction.ID, "--json")
+	command.Env = os.Environ()
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	runErr := command.Run()
+	var exitError *exec.ExitError
+	if !errors.As(runErr, &exitError) || exitError.ExitCode() != 2 || stderr.Len() != 0 {
+		return fmt.Errorf("original-session confirm exit=%v stderr=%q stdout=%q", runErr, stderr.String(), stdout.String())
+	}
+	var result output.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return fmt.Errorf("decode original-session result: %w", err)
+	}
+	if err := result.Validate(); err != nil {
+		return fmt.Errorf("validate original-session result: %w", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "new_ssh_session_required" || result.Data["changed"] != false {
+		return fmt.Errorf("unexpected original-session result: %s", stdout.String())
+	}
+	if err := os.WriteFile(originalResultPath, stdout.Bytes(), 0o600); err != nil {
+		return err
+	}
+	fmt.Println(transaction.ID)
+	return nil
 }
 
 func renderUnits(outputDirectory, binaryPath string) error {
@@ -106,7 +226,7 @@ func armAndKill() error {
 	if err := applyCandidate(); err != nil {
 		return err
 	}
-	if err := watchdog.MarkActivated(transaction.ID); err != nil {
+	if err := watchdog.MarkActivated(context.Background(), transaction.ID); err != nil {
 		return err
 	}
 	if err := unix.Kill(os.Getpid(), unix.SIGKILL); err != nil {

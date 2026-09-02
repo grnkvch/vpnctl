@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,7 +27,7 @@ func TestWatchdogArmPersistsSnapshotBeforeStartingTimer(t *testing.T) {
 	}
 	preparedAt := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	watchdog.clock = fixedWatchdogClock{now: preparedAt}
-	watchdog.newID = func() (string, error) { return "12345678-1234-4234-8234-123456789abc", nil }
+	watchdog.newID = func() (string, error) { return "fw-00000A", nil }
 	supervisor.onStart = func(id string) error {
 		if _, err := watchdog.store.Load(id); err != nil {
 			return errors.New("snapshot was not durable before timer start")
@@ -88,7 +89,7 @@ func TestWatchdogRollbackIsIdempotentAndStopsTimer(t *testing.T) {
 	supervisor := &fakeWatchdogSupervisor{}
 	watchdog, _ := NewWatchdog(paths, network, supervisor)
 	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)}
-	watchdog.newID = func() (string, error) { return "12345678-1234-4234-8234-123456789abd", nil }
+	watchdog.newID = func() (string, error) { return "fw-00000B", nil }
 	transaction, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
 	if err != nil {
 		t.Fatalf("Arm() error = %v", err)
@@ -118,7 +119,7 @@ func TestWatchdogRollbackTreatsCommittedTransactionAsNoOp(t *testing.T) {
 	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
 	watchdog, _ := NewWatchdog(paths, network, &fakeWatchdogSupervisor{})
 	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)}
-	watchdog.newID = func() (string, error) { return "12345678-1234-4234-8234-123456789abe", nil }
+	watchdog.newID = func() (string, error) { return "fw-00000C", nil }
 	transaction, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
 	if err != nil {
 		t.Fatalf("Arm() error = %v", err)
@@ -140,7 +141,7 @@ func TestWatchdogStoreRejectsTamperingAndSymlinks(t *testing.T) {
 
 	paths := testWatchdogPaths(t)
 	transactionStore, _ := NewWatchdogStore(paths)
-	transaction := testWatchdogTransaction("12345678-1234-4234-8234-123456789abf")
+	transaction := testWatchdogTransaction("fw-00000D")
 	if err := transactionStore.Create(transaction); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -157,7 +158,7 @@ func TestWatchdogStoreRejectsTamperingAndSymlinks(t *testing.T) {
 		t.Fatalf("Load(tampered) error = %v", err)
 	}
 
-	second := testWatchdogTransaction("12345678-1234-4234-8234-123456789ac0")
+	second := testWatchdogTransaction("fw-00000E")
 	if err := transactionStore.Create(second); err != nil {
 		t.Fatalf("Create(second) error = %v", err)
 	}
@@ -178,7 +179,7 @@ func TestWatchdogRollbackRefusesUnsafeCommitMarkerBeforeMutation(t *testing.T) {
 
 	paths := testWatchdogPaths(t)
 	transactionStore, _ := NewWatchdogStore(paths)
-	transaction := testWatchdogTransaction("12345678-1234-4234-8234-123456789ac2")
+	transaction := testWatchdogTransaction("fw-00000F")
 	if err := transactionStore.Create(transaction); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -201,7 +202,7 @@ func TestSystemdWatchdogSupervisorUsesExactInstances(t *testing.T) {
 
 	runner := &recordingProbeRunner{}
 	supervisor := NewSystemdWatchdogSupervisor(runner)
-	id := "12345678-1234-4234-8234-123456789ac1"
+	id := "fw-00000G"
 	if err := supervisor.StartTimer(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +219,157 @@ func TestSystemdWatchdogSupervisorUsesExactInstances(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("systemctl args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestWatchdogConfirmRequiresNewSSHSessionAndCommitsOnce(t *testing.T) {
+	t.Parallel()
+
+	watchdog, supervisor, transaction := newActivatedWatchdog(t, "fw-NEW001")
+	watchdog.sessions.(*fakeWatchdogSessions).proof = validNewSessionProof(22)
+
+	confirmation, err := watchdog.Confirm(context.Background(), transaction.ID, "192.0.2.20 55001 203.0.113.10 22")
+	if err != nil {
+		t.Fatalf("Confirm() error = %v", err)
+	}
+	if confirmation.TransactionID != transaction.ID || !confirmation.TimerStopped {
+		t.Fatalf("confirmation = %+v", confirmation)
+	}
+	if !reflect.DeepEqual(supervisor.stopped, []string{transaction.ID}) {
+		t.Fatalf("stopped timers = %v", supervisor.stopped)
+	}
+	marker := filepath.Join(watchdog.store.paths.WatchdogDir, transaction.ID, watchdogCommittedFile)
+	assertWatchdogMode(t, marker, 0o600)
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "192.0.2.20") || !strings.Contains(string(data), `"ssh_server_port":22`) {
+		t.Fatalf("unsafe or incomplete commit marker: %s", data)
+	}
+
+	if _, err := watchdog.Confirm(context.Background(), transaction.ID, "192.0.2.20 55002 203.0.113.10 22"); !errors.Is(err, ErrWatchdogAlreadyCommitted) {
+		t.Fatalf("second Confirm() error = %v", err)
+	}
+	if len(supervisor.stopped) != 1 {
+		t.Fatalf("reused ID stopped timer again: %v", supervisor.stopped)
+	}
+}
+
+func TestWatchdogConfirmRejectsOriginalSessionWrongPortAndExpiryWithoutCommit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		proof linuxplatform.SSHSessionProof
+		want  error
+	}{
+		{name: "original session", proof: func() linuxplatform.SSHSessionProof {
+			proof := validNewSessionProof(22)
+			proof.StartedMonotonicNanos = 5_000_000_000
+			return proof
+		}(), want: ErrWatchdogOriginalSession},
+		{name: "wrong listener port", proof: validNewSessionProof(2222), want: ErrWatchdogWrongSSHPort},
+		{name: "expired", proof: func() linuxplatform.SSHSessionProof {
+			proof := validNewSessionProof(22)
+			proof.ObservedMonotonicNanos = 125_000_000_000
+			return proof
+		}(), want: ErrWatchdogExpired},
+	}
+	for index, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			watchdog, supervisor, transaction := newActivatedWatchdog(t, fmt.Sprintf("fw-BAD%03d", index))
+			watchdog.sessions.(*fakeWatchdogSessions).proof = test.proof
+			if _, err := watchdog.Confirm(context.Background(), transaction.ID, "192.0.2.20 55001 203.0.113.10 22"); !errors.Is(err, test.want) {
+				t.Fatalf("Confirm() error = %v, want %v", err, test.want)
+			}
+			if len(supervisor.stopped) != 0 {
+				t.Fatalf("rejected confirmation stopped timer: %v", supervisor.stopped)
+			}
+			if _, err := os.Lstat(filepath.Join(watchdog.store.paths.WatchdogDir, transaction.ID, watchdogCommittedFile)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected confirmation published marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestWatchdogConfirmReportsRolledBackTransactionAsExpired(t *testing.T) {
+	t.Parallel()
+
+	watchdog, supervisor, transaction := newActivatedWatchdog(t, "fw-EXP001")
+	if err := watchdog.store.Rollback(context.Background(), transaction.ID, watchdog.network, watchdog.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watchdog.Confirm(context.Background(), transaction.ID, "192.0.2.20 55001 203.0.113.10 22"); !errors.Is(err, ErrWatchdogExpired) {
+		t.Fatalf("Confirm(rolled back) error = %v", err)
+	}
+	if len(supervisor.stopped) != 0 {
+		t.Fatalf("expired confirmation stopped timer: %v", supervisor.stopped)
+	}
+}
+
+func TestWatchdogArmRetriesAtomicShortIDCollision(t *testing.T) {
+	t.Parallel()
+
+	paths := testWatchdogPaths(t)
+	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
+	watchdog, _ := NewWatchdog(paths, network, &fakeWatchdogSupervisor{})
+	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)}
+	ids := []string{"fw-SAME01", "fw-SAME01", "fw-NEXT01"}
+	watchdog.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	first, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != "fw-SAME01" || second.ID != "fw-NEXT01" {
+		t.Fatalf("collision IDs = %s, %s", first.ID, second.ID)
+	}
+}
+
+func newActivatedWatchdog(t *testing.T, id string) (*Watchdog, *fakeWatchdogSupervisor, WatchdogTransaction) {
+	t.Helper()
+	paths := testWatchdogPaths(t)
+	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
+	supervisor := &fakeWatchdogSupervisor{}
+	watchdog, err := NewWatchdog(paths, network, supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedAt := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	watchdog.clock = fixedWatchdogClock{now: preparedAt}
+	watchdog.newID = func() (string, error) { return id, nil }
+	watchdog.sessions = &fakeWatchdogSessions{boundary: linuxplatform.MonotonicBoundary{
+		BootID: "12345678-1234-4234-8234-123456789abc", MonotonicNanos: 5_000_000_000,
+	}}
+	transaction, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchdog.clock = fixedWatchdogClock{now: preparedAt.Add(time.Second)}
+	if err := watchdog.MarkActivated(context.Background(), transaction.ID); err != nil {
+		t.Fatal(err)
+	}
+	return watchdog, supervisor, transaction
+}
+
+func validNewSessionProof(port int) linuxplatform.SSHSessionProof {
+	return linuxplatform.SSHSessionProof{
+		Connection: linuxplatform.SSHConnection{
+			ClientAddress: "192.0.2.20", ClientPort: 55001,
+			ServerAddress: "203.0.113.10", ServerPort: port,
+		},
+		BootID:                 "12345678-1234-4234-8234-123456789abc",
+		StartedMonotonicNanos:  6_000_000_000,
+		ObservedMonotonicNanos: 7_000_000_000,
 	}
 }
 
@@ -317,6 +469,21 @@ func (supervisor *fakeWatchdogSupervisor) StopTimer(_ context.Context, id string
 type fixedWatchdogClock struct{ now time.Time }
 
 func (clock fixedWatchdogClock) Now() time.Time { return clock.now }
+
+type fakeWatchdogSessions struct {
+	boundary    linuxplatform.MonotonicBoundary
+	boundaryErr error
+	proof       linuxplatform.SSHSessionProof
+	proofErr    error
+}
+
+func (sessions *fakeWatchdogSessions) ActivationBoundary(context.Context) (linuxplatform.MonotonicBoundary, error) {
+	return sessions.boundary, sessions.boundaryErr
+}
+
+func (sessions *fakeWatchdogSessions) CurrentSSHSession(context.Context, string) (linuxplatform.SSHSessionProof, error) {
+	return sessions.proof, sessions.proofErr
+}
 
 type recordingProbeRunner struct{ args [][]string }
 

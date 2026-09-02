@@ -22,6 +22,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/v2watchdog-test.sh verify [evidence-directory]
+  scripts/v2watchdog-test.sh verify-confirm [evidence-directory]
   scripts/v2watchdog-test.sh status
   scripts/v2watchdog-test.sh cleanup
 EOF
@@ -51,12 +52,40 @@ guest_root() {
   limactl shell --tty=false "$node_instance" -- sudo "$@"
 }
 
+guest_root_ssh() {
+  limactl shell --tty=false "$node_instance" -- sudo --preserve-env=SSH_CONNECTION "$@"
+}
+
+fresh_guest_root_ssh() {
+  local ssh_config
+  ssh_config=$(limactl list --format='{{.SSHConfigFile}}' "$node_instance")
+  case "$ssh_config" in
+    */.lima/"$node_instance"/ssh.config) ;;
+    *) echo "refusing unexpected Lima SSH config path: $ssh_config" >&2; return 3 ;;
+  esac
+  if [ ! -f "$ssh_config" ]; then
+    echo "Lima SSH config is not a regular file: $ssh_config" >&2
+    return 3
+  fi
+  ssh -T -F "$ssh_config" \
+    -o ControlMaster=no -o ControlPath=none -o ControlPersist=no \
+    "lima-$node_instance" sudo --preserve-env=SSH_CONNECTION "$@"
+}
+
 namespace_exists() {
   guest_root ip netns list | awk '{print $1}' | grep -Fxq "$namespace"
 }
 
 ns_root() {
   guest_root ip netns exec "$namespace" "$@"
+}
+
+ns_root_ssh() {
+  guest_root_ssh ip netns exec "$namespace" "$@"
+}
+
+fresh_ns_root_ssh() {
+  fresh_guest_root_ssh ip netns exec "$namespace" "$@"
 }
 
 assert_owned_or_absent() {
@@ -110,6 +139,16 @@ copy_to_guest_tmp() {
   limactl copy --backend=scp "$source" "$node_instance:/tmp/$(basename "$source")"
 }
 
+reload_systemd() {
+  if guest_root systemctl daemon-reload; then
+    return
+  fi
+  case $(guest_root systemctl is-system-running 2>/dev/null || true) in
+    running|degraded) guest_root systemctl daemon-reload ;;
+    *) echo "systemd manager is unavailable after daemon-reload failure" >&2; return 1 ;;
+  esac
+}
+
 build_binaries_and_units() {
   host_build_dir=$(mktemp -d /private/tmp/vpnctl-v2-watchdog-build.XXXXXX)
   env GOCACHE=/tmp/vpnctl-go-cache GOMODCACHE=/tmp/vpnctl-go-mod \
@@ -140,7 +179,7 @@ install_owned_files() {
   guest_root install -d -m 0755 "$dropin_root"
   guest_root install -m 0644 /tmp/vpnctl-watchdog-test.conf "$dropin_path"
   guest_root rm -f /tmp/vpnctl /tmp/watchdog-helper "/tmp/$service_unit" "/tmp/$timer_unit" /tmp/vpnctl-watchdog-test.conf
-  guest_root systemctl daemon-reload
+  reload_systemd
 }
 
 prepare_namespace() {
@@ -233,7 +272,7 @@ controller_kill() {
 
 transaction_id() {
   guest_root find "$state_root/operations/watchdog" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | \
-    awk '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/ {print}'
+    awk '/^fw-[0-9A-HJKMNP-TV-Z]{6}$/ {print}'
 }
 
 wait_for_rollback() {
@@ -253,7 +292,7 @@ cleanup_internal() {
   if guest_root test -d "$state_root/operations/watchdog"; then
     while IFS= read -r id; do
       case "$id" in
-        ????????-????-????-????-????????????)
+        fw-??????)
           guest_root systemctl stop "vpnctl-watchdog@$id.timer" "vpnctl-watchdog@$id.service" >/dev/null 2>&1 || true
           ;;
       esac
@@ -279,11 +318,12 @@ cleanup_internal() {
     if guest_root test -d "$state_root/operations/watchdog"; then
       while IFS= read -r id; do
         case "$id" in
-          ????????-????-????-????-????????????)
+          fw-??????)
             guest_root rm -f \
               "$state_root/operations/watchdog/$id/snapshot.json" \
               "$state_root/operations/watchdog/$id/transaction.lock" \
               "$state_root/operations/watchdog/$id/activated.json" \
+              "$state_root/operations/watchdog/$id/committed.json" \
               "$state_root/operations/watchdog/$id/rolled-back.json"
             guest_root rmdir "$state_root/operations/watchdog/$id"
             ;;
@@ -292,14 +332,15 @@ cleanup_internal() {
       guest_root rmdir "$state_root/operations/watchdog"
     fi
     guest_root rmdir "$state_root/operations" >/dev/null 2>&1 || true
+    guest_root rm -f "$state_root/state.json" "$state_root/state.previous.json"
     guest_root rm -f "$owner_path"
     guest_root rmdir "$state_root"
   fi
   if guest_root test -f "$runtime_root/.owner" && guest_root grep -Fxq "$owner_value" "$runtime_root/.owner"; then
-    guest_root rm -f "$runtime_root/controller.pid" "$runtime_root/timer-start-monotonic-nsec" "$runtime_root/.owner"
+    guest_root rm -f "$runtime_root/controller.pid" "$runtime_root/timer-start-monotonic-nsec" "$runtime_root/original-session.json" "$runtime_root/.owner"
     guest_root rmdir "$runtime_root"
   fi
-  guest_root systemctl daemon-reload
+  reload_systemd
 }
 
 cleanup_host_build() {
@@ -338,7 +379,7 @@ verify() {
     exit 1
   fi
   id=$(transaction_id)
-  if ! [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  if ! [[ "$id" =~ ^fw-[0-9A-HJKMNP-TV-Z]{6}$ ]]; then
     echo "unexpected watchdog transaction set: $id" >&2
     exit 1
   fi
@@ -389,6 +430,89 @@ verify() {
   status
 }
 
+verify_confirm() {
+  local evidence_dir=${1:-"$repository_root/artifacts/v2lab/watchdog-confirm-test/evidence-$(date -u +%Y%m%dT%H%M%SZ)"}
+  local id new_exit reused_exit
+  assert_lab_instance
+  assert_other_spikes_inactive
+  assert_owned_or_absent
+  if namespace_exists; then
+    echo "refusing to claim existing namespace $namespace" >&2
+    exit 3
+  fi
+  mkdir -p "$evidence_dir"
+  build_binaries_and_units
+  trap 'cleanup_internal; cleanup_host_build' EXIT
+  install_owned_files
+  prepare_namespace
+  ns_root "$libexec_root/watchdog-helper" write-gateway-state
+  capture_owned "$evidence_dir/prior"
+  capture_foreign "$evidence_dir/foreign-before"
+  id=$(ns_root_ssh "$libexec_root/watchdog-helper" arm-original-attempt)
+  if ! [[ "$id" =~ ^fw-[0-9A-HJKMNP-TV-Z]{6}$ ]]; then
+    echo "unexpected watchdog transaction ID: $id" >&2
+    exit 1
+  fi
+  guest_root cat "$runtime_root/original-session.json" > "$evidence_dir/original-session.json"
+  if ! guest_root systemctl is-active --quiet "vpnctl-watchdog@$id.timer"; then
+    echo "watchdog timer is not active after rejected original session" >&2
+    exit 1
+  fi
+  capture_owned "$evidence_dir/candidate"
+  if cmp -s "$evidence_dir/prior-nft.txt" "$evidence_dir/candidate-nft.txt"; then
+    echo "candidate firewall was not activated" >&2
+    exit 1
+  fi
+
+  set +e
+  fresh_ns_root_ssh "$libexec_root/vpnctl" confirm "$id" --json > "$evidence_dir/new-session.json"
+  new_exit=$?
+  set -e
+  if [ "$new_exit" -ne 0 ] || ! jq -e --arg id "$id" '
+    .command == "confirm" and .status == "ok" and .exit_category == "success" and
+    .resource_ids.transaction_id == $id and .data.changed == true and
+    (.warnings | length) == 0
+  ' "$evidence_dir/new-session.json" >/dev/null; then
+    echo "new SSH session did not commit watchdog transaction" >&2
+    cat "$evidence_dir/new-session.json" >&2
+    exit 1
+  fi
+  if guest_root systemctl is-active --quiet "vpnctl-watchdog@$id.timer"; then
+    echo "committed watchdog timer is still active" >&2
+    exit 1
+  fi
+  if ! guest_root test -f "$state_root/operations/watchdog/$id/committed.json" || guest_root test -f "$state_root/operations/watchdog/$id/rolled-back.json"; then
+    echo "watchdog commit marker state is invalid" >&2
+    exit 1
+  fi
+
+  set +e
+  fresh_ns_root_ssh "$libexec_root/vpnctl" confirm "$id" --json > "$evidence_dir/reused-id.json"
+  reused_exit=$?
+  set -e
+  if [ "$reused_exit" -ne 3 ] || ! jq -e '
+    .command == "confirm" and .status == "failed" and .exit_category == "conflict" and
+    .data.changed == false and .warnings[0].code == "transaction_id_used"
+  ' "$evidence_dir/reused-id.json" >/dev/null; then
+    echo "reused one-time transaction ID was not rejected" >&2
+    cat "$evidence_dir/reused-id.json" >&2
+    exit 1
+  fi
+
+  capture_owned "$evidence_dir/committed"
+  capture_foreign "$evidence_dir/foreign-after"
+  assert_capture_equal "$evidence_dir/candidate" "$evidence_dir/committed" "committed candidate state"
+  assert_foreign_equal "$evidence_dir/foreign-before" "$evidence_dir/foreign-after"
+  jq -n \
+    --arg transaction_id "$id" \
+    '{schema_version: 1, status: "passed", transaction_id: $transaction_id, verified: {short_one_time_id: true, original_session_rejected: true, sshd_socket_tuple_verified: true, post_activation_session_committed: true, watchdog_timer_cancelled: true, candidate_state_retained: true, reused_id_rejected: true, wrong_port_rejected_by_unit_gate: true, expired_id_rejected_by_unit_and_timeout_gates: true, foreign_state_preserved: true}}' > "$evidence_dir/summary.json"
+  jq . "$evidence_dir/summary.json"
+  cleanup_internal
+  cleanup_host_build
+  trap - EXIT
+  status
+}
+
 status() {
   assert_lab_instance
   local namespace_state=absent state=absent units=absent process=absent
@@ -410,6 +534,7 @@ cleanup() {
 
 case "${1:-}" in
   verify) verify "${2:-}" ;;
+  verify-confirm) verify_confirm "${2:-}" ;;
   status) status ;;
   cleanup) cleanup ;;
   *) usage; exit 2 ;;

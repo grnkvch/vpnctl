@@ -14,7 +14,7 @@ const (
 	DefaultVPNCTLBinaryPath = "/usr/local/bin/vpnctl"
 )
 
-var systemdInstanceIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var systemdInstanceIDPattern = regexp.MustCompile(`^fw-[0-9A-HJKMNP-TV-Z]{6}$`)
 
 type WatchdogUnitFile struct {
 	Name    string

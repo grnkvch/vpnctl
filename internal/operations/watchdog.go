@@ -3,6 +3,7 @@ package operations
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"golang.org/x/sys/unix"
@@ -32,13 +32,23 @@ const (
 	watchdogActivatedFile            = "activated.json"
 	watchdogCommittedFile            = "committed.json"
 	watchdogRolledBackFile           = "rolled-back.json"
+	watchdogIDCharacters             = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	watchdogIDRandomLength           = 6
+	maximumWatchdogIDAttempts        = 16
 )
 
 var (
 	ErrWatchdogTransactionNotFound = errors.New("watchdog transaction not found")
+	ErrWatchdogIDConflict          = errors.New("watchdog transaction ID already exists")
+	ErrWatchdogNotActivated        = errors.New("watchdog transaction is not active")
 	ErrWatchdogAlreadyCommitted    = errors.New("watchdog transaction is already committed")
 	ErrWatchdogAlreadyRolledBack   = errors.New("watchdog transaction is already rolled back")
-	watchdogIDPattern              = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	ErrWatchdogExpired             = errors.New("watchdog transaction expired and must roll back")
+	ErrWatchdogOriginalSession     = errors.New("confirmation requires an SSH session established after activation")
+	ErrWatchdogWrongSSHPort        = errors.New("confirmation SSH session uses the wrong server port")
+	ErrWatchdogConfirmationProof   = errors.New("watchdog SSH confirmation proof failed")
+	watchdogIDPattern              = regexp.MustCompile(`^fw-[0-9A-HJKMNP-TV-Z]{6}$`)
+	watchdogBootIDPattern          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 type SSHOrigin struct {
@@ -65,6 +75,18 @@ type WatchdogArmInput struct {
 	NetworkScope   linuxplatform.OwnedNetworkScope
 }
 
+type WatchdogActivation struct {
+	TransactionID   string                          `json:"transaction_id"`
+	ActivatedAt     time.Time                       `json:"activated_at"`
+	SessionBoundary linuxplatform.MonotonicBoundary `json:"session_boundary"`
+}
+
+type WatchdogConfirmation struct {
+	TransactionID string
+	CommittedAt   time.Time
+	TimerStopped  bool
+}
+
 type WatchdogNetwork interface {
 	Snapshot(context.Context, linuxplatform.OwnedNetworkScope) (linuxplatform.NetworkSnapshot, error)
 	Restore(context.Context, linuxplatform.NetworkSnapshot) error
@@ -80,18 +102,24 @@ type WatchdogClock interface {
 	Now() time.Time
 }
 
+type WatchdogSessionInspector interface {
+	ActivationBoundary(context.Context) (linuxplatform.MonotonicBoundary, error)
+	CurrentSSHSession(context.Context, string) (linuxplatform.SSHSessionProof, error)
+}
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
-type UUIDGenerator func() (string, error)
+type WatchdogIDGenerator func() (string, error)
 
 type Watchdog struct {
 	store      *WatchdogStore
 	network    WatchdogNetwork
 	supervisor WatchdogSupervisor
+	sessions   WatchdogSessionInspector
 	clock      WatchdogClock
-	newID      UUIDGenerator
+	newID      WatchdogIDGenerator
 }
 
 func NewWatchdog(paths store.Paths, network WatchdogNetwork, supervisor WatchdogSupervisor) (*Watchdog, error) {
@@ -106,13 +134,18 @@ func NewWatchdog(paths store.Paths, network WatchdogNetwork, supervisor Watchdog
 		store:      transactionStore,
 		network:    network,
 		supervisor: supervisor,
+		sessions:   linuxplatform.NewOSSSHSessionInspector(),
 		clock:      systemClock{},
-		newID:      model.NewUUID,
+		newID:      newWatchdogID,
 	}, nil
 }
 
 func NewDefaultWatchdog() (*Watchdog, error) {
-	return NewWatchdog(store.DefaultPaths(), linuxplatform.NewOSNetworkManager(), NewSystemdWatchdogSupervisor(linuxplatform.OSProbeRunner{}))
+	return NewSystemWatchdog(store.DefaultPaths())
+}
+
+func NewSystemWatchdog(paths store.Paths) (*Watchdog, error) {
+	return NewWatchdog(paths, linuxplatform.NewOSNetworkManager(), NewSystemdWatchdogSupervisor(linuxplatform.OSProbeRunner{}))
 }
 
 // Arm persists the complete rollback input before asking systemd to start the
@@ -135,26 +168,38 @@ func (watchdog *Watchdog) Arm(ctx context.Context, input WatchdogArmInput) (Watc
 	if err != nil {
 		return WatchdogTransaction{}, fmt.Errorf("snapshot prior vpnctl network state: %w", err)
 	}
-	id, err := watchdog.newID()
-	if err != nil {
-		return WatchdogTransaction{}, fmt.Errorf("generate watchdog transaction ID: %w", err)
-	}
 	preparedAt := watchdog.clock.Now().UTC()
-	transaction := WatchdogTransaction{
-		SchemaVersion:  WatchdogTransactionSchemaVersion,
-		ID:             id,
-		PreparedAt:     preparedAt,
-		Deadline:       preparedAt.Add(linuxplatform.WatchdogSeconds * time.Second),
-		AllowedSSHPort: input.AllowedSSHPort,
-		Origin:         sshOrigin(input.Origin),
-		NetworkSHA256:  networkDigest(network),
-		Network:        network,
+	var transaction WatchdogTransaction
+	created := false
+	for attempt := 0; attempt < maximumWatchdogIDAttempts; attempt++ {
+		id, err := watchdog.newID()
+		if err != nil {
+			return WatchdogTransaction{}, fmt.Errorf("generate watchdog transaction ID: %w", err)
+		}
+		transaction = WatchdogTransaction{
+			SchemaVersion:  WatchdogTransactionSchemaVersion,
+			ID:             id,
+			PreparedAt:     preparedAt,
+			Deadline:       preparedAt.Add(linuxplatform.WatchdogSeconds * time.Second),
+			AllowedSSHPort: input.AllowedSSHPort,
+			Origin:         sshOrigin(input.Origin),
+			NetworkSHA256:  networkDigest(network),
+			Network:        network,
+		}
+		if err := transaction.Validate(); err != nil {
+			return WatchdogTransaction{}, err
+		}
+		if err := watchdog.store.Create(transaction); err != nil {
+			if errors.Is(err, ErrWatchdogIDConflict) {
+				continue
+			}
+			return WatchdogTransaction{}, err
+		}
+		created = true
+		break
 	}
-	if err := transaction.Validate(); err != nil {
-		return WatchdogTransaction{}, err
-	}
-	if err := watchdog.store.Create(transaction); err != nil {
-		return WatchdogTransaction{}, err
+	if !created {
+		return WatchdogTransaction{}, fmt.Errorf("generate unique watchdog transaction ID after %d attempts", maximumWatchdogIDAttempts)
 	}
 	if err := watchdog.supervisor.StartTimer(ctx, transaction.ID); err != nil {
 		return WatchdogTransaction{}, fmt.Errorf("start independent watchdog timer: %w", err)
@@ -165,11 +210,65 @@ func (watchdog *Watchdog) Arm(ctx context.Context, input WatchdogArmInput) (Watc
 // MarkActivated records the post-activation boundary used by task 5.7. A kill
 // before this marker still rolls back; it can never make a transaction
 // confirmable accidentally.
-func (watchdog *Watchdog) MarkActivated(transactionID string) error {
-	if watchdog == nil || watchdog.store == nil || watchdog.clock == nil {
+func (watchdog *Watchdog) MarkActivated(ctx context.Context, transactionID string) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	if watchdog == nil || watchdog.store == nil || watchdog.clock == nil || watchdog.sessions == nil {
 		return fmt.Errorf("watchdog is incomplete")
 	}
-	return watchdog.store.MarkActivated(transactionID, watchdog.clock.Now().UTC())
+	boundary, err := watchdog.sessions.ActivationBoundary(ctx)
+	if err != nil {
+		return fmt.Errorf("record watchdog activation boundary: %w", err)
+	}
+	return watchdog.store.MarkActivated(transactionID, WatchdogActivation{
+		TransactionID:   transactionID,
+		ActivatedAt:     watchdog.clock.Now().UTC(),
+		SessionBoundary: boundary,
+	})
+}
+
+// Confirm commits a lockout-risk transaction only when the current process is
+// descended from an sshd session created after activation on the allowed port.
+func (watchdog *Watchdog) Confirm(ctx context.Context, transactionID, rawSSHConnection string) (WatchdogConfirmation, error) {
+	if ctx == nil {
+		return WatchdogConfirmation{}, fmt.Errorf("context is required")
+	}
+	if watchdog == nil || watchdog.store == nil || watchdog.supervisor == nil || watchdog.sessions == nil || watchdog.clock == nil {
+		return WatchdogConfirmation{}, fmt.Errorf("watchdog is incomplete")
+	}
+	committedAt := watchdog.clock.Now().UTC()
+	transaction, err := watchdog.store.Commit(ctx, transactionID, committedAt, func(transaction WatchdogTransaction, activation WatchdogActivation) (linuxplatform.SSHSessionProof, error) {
+		proof, proofErr := watchdog.sessions.CurrentSSHSession(ctx, rawSSHConnection)
+		if proofErr != nil {
+			return linuxplatform.SSHSessionProof{}, fmt.Errorf("%w: %v", ErrWatchdogConfirmationProof, proofErr)
+		}
+		if proof.BootID != activation.SessionBoundary.BootID {
+			return linuxplatform.SSHSessionProof{}, fmt.Errorf("%w: host boot changed after activation", ErrWatchdogExpired)
+		}
+		if proof.ObservedMonotonicNanos < activation.SessionBoundary.MonotonicNanos || proof.StartedMonotonicNanos > proof.ObservedMonotonicNanos {
+			return linuxplatform.SSHSessionProof{}, fmt.Errorf("%w: SSH session monotonic timestamps are inconsistent", ErrWatchdogConfirmationProof)
+		}
+		if proof.ObservedMonotonicNanos >= activation.SessionBoundary.MonotonicNanos+int64(linuxplatform.WatchdogSeconds)*int64(time.Second) {
+			return linuxplatform.SSHSessionProof{}, ErrWatchdogExpired
+		}
+		if proof.StartedMonotonicNanos <= activation.SessionBoundary.MonotonicNanos {
+			return linuxplatform.SSHSessionProof{}, ErrWatchdogOriginalSession
+		}
+		if proof.Connection.ServerPort != transaction.AllowedSSHPort {
+			return linuxplatform.SSHSessionProof{}, ErrWatchdogWrongSSHPort
+		}
+		return proof, nil
+	})
+	if err != nil {
+		return WatchdogConfirmation{}, err
+	}
+	confirmation := WatchdogConfirmation{TransactionID: transaction.ID, CommittedAt: committedAt}
+	if err := watchdog.supervisor.StopTimer(ctx, transaction.ID); err != nil {
+		return confirmation, fmt.Errorf("stop committed watchdog timer: %w", err)
+	}
+	confirmation.TimerStopped = true
+	return confirmation, nil
 }
 
 // RollbackNow asks the independently supervised executable to run and then
@@ -194,7 +293,7 @@ func (transaction WatchdogTransaction) Validate() error {
 		issues = append(issues, fmt.Sprintf("schema_version must be %d", WatchdogTransactionSchemaVersion))
 	}
 	if !watchdogIDPattern.MatchString(transaction.ID) {
-		issues = append(issues, "id must be a canonical lower-case UUID")
+		issues = append(issues, "id must be a canonical short watchdog ID")
 	}
 	if transaction.PreparedAt.IsZero() || transaction.PreparedAt.Location() != time.UTC {
 		issues = append(issues, "prepared_at must be a non-zero UTC timestamp")
@@ -310,6 +409,9 @@ func (transactionStore *WatchdogStore) Create(transaction WatchdogTransaction) e
 	}
 	directory := transactionStore.transactionDirectory(transaction.ID)
 	if err := os.Mkdir(directory, watchdogDirectoryMode); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("%w: %s", ErrWatchdogIDConflict, transaction.ID)
+		}
 		return fmt.Errorf("create watchdog transaction directory: %w", err)
 	}
 	if err := syncWatchdogDirectory(transactionStore.paths.WatchdogDir); err != nil {
@@ -369,7 +471,7 @@ func (transactionStore *WatchdogStore) Load(transactionID string) (WatchdogTrans
 	return transaction, nil
 }
 
-func (transactionStore *WatchdogStore) MarkActivated(transactionID string, activatedAt time.Time) error {
+func (transactionStore *WatchdogStore) MarkActivated(transactionID string, activation WatchdogActivation) error {
 	return transactionStore.withLock(transactionID, func(transaction WatchdogTransaction, directory string) error {
 		committed, err := watchdogMarkerExists(directory, watchdogCommittedFile)
 		if err != nil {
@@ -385,17 +487,74 @@ func (transactionStore *WatchdogStore) MarkActivated(transactionID string, activ
 		if rolledBack {
 			return ErrWatchdogAlreadyRolledBack
 		}
-		if activatedAt.Location() != time.UTC || activatedAt.Before(transaction.PreparedAt) || !activatedAt.Before(transaction.Deadline) {
-			return fmt.Errorf("activation time is outside the watchdog window")
+		if err := activation.Validate(transaction); err != nil {
+			return err
 		}
-		data, err := json.Marshal(struct {
-			ActivatedAt time.Time `json:"activated_at"`
-		}{ActivatedAt: activatedAt})
+		data, err := json.Marshal(activation)
 		if err != nil {
 			return err
 		}
 		return writeWatchdogFile(directory, watchdogActivatedFile, append(data, '\n'), true)
 	})
+}
+
+type watchdogCommitProof func(WatchdogTransaction, WatchdogActivation) (linuxplatform.SSHSessionProof, error)
+
+func (transactionStore *WatchdogStore) Commit(ctx context.Context, transactionID string, committedAt time.Time, verify watchdogCommitProof) (WatchdogTransaction, error) {
+	if ctx == nil {
+		return WatchdogTransaction{}, fmt.Errorf("context is required")
+	}
+	if verify == nil {
+		return WatchdogTransaction{}, fmt.Errorf("watchdog confirmation verifier is required")
+	}
+	var committed WatchdogTransaction
+	err := transactionStore.withLock(transactionID, func(transaction WatchdogTransaction, directory string) error {
+		rolledBack, err := watchdogMarkerExists(directory, watchdogRolledBackFile)
+		if err != nil {
+			return err
+		}
+		if rolledBack {
+			return ErrWatchdogExpired
+		}
+		alreadyCommitted, err := watchdogMarkerExists(directory, watchdogCommittedFile)
+		if err != nil {
+			return err
+		}
+		if alreadyCommitted {
+			return ErrWatchdogAlreadyCommitted
+		}
+		activation, err := readWatchdogActivation(directory, transaction)
+		if err != nil {
+			return err
+		}
+		proof, err := verify(transaction, activation)
+		if err != nil {
+			return err
+		}
+		if committedAt.IsZero() || committedAt.Location() != time.UTC {
+			return fmt.Errorf("commit timestamp is invalid")
+		}
+		data, err := json.Marshal(struct {
+			CommittedAt                  time.Time `json:"committed_at"`
+			BootID                       string    `json:"boot_id"`
+			SSHSessionStartedMonotonicNS int64     `json:"ssh_session_started_monotonic_ns"`
+			SSHServerPort                int       `json:"ssh_server_port"`
+		}{
+			CommittedAt:                  committedAt,
+			BootID:                       proof.BootID,
+			SSHSessionStartedMonotonicNS: proof.StartedMonotonicNanos,
+			SSHServerPort:                proof.Connection.ServerPort,
+		})
+		if err != nil {
+			return err
+		}
+		if err := writeWatchdogFile(directory, watchdogCommittedFile, append(data, '\n'), true); err != nil {
+			return err
+		}
+		committed = transaction
+		return nil
+	})
+	return committed, err
 }
 
 func (transactionStore *WatchdogStore) Rollback(ctx context.Context, transactionID string, network WatchdogNetwork, now time.Time) error {
@@ -586,6 +745,37 @@ func watchdogMarkerExists(directory, name string) (bool, error) {
 	return true, nil
 }
 
+func readWatchdogActivation(directory string, transaction WatchdogTransaction) (WatchdogActivation, error) {
+	present, err := watchdogMarkerExists(directory, watchdogActivatedFile)
+	if err != nil {
+		return WatchdogActivation{}, err
+	}
+	if !present {
+		return WatchdogActivation{}, ErrWatchdogNotActivated
+	}
+	data, err := readWatchdogFile(directory, watchdogActivatedFile, 4096)
+	if err != nil {
+		return WatchdogActivation{}, err
+	}
+	var activation WatchdogActivation
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&activation); err != nil {
+		return WatchdogActivation{}, fmt.Errorf("decode watchdog activation: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return WatchdogActivation{}, fmt.Errorf("decode watchdog activation: trailing JSON document")
+		}
+		return WatchdogActivation{}, fmt.Errorf("decode watchdog activation trailing data: %w", err)
+	}
+	if err := activation.Validate(transaction); err != nil {
+		return WatchdogActivation{}, err
+	}
+	return activation, nil
+}
+
 func syncWatchdogDirectory(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {
@@ -617,6 +807,38 @@ func networkDigest(snapshot linuxplatform.NetworkSnapshot) string {
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:])
+}
+
+func (activation WatchdogActivation) Validate(transaction WatchdogTransaction) error {
+	if activation.TransactionID != transaction.ID || !watchdogIDPattern.MatchString(activation.TransactionID) {
+		return fmt.Errorf("watchdog activation transaction ID mismatch")
+	}
+	if activation.ActivatedAt.IsZero() || activation.ActivatedAt.Location() != time.UTC {
+		return fmt.Errorf("watchdog activation timestamp must be non-zero UTC")
+	}
+	if !watchdogBootIDPattern.MatchString(activation.SessionBoundary.BootID) {
+		return fmt.Errorf("watchdog activation boot ID is invalid")
+	}
+	if activation.SessionBoundary.MonotonicNanos <= 0 || activation.SessionBoundary.MonotonicNanos > int64(^uint64(0)>>1)-int64(linuxplatform.WatchdogSeconds)*int64(time.Second) {
+		return fmt.Errorf("watchdog activation monotonic boundary must be positive")
+	}
+	return nil
+}
+
+func newWatchdogID() (string, error) {
+	random := make([]byte, watchdogIDRandomLength)
+	if _, err := io.ReadFull(rand.Reader, random); err != nil {
+		return "", err
+	}
+	encoded := make([]byte, watchdogIDRandomLength)
+	for index, value := range random {
+		encoded[index] = watchdogIDCharacters[int(value)&31]
+	}
+	return "fw-" + string(encoded), nil
+}
+
+func ValidWatchdogID(value string) bool {
+	return watchdogIDPattern.MatchString(value)
 }
 
 // RunDefaultWatchdogRollback is the private service-mode entry point used by
