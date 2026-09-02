@@ -47,3 +47,26 @@ no private/public key, credential reference, profile content, or secret-store
 path. Before the export lifecycle exists, export state is explicitly
 `not-exported`; tasks 7.10-7.11 extend that field to `current`/`stale` from
 durable artifact metadata without broadening the view to secret material.
+
+## WireGuard profile rendering
+
+The v2 WireGuard adapter delegates final text formatting to the retained v1
+`wireguard.RenderClientConfig` implementation. It resolves an active client and
+its standard transport from validated gateway state, reads only that transport's
+opaque private-key reference, derives the address prefix from the configured
+client CIDR, and uses the mandatory gateway public IPv4 with fixed `51820/UDP`.
+The gateway standard provider supplies its public key at this boundary; task 8.2
+owns that provider state rather than inventing a second server-key record here.
+
+With no DNS override, profiles contain `1.1.1.1, 8.8.8.8`, matching the accepted
+gateway-path defaults. An override must be a non-empty, unique list of canonical
+IPv4 addresses. The renderer always uses v1 defaults `AllowedIPs = 0.0.0.0/0`
+and `PersistentKeepalive = 25`, so this export is standard full-tunnel and does
+not consume policy names, selectors, or policy generation.
+
+The rendered content is deliberately a private field with only a defensive
+`Bytes()` copy for the later file writer. JSON serialization of profile metadata
+cannot expose the private key or full profile. Task 7.10 owns `0600` artifact
+publication and stdout/scp behavior; this step performs no filesystem export.
+A preset-only policy replacement advances authoritative state metadata but
+leaves the WireGuard bytes and credential generation identical.

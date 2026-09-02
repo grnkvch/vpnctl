@@ -251,6 +251,15 @@ vpnctl client export <name-or-id> <clash|wireguard>
 - `clash` export может содержать standard и restricted alternatives с ручным
   выбором пользователя внутри клиента. `wireguard` export создаёт standard
   full-tunnel profile.
+- WireGuard text renderer переиспользует v1 formatter побайтно: address берётся
+  из immutable client allocation, private key — только из opaque standard
+  transport ref, endpoint — обязательный public gateway IPv4 на `51820/UDP`,
+  gateway public key передаёт standard provider (его state относится к 8.2).
+  Default DNS — `1.1.1.1, 8.8.8.8`, `AllowedIPs = 0.0.0.0/0`, keepalive `25`.
+  Preset names/selectors/policy generation не являются input WireGuard export.
+- Secret-bearing rendered bytes являются private полем с defensive-copy API и
+  не сериализуются в JSON metadata. Запись artifact/stdout boundary остаётся в
+  7.10; renderer сам не создаёт файлов.
 - Client export file contract:
 
 ```text
