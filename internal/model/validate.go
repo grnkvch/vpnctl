@@ -43,6 +43,14 @@ func (state State) Validate() error {
 	if state.SchemaVersion < state.Components.StateSchemaMinimum || state.SchemaVersion > state.Components.StateSchemaMaximum {
 		return invalid("components", "state schema %d is outside supported range", state.SchemaVersion)
 	}
+	if state.EnrollmentIdentity != nil {
+		if state.Host.Role != RoleGateway {
+			return invalid("enrollment_signing_identity", "is gateway-only")
+		}
+		if err := state.EnrollmentIdentity.Validate(); err != nil {
+			return wrap("enrollment_signing_identity", err)
+		}
+	}
 	if state.Nodes == nil || state.Clients == nil || state.Presets == nil || state.Policies == nil || state.Transports == nil || state.Exposes == nil || state.Certificates == nil || state.Operations == nil || state.Logging == nil || state.Backups == nil {
 		return invalid("state", "all resource collections must be present as JSON arrays")
 	}
@@ -627,7 +635,10 @@ func (certificate Certificate) Validate() error {
 	if strings.TrimSpace(certificate.Subject) == "" || strings.ContainsAny(certificate.Subject, "\r\n") {
 		return invalid("subject", "must be non-empty and single-line")
 	}
-	if len(certificate.SANs) == 0 {
+	if certificate.SANs == nil {
+		return invalid("sans", "must be present as a JSON array")
+	}
+	if certificate.Kind != CertificateControlCA && len(certificate.SANs) == 0 {
 		return invalid("sans", "must not be empty")
 	}
 	if err := validateUniqueStrings("sans", certificate.SANs); err != nil {
@@ -663,6 +674,31 @@ func (certificate Certificate) Validate() error {
 		return invalid("owner_kind", "non-node certificate must be host-owned")
 	}
 	return nil
+}
+
+func (identity EnrollmentIdentity) Validate() error {
+	if err := validateSchema("enrollment identity", identity.SchemaVersion, ResourceSchemaVersion); err != nil {
+		return err
+	}
+	if identity.Algorithm != "Ed25519" {
+		return invalid("algorithm", "must be Ed25519")
+	}
+	if err := validateFingerprint("fingerprint", identity.Fingerprint); err != nil {
+		return err
+	}
+	if err := validateOpaqueRef("public_key_ref", identity.PublicKeyRef); err != nil {
+		return err
+	}
+	if err := validateOpaqueRef("private_key_ref", string(identity.PrivateKeyRef)); err != nil {
+		return err
+	}
+	if identity.PublicKeyRef == identity.PrivateKeyRef.String() {
+		return invalid("public_key_ref", "must differ from private_key_ref")
+	}
+	if identity.Generation == 0 {
+		return invalid("generation", "must be positive")
+	}
+	return validateTime("created_at", identity.CreatedAt)
 }
 
 func (operation Operation) Validate() error {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -98,6 +99,11 @@ type GatewayInitSwapManager interface {
 	Deactivate(context.Context, model.ManagedSwap, bool) error
 }
 
+type GatewayInitIdentityProvisioner interface {
+	Provision(context.Context, control.GatewayIdentityRequest) (control.GatewayIdentityInstallation, error)
+	Rollback(context.Context, control.GatewayIdentityInstallation) error
+}
+
 type GatewayInitRuntime struct {
 	Paths         store.Paths
 	Snapshot      linuxplatform.HostSnapshot
@@ -110,6 +116,7 @@ type GatewayInitRuntime struct {
 	Watchdog      GatewayInitWatchdog
 	Network       GatewayInitNetworkActivator
 	Swap          GatewayInitSwapManager
+	Identity      GatewayInitIdentityProvisioner
 	Now           func() time.Time
 	NewHostID     model.UUIDGenerator
 }
@@ -119,7 +126,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -304,7 +311,8 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 		}
 		return GatewayInitResult{HostID: plan.HostID, Network: plan.Network, Units: []string{}}, nil
 	}
-	if !plan.Changed || plan.AlreadyInitialized || plan.HostID == "" || plan.desiredState.Host.ID != plan.HostID || !plan.swapDecisionMade {
+	if !plan.Changed || plan.AlreadyInitialized || plan.HostID == "" || plan.desiredState.Host.ID != plan.HostID || !plan.swapDecisionMade ||
+		len(plan.desiredState.Certificates) != 0 || plan.desiredState.EnrollmentIdentity != nil {
 		return GatewayInitResult{}, fmt.Errorf("invalid gateway initialization plan")
 	}
 	if _, err := initializer.runtime.State.Load(); !errors.Is(err, store.ErrStateNotFound) {
@@ -316,25 +324,45 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 	if _, err := initializer.runtime.Layout.Apply(plan.layout); err != nil {
 		return GatewayInitResult{}, fmt.Errorf("apply gateway layout: %w", err)
 	}
+	identity, err := initializer.runtime.Identity.Provision(ctx, control.GatewayIdentityRequest{
+		GatewayID: plan.HostID, NodeCIDR: plan.Network.NodeCIDR, Initialized: plan.desiredState.Host.InitializedAt,
+	})
+	if err != nil {
+		return GatewayInitResult{}, fmt.Errorf("provision gateway control identity: %w", err)
+	}
+	rollbackIdentity := func(applyErr error) (GatewayInitResult, error) {
+		return GatewayInitResult{}, errors.Join(applyErr, initializer.runtime.Identity.Rollback(context.Background(), identity))
+	}
+	candidate := plan.desiredState
+	candidate.Certificates = append([]model.Certificate(nil), identity.Certificates...)
+	enrollmentIdentity := identity.EnrollmentIdentity
+	candidate.EnrollmentIdentity = &enrollmentIdentity
+	if err := candidate.Validate(); err != nil {
+		return rollbackIdentity(fmt.Errorf("validate provisioned gateway identity: %w", err))
+	}
 	if _, err := initializer.runtime.WatchdogUnits.Apply(ctx, plan.watchdogUnits); err != nil {
-		return GatewayInitResult{}, fmt.Errorf("install gateway watchdog units: %w", err)
+		return rollbackIdentity(fmt.Errorf("install gateway watchdog units: %w", err))
 	}
 	transaction, err := initializer.runtime.Watchdog.Arm(ctx, GatewayInitWatchdogArm{
 		AllowedSSHPort: plan.SSH.Port, Origin: plan.SSH.Connection,
 		NetworkScope: linuxplatform.GatewayInitNetworkScope(),
 	})
 	if err != nil {
-		return GatewayInitResult{}, fmt.Errorf("arm gateway lockout watchdog: %w", err)
+		return rollbackIdentity(fmt.Errorf("arm gateway lockout watchdog: %w", err))
 	}
 	var createdSwap *model.ManagedSwap
 	statePersisted := false
 	fail := func(applyErr error) (GatewayInitResult, error) {
 		rollbackErr := initializer.runtime.Watchdog.RollbackNow(ctx, transaction.ID)
 		var swapErr error
+		var identityErr error
 		if createdSwap != nil && !statePersisted {
 			swapErr = initializer.runtime.Swap.Deactivate(ctx, *createdSwap, true)
 		}
-		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, swapErr)
+		if !statePersisted {
+			identityErr = initializer.runtime.Identity.Rollback(context.Background(), identity)
+		}
+		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, swapErr, identityErr)
 	}
 	if plan.ManagedSwapSelected {
 		owned, err := initializer.runtime.Swap.Apply(ctx, plan.ManagedSwap)
@@ -347,7 +375,7 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 		}
 		createdSwap = &owned
 	}
-	if err := initializer.runtime.State.Save(0, plan.desiredState); err != nil {
+	if err := initializer.runtime.State.Save(0, candidate); err != nil {
 		return fail(fmt.Errorf("persist initial gateway state: %w", err))
 	}
 	statePersisted = true

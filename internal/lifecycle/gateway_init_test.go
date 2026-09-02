@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -51,12 +52,16 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !result.Changed || result.HostID != gatewayTestHostID || result.TransactionID != "fw-ABC123" {
 		t.Fatalf("Apply() result = %+v", result)
 	}
-	wantEvents := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
 	if !reflect.DeepEqual(harness.events.values, wantEvents) {
 		t.Fatalf("apply events = %v, want %v", harness.events.values, wantEvents)
 	}
 	if harness.watchdog.lastArm.AllowedSSHPort != 2222 || harness.watchdog.lastArm.Origin == nil || harness.watchdog.lastArm.Origin.ServerPort != 2222 {
 		t.Fatalf("watchdog arm input = %+v", harness.watchdog.lastArm)
+	}
+	if harness.identity.lastRequest.GatewayID != gatewayTestHostID || harness.identity.lastRequest.NodeCIDR != model.DefaultNodeCIDR ||
+		!harness.identity.lastRequest.Initialized.Equal(time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC)) {
+		t.Fatalf("identity provision request = %+v", harness.identity.lastRequest)
 	}
 	if !reflect.DeepEqual(harness.watchdog.lastArm.NetworkScope, linuxplatform.GatewayInitNetworkScope()) {
 		t.Fatalf("watchdog scope = %+v", harness.watchdog.lastArm.NetworkScope)
@@ -155,12 +160,36 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic activation failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
 	}
 	if harness.watchdog.rollbackID != "fw-ABC123" || harness.watchdog.markCalls != 0 {
 		t.Fatalf("watchdog failure handling = rollback:%q marks:%d", harness.watchdog.rollbackID, harness.watchdog.markCalls)
+	}
+	if harness.identity.rollbackCalls != 0 {
+		t.Fatalf("persisted control identity was rolled back: %d", harness.identity.rollbackCalls)
+	}
+}
+
+func TestGatewayInitIdentityFailureStopsBeforeWatchdogAndState(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.identity.err = errors.New("synthetic identity failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic identity failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !reflect.DeepEqual(harness.events.values, []string{"state-load", "identity-provision"}) {
+		t.Fatalf("identity failure events = %v", harness.events.values)
+	}
+	if harness.watchdogUnits.applyCalls != 0 || harness.watchdog.armCalls != 0 || harness.state.saveCalls != 0 || harness.roles.applyCalls != 0 || harness.network.calls != 0 {
+		t.Fatal("identity failure crossed the state/network mutation boundary")
 	}
 }
 
@@ -183,7 +212,7 @@ func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
-		want := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
 		if !reflect.DeepEqual(harness.events.values, want) {
 			t.Fatalf("accept events = %v, want %v", harness.events.values, want)
 		}
@@ -272,12 +301,15 @@ func TestGatewayInitStateFailurePurgesNewManagedSwap(t *testing.T) {
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic state failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "watchdog-rollback", "swap-deactivate"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "watchdog-rollback", "swap-deactivate", "identity-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("rollback events = %v, want %v", harness.events.values, want)
 	}
 	if harness.swap.deactivateCalls != 1 {
 		t.Fatalf("swap rollback calls = %d", harness.swap.deactivateCalls)
+	}
+	if harness.identity.rollbackCalls != 1 {
+		t.Fatalf("identity rollback calls = %d", harness.identity.rollbackCalls)
 	}
 }
 
@@ -287,6 +319,14 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	root := newGatewaySystemRoot(t)
 	paths, _ := store.NewPaths(root)
 	stateStore, _ := store.NewStateStore(paths)
+	secretStore, err := store.NewSecretStore(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := control.NewGatewayIdentityProvisioner(secretStore, control.GatewayIdentityRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	layout, _ := NewGatewayLayoutInstaller(paths)
 	runner := &gatewayInitSystemdRunner{}
 	roles, err := linuxplatform.NewRoleSystemdInstaller(root, paths.ConfigDir, runner)
@@ -303,7 +343,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	initializer, err := NewGatewayInitializer(GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: stateStore, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits,
-		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{},
+		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{}, Identity: identity,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { return gatewayTestHostID, nil },
 	})
@@ -336,6 +376,37 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "gateway", "gateway-controller.ready")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("gateway controller readiness marker = %v, %v", info, err)
+	}
+	for _, reference := range []model.SecretRef{
+		model.SecretRef(control.ControlCACertificateRef), control.ControlCAPrivateKeyRef,
+		model.SecretRef(control.GatewayControlCertificateRef), control.GatewayControlPrivateKeyRef,
+		model.SecretRef(control.EnrollmentPublicKeyRef), control.EnrollmentPrivateKeyRef,
+	} {
+		content, err := secretStore.Get(reference)
+		if err != nil || len(content) == 0 {
+			t.Fatalf("gateway init identity %s = %d bytes, %v", reference, len(content), err)
+		}
+		kind, id, err := reference.Parts()
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filepath.Join(paths.SecretsDir, kind, id))
+		if err != nil || info.Mode().Perm() != store.SecretFileMode {
+			t.Fatalf("gateway init identity mode %s = %v, %v", reference, info, err)
+		}
+	}
+	state, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Certificates) != 2 || state.EnrollmentIdentity == nil ||
+		state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer {
+		t.Fatalf("gateway init identity state = certificates:%+v enrollment:%+v", state.Certificates, state.EnrollmentIdentity)
+	}
+	for _, certificate := range state.Certificates {
+		if certificate.Kind == model.CertificatePublicIngress {
+			t.Fatalf("gateway init conflated control and public ingress identities: %+v", certificate)
+		}
 	}
 	before := append([]string(nil), runner.calls...)
 	second, err := initializer.Plan(context.Background(), validGatewayInitInput())
@@ -385,6 +456,7 @@ type gatewayInitHarness struct {
 	watchdog      *recordingGatewayWatchdog
 	network       *recordingGatewayNetwork
 	swap          *recordingGatewaySwap
+	identity      *recordingGatewayIdentity
 	events        *gatewayInitEvents
 	idCalls       int
 }
@@ -411,10 +483,11 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	watchdog := &recordingGatewayWatchdog{events: events}
 	network := &recordingGatewayNetwork{events: events}
 	swap := &recordingGatewaySwap{events: events}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, events: events}
+	identity := newRecordingGatewayIdentity(events)
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
-		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap,
+		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
@@ -497,8 +570,11 @@ func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 		state.Host.ExternalInterface != "eth0" || state.Host.SSHPort != 2222 {
 		t.Fatalf("initial gateway state = %+v", state)
 	}
-	if state.Presets == nil || state.Certificates == nil || len(state.Presets) != 0 || len(state.Certificates) != 0 {
-		t.Fatalf("preset/PKI placeholders in state = presets:%v certificates:%v", state.Presets, state.Certificates)
+	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 2 || state.EnrollmentIdentity == nil {
+		t.Fatalf("initial PKI state = presets:%v certificates:%v enrollment:%v", state.Presets, state.Certificates, state.EnrollmentIdentity)
+	}
+	if state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer || state.EnrollmentIdentity.Algorithm != "Ed25519" {
+		t.Fatalf("initial control identity metadata = certificates:%v enrollment:%v", state.Certificates, state.EnrollmentIdentity)
 	}
 }
 
@@ -534,8 +610,8 @@ func assertGatewayRoleRequest(t *testing.T, request linuxplatform.RoleInstallati
 
 func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 	t.Helper()
-	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 {
-		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls)
+	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 {
+		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls)
 	}
 	for _, path := range []string{harness.paths.ConfigDir, harness.paths.StateDir, harness.paths.RuntimeDir} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -667,6 +743,59 @@ type recordingGatewaySwap struct {
 	plan            linuxplatform.ManagedSwapPlan
 	applyCalls      int
 	deactivateCalls int
+}
+
+type recordingGatewayIdentity struct {
+	events         *gatewayInitEvents
+	provisionCalls int
+	rollbackCalls  int
+	lastRequest    control.GatewayIdentityRequest
+	err            error
+}
+
+func newRecordingGatewayIdentity(events *gatewayInitEvents) *recordingGatewayIdentity {
+	return &recordingGatewayIdentity{events: events}
+}
+
+func (identity *recordingGatewayIdentity) Provision(_ context.Context, request control.GatewayIdentityRequest) (control.GatewayIdentityInstallation, error) {
+	identity.events.add("identity-provision")
+	identity.provisionCalls++
+	identity.lastRequest = request
+	if identity.err != nil {
+		return control.GatewayIdentityInstallation{}, identity.err
+	}
+	notBefore := request.Initialized.UTC().Add(-5 * time.Minute)
+	return control.GatewayIdentityInstallation{
+		Certificates: []model.Certificate{
+			{
+				SchemaVersion: model.ResourceSchemaVersion, ID: "11111111-1111-4111-8111-111111111111",
+				Kind: model.CertificateControlCA, OwnerKind: "host", OwnerID: request.GatewayID,
+				Fingerprint: "sha256:" + strings.Repeat("1", 64), SerialHex: "01", Subject: "CN=vpnctl control CA",
+				SANs: []string{}, NotBefore: notBefore, NotAfter: request.Initialized.Add(control.ControlCAValidity),
+				WarningDays: control.ControlWarningDays, Generation: 1,
+				CertificateRef: control.ControlCACertificateRef, PrivateKeyRef: control.ControlCAPrivateKeyRef,
+			},
+			{
+				SchemaVersion: model.ResourceSchemaVersion, ID: "22222222-2222-4222-8222-222222222222",
+				Kind: model.CertificateControlServer, OwnerKind: "host", OwnerID: request.GatewayID,
+				Fingerprint: "sha256:" + strings.Repeat("2", 64), SerialHex: "02", Subject: "CN=vpnctl gateway control leaf",
+				SANs: []string{"IP:10.67.0.1", "urn:vpnctl:gateway:" + request.GatewayID}, NotBefore: notBefore, NotAfter: request.Initialized.Add(control.ControlLeafValidity),
+				WarningDays: control.ControlWarningDays, Generation: 1,
+				CertificateRef: control.GatewayControlCertificateRef, PrivateKeyRef: control.GatewayControlPrivateKeyRef,
+			},
+		},
+		EnrollmentIdentity: model.EnrollmentIdentity{
+			SchemaVersion: model.ResourceSchemaVersion, Algorithm: "Ed25519", Fingerprint: "sha256:" + strings.Repeat("3", 64),
+			PublicKeyRef: control.EnrollmentPublicKeyRef, PrivateKeyRef: control.EnrollmentPrivateKeyRef, Generation: 1, CreatedAt: request.Initialized.UTC(),
+		},
+		OwnedReferences: []model.SecretRef{control.ControlCAPrivateKeyRef, control.GatewayControlPrivateKeyRef, control.EnrollmentPrivateKeyRef},
+	}, nil
+}
+
+func (identity *recordingGatewayIdentity) Rollback(_ context.Context, _ control.GatewayIdentityInstallation) error {
+	identity.events.add("identity-rollback")
+	identity.rollbackCalls++
+	return nil
 }
 
 func lowMemoryGatewayResources() linuxplatform.HostResources {

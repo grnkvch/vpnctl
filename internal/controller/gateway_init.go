@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
@@ -61,6 +62,14 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create managed swap manager: %w", err)
 	}
+	secretStore, err := store.NewSecretStore(paths)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway identity secret store: %w", err)
+	}
+	identity, err := control.NewGatewayIdentityProvisioner(secretStore, control.GatewayIdentityRuntime{})
+	if err != nil {
+		return nil, fmt.Errorf("create gateway identity provisioner: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
@@ -68,6 +77,6 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	return lifecycle.NewGatewayInitializer(lifecycle.GatewayInitRuntime{
 		Paths: paths, Snapshot: snapshot, Manifest: manifest, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
-		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap,
+		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
 	})
 }

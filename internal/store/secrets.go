@@ -24,6 +24,7 @@ const (
 
 var (
 	ErrSecretNotFound    = errors.New("vpnctl secret not found")
+	ErrSecretExists      = errors.New("vpnctl secret already exists")
 	ErrSecretPermissions = errors.New("vpnctl secret permissions are unsafe")
 	ErrUnsafeSecretPath  = errors.New("vpnctl secret path has an unsafe type")
 )
@@ -108,6 +109,75 @@ func (store *SecretStore) Put(reference model.SecretRef, secret []byte) error {
 	keepTemporary = false
 	if err := unix.Fsync(kindFD); err != nil {
 		return fmt.Errorf("sync secret directory: %w", err)
+	}
+	return nil
+}
+
+// PutIfAbsent atomically publishes a new secret without replacing an existing
+// entry. It is the provisioning boundary for identities that must never be
+// silently adopted or overwritten by a concurrent initializer.
+func (store *SecretStore) PutIfAbsent(reference model.SecretRef, secret []byte) error {
+	if len(secret) == 0 {
+		return fmt.Errorf("secret value must not be empty")
+	}
+	if len(secret) > MaxSecretBytes {
+		return fmt.Errorf("secret value exceeds %d bytes", MaxSecretBytes)
+	}
+	kind, id, err := reference.Parts()
+	if err != nil {
+		return err
+	}
+	rootFD, err := store.openRoot(true)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(rootFD)
+	kindFD, err := openKindDirectory(rootFD, kind, true)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(kindFD)
+	if err := validateSecretEntry(kindFD, id); err == nil {
+		return fmt.Errorf("%w: %s", ErrSecretExists, reference)
+	} else if !errors.Is(err, ErrSecretNotFound) {
+		return err
+	}
+
+	temporary, file, err := createSecretTemporary(kindFD)
+	if err != nil {
+		return err
+	}
+	keepTemporary := true
+	defer func() {
+		_ = file.Close()
+		if keepTemporary {
+			_ = unix.Unlinkat(kindFD, temporary, 0)
+		}
+	}()
+	if err := writeAll(file, secret); err != nil {
+		return fmt.Errorf("write secret temporary file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync secret temporary file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close secret temporary file: %w", err)
+	}
+	if err := unix.Linkat(kindFD, temporary, kindFD, id, 0); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("%w: %s", ErrSecretExists, reference)
+		}
+		return fmt.Errorf("activate new secret: %w", err)
+	}
+	if err := unix.Unlinkat(kindFD, temporary, 0); err != nil {
+		_ = unix.Unlinkat(kindFD, id, 0)
+		return fmt.Errorf("remove linked secret temporary: %w", err)
+	}
+	keepTemporary = false
+	if err := unix.Fsync(kindFD); err != nil {
+		removeErr := unix.Unlinkat(kindFD, id, 0)
+		resyncErr := unix.Fsync(kindFD)
+		return errors.Join(fmt.Errorf("sync secret directory: %w", err), removeErr, resyncErr)
 	}
 	return nil
 }

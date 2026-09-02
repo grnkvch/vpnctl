@@ -351,6 +351,8 @@ func TestTransitionRejectsIdentityReplacementAndGenerationErrors(t *testing.T) {
 		{name: "preset generation jump", mutate: func(state *State) { state.Presets[0].Generation += 2 }, want: "generation must advance exactly once"},
 		{name: "expose ownership", mutate: func(state *State) { state.Exposes[0].CreatedAt = state.Exposes[0].CreatedAt.Add(time.Second) }, want: "owner and creation time are immutable"},
 		{name: "certificate kind", mutate: func(state *State) { state.Certificates[0].Kind = CertificateControlServer }, want: "kind and owner are immutable"},
+		{name: "enrollment identity", mutate: func(state *State) { state.EnrollmentIdentity.Generation++ }, want: "enrollment signing identity is immutable"},
+		{name: "remove enrollment identity", mutate: func(state *State) { state.EnrollmentIdentity = nil }, want: "enrollment signing identity cannot be removed"},
 		{name: "operation identity", mutate: func(state *State) { state.Operations[0].TargetID = "openai" }, want: "operation"},
 		{name: "logging identity", mutate: func(state *State) { state.Logging[0].Scope = LogRouting }, want: "logging session"},
 		{name: "backup metadata", mutate: func(state *State) { state.Backups[0].SHA256 = digest("4") }, want: "backup"},

@@ -152,6 +152,12 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "certificate lifetime reversed", mutate: func(state *State) {
 			state.Certificates[0].NotAfter = state.Certificates[0].NotBefore
 		}, want: "must follow not_before"},
+		{name: "wrong enrollment algorithm", mutate: func(state *State) {
+			state.EnrollmentIdentity.Algorithm = "RSA"
+		}, want: "Ed25519"},
+		{name: "shared enrollment key refs", mutate: func(state *State) {
+			state.EnrollmentIdentity.PublicKeyRef = state.EnrollmentIdentity.PrivateKeyRef.String()
+		}, want: "must differ"},
 		{name: "failed operation without code", mutate: func(state *State) {
 			state.Operations[0].State = OperationFailed
 			state.Operations[0].Steps[0].State = OperationFailed
@@ -241,6 +247,7 @@ func TestNodeRoleStateBoundaries(t *testing.T) {
 		}, want: "gateway client"},
 		{name: "missing gateway trust", mutate: func(state *State) { state.Nodes[0].Gateway = nil }, want: "requires gateway trust"},
 		{name: "gateway-only host field", mutate: func(state *State) { state.Host.PublicIPv4 = "203.0.113.10" }, want: "gateway-only"},
+		{name: "gateway enrollment signer", mutate: func(state *State) { state.EnrollmentIdentity = gatewayState().EnrollmentIdentity }, want: "gateway-only"},
 		{name: "foreign policy", mutate: func(state *State) { state.Policies[0].TargetID = clientID }, want: "unknown node"},
 		{name: "gateway idempotency history", mutate: func(state *State) {
 			state.Nodes[0].IdempotencyRecords = []IdempotencyRecord{idempotencyRecord(state.Generation, state.Host.InitializedAt)}
@@ -404,6 +411,15 @@ func gatewayState() State {
 			NodeCIDR:          "10.67.0.0/24",
 			ManagedSwap:       &ManagedSwap{Path: "/var/lib/vpnctl/swapfile", SizeBytes: 1 << 30, Enabled: true},
 		},
+		EnrollmentIdentity: &EnrollmentIdentity{
+			SchemaVersion: ResourceSchemaVersion,
+			Algorithm:     "Ed25519",
+			Fingerprint:   fingerprint("e"),
+			PublicKeyRef:  "enrollment-public:gateway",
+			PrivateKeyRef: "enrollment-key:gateway",
+			Generation:    1,
+			CreatedAt:     created,
+		},
 		Nodes: []Node{{
 			SchemaVersion:        ResourceSchemaVersion,
 			ID:                   nodeID,
@@ -522,6 +538,7 @@ func nodeState() State {
 		InitializedAt: state.Host.InitializedAt,
 	}
 	state.Nodes[0].Gateway = gatewayTrust()
+	state.EnrollmentIdentity = nil
 	state.Clients = []Client{}
 	state.Presets = []Preset{}
 	state.Policies = state.Policies[:1]

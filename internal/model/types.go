@@ -173,20 +173,21 @@ const (
 type SecretRef string
 
 type State struct {
-	SchemaVersion int               `json:"schema_version"`
-	Generation    uint64            `json:"generation"`
-	Host          Host              `json:"host"`
-	Nodes         []Node            `json:"nodes"`
-	Clients       []Client          `json:"clients"`
-	Presets       []Preset          `json:"presets"`
-	Policies      []Policy          `json:"policies"`
-	Transports    []Transport       `json:"transports"`
-	Exposes       []Expose          `json:"exposes"`
-	Certificates  []Certificate     `json:"certificates"`
-	Operations    []Operation       `json:"operations"`
-	Logging       []LoggingSession  `json:"logging"`
-	Backups       []Backup          `json:"backups"`
-	Components    ComponentManifest `json:"components"`
+	SchemaVersion      int                 `json:"schema_version"`
+	Generation         uint64              `json:"generation"`
+	Host               Host                `json:"host"`
+	EnrollmentIdentity *EnrollmentIdentity `json:"enrollment_signing_identity,omitempty"`
+	Nodes              []Node              `json:"nodes"`
+	Clients            []Client            `json:"clients"`
+	Presets            []Preset            `json:"presets"`
+	Policies           []Policy            `json:"policies"`
+	Transports         []Transport         `json:"transports"`
+	Exposes            []Expose            `json:"exposes"`
+	Certificates       []Certificate       `json:"certificates"`
+	Operations         []Operation         `json:"operations"`
+	Logging            []LoggingSession    `json:"logging"`
+	Backups            []Backup            `json:"backups"`
+	Components         ComponentManifest   `json:"components"`
 }
 
 type Host struct {
@@ -332,6 +333,16 @@ type Certificate struct {
 	Generation     uint64          `json:"generation"`
 	CertificateRef string          `json:"certificate_ref"`
 	PrivateKeyRef  SecretRef       `json:"private_key_ref,omitempty"`
+}
+
+type EnrollmentIdentity struct {
+	SchemaVersion int       `json:"schema_version"`
+	Algorithm     string    `json:"algorithm"`
+	Fingerprint   string    `json:"fingerprint"`
+	PublicKeyRef  string    `json:"public_key_ref"`
+	PrivateKeyRef SecretRef `json:"private_key_ref"`
+	Generation    uint64    `json:"generation"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Operation struct {

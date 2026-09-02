@@ -159,6 +159,14 @@ func ValidateTransition(before, after State) error {
 	if err := validateCertificateTransitions(before.Certificates, after.Certificates); err != nil {
 		return err
 	}
+	if before.EnrollmentIdentity != nil {
+		if after.EnrollmentIdentity == nil {
+			return transitionError("enrollment signing identity cannot be removed")
+		}
+		if !reflect.DeepEqual(before.EnrollmentIdentity, after.EnrollmentIdentity) {
+			return transitionError("enrollment signing identity is immutable")
+		}
+	}
 	if err := validateStableRecordIdentities(before, after); err != nil {
 		return err
 	}

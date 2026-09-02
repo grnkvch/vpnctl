@@ -56,6 +56,61 @@ func TestSecretStorePutGetReplaceDelete(t *testing.T) {
 	}
 }
 
+func TestSecretStorePutIfAbsentNeverReplacesOrTears(t *testing.T) {
+	t.Parallel()
+
+	secretStore, _ := newTestSecretStore(t)
+	reference := mustSecretRef(t, "control-key:gateway")
+	const writers = 16
+	start := make(chan struct{})
+	results := make(chan struct {
+		value []byte
+		err   error
+	}, writers)
+	var group sync.WaitGroup
+	for index := 0; index < writers; index++ {
+		value := bytes.Repeat([]byte{byte(index + 1)}, 4096)
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			results <- struct {
+				value []byte
+				err   error
+			}{value: value, err: secretStore.PutIfAbsent(reference, value)}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	winners := 0
+	var winner []byte
+	for result := range results {
+		if result.err == nil {
+			winners++
+			winner = result.value
+			continue
+		}
+		if !errors.Is(result.err, ErrSecretExists) {
+			t.Fatalf("PutIfAbsent() error = %v", result.err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("PutIfAbsent() winners = %d, want 1", winners)
+	}
+	stored, err := secretStore.Get(reference)
+	if err != nil || !bytes.Equal(stored, winner) {
+		t.Fatalf("stored winner = %d bytes, %v", len(stored), err)
+	}
+	if err := secretStore.PutIfAbsent(reference, []byte("replacement")); !errors.Is(err, ErrSecretExists) {
+		t.Fatalf("PutIfAbsent(existing) error = %v", err)
+	}
+	stored, _ = secretStore.Get(reference)
+	if !bytes.Equal(stored, winner) {
+		t.Fatal("PutIfAbsent(existing) replaced the identity")
+	}
+}
+
 func TestSecretStoreRejectsInvalidValuesAndReferences(t *testing.T) {
 	t.Parallel()
 
