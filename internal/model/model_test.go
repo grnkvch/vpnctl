@@ -94,6 +94,7 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 			state.Nodes[0].Gateway = gatewayTrust()
 		}, want: "must not embed local gateway trust"},
 		{name: "missing assigned presets array", mutate: func(state *State) { state.Nodes[0].AssignedPresets = nil }, want: "assigned_presets"},
+		{name: "missing idempotency records array", mutate: func(state *State) { state.Nodes[0].IdempotencyRecords = nil }, want: "idempotency_records"},
 		{name: "unknown policy target", mutate: func(state *State) {
 			state.Policies[0].TargetID = "77777777-7777-4777-8777-777777777777"
 		}, want: "unknown node"},
@@ -241,6 +242,9 @@ func TestNodeRoleStateBoundaries(t *testing.T) {
 		{name: "missing gateway trust", mutate: func(state *State) { state.Nodes[0].Gateway = nil }, want: "requires gateway trust"},
 		{name: "gateway-only host field", mutate: func(state *State) { state.Host.PublicIPv4 = "203.0.113.10" }, want: "gateway-only"},
 		{name: "foreign policy", mutate: func(state *State) { state.Policies[0].TargetID = clientID }, want: "unknown node"},
+		{name: "gateway idempotency history", mutate: func(state *State) {
+			state.Nodes[0].IdempotencyRecords = []IdempotencyRecord{idempotencyRecord(state.Generation, state.Host.InitializedAt)}
+		}, want: "gateway idempotency history"},
 	}
 
 	for _, test := range tests {
@@ -409,6 +413,7 @@ func gatewayState() State {
 			CredentialGeneration: 3,
 			AssignedPresets:      []string{"telegram"},
 			ActiveTransport:      TransportRestricted,
+			IdempotencyRecords:   []IdempotencyRecord{},
 			CreatedAt:            created,
 		}},
 		Clients: []Client{{
@@ -532,6 +537,17 @@ func gatewayTrust() *GatewayTrust {
 		EnrollmentFingerprint:      fingerprint("d"),
 		ControlCAFingerprints:      []string{fingerprint("e")},
 		LastKnownGatewayGeneration: 7,
+	}
+}
+
+func idempotencyRecord(generation uint64, recordedAt time.Time) IdempotencyRecord {
+	return IdempotencyRecord{
+		RequestID:       requestID,
+		Operation:       OperationApply,
+		ResultStatus:    ResultOK,
+		ResultHash:      digest("9"),
+		StateGeneration: generation,
+		RecordedAt:      recordedAt,
 	}
 }
 

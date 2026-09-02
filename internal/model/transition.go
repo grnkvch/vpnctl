@@ -224,6 +224,9 @@ func validateNodeTransitions(before, after State) error {
 			if node.Lifecycle != LifecycleActive || node.CredentialGeneration != 1 {
 				return transitionError("new node %s must start active at credential generation 1", node.ID)
 			}
+			if len(node.IdempotencyRecords) != 0 {
+				return transitionError("new node %s must start with empty idempotency history", node.ID)
+			}
 			continue
 		}
 		if err := validateResourceTransition("node", old.ID, old.Name, node.Name, old.OverlayIPv4, node.OverlayIPv4, before.Host.NodeCIDR != after.Host.NodeCIDR, old.CreatedAt, node.CreatedAt, old.Lifecycle, node.Lifecycle, old.CredentialGeneration, node.CredentialGeneration); err != nil {
@@ -240,10 +243,26 @@ func validateNodeTransitions(before, after State) error {
 				return transitionError("node %s credential rotation changed its expose identities", node.ID)
 			}
 		}
+		if err := validateIdempotencyTransition(old, node); err != nil {
+			return err
+		}
 	}
 	for id, node := range previous {
 		if _, exists := current[id]; !exists && node.Lifecycle == LifecycleActive {
 			return transitionError("active node %s cannot be removed before revoke", id)
+		}
+	}
+	return nil
+}
+
+func validateIdempotencyTransition(before, after Node) error {
+	retained := make(map[string]IdempotencyRecord, len(after.IdempotencyRecords))
+	for _, record := range after.IdempotencyRecords {
+		retained[record.RequestID] = record
+	}
+	for _, old := range before.IdempotencyRecords {
+		if current, exists := retained[old.RequestID]; exists && !reflect.DeepEqual(current, old) {
+			return transitionError("node %s idempotency result %s is immutable", after.ID, old.RequestID)
 		}
 	}
 	return nil

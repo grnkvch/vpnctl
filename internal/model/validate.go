@@ -53,6 +53,14 @@ func (state State) Validate() error {
 		if err := node.Validate(); err != nil {
 			return wrap(indexPath("nodes", index), err)
 		}
+		for recordIndex, record := range node.IdempotencyRecords {
+			if record.StateGeneration > state.Generation {
+				return invalid(indexPath("nodes", index)+"."+indexPath("idempotency_records", recordIndex)+".state_generation", "must not exceed authoritative state generation")
+			}
+			if record.RecordedAt.Before(node.CreatedAt) {
+				return invalid(indexPath("nodes", index)+"."+indexPath("idempotency_records", recordIndex)+".recorded_at", "must not precede node creation")
+			}
+		}
 		if _, duplicate := nodes[node.ID]; duplicate {
 			return invalid(indexPath("nodes", index)+".id", "duplicates node %s", node.ID)
 		}
@@ -285,6 +293,9 @@ func (state State) Validate() error {
 		if len(state.Nodes) == 1 && state.Nodes[0].Gateway == nil {
 			return invalid("nodes[0].gateway", "joined local node requires gateway trust")
 		}
+		if len(state.Nodes) == 1 && len(state.Nodes[0].IdempotencyRecords) != 0 {
+			return invalid("nodes[0].idempotency_records", "node-local state must not contain gateway idempotency history")
+		}
 		localID := ""
 		if len(state.Nodes) == 1 {
 			localID = state.Nodes[0].ID
@@ -365,6 +376,9 @@ func (node Node) Validate() error {
 	}
 	if node.AssignedPresets == nil {
 		return invalid("assigned_presets", "must be present as a JSON array")
+	}
+	if err := validateIdempotencyHistory(node.IdempotencyRecords); err != nil {
+		return wrap("idempotency_records", err)
 	}
 	if node.Gateway != nil {
 		if err := node.Gateway.Validate(); err != nil {
@@ -635,9 +649,7 @@ func (operation Operation) Validate() error {
 	if err := validateUUID("id", operation.ID); err != nil {
 		return err
 	}
-	switch operation.Type {
-	case OperationInit, OperationJoin, OperationApply, OperationRepair, OperationRotate, OperationRevoke, OperationDelete, OperationTransportSwitch, OperationExposeCreate, OperationExposeRemove, OperationCertificateRotate, OperationTrustRotate, OperationRestore, OperationUpdate, OperationUninstall, OperationPurge:
-	default:
+	if !validOperationType(operation.Type) {
 		return invalid("type", "unsupported value %q", operation.Type)
 	}
 	if !validOperationState(operation.State) {

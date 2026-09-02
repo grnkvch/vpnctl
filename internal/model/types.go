@@ -119,6 +119,15 @@ const (
 	OperationCompleted OperationState = "completed"
 )
 
+type ResultStatus string
+
+const (
+	ResultOK       ResultStatus = "ok"
+	ResultPending  ResultStatus = "pending"
+	ResultDegraded ResultStatus = "degraded"
+	ResultFailed   ResultStatus = "failed"
+)
+
 type LogScope string
 
 const (
@@ -203,17 +212,27 @@ type ManagedSwap struct {
 }
 
 type Node struct {
-	SchemaVersion        int           `json:"schema_version"`
-	ID                   string        `json:"id"`
-	Name                 string        `json:"name"`
-	Lifecycle            Lifecycle     `json:"lifecycle"`
-	OverlayIPv4          string        `json:"overlay_ipv4"`
-	CredentialGeneration uint64        `json:"credential_generation"`
-	AssignedPresets      []string      `json:"assigned_presets"`
-	ActiveTransport      TransportKind `json:"active_transport"`
-	Gateway              *GatewayTrust `json:"gateway,omitempty"`
-	CreatedAt            time.Time     `json:"created_at"`
-	RevokedAt            *time.Time    `json:"revoked_at,omitempty"`
+	SchemaVersion        int                 `json:"schema_version"`
+	ID                   string              `json:"id"`
+	Name                 string              `json:"name"`
+	Lifecycle            Lifecycle           `json:"lifecycle"`
+	OverlayIPv4          string              `json:"overlay_ipv4"`
+	CredentialGeneration uint64              `json:"credential_generation"`
+	AssignedPresets      []string            `json:"assigned_presets"`
+	ActiveTransport      TransportKind       `json:"active_transport"`
+	IdempotencyRecords   []IdempotencyRecord `json:"idempotency_records"`
+	Gateway              *GatewayTrust       `json:"gateway,omitempty"`
+	CreatedAt            time.Time           `json:"created_at"`
+	RevokedAt            *time.Time          `json:"revoked_at,omitempty"`
+}
+
+type IdempotencyRecord struct {
+	RequestID       string        `json:"request_id"`
+	Operation       OperationType `json:"operation_type"`
+	ResultStatus    ResultStatus  `json:"result_status"`
+	ResultHash      string        `json:"result_hash"`
+	StateGeneration uint64        `json:"state_generation"`
+	RecordedAt      time.Time     `json:"recorded_at"`
 }
 
 type GatewayTrust struct {
