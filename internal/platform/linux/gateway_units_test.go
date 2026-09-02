@@ -1,0 +1,58 @@
+package linux
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/vgrinkevich/vpnctl/internal/model"
+)
+
+func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
+	t.Parallel()
+
+	request, err := RenderGatewayRoleInstallation(DefaultVPNCTLBinaryPath)
+	if err != nil {
+		t.Fatalf("RenderGatewayRoleInstallation() error = %v", err)
+	}
+	if request.Role != model.RoleGateway {
+		t.Fatalf("role = %s", request.Role)
+	}
+	names := make([]string, len(request.Units))
+	for index, unit := range request.Units {
+		names[index] = unit.Name
+		content := string(unit.Content)
+		for _, required := range []string{
+			"ConditionPathExists=/etc/vpnctl/generated/gateway/", "Restart=on-failure",
+			"StandardOutput=null", "StandardError=null", "ExecStart=/usr/local/bin/vpnctl __service gateway-",
+		} {
+			if !strings.Contains(content, required) {
+				t.Errorf("unit %s missing %q", unit.Name, required)
+			}
+		}
+		if !unit.Enable || !unit.Start {
+			t.Errorf("gateway unit %s is not enabled and started", unit.Name)
+		}
+	}
+	if want := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(names, want) {
+		t.Fatalf("gateway rendered units = %v, want %v", names, want)
+	}
+	if len(request.Configs) != 1 || request.Configs[0].Name != "bootstrap.conf" {
+		t.Fatalf("gateway configs = %+v", request.Configs)
+	}
+	for _, fixed := range []string{"public_https_tcp=443", "restricted_tcp=8443", "standard_udp=51820", "pki_status=unprovisioned"} {
+		if !strings.Contains(string(request.Configs[0].Content), fixed) {
+			t.Errorf("bootstrap config missing %q", fixed)
+		}
+	}
+}
+
+func TestRenderGatewayRoleInstallationRejectsUnsafeBinaryPath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"vpnctl", "/usr/local/bin/vpnctl bad", "/usr/local/bin/%i"} {
+		if _, err := RenderGatewayRoleInstallation(path); err == nil {
+			t.Errorf("unsafe binary path %q was accepted", path)
+		}
+	}
+}
