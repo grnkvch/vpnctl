@@ -1,0 +1,477 @@
+package model
+
+import (
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"reflect"
+	"strings"
+	"time"
+)
+
+const UUIDCollisionRetryLimit = 32
+
+var (
+	ErrGenerationOverflow = errors.New("generation overflow")
+	ErrIdentityCollision  = errors.New("identity collision retry limit reached")
+	ErrInvalidTransition  = errors.New("invalid state transition")
+)
+
+type UUIDGenerator func() (string, error)
+
+func NewUUID() (string, error) {
+	return newUUIDFrom(rand.Reader)
+}
+
+func AllocateUUID(occupied map[string]struct{}, generator UUIDGenerator) (string, error) {
+	if generator == nil {
+		generator = NewUUID
+	}
+	for attempt := 0; attempt < UUIDCollisionRetryLimit; attempt++ {
+		id, err := generator()
+		if err != nil {
+			return "", fmt.Errorf("generate UUID: %w", err)
+		}
+		if err := validateGeneratedUUID(id); err != nil {
+			return "", err
+		}
+		if _, collision := occupied[id]; !collision {
+			if occupied != nil {
+				occupied[id] = struct{}{}
+			}
+			return id, nil
+		}
+	}
+	return "", ErrIdentityCollision
+}
+
+func NextGeneration(current uint64) (uint64, error) {
+	if current == math.MaxUint64 {
+		return 0, ErrGenerationOverflow
+	}
+	return current + 1, nil
+}
+
+func (node Node) AdvanceCredentialGeneration() (Node, error) {
+	if node.Lifecycle != LifecycleActive {
+		return Node{}, fmt.Errorf("%w: credentials can advance only for an active node", ErrInvalidTransition)
+	}
+	next, err := NextGeneration(node.CredentialGeneration)
+	if err != nil {
+		return Node{}, fmt.Errorf("node credential %w", err)
+	}
+	node.CredentialGeneration = next
+	return node, nil
+}
+
+func (client Client) AdvanceCredentialGeneration() (Client, error) {
+	if client.Lifecycle != LifecycleActive {
+		return Client{}, fmt.Errorf("%w: credentials can advance only for an active client", ErrInvalidTransition)
+	}
+	next, err := NextGeneration(client.CredentialGeneration)
+	if err != nil {
+		return Client{}, fmt.Errorf("client credential %w", err)
+	}
+	client.CredentialGeneration = next
+	return client, nil
+}
+
+func (node Node) Revoke(at time.Time) (Node, error) {
+	lifecycle, revokedAt, err := transitionLifecycle(node.Lifecycle, LifecycleRevoked, node.CreatedAt, node.RevokedAt, at)
+	if err != nil {
+		return Node{}, err
+	}
+	node.Lifecycle = lifecycle
+	node.RevokedAt = revokedAt
+	return node, nil
+}
+
+func (client Client) Revoke(at time.Time) (Client, error) {
+	lifecycle, revokedAt, err := transitionLifecycle(client.Lifecycle, LifecycleRevoked, client.CreatedAt, client.RevokedAt, at)
+	if err != nil {
+		return Client{}, err
+	}
+	client.Lifecycle = lifecycle
+	client.RevokedAt = revokedAt
+	return client, nil
+}
+
+func (node Node) Delete() (Node, error) {
+	lifecycle, revokedAt, err := transitionLifecycle(node.Lifecycle, LifecycleDeleted, node.CreatedAt, node.RevokedAt, time.Time{})
+	if err != nil {
+		return Node{}, err
+	}
+	node.Lifecycle = lifecycle
+	node.RevokedAt = revokedAt
+	return node, nil
+}
+
+func (client Client) Delete() (Client, error) {
+	lifecycle, revokedAt, err := transitionLifecycle(client.Lifecycle, LifecycleDeleted, client.CreatedAt, client.RevokedAt, time.Time{})
+	if err != nil {
+		return Client{}, err
+	}
+	client.Lifecycle = lifecycle
+	client.RevokedAt = revokedAt
+	return client, nil
+}
+
+func ValidateTransition(before, after State) error {
+	if err := before.Validate(); err != nil {
+		return fmt.Errorf("before state: %w", err)
+	}
+	expectedGeneration, err := NextGeneration(before.Generation)
+	if err != nil {
+		return fmt.Errorf("state %w", err)
+	}
+	if after.Generation != expectedGeneration {
+		return transitionError("generation must advance exactly once from %d to %d", before.Generation, expectedGeneration)
+	}
+	if before.Host.ID != after.Host.ID {
+		return transitionError("host identity is immutable")
+	}
+	if before.Host.Role != after.Host.Role {
+		return transitionError("host role is immutable")
+	}
+	if !before.Host.InitializedAt.Equal(after.Host.InitializedAt) {
+		return transitionError("host initialization time is immutable")
+	}
+	if err := after.Validate(); err != nil {
+		return transitionError("after state: %v", err)
+	}
+	if err := validateNodeTransitions(before, after); err != nil {
+		return err
+	}
+	if err := validateClientTransitions(before, after); err != nil {
+		return err
+	}
+	if err := validateVersionedTransitions("preset", presetsByName(before.Presets), presetsByName(after.Presets)); err != nil {
+		return err
+	}
+	if err := validateVersionedTransitions("policy", policiesByTarget(before.Policies), policiesByTarget(after.Policies)); err != nil {
+		return err
+	}
+	if err := validateExposeTransitions(before.Exposes, after.Exposes); err != nil {
+		return err
+	}
+	if err := validateCertificateTransitions(before.Certificates, after.Certificates); err != nil {
+		return err
+	}
+	if err := validateStableRecordIdentities(before, after); err != nil {
+		return err
+	}
+	return nil
+}
+
+func newUUIDFrom(reader io.Reader) (string, error) {
+	var raw [16]byte
+	if _, err := io.ReadFull(reader, raw[:]); err != nil {
+		return "", fmt.Errorf("read UUID entropy: %w", err)
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16]), nil
+}
+
+func validateGeneratedUUID(id string) error {
+	if err := validateUUID("id", id); err != nil {
+		return fmt.Errorf("generated UUID: %w", err)
+	}
+	if id[14] != '4' || !strings.ContainsRune("89ab", rune(id[19])) {
+		return fmt.Errorf("generated UUID: must use RFC 4122 version 4 and variant bits")
+	}
+	return nil
+}
+
+func transitionLifecycle(current, requested Lifecycle, createdAt time.Time, revokedAt *time.Time, at time.Time) (Lifecycle, *time.Time, error) {
+	if current == requested {
+		return current, revokedAt, nil
+	}
+	switch {
+	case current == LifecycleActive && requested == LifecycleRevoked:
+		if err := validateTime("revoked_at", at); err != nil {
+			return "", nil, transitionError("%v", err)
+		}
+		if at.Before(createdAt) {
+			return "", nil, transitionError("revocation cannot precede creation")
+		}
+		copy := at
+		return LifecycleRevoked, &copy, nil
+	case current == LifecycleRevoked && requested == LifecycleDeleted:
+		if revokedAt == nil {
+			return "", nil, transitionError("revoked resource has no revocation time")
+		}
+		copy := *revokedAt
+		return LifecycleDeleted, &copy, nil
+	default:
+		return "", nil, transitionError("lifecycle cannot move from %s to %s", current, requested)
+	}
+}
+
+func validateNodeTransitions(before, after State) error {
+	previous := make(map[string]Node, len(before.Nodes))
+	for _, node := range before.Nodes {
+		previous[node.ID] = node
+	}
+	current := make(map[string]Node, len(after.Nodes))
+	for _, node := range after.Nodes {
+		current[node.ID] = node
+		old, exists := previous[node.ID]
+		if !exists {
+			if node.Lifecycle != LifecycleActive || node.CredentialGeneration != 1 {
+				return transitionError("new node %s must start active at credential generation 1", node.ID)
+			}
+			continue
+		}
+		if err := validateResourceTransition("node", old.ID, old.Name, node.Name, old.OverlayIPv4, node.OverlayIPv4, old.CreatedAt, node.CreatedAt, old.Lifecycle, node.Lifecycle, old.CredentialGeneration, node.CredentialGeneration); err != nil {
+			return err
+		}
+		if node.CredentialGeneration != old.CredentialGeneration {
+			if !equalStringSet(old.AssignedPresets, node.AssignedPresets) {
+				return transitionError("node %s credential rotation changed preset assignments", node.ID)
+			}
+			if !reflect.DeepEqual(policyFor(before.Policies, TargetNode, node.ID), policyFor(after.Policies, TargetNode, node.ID)) {
+				return transitionError("node %s credential rotation changed its policy", node.ID)
+			}
+			if !equalStringSet(exposeIDsForNode(before.Exposes, node.ID), exposeIDsForNode(after.Exposes, node.ID)) {
+				return transitionError("node %s credential rotation changed its expose identities", node.ID)
+			}
+		}
+	}
+	for id, node := range previous {
+		if _, exists := current[id]; !exists && node.Lifecycle == LifecycleActive {
+			return transitionError("active node %s cannot be removed before revoke", id)
+		}
+	}
+	return nil
+}
+
+func validateClientTransitions(before, after State) error {
+	previous := make(map[string]Client, len(before.Clients))
+	for _, client := range before.Clients {
+		previous[client.ID] = client
+	}
+	current := make(map[string]Client, len(after.Clients))
+	for _, client := range after.Clients {
+		current[client.ID] = client
+		old, exists := previous[client.ID]
+		if !exists {
+			if client.Lifecycle != LifecycleActive || client.CredentialGeneration != 1 {
+				return transitionError("new client %s must start active at credential generation 1", client.ID)
+			}
+			continue
+		}
+		if err := validateResourceTransition("client", old.ID, old.Name, client.Name, old.OverlayIPv4, client.OverlayIPv4, old.CreatedAt, client.CreatedAt, old.Lifecycle, client.Lifecycle, old.CredentialGeneration, client.CredentialGeneration); err != nil {
+			return err
+		}
+		if client.CredentialGeneration != old.CredentialGeneration {
+			if !equalStringSet(old.AssignedPresets, client.AssignedPresets) {
+				return transitionError("client %s credential rotation changed preset assignments", client.ID)
+			}
+			if !reflect.DeepEqual(policyFor(before.Policies, TargetClient, client.ID), policyFor(after.Policies, TargetClient, client.ID)) {
+				return transitionError("client %s credential rotation changed its policy", client.ID)
+			}
+		}
+	}
+	for id, client := range previous {
+		if _, exists := current[id]; !exists && client.Lifecycle == LifecycleActive {
+			return transitionError("active client %s cannot be removed before revoke", id)
+		}
+	}
+	return nil
+}
+
+func validateResourceTransition(kind, id, oldName, newName, oldIP, newIP string, oldCreatedAt, newCreatedAt time.Time, oldLifecycle, newLifecycle Lifecycle, oldCredentialGeneration, newCredentialGeneration uint64) error {
+	if oldIP != newIP {
+		return transitionError("%s %s overlay address is immutable", kind, id)
+	}
+	if !oldCreatedAt.Equal(newCreatedAt) {
+		return transitionError("%s %s creation time is immutable", kind, id)
+	}
+	if oldLifecycle != newLifecycle && !((oldLifecycle == LifecycleActive && newLifecycle == LifecycleRevoked) || (oldLifecycle == LifecycleRevoked && newLifecycle == LifecycleDeleted)) {
+		return transitionError("%s %s lifecycle cannot move from %s to %s", kind, id, oldLifecycle, newLifecycle)
+	}
+	if newCredentialGeneration < oldCredentialGeneration {
+		return transitionError("%s %s credential generation decreased", kind, id)
+	}
+	if newCredentialGeneration > oldCredentialGeneration {
+		expected, err := NextGeneration(oldCredentialGeneration)
+		if err != nil {
+			return fmt.Errorf("%s %s credential %w", kind, id, err)
+		}
+		if newCredentialGeneration != expected {
+			return transitionError("%s %s credential generation must advance exactly once", kind, id)
+		}
+		if newLifecycle != LifecycleActive {
+			return transitionError("%s %s credentials cannot rotate while non-active", kind, id)
+		}
+		if oldName != newName {
+			return transitionError("%s %s credential rotation changed its name", kind, id)
+		}
+	}
+	return nil
+}
+
+type versionedResource struct {
+	generation uint64
+}
+
+func validateVersionedTransitions(kind string, before, after map[string]versionedResource) error {
+	for id, current := range after {
+		previous, exists := before[id]
+		if !exists {
+			if current.generation != 1 {
+				return transitionError("new %s %s must start at generation 1", kind, id)
+			}
+			continue
+		}
+		if current.generation < previous.generation {
+			return transitionError("%s %s generation decreased", kind, id)
+		}
+		if current.generation > previous.generation {
+			expected, err := NextGeneration(previous.generation)
+			if err != nil {
+				return fmt.Errorf("%s %s %w", kind, id, err)
+			}
+			if current.generation != expected {
+				return transitionError("%s %s generation must advance exactly once", kind, id)
+			}
+		}
+	}
+	return nil
+}
+
+func presetsByName(values []Preset) map[string]versionedResource {
+	result := make(map[string]versionedResource, len(values))
+	for _, value := range values {
+		result[strings.ToLower(value.Name)] = versionedResource{generation: value.Generation}
+	}
+	return result
+}
+
+func policiesByTarget(values []Policy) map[string]versionedResource {
+	result := make(map[string]versionedResource, len(values))
+	for _, value := range values {
+		result[targetKey(value.TargetKind, value.TargetID)] = versionedResource{generation: value.Generation}
+	}
+	return result
+}
+
+func exposesByID(values []Expose) map[string]versionedResource {
+	result := make(map[string]versionedResource, len(values))
+	for _, value := range values {
+		result[value.ID] = versionedResource{generation: value.Generation}
+	}
+	return result
+}
+
+func certificatesByID(values []Certificate) map[string]versionedResource {
+	result := make(map[string]versionedResource, len(values))
+	for _, value := range values {
+		result[value.ID] = versionedResource{generation: value.Generation}
+	}
+	return result
+}
+
+func validateExposeTransitions(before, after []Expose) error {
+	previous := make(map[string]Expose, len(before))
+	for _, expose := range before {
+		previous[expose.ID] = expose
+	}
+	if err := validateVersionedTransitions("expose", exposesByID(before), exposesByID(after)); err != nil {
+		return err
+	}
+	for _, expose := range after {
+		old, exists := previous[expose.ID]
+		if !exists {
+			continue
+		}
+		if old.NodeID != expose.NodeID || !old.CreatedAt.Equal(expose.CreatedAt) {
+			return transitionError("expose %s owner and creation time are immutable", expose.ID)
+		}
+	}
+	return nil
+}
+
+func validateCertificateTransitions(before, after []Certificate) error {
+	previous := make(map[string]Certificate, len(before))
+	for _, certificate := range before {
+		previous[certificate.ID] = certificate
+	}
+	if err := validateVersionedTransitions("certificate", certificatesByID(before), certificatesByID(after)); err != nil {
+		return err
+	}
+	for _, certificate := range after {
+		old, exists := previous[certificate.ID]
+		if !exists {
+			continue
+		}
+		if old.Kind != certificate.Kind || old.OwnerKind != certificate.OwnerKind || old.OwnerID != certificate.OwnerID {
+			return transitionError("certificate %s kind and owner are immutable", certificate.ID)
+		}
+	}
+	return nil
+}
+
+func validateStableRecordIdentities(before, after State) error {
+	operations := make(map[string]Operation, len(before.Operations))
+	for _, operation := range before.Operations {
+		operations[operation.ID] = operation
+	}
+	for _, operation := range after.Operations {
+		old, exists := operations[operation.ID]
+		if exists && (old.Type != operation.Type || old.TargetKind != operation.TargetKind || old.TargetID != operation.TargetID || !old.CreatedAt.Equal(operation.CreatedAt)) {
+			return transitionError("operation %s identity fields are immutable", operation.ID)
+		}
+	}
+
+	logging := make(map[string]LoggingSession, len(before.Logging))
+	for _, session := range before.Logging {
+		logging[session.ID] = session
+	}
+	for _, session := range after.Logging {
+		old, exists := logging[session.ID]
+		if exists && (old.Scope != session.Scope || !old.StartedAt.Equal(session.StartedAt)) {
+			return transitionError("logging session %s identity fields are immutable", session.ID)
+		}
+	}
+
+	backups := make(map[string]Backup, len(before.Backups))
+	for _, backup := range before.Backups {
+		backups[backup.ID] = backup
+	}
+	for _, backup := range after.Backups {
+		old, exists := backups[backup.ID]
+		if exists && !reflect.DeepEqual(old, backup) {
+			return transitionError("completed backup %s metadata is immutable", backup.ID)
+		}
+	}
+	return nil
+}
+
+func policyFor(policies []Policy, kind TargetKind, id string) *Policy {
+	for index := range policies {
+		if policies[index].TargetKind == kind && policies[index].TargetID == id {
+			copy := policies[index]
+			return &copy
+		}
+	}
+	return nil
+}
+
+func exposeIDsForNode(exposes []Expose, nodeID string) []string {
+	ids := make([]string, 0)
+	for _, expose := range exposes {
+		if expose.NodeID == nodeID {
+			ids = append(ids, expose.ID)
+		}
+	}
+	return ids
+}
+
+func transitionError(format string, arguments ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalidTransition, fmt.Sprintf(format, arguments...))
+}

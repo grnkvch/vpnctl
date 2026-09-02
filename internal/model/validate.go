@@ -145,6 +145,15 @@ func (state State) Validate() error {
 		if !targetExists(transport.OwnerKind, transport.OwnerID, nodes, clients) {
 			return invalid(indexPath("transports", index)+".owner_id", "references an unknown %s", transport.OwnerKind)
 		}
+		credentialGeneration := uint64(0)
+		if transport.OwnerKind == TargetNode {
+			credentialGeneration = nodes[transport.OwnerID].CredentialGeneration
+		} else {
+			credentialGeneration = clients[transport.OwnerID].CredentialGeneration
+		}
+		if transport.CredentialGeneration != credentialGeneration {
+			return invalid(indexPath("transports", index)+".credential_generation", "does not match its owner generation")
+		}
 		owner := targetKey(transport.OwnerKind, transport.OwnerID)
 		if transportKinds[owner] == nil {
 			transportKinds[owner] = make(map[TransportKind]struct{})

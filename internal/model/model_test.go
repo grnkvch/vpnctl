@@ -121,6 +121,9 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "unknown transport state", mutate: func(state *State) {
 			state.Transports[0].State = TransportState("automatic")
 		}, want: "unsupported value"},
+		{name: "transport credential generation mismatch", mutate: func(state *State) {
+			state.Transports[0].CredentialGeneration++
+		}, want: "does not match its owner generation"},
 		{name: "wrong restricted port", mutate: func(state *State) {
 			state.Transports[1].Port = 443
 		}, want: "TCP/8443"},
@@ -381,7 +384,7 @@ func gatewayState() State {
 			Platform:             "ios",
 			Lifecycle:            LifecycleActive,
 			OverlayIPv4:          "10.66.0.2",
-			CredentialGeneration: 2,
+			CredentialGeneration: 3,
 			AssignedPresets:      []string{"telegram"},
 			ActiveTransport:      TransportStandard,
 			CreatedAt:            created,
