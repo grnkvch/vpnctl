@@ -103,7 +103,7 @@ func (installer *GatewayLayoutInstaller) Apply(plan GatewayLayoutPlan) ([]string
 			return changed, fmt.Errorf("create gateway directory %s: %w", directory.Path, err)
 		}
 		changed = append(changed, directory.Path)
-		if err := syncGatewayDirectory(filepath.Dir(directory.Path)); err != nil {
+		if err := syncLifecycleDirectory(filepath.Dir(directory.Path)); err != nil {
 			return changed, err
 		}
 	}
@@ -131,14 +131,14 @@ func equalGatewayLayoutPlans(left, right GatewayLayoutPlan) bool {
 	return true
 }
 
-func syncGatewayDirectory(path string) error {
+func syncLifecycleDirectory(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open gateway directory %s: %w", path, err)
+		return fmt.Errorf("open lifecycle directory %s: %w", path, err)
 	}
 	defer directory.Close()
 	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync gateway directory %s: %w", path, err)
+		return fmt.Errorf("sync lifecycle directory %s: %w", path, err)
 	}
 	return nil
 }

@@ -266,10 +266,10 @@ func buildSystemGatewayInitializer(ctx context.Context, paths store.Paths) (gate
 	if err != nil {
 		return nil, err
 	}
-	return controller.NewSystemGatewayInitializer(paths, snapshot, developmentGatewayManifest(), linuxplatform.DefaultVPNCTLBinaryPath)
+	return controller.NewSystemGatewayInitializer(paths, snapshot, developmentComponentManifest(), linuxplatform.DefaultVPNCTLBinaryPath)
 }
 
-func developmentGatewayManifest() model.ComponentManifest {
+func developmentComponentManifest() model.ComponentManifest {
 	return model.ComponentManifest{
 		SchemaVersion: model.ComponentManifestSchemaVersion, ManifestVersion: 1, VPNCTLVersion: version,
 		ControlProtocols: []string{"1.0"}, StateSchemaMinimum: model.StateSchemaVersion, StateSchemaMaximum: model.StateSchemaVersion,

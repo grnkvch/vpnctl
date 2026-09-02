@@ -29,6 +29,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isGatewayInitInvocation(args) {
 		return executeGatewayInit(args, stdout, stderr)
 	}
+	if isNodeInitInvocation(args) {
+		return executeNodeInit(args, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "__watchdog-rollback" {
 		return executeInternalWatchdogRollback(args[1:], stderr)
 	}
