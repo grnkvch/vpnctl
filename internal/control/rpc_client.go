@@ -124,7 +124,7 @@ func (client *RPCClient) Call(ctx context.Context, request RPCRequest) (RPCCallR
 	}
 	bounded, cancel := context.WithTimeout(ctx, client.timeout)
 	defer cancel()
-	httpRequest, err := http.NewRequestWithContext(bounded, http.MethodPost, "https://"+client.address+RPCPathPrefix+request.Operation, bytes.NewReader(encoded))
+	httpRequest, err := http.NewRequestWithContext(bounded, http.MethodPost, "https://"+client.address+rpcPath(request.ProtocolMajor, request.Operation), bytes.NewReader(encoded))
 	if err != nil {
 		return RPCCallResult{}, fmt.Errorf("build control RPC request: %w", err)
 	}
@@ -161,6 +161,9 @@ func (client *RPCClient) Call(ctx context.Context, request RPCRequest) (RPCCallR
 	response, err := DecodeRPCResponse(body)
 	if err != nil {
 		return RPCCallResult{}, err
+	}
+	if response.ProtocolMajor != request.ProtocolMajor || response.ProtocolMinor != request.ProtocolMinor {
+		return RPCCallResult{}, fmt.Errorf("control RPC response protocol does not match the negotiated request version")
 	}
 	return RPCCallResult{StatusCode: httpResponse.StatusCode, Response: response}, nil
 }

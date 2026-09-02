@@ -343,10 +343,14 @@ func newRPCTestFixture(t *testing.T, limits rpcLimits, handler RPCHandler) *rpcT
 
 func newTestRPCServer(t *testing.T, material GatewayControlMaterial, limits rpcLimits, handler RPCHandler) *RPCServer {
 	t.Helper()
+	protocols, err := NewRPCProtocolRegistryFromVersions([]string{"1.0"}, map[int]RPCHandler{1: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server, err := newRPCServer(RPCServerConfig{
 		GatewayID: testGatewayID, NodeCIDR: "127.0.0.0/8",
 		CertificatePEM: material.GatewayCertificatePEM, PrivateKeyPEM: material.GatewayPrivateKeyPEM,
-		ClientCACertificatePEM: material.ControlCACertificatePEM, Handler: handler,
+		ClientCACertificatePEM: material.ControlCACertificatePEM, Protocols: protocols,
 	}, limits)
 	if err != nil {
 		t.Fatal(err)

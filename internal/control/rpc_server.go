@@ -25,7 +25,7 @@ type RPCServerConfig struct {
 	CertificatePEM         []byte
 	PrivateKeyPEM          []byte
 	ClientCACertificatePEM []byte
-	Handler                RPCHandler
+	Protocols              *RPCProtocolRegistry
 	Now                    func() time.Time
 }
 
@@ -42,7 +42,7 @@ type rpcLimits struct {
 
 type RPCServer struct {
 	overlayIPv4 string
-	handler     RPCHandler
+	protocols   *RPCProtocolRegistry
 	now         func() time.Time
 	tlsConfig   *tls.Config
 	limits      rpcLimits
@@ -53,8 +53,8 @@ func NewRPCServer(config RPCServerConfig) (*RPCServer, error) {
 }
 
 func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) {
-	if config.Handler == nil {
-		return nil, fmt.Errorf("control RPC handler is required")
+	if config.Protocols == nil {
+		return nil, fmt.Errorf("control RPC protocol registry is required")
 	}
 	overlayIPv4, err := GatewayOverlayIPv4(config.NodeCIDR)
 	if err != nil {
@@ -89,7 +89,7 @@ func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) 
 		return nil, fmt.Errorf("verify gateway control TLS identity: %w", err)
 	}
 	return &RPCServer{
-		overlayIPv4: overlayIPv4, handler: config.Handler, now: config.Now, limits: limits,
+		overlayIPv4: overlayIPv4, protocols: config.Protocols, now: config.Now, limits: limits,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
@@ -118,7 +118,7 @@ func (server *RPCServer) Serve(ctx context.Context, listener net.Listener) error
 	if ctx == nil {
 		return fmt.Errorf("context is required")
 	}
-	if server == nil || server.handler == nil || server.tlsConfig == nil {
+	if server == nil || server.protocols == nil || server.tlsConfig == nil {
 		return fmt.Errorf("control RPC server is incomplete")
 	}
 	if listener == nil {
@@ -177,7 +177,7 @@ func (server *RPCServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		server.writeResponse(writer, http.StatusForbidden, rpcFailure("validation", "invalid_identity", "the node certificate identity is invalid"))
 		return
 	}
-	operation, ok := rpcOperationFromRequest(request)
+	pathMajor, operation, ok := rpcOperationFromRequest(request)
 	if !ok {
 		server.writeResponse(writer, http.StatusNotFound, rpcFailure("validation", "invalid_endpoint", "the control RPC endpoint is invalid"))
 		return
@@ -210,6 +210,10 @@ func (server *RPCServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		server.writeResponse(writer, http.StatusBadRequest, rpcFailure("validation", "operation_mismatch", "the path and request operation differ"))
 		return
 	}
+	if envelope.ProtocolMajor != pathMajor {
+		server.writeResponse(writer, http.StatusConflict, rpcFailureForVersion(envelope, "conflict", "protocol_path_mismatch", "the path and request protocol majors differ"))
+		return
+	}
 	if envelope.NodeID != peer.NodeID {
 		server.writeResponse(writer, http.StatusForbidden, rpcFailure("validation", "identity_mismatch", "the certificate and request node identities differ"))
 		return
@@ -221,13 +225,17 @@ func (server *RPCServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 	}
 	handlerContext, cancel := context.WithTimeout(request.Context(), server.limits.writeTimeout)
 	defer cancel()
-	result, err := server.handler.HandleRPC(handlerContext, peer, envelope)
+	result, err := server.protocols.HandleRPC(handlerContext, peer, envelope)
 	if err != nil {
 		server.writeResponse(writer, http.StatusInternalServerError, rpcFailure("internal", "handler_failed", "the control RPC request could not be completed"))
 		return
 	}
 	if result.Response.Validate() != nil {
 		server.writeResponse(writer, http.StatusInternalServerError, result.Response)
+		return
+	}
+	if result.Response.ProtocolMajor != envelope.ProtocolMajor || result.Response.ProtocolMinor != envelope.ProtocolMinor {
+		server.writeResponse(writer, http.StatusInternalServerError, rpcFailureForVersion(envelope, "internal", "protocol_response_mismatch", "the control RPC handler returned a mismatched protocol version"))
 		return
 	}
 	if validateRPCHandlerResult(result) != nil {
@@ -263,12 +271,20 @@ func (server *RPCServer) validateListener(listener net.Listener) error {
 	return nil
 }
 
-func rpcOperationFromRequest(request *http.Request) (string, bool) {
-	if request.URL.RawPath != "" || request.URL.RawQuery != "" || !strings.HasPrefix(request.URL.Path, RPCPathPrefix) {
-		return "", false
+func rpcOperationFromRequest(request *http.Request) (int, string, bool) {
+	const prefix = "/rpc/v"
+	if request.URL.RawPath != "" || request.URL.RawQuery != "" || !strings.HasPrefix(request.URL.Path, prefix) {
+		return 0, "", false
 	}
-	operation := strings.TrimPrefix(request.URL.Path, RPCPathPrefix)
-	return operation, rpcOperationPattern.MatchString(operation)
+	majorText, operation, found := strings.Cut(strings.TrimPrefix(request.URL.Path, prefix), "/")
+	if !found || majorText == "" || (len(majorText) > 1 && majorText[0] == '0') || !rpcOperationPattern.MatchString(operation) {
+		return 0, "", false
+	}
+	major, err := strconv.Atoi(majorText)
+	if err != nil || major < 1 {
+		return 0, "", false
+	}
+	return major, operation, true
 }
 
 func parseTLSCertificate(certificatePEM, privateKeyPEM []byte) (tls.Certificate, *x509.Certificate, error) {

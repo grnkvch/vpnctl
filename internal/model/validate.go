@@ -21,7 +21,7 @@ var (
 	serialPattern      = regexp.MustCompile(`^[0-9a-f]{1,32}$`)
 	componentPattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
 	errorCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
-	protocolPattern    = regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+$`)
+	protocolPattern    = regexp.MustCompile(`^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$`)
 )
 
 func (state State) Validate() error {
@@ -859,13 +859,22 @@ func (manifest ComponentManifest) Validate() error {
 	if len(manifest.ControlProtocols) == 0 {
 		return invalid("control_protocols", "must not be empty")
 	}
+	if len(manifest.ControlProtocols) > 2 {
+		return invalid("control_protocols", "must contain current and at most one previous major")
+	}
 	if err := validateUniqueStrings("control_protocols", manifest.ControlProtocols); err != nil {
 		return err
 	}
+	majors := make([]int, len(manifest.ControlProtocols))
 	for index, protocol := range manifest.ControlProtocols {
 		if !protocolPattern.MatchString(protocol) {
-			return invalid(indexPath("control_protocols", index), "must be major.minor")
+			return invalid(indexPath("control_protocols", index), "must be canonical major.minor")
 		}
+		majorText, _, _ := strings.Cut(protocol, ".")
+		majors[index], _ = strconv.Atoi(majorText)
+	}
+	if len(majors) == 2 && majors[1] != majors[0]-1 {
+		return invalid("control_protocols", "second entry must be the immediately previous major")
 	}
 	if manifest.StateSchemaMinimum < 1 || manifest.StateSchemaMaximum < manifest.StateSchemaMinimum {
 		return invalid("state_schema_minimum", "invalid supported state schema range")

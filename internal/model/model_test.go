@@ -357,6 +357,32 @@ func TestStandaloneVersionedModelCodecs(t *testing.T) {
 	}
 }
 
+func TestComponentManifestControlProtocolCompatibilityWindow(t *testing.T) {
+	t.Parallel()
+
+	manifest := componentManifest()
+	manifest.ControlProtocols = []string{"2.3", "1.5"}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("Validate(current/previous) error = %v", err)
+	}
+	for name, versions := range map[string][]string{
+		"empty":              {},
+		"minor-leading-zero": {"1.00"},
+		"too-many":           {"3.0", "2.0", "1.0"},
+		"same-major":         {"2.3", "2.1"},
+		"non-adjacent":       {"3.0", "1.9"},
+		"wrong-order":        {"1.9", "2.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := manifest
+			candidate.ControlProtocols = versions
+			if err := candidate.Validate(); err == nil {
+				t.Fatalf("Validate(%v) error = nil", versions)
+			}
+		})
+	}
+}
+
 func TestSecretReferenceJSONBoundary(t *testing.T) {
 	t.Parallel()
 

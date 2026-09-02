@@ -59,6 +59,8 @@ type RPCRequest struct {
 
 type RPCResponse struct {
 	SchemaVersion           int               `json:"schema_version"`
+	ProtocolMajor           int               `json:"protocol_major"`
+	ProtocolMinor           int               `json:"protocol_minor"`
 	Category                string            `json:"category"`
 	AuthoritativeGeneration uint64            `json:"authoritative_generation"`
 	ResourceIDs             map[string]string `json:"resource_ids"`
@@ -95,7 +97,7 @@ func NewRPCResponse(category string, authoritativeGeneration uint64, data json.R
 		data = json.RawMessage(`{}`)
 	}
 	return RPCResponse{
-		SchemaVersion: RPCSchemaVersion, Category: category, AuthoritativeGeneration: authoritativeGeneration,
+		SchemaVersion: RPCSchemaVersion, ProtocolMajor: 1, ProtocolMinor: 0, Category: category, AuthoritativeGeneration: authoritativeGeneration,
 		ResourceIDs: map[string]string{}, Warnings: []string{}, RequiresAction: []string{}, Data: append(json.RawMessage(nil), data...),
 	}
 }
@@ -176,6 +178,9 @@ func (request RPCRequest) Validate() error {
 func (response RPCResponse) Validate() error {
 	if response.SchemaVersion != RPCSchemaVersion {
 		return fmt.Errorf("%w: schema_version must be %d", ErrInvalidRPCResponse, RPCSchemaVersion)
+	}
+	if response.ProtocolMajor < 1 || response.ProtocolMinor < 0 {
+		return fmt.Errorf("%w: protocol version must be positive major and non-negative minor", ErrInvalidRPCResponse)
 	}
 	switch response.Category {
 	case "success", "validation", "conflict", "unavailable", "internal":
@@ -266,6 +271,13 @@ func rpcFailure(category, code, message string) RPCResponse {
 	response := NewRPCResponse(category, 0, json.RawMessage(`{}`))
 	response.ErrorCode = code
 	response.Message = message
+	return response
+}
+
+func rpcFailureForVersion(request RPCRequest, category, code, message string) RPCResponse {
+	response := rpcFailure(category, code, message)
+	response.ProtocolMajor = request.ProtocolMajor
+	response.ProtocolMinor = request.ProtocolMinor
 	return response
 }
 
