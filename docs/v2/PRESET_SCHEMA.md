@@ -33,3 +33,9 @@ The initial Telegram template intentionally contains stable DNS suffixes rather
 than a frozen data-center address list. Telegram clients obtain DC addresses at
 runtime and those addresses may change; an operator who needs hardcoded-IP
 classification can add reviewed `ip-cidr` selectors before applying the preset.
+
+Composition keeps preset boundaries. Each preset first evaluates its own
+`include − exclude` set with exclusions taking precedence; assigned presets are
+then unioned. An explicit include in one preset can therefore reselect a domain
+or IP excluded by another preset. Source rule order and preset file order do not
+change the normalized composition.
