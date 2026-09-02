@@ -48,7 +48,7 @@
 
 - [x] 5.1 Implement Ubuntu/amd64/root/systemd capability discovery for TUN, kernel WireGuard, nftables, marks/policy routing, systemd-resolved, forwarding, interfaces, routes, container networks, listeners, RAM/disk, and swap; verify clean, missing-capability, and conflicting-host fixtures.
 - [x] 5.2 Implement explicit public IPv4 and CIDR/interface validation with no external IP lookup; verify missing/invalid IP and overlapping pool cases fail before mutation.
-- [ ] 5.3 Implement fail-closed SSH port discovery from `SSH_CONNECTION` plus active listener cross-check and verified `--ssh-port`; verify non-SSH, mismatch, ambiguity, non-22, and explicit-port fixtures.
+- [x] 5.3 Implement fail-closed SSH port discovery from `SSH_CONNECTION` plus active listener cross-check and verified `--ssh-port`; verify non-SSH, mismatch, ambiguity, non-22, and explicit-port fixtures.
 - [ ] 5.4 Implement vpnctl-owned nftables table rendering with default-deny gateway inbound, established/related, loopback, SSH from `0.0.0.0/0`, fixed listeners, isolation, forwarding, and NAT; verify packet-level namespace tests and preservation of foreign tables.
 - [ ] 5.5 Implement preflight conflicts for UFW/firewalld, reserved ports, incompatible routes/TUN/WireGuard, and unmanaged reverse proxies while permitting non-conflicting foreign resources; verify conflicts produce actionable plans and zero mutation.
 - [ ] 5.6 Implement the controller-independent systemd watchdog snapshot/rollback executable and 120-second timer; verify controller/CLI kill and timeout restore only prior vpnctl rules, routes, rules, and sysctls.

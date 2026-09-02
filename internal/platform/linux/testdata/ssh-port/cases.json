@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "name": "standard port from current SSH session",
+      "ssh_connection": "192.0.2.50 50444 198.51.100.10 22",
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"}
+      ],
+      "want_port": 22,
+      "want_source": "ssh_connection",
+      "want_addresses": ["0.0.0.0"]
+    },
+    {
+      "name": "non-22 port from current SSH session",
+      "ssh_connection": "192.0.2.50 50444 198.51.100.10 2222",
+      "listeners": [
+        {"protocol": "tcp", "address": "198.51.100.10", "port": 2222, "process": "users:((\"sshd\",pid=700,fd=3))"}
+      ],
+      "want_port": 2222,
+      "want_source": "ssh_connection",
+      "want_addresses": ["198.51.100.10"]
+    },
+    {
+      "name": "non-SSH invocation fails instead of assuming 22",
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"}
+      ],
+      "want_code": "not_ssh"
+    },
+    {
+      "name": "connection and listener mismatch",
+      "ssh_connection": "192.0.2.50 50444 198.51.100.10 2222",
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"}
+      ],
+      "want_code": "connection_mismatch"
+    },
+    {
+      "name": "multiple unmatched listeners are ambiguous",
+      "ssh_connection": "192.0.2.50 50444 198.51.100.10 2200",
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"},
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 2222, "process": "users:((\"sshd\",pid=701,fd=3))"}
+      ],
+      "want_code": "ambiguous"
+    },
+    {
+      "name": "multiple matching bindings are ambiguous without override",
+      "ssh_connection": "192.0.2.50 50444 198.51.100.10 2222",
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 2222, "process": "users:((\"sshd\",pid=700,fd=3))"},
+        {"protocol": "tcp", "address": "198.51.100.10", "port": 2222, "process": "systemd"}
+      ],
+      "want_code": "ambiguous"
+    },
+    {
+      "name": "explicit port resolves multiple SSH ports",
+      "explicit_port": 2222,
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"},
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 2222, "process": "systemd"}
+      ],
+      "want_port": 2222,
+      "want_source": "explicit_override",
+      "want_addresses": ["0.0.0.0"]
+    },
+    {
+      "name": "explicit port must have verified listener",
+      "explicit_port": 2222,
+      "listeners": [
+        {"protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "users:((\"sshd\",pid=700,fd=3))"}
+      ],
+      "want_code": "override_not_listening"
+    }
+  ]
+}
