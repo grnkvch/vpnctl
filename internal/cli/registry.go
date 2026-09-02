@@ -38,6 +38,7 @@ type CommandSpec struct {
 	ResultContract string
 	Roles          []HostRole
 	Consent        ConsentClass
+	SecretFlow     PromptKind
 	DryRun         bool
 	Defer          DeferSupport
 }
@@ -169,6 +170,11 @@ func validateCommandSpec(spec CommandSpec) (CommandSpec, error) {
 	default:
 		return CommandSpec{}, fmt.Errorf("command %s has invalid consent %q", spec.ID, spec.Consent)
 	}
+	switch spec.SecretFlow {
+	case PromptNone, PromptSecretOnce, PromptSecretTwice, PromptSecretOutputOnce:
+	default:
+		return CommandSpec{}, fmt.Errorf("command %s has invalid secret flow %q", spec.ID, spec.SecretFlow)
+	}
 	switch spec.Defer {
 	case DeferNo, DeferYes, DeferNodeOnly:
 	default:
@@ -220,7 +226,7 @@ func v2CommandSpecs() []CommandSpec {
 	initialized := []HostRole{RoleGateway, RoleNode}
 	gateway := []HostRole{RoleGateway}
 	node := []HostRole{RoleNode}
-	return []CommandSpec{
+	specs := []CommandSpec{
 		command("help", "help [command...]", "plain-text", all, ConsentNone, false, DeferNo),
 		command("version", "version", "plain-text", all, ConsentNone, false, DeferNo),
 		command("init.gateway", "init --gateway", "operation-v1:init.gateway", all, ConsentConfirm, true, DeferNo),
@@ -291,6 +297,20 @@ func v2CommandSpecs() []CommandSpec {
 		command("uninstall", "uninstall", "operation-v1:uninstall", initialized, ConsentConfirm, true, DeferNo),
 		command("purge", "purge", "operation-v1:purge", initialized, ConsentTyped, true, DeferNo),
 	}
+	secretFlows := map[string]PromptKind{
+		"invite":               PromptSecretOutputOnce,
+		"join":                 PromptSecretOnce,
+		"node.recover.gateway": PromptSecretOutputOnce,
+		"node.recover.node":    PromptSecretOnce,
+		"backup":               PromptSecretTwice,
+		"restore":              PromptSecretOnce,
+	}
+	for index := range specs {
+		if flow, found := secretFlows[specs[index].ID]; found {
+			specs[index].SecretFlow = flow
+		}
+	}
+	return specs
 }
 
 func command(id, syntax, result string, roles []HostRole, consent ConsentClass, dryRun bool, deferSupport DeferSupport) CommandSpec {
@@ -300,6 +320,7 @@ func command(id, syntax, result string, roles []HostRole, consent ConsentClass, 
 		ResultContract: result,
 		Roles:          append([]HostRole(nil), roles...),
 		Consent:        consent,
+		SecretFlow:     PromptNone,
 		DryRun:         dryRun,
 		Defer:          deferSupport,
 	}

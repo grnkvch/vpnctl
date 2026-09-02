@@ -130,6 +130,7 @@ func TestNewCommandRegistryRejectsInvalidContracts(t *testing.T) {
 		{name: "no roles", specs: []CommandSpec{func() CommandSpec { copy := valid; copy.Roles = nil; return copy }()}},
 		{name: "bad role", specs: []CommandSpec{func() CommandSpec { copy := valid; copy.Roles = []HostRole{"proxy"}; return copy }()}},
 		{name: "bad consent", specs: []CommandSpec{func() CommandSpec { copy := valid; copy.Consent = "automatic"; return copy }()}},
+		{name: "bad secret flow", specs: []CommandSpec{func() CommandSpec { copy := valid; copy.SecretFlow = PromptConfirm; return copy }()}},
 		{name: "bad defer", specs: []CommandSpec{func() CommandSpec { copy := valid; copy.Defer = "sometimes"; return copy }()}},
 	}
 	for _, test := range tests {
