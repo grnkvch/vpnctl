@@ -226,7 +226,7 @@ func validateNodeTransitions(before, after State) error {
 			}
 			continue
 		}
-		if err := validateResourceTransition("node", old.ID, old.Name, node.Name, old.OverlayIPv4, node.OverlayIPv4, old.CreatedAt, node.CreatedAt, old.Lifecycle, node.Lifecycle, old.CredentialGeneration, node.CredentialGeneration); err != nil {
+		if err := validateResourceTransition("node", old.ID, old.Name, node.Name, old.OverlayIPv4, node.OverlayIPv4, before.Host.NodeCIDR != after.Host.NodeCIDR, old.CreatedAt, node.CreatedAt, old.Lifecycle, node.Lifecycle, old.CredentialGeneration, node.CredentialGeneration); err != nil {
 			return err
 		}
 		if node.CredentialGeneration != old.CredentialGeneration {
@@ -264,7 +264,7 @@ func validateClientTransitions(before, after State) error {
 			}
 			continue
 		}
-		if err := validateResourceTransition("client", old.ID, old.Name, client.Name, old.OverlayIPv4, client.OverlayIPv4, old.CreatedAt, client.CreatedAt, old.Lifecycle, client.Lifecycle, old.CredentialGeneration, client.CredentialGeneration); err != nil {
+		if err := validateResourceTransition("client", old.ID, old.Name, client.Name, old.OverlayIPv4, client.OverlayIPv4, before.Host.ClientCIDR != after.Host.ClientCIDR, old.CreatedAt, client.CreatedAt, old.Lifecycle, client.Lifecycle, old.CredentialGeneration, client.CredentialGeneration); err != nil {
 			return err
 		}
 		if client.CredentialGeneration != old.CredentialGeneration {
@@ -284,9 +284,9 @@ func validateClientTransitions(before, after State) error {
 	return nil
 }
 
-func validateResourceTransition(kind, id, oldName, newName, oldIP, newIP string, oldCreatedAt, newCreatedAt time.Time, oldLifecycle, newLifecycle Lifecycle, oldCredentialGeneration, newCredentialGeneration uint64) error {
-	if oldIP != newIP {
-		return transitionError("%s %s overlay address is immutable", kind, id)
+func validateResourceTransition(kind, id, oldName, newName, oldIP, newIP string, allowAddressMigration bool, oldCreatedAt, newCreatedAt time.Time, oldLifecycle, newLifecycle Lifecycle, oldCredentialGeneration, newCredentialGeneration uint64) error {
+	if oldIP != newIP && !allowAddressMigration {
+		return transitionError("%s %s overlay address may change only with its pool", kind, id)
 	}
 	if !oldCreatedAt.Equal(newCreatedAt) {
 		return transitionError("%s %s creation time is immutable", kind, id)

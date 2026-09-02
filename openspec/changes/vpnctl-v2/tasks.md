@@ -27,7 +27,7 @@
 
 - [x] 3.1 Implement versioned role, host, node, client, preset, policy, transport, expose, certificate, operation, logging, backup, and component-manifest models; verify invariant and JSON round-trip tests reject unknown/invalid states.
 - [x] 3.2 Implement immutable UUID identities, unique active names, lifecycle states, credential generations, and monotonic state generation; verify property tests cover collisions, rotation preservation, revoke/delete ordering, and generation overflow/error handling.
-- [ ] 3.3 Implement independent `10.66.0.0/24` client and `10.67.0.0/24` node allocators with configurable pools and stable rotation assignments; verify overlap, exhaustion, release, restore, and v1-address preservation tests.
+- [x] 3.3 Implement independent `10.66.0.0/24` client and `10.67.0.0/24` node allocators with configurable pools and stable rotation assignments; verify overlap, exhaustion, release, restore, and v1-address preservation tests.
 - [ ] 3.4 Implement the system path resolver for `/etc/vpnctl`, `/var/lib/vpnctl`, and `/run/vpnctl` with injectable test roots; verify commands launched from different working directories resolve identical role/state paths.
 - [ ] 3.5 Implement validated atomic JSON writes using temp file, fsync, rename, directory fsync, and one prior generation; verify kill/fault-injection tests never accept partial state and can load the previous snapshot.
 - [ ] 3.6 Implement root-only secret storage with opaque references, no-follow file creation, atomic replacement, and permission repair diagnostics; verify symlink, mode, concurrent write, and secret/non-secret serialization tests.

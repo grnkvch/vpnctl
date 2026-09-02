@@ -337,7 +337,7 @@ func TestTransitionRejectsIdentityReplacementAndGenerationErrors(t *testing.T) {
 			state.Exposes = []Expose{}
 			state.Certificates = state.Certificates[:1]
 		}, want: "cannot be removed before revoke"},
-		{name: "change overlay address", mutate: func(state *State) { state.Nodes[0].OverlayIPv4 = "10.67.0.3" }, want: "overlay address is immutable"},
+		{name: "change overlay address", mutate: func(state *State) { state.Nodes[0].OverlayIPv4 = "10.67.0.3" }, want: "only with its pool"},
 		{name: "credential generation jump", mutate: func(state *State) {
 			state.Nodes[0].CredentialGeneration += 2
 			state.Transports[0].CredentialGeneration += 2

@@ -83,6 +83,22 @@ func (state State) Validate() error {
 			clientNames[key] = client.ID
 		}
 	}
+	if state.Host.Role == RoleGateway {
+		assignments := make([]AddressAssignment, 0, len(state.Nodes)+len(state.Clients))
+		for _, node := range state.Nodes {
+			if node.Lifecycle != LifecycleDeleted {
+				assignments = append(assignments, AddressAssignment{Kind: TargetNode, ID: node.ID, Address: node.OverlayIPv4})
+			}
+		}
+		for _, client := range state.Clients {
+			if client.Lifecycle != LifecycleDeleted {
+				assignments = append(assignments, AddressAssignment{Kind: TargetClient, ID: client.ID, Address: client.OverlayIPv4})
+			}
+		}
+		if _, err := NewAddressAllocator(state.Host.ClientCIDR, state.Host.NodeCIDR, assignments); err != nil {
+			return wrap("addresses", err)
+		}
+	}
 
 	presets := make(map[string]Preset, len(state.Presets))
 	for index, preset := range state.Presets {
@@ -323,15 +339,15 @@ func (host Host) Validate() error {
 		if host.SSHPort < 1 || host.SSHPort > 65535 {
 			return invalid("ssh_port", "must be between 1 and 65535")
 		}
-		clientPrefix, err := validateIPv4Prefix("client_cidr", host.ClientCIDR)
+		clientPool, err := newIPv4Pool("client_cidr", host.ClientCIDR)
 		if err != nil {
 			return err
 		}
-		nodePrefix, err := validateIPv4Prefix("node_cidr", host.NodeCIDR)
+		nodePool, err := newIPv4Pool("node_cidr", host.NodeCIDR)
 		if err != nil {
 			return err
 		}
-		if clientPrefix.Overlaps(nodePrefix) {
+		if clientPool.prefix.Overlaps(nodePool.prefix) {
 			return invalid("client_cidr", "overlaps node_cidr")
 		}
 	} else if host.PublicIPv4 != "" || host.ExternalInterface != "" || host.SSHPort != 0 || host.ClientCIDR != "" || host.NodeCIDR != "" {
