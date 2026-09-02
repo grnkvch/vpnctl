@@ -1,0 +1,27 @@
+[Unit]
+Description=vpnctl v2 shared gateway DNS upstream fixture
+After=network.target
+
+[Service]
+Type=simple
+NetworkNamespacePath=/run/netns/vpnctl-v2-dns-gateway
+ExecStart=/usr/local/libexec/vpnctl-v2-spike-dns/authoritative-dns --address 10.212.0.1 --port 53 --answer 203.0.113.77 --ttl 2 --state /run/vpnctl-v2-spike-dns/gateway.json
+Restart=on-failure
+RestartSec=1s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/run/vpnctl-v2-spike-dns
+MemoryMax=32M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

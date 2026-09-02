@@ -1,0 +1,34 @@
+[Unit]
+Description=vpnctl v2 local split-DNS resolver spike
+After=network.target vpnctl-v2-spike-dns-direct.service vpnctl-v2-spike-dns-gateway.service
+Wants=vpnctl-v2-spike-dns-direct.service vpnctl-v2-spike-dns-gateway.service
+
+[Service]
+Type=simple
+User=vpnctl-v2-dns-spike
+Group=vpnctl-v2-dns-spike
+WorkingDirectory=/var/lib/vpnctl-v2-spike-dns
+Environment=HOME=/var/lib/vpnctl-v2-spike-dns
+ExecStart=/usr/local/libexec/vpnctl-v2-spike-dns/mihomo -d /etc/vpnctl-v2-spike/dns
+Restart=on-failure
+RestartSec=2s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+CapabilityBoundingSet=
+DevicePolicy=closed
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+ReadOnlyPaths=/etc/vpnctl-v2-spike/dns
+StateDirectory=vpnctl-v2-spike-dns
+MemoryMax=96M
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

@@ -581,6 +581,18 @@ vpnctl preset update <name> [--defer]
 - Если gateway/forwarder недоступен, selected DNS не переключается на direct;
   unrelated direct DNS продолжает работать. Смена gateway upstreams применяется
   централизованно и не требует remote node reconfiguration или client export.
+- Внутренняя реализация v2 использует `redir-host` и `nameserver-policy` для
+  `policy` mode; `direct` compatibility mode также использует `redir-host`, но
+  без split policy. `fake-ip whitelist` отклонён: он может синтезировать ответ
+  для нового selected name до обращения к gateway DNS, что расходится с
+  буквальной query-path семантикой выше.
+- Pinned Mihomo сохраняет ранее полученный через gateway ответ по схеме
+  stale-while-revalidate: после authoritative TTL он может вернуть stale answer
+  с TTL `1`, продолжая refresh только через gateway. Это не fail-direct:
+  неизвестный ранее selected name при outage блокируется, direct DNS продолжает
+  работать, а весь уже классифицированный selected traffic по-прежнему идёт
+  через gateway либо блокируется. Cache ограничен по capacity, но не обещает
+  time-based eviction во время outage; смена policy/mode очищает его restart'ом.
 - Default gateway-path DNS upstreams — `1.1.1.1` и `8.8.8.8`, совместимые с
   defaults v1. Они используются только через gateway. Default direct-path
   upstreams берутся из действующей DNS configuration private node при init.
@@ -610,8 +622,8 @@ vpnctl dns reset
 - Clash/Mihomo client export должен выражать эквивалентную split-DNS policy в
   пределах возможностей целевого клиента; расхождения capability должны быть
   видимы при export/validate, а не приводить к молчаливому ослаблению policy.
-- Конкретный Mihomo DNS mode (`fake-ip`, его альтернатива или комбинация) должен
-  быть выбран technical spike и не является публичным product contract.
+- Конкретный Mihomo DNS mode остаётся внутренней renderer detail; task 2.9
+  выбрал `redir-host` по описанному выше fail-closed/query-path contract.
 - Domain selectors не могут гарантированно классифицировать приложения с
   собственным DoH/DoT, hardcoded destination IP или иным скрытым resolution.
   Такой traffic остаётся unselected/direct, если он отдельно не совпал с

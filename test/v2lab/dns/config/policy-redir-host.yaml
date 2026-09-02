@@ -1,0 +1,33 @@
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: silent
+ipv6: false
+geodata-loader: memconservative
+geo-auto-update: false
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  cache-algorithm: arc
+  enhanced-mode: redir-host
+  use-hosts: false
+  use-system-hosts: false
+  respect-rules: false
+  default-nameserver:
+    - 10.211.0.1
+  nameserver:
+    - "udp://10.211.0.1:53"
+  nameserver-policy:
+    "+.selected.test": "udp://10.212.0.1:53"
+
+proxies:
+  - name: GATEWAY-DNS
+    type: direct
+    udp: true
+    interface-name: v2dnsgateway0
+
+rules:
+  - DOMAIN-SUFFIX,selected.test,GATEWAY-DNS
+  - MATCH,DIRECT

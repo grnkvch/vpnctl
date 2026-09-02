@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "status": "spike-only",
+  "mihomo": {
+    "version": "v1.19.30",
+    "asset": "mihomo-linux-amd64-v1.19.30.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-v1.19.30.gz",
+    "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
+  },
+  "systemd": {
+    "version_prefix": "255",
+    "resolved_dropin": "/etc/systemd/resolved.conf.d/vpnctl-v2-dns-spike.conf",
+    "managed_server": "127.0.0.1:1053",
+    "managed_domain": "~.",
+    "underlay_hold_domain": "~vpnctl-v2-underlay.invalid"
+  },
+  "network": {
+    "direct_namespace": "vpnctl-v2-dns-direct",
+    "gateway_namespace": "vpnctl-v2-dns-gateway",
+    "direct_interface": "v2dnsdirect0",
+    "gateway_interface": "v2dnsgateway0",
+    "direct_upstream": "10.211.0.1",
+    "gateway_upstream": "10.212.0.1",
+    "upstream_port": 53,
+    "local_listener": "127.0.0.1",
+    "local_port": 1053
+  },
+  "policy": {
+    "selected_suffix": "selected.test",
+    "direct_suffix": "direct.test",
+    "fake_ip_range": "198.19.0.1/16",
+    "rejected_default_fake_ip_range": "198.18.0.1/16",
+    "direct_answer": "192.0.2.77",
+    "gateway_answer": "203.0.113.77",
+    "upstream_ttl_seconds": 2,
+    "fake_ip_ttl_seconds": 2,
+    "accepted_mode": "policy-redir-host"
+  },
+  "nftables": {
+    "family": "inet",
+    "table": "vpnctl_v2_spike_dns",
+    "output_priority": -100
+  }
+}

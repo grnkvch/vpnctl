@@ -1,0 +1,16 @@
+table inet vpnctl_v2_spike_dns {
+  counter resolver_uid_bypass {}
+  counter resolved_stub_passthrough {}
+  counter classic_udp_captured {}
+  counter classic_tcp_captured {}
+
+  chain output_redirect {
+    type nat hook output priority dstnat; policy accept;
+
+    meta skuid @DNS_UID@ counter name resolver_uid_bypass return
+    ip daddr 127.0.0.0/8 udp dport 53 counter name resolved_stub_passthrough return
+    ip daddr 127.0.0.0/8 tcp dport 53 counter name resolved_stub_passthrough return
+    udp dport 53 counter name classic_udp_captured redirect to :1053
+    tcp dport 53 counter name classic_tcp_captured redirect to :1053
+  }
+}
