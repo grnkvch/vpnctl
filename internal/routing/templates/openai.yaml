@@ -1,0 +1,9 @@
+# Editable vpnctl preset source. Changes become active only after reviewed apply.
+schema_version: 1
+name: openai
+include:
+  - type: domain-suffix
+    value: chatgpt.com
+  - type: domain-suffix
+    value: openai.com
+exclude: []

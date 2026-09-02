@@ -13,6 +13,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -75,6 +76,18 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	assertInitialGatewayState(t, harness.state)
 	assertGatewayLayout(t, plan.layout)
 	assertGatewayRoleRequest(t, harness.roles.lastApplied)
+	presetFiles := gatewayPresetFilesByName(plan.layout)
+	userTelegram := []byte("# user-edited source\nschema_version: 1\nname: telegram\ninclude:\n  - type: domain\n    value: api.telegram.org\nexclude: []\n")
+	if err := os.WriteFile(presetFiles["telegram"].Path, userTelegram, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(presetFiles["openai"].Path); err != nil {
+		t.Fatal(err)
+	}
+	anthropicBefore, err := os.ReadFile(presetFiles["anthropic"].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	harness.events.values = nil
 	secondPlan, err := harness.initializer.Plan(context.Background(), input)
@@ -98,6 +111,15 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	}
 	if !reflect.DeepEqual(harness.events.values, []string{"state-load"}) {
 		t.Fatalf("second apply events = %v", harness.events.values)
+	}
+	if content, err := os.ReadFile(presetFiles["telegram"].Path); err != nil || !reflect.DeepEqual(content, userTelegram) {
+		t.Fatalf("repeat init changed user-edited telegram source: %q, %v", content, err)
+	}
+	if _, err := os.Lstat(presetFiles["openai"].Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repeat init recreated user-deleted openai source: %v", err)
+	}
+	if content, err := os.ReadFile(presetFiles["anthropic"].Path); err != nil || !reflect.DeepEqual(content, anthropicBefore) {
+		t.Fatalf("repeat init changed untouched anthropic source: %q, %v", content, err)
 	}
 }
 
@@ -451,6 +473,74 @@ func TestGatewayLayoutRefusesForeignRootWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestGatewayPresetTemplateCreateIsNoReplace(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "telegram.yaml")
+	userSource := []byte("user source stays intact\n")
+	if err := os.WriteFile(path, userSource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := createGatewayPresetTemplate(GatewayLayoutPresetFile{
+		Name: "telegram", Path: path, Mode: 0o644, Revision: 2,
+		SHA256: strings.Repeat("a", 64), source: []byte("release source\n"),
+	})
+	if !errors.Is(err, ErrGatewayPresetTemplateExists) {
+		t.Fatalf("create existing template error = %v", err)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil || !reflect.DeepEqual(content, userSource) {
+		t.Fatalf("existing user source = %q, %v", content, readErr)
+	}
+	if info, statErr := os.Stat(path); statErr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("existing user source mode = %v, %v", info, statErr)
+	}
+	target := filepath.Join(directory, "user-target.yaml")
+	if err := os.WriteFile(target, userSource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(directory, "openai.yaml")
+	if err := os.Symlink(target, symlink); err != nil {
+		t.Fatal(err)
+	}
+	err = createGatewayPresetTemplate(GatewayLayoutPresetFile{
+		Name: "openai", Path: symlink, Mode: 0o644, Revision: 2,
+		SHA256: strings.Repeat("b", 64), source: []byte("release source\n"),
+	})
+	if !errors.Is(err, ErrGatewayPresetTemplateExists) {
+		t.Fatalf("create symlink template error = %v", err)
+	}
+	if content, readErr := os.ReadFile(target); readErr != nil || !reflect.DeepEqual(content, userSource) {
+		t.Fatalf("preset symlink target = %q, %v", content, readErr)
+	}
+}
+
+func TestBuiltinPresetCatalogLookupDoesNotRestoreDeletedUserSource(t *testing.T) {
+	t.Parallel()
+
+	root := newGatewaySystemRoot(t)
+	paths, _ := store.NewPaths(root)
+	layout, _ := NewGatewayLayoutInstaller(paths)
+	plan, err := layout.PlanFresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := layout.Apply(plan); err != nil {
+		t.Fatal(err)
+	}
+	files := gatewayPresetFilesByName(plan)
+	if err := os.Remove(files["openai"].Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := routing.BuiltinPresetTemplates(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(files["openai"].Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only release catalog lookup restored deleted user source: %v", err)
+	}
+}
+
 const gatewayTestHostID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 type gatewayInitHarness struct {
@@ -597,6 +687,31 @@ func assertGatewayLayout(t *testing.T, plan GatewayLayoutPlan) {
 			t.Fatalf("PKI placeholder %s = %v, %v", placeholder, info, err)
 		}
 	}
+	if len(plan.PresetFiles) != 3 {
+		t.Fatalf("gateway preset file count = %d", len(plan.PresetFiles))
+	}
+	for _, preset := range plan.PresetFiles {
+		info, err := os.Lstat(preset.Path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != preset.Mode {
+			t.Fatalf("gateway preset file %s = %v, %v", preset.Path, info, err)
+		}
+		content, err := os.ReadFile(preset.Path)
+		if err != nil || !reflect.DeepEqual(content, preset.source) {
+			t.Fatalf("gateway preset file %s content differs: %q, %v", preset.Path, content, err)
+		}
+		ast, err := routing.DecodePresetDocument(content)
+		if err != nil || ast.Name != preset.Name {
+			t.Fatalf("gateway preset file %s AST = %+v, %v", preset.Path, ast, err)
+		}
+	}
+}
+
+func gatewayPresetFilesByName(plan GatewayLayoutPlan) map[string]GatewayLayoutPresetFile {
+	files := make(map[string]GatewayLayoutPresetFile, len(plan.PresetFiles))
+	for _, file := range plan.PresetFiles {
+		files[file.Name] = file
+	}
+	return files
 }
 
 func assertGatewayRoleRequest(t *testing.T, request linuxplatform.RoleInstallationRequest) {

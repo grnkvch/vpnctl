@@ -21,3 +21,15 @@ There is intentionally no action, outbound, proxy name, Mihomo rule, or raw
 provider field. An included match can only mean selected traffic that must use
 the gateway or block; an unmatched flow remains direct. Exclusion/composition
 semantics and policy activation are handled separately from this source schema.
+
+Fresh `vpnctl init --gateway` creates editable `telegram.yaml`, `openai.yaml`,
+and `anthropic.yaml` sources with mode `0644`. These files become user state at
+creation: repeat initialization and ordinary binary/component updates neither
+restore a deleted source nor overwrite an edited one. A later built-in template
+revision must be introduced only through the explicit reviewed preset-update
+flow.
+
+The initial Telegram template intentionally contains stable DNS suffixes rather
+than a frozen data-center address list. Telegram clients obtain DC addresses at
+runtime and those addresses may change; an operator who needs hardcoded-IP
+classification can add reviewed `ip-cidr` selectors before applying the preset.

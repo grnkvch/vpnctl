@@ -1,0 +1,9 @@
+# Editable vpnctl preset source. Changes become active only after reviewed apply.
+schema_version: 1
+name: anthropic
+include:
+  - type: domain-suffix
+    value: anthropic.com
+  - type: domain-suffix
+    value: claude.ai
+exclude: []

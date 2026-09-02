@@ -36,6 +36,7 @@ type GatewayInitPlan struct {
 	FixedListeners      []string
 	Directories         []string
 	PresetDirectory     string
+	PresetFiles         []string
 	PKIPlaceholders     []string
 	Units               []string
 	WatchdogUnitFiles   []string
@@ -227,10 +228,14 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	for index, directory := range layout.Directories {
 		directories[index] = directory.Path
 	}
+	presetFiles := make([]string, len(layout.PresetFiles))
+	for index, preset := range layout.PresetFiles {
+		presetFiles[index] = preset.Path
+	}
 	return GatewayInitPlan{
 		Changed: true, HostID: hostID, Network: network, SSH: ssh, Preflight: preflight,
 		FixedListeners: []string{"443/tcp", "8443/tcp", "51820/udp"},
-		Directories:    directories, PresetDirectory: layout.PresetDirectory,
+		Directories:    directories, PresetDirectory: layout.PresetDirectory, PresetFiles: presetFiles,
 		PKIPlaceholders: append([]string(nil), layout.PKIPlaceholders...), Units: append([]string(nil), rolePlan.UnitsToStart...),
 		WatchdogUnitFiles: append([]string(nil), watchdogUnits.UnitFiles...),
 		ManagedSwap:       managedSwap,
