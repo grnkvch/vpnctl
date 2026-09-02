@@ -1020,7 +1020,7 @@ func validateSelectors(selectors []Selector) error {
 			}
 		case SelectorIPCIDR:
 			prefix, err := netip.ParsePrefix(selector.Value)
-			if err != nil || prefix.String() != selector.Value {
+			if err != nil || prefix.String() != selector.Value || prefix.Masked() != prefix {
 				return invalid(path+".value", "must be a canonical IP prefix")
 			}
 		default:
@@ -1033,6 +1033,10 @@ func validateSelectors(selectors []Selector) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func (selector Selector) Validate() error {
+	return validateSelectors([]Selector{selector})
 }
 
 func validateSchema(kind string, got, want int) error {

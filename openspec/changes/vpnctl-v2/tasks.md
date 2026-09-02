@@ -72,7 +72,7 @@
 
 ## 7. Presets, Policies, and Personal Clients
 
-- [ ] 7.1 Define and implement the public versioned preset YAML schema and normalized selector AST without actions/raw Mihomo fields; verify unknown types/actions/outbounds fail whole-set validation.
+- [x] 7.1 Define and implement the public versioned preset YAML schema and normalized selector AST without actions/raw Mihomo fields; verify unknown types/actions/outbounds fail whole-set validation.
 - [ ] 7.2 Ship editable `telegram`, `openai`, and `anthropic` templates and initialize them only when absent; verify update never recreates a user-deleted preset or mutates user source implicitly.
 - [ ] 7.3 Implement include-minus-exclude and cross-preset union normalization with order independence; verify property tests cover reordered files/rules and cross-preset reselection.
 - [ ] 7.4 Implement preset list/show/validate/diff and assigned-preset deletion guard; verify manual invalid edits leave the prior effective generation active.

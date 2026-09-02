@@ -1,0 +1,12 @@
+schema_version: 1
+name: telegram
+include:
+  - type: domain
+    value: api.telegram.org
+  - type: domain-suffix
+    value: telegram.org
+  - type: ip-cidr
+    value: 149.154.160.0/20
+exclude:
+  - type: domain
+    value: direct.telegram.org
