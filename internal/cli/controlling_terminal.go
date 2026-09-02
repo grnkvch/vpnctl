@@ -119,6 +119,9 @@ func (terminal *ControllingTerminal) ready() error {
 }
 
 func visiblePrompt(step InteractionStep) string {
+	if step.ID == StepManagedSwap {
+		return "Create a vpnctl-managed 1 GB swap file? [y/N]: "
+	}
 	if step.Prompt == PromptTyped {
 		return fmt.Sprintf("Type %q to continue: ", step.Exact)
 	}

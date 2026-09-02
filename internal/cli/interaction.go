@@ -30,6 +30,7 @@ const (
 	StepBackupPassphrase      = "backup_passphrase"
 	StepRestorePassphrase     = "restore_passphrase"
 	StepImpactConfirmation    = "impact_confirmation"
+	StepManagedSwap           = "managed_swap_confirmation"
 	StepPurgeConfirmation     = "purge_confirmation"
 	StepBackupDeletion        = "backup_deletion_confirmation"
 	StepIrreversibleMigration = "irreversible_migration_confirmation"

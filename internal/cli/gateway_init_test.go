@@ -57,6 +57,21 @@ func TestExecuteGatewayInitUsesV2WorkflowAndEmitsConfirmAction(t *testing.T) {
 	}
 }
 
+func TestGatewayInitOutputWithUnknownSwapCapacityIsValid(t *testing.T) {
+	t.Parallel()
+	result := gatewayInitOutput(lifecycle.GatewayInitPlan{
+		Changed: true, HostID: gatewayCLIHostID,
+		Network: linuxplatform.GatewayNetworkPlan{
+			PublicIPv4: "8.8.8.8", ClientCIDR: model.DefaultClientCIDR,
+			NodeCIDR: model.DefaultNodeCIDR, ExternalInterface: "eth0",
+		},
+		SSH: linuxplatform.SSHPortPlan{Port: 2222},
+	}, lifecycle.GatewayInitResult{}, false)
+	if err := result.Validate(); err != nil {
+		t.Fatalf("gatewayInitOutput() validation error = %v; result=%+v", err, result)
+	}
+}
+
 func TestExecuteGatewayInitDryRunDoesNotApplyOrRequestTTY(t *testing.T) {
 	initializer := &recordingGatewayInitializer{}
 	restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")
@@ -101,6 +116,85 @@ func TestExecuteGatewayInitRequiresConsentBeforeApply(t *testing.T) {
 	if terminal.visibleCalls != 1 || initializer.applyCalls != 1 {
 		t.Fatalf("consent/apply calls = %d/%d", terminal.visibleCalls, initializer.applyCalls)
 	}
+}
+
+func TestExecuteGatewayInitManagedSwapChoiceIsSeparateAndExplicit(t *testing.T) {
+	t.Run("interactive accept then init consent", func(t *testing.T) {
+		initializer := &recordingGatewayInitializer{offerManagedSwap: true}
+		restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")
+		defer restore()
+		originalTTY := gatewayInitOpenTTY
+		terminal := &sequenceGatewayInitPrompt{answers: []string{"yes", "yes"}}
+		gatewayInitOpenTTY = func() (PromptIO, io.Closer, error) { return terminal, io.NopCloser(strings.NewReader("")), nil }
+		defer func() { gatewayInitOpenTTY = originalTTY }()
+
+		var stdout, stderr bytes.Buffer
+		code := Execute([]string{"init", "--gateway", "--public-ip", "8.8.8.8", "--json"}, &stdout, &stderr)
+		if code != ExitSuccess || stderr.Len() != 0 || terminal.visibleCalls != 2 || !initializer.appliedPlan.ManagedSwapSelected {
+			t.Fatalf("accept code/prompts/selection = %d/%d/%t stdout=%q stderr=%q", code, terminal.visibleCalls, initializer.appliedPlan.ManagedSwapSelected, stdout.String(), stderr.String())
+		}
+		var result output.Result
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		managed := result.Data["managed_swap"].(map[string]any)
+		if managed["offered"] != true || managed["selected"] != true || managed["status"] != string(linuxplatform.ManagedSwapOffered) {
+			t.Fatalf("managed swap output = %+v", managed)
+		}
+	})
+
+	t.Run("interactive decline continues init", func(t *testing.T) {
+		initializer := &recordingGatewayInitializer{offerManagedSwap: true}
+		restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")
+		defer restore()
+		originalTTY := gatewayInitOpenTTY
+		terminal := &sequenceGatewayInitPrompt{answers: []string{"no", "yes"}}
+		gatewayInitOpenTTY = func() (PromptIO, io.Closer, error) { return terminal, io.NopCloser(strings.NewReader("")), nil }
+		defer func() { gatewayInitOpenTTY = originalTTY }()
+
+		var stdout, stderr bytes.Buffer
+		code := Execute([]string{"init", "--gateway", "--public-ip", "8.8.8.8", "--json"}, &stdout, &stderr)
+		if code != ExitSuccess || stderr.Len() != 0 || terminal.visibleCalls != 2 || initializer.appliedPlan.ManagedSwapSelected {
+			t.Fatalf("decline code/prompts/selection = %d/%d/%t stdout=%q stderr=%q", code, terminal.visibleCalls, initializer.appliedPlan.ManagedSwapSelected, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("yes accepts swap without tty", func(t *testing.T) {
+		initializer := &recordingGatewayInitializer{offerManagedSwap: true}
+		restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")
+		defer restore()
+		originalTTY := gatewayInitOpenTTY
+		gatewayInitOpenTTY = func() (PromptIO, io.Closer, error) {
+			t.Fatal("--yes opened controlling TTY")
+			return nil, nil, nil
+		}
+		defer func() { gatewayInitOpenTTY = originalTTY }()
+
+		var stdout, stderr bytes.Buffer
+		code := Execute([]string{"init", "--gateway", "--public-ip", "8.8.8.8", "--yes", "--json"}, &stdout, &stderr)
+		if code != ExitSuccess || stderr.Len() != 0 || !initializer.appliedPlan.ManagedSwapSelected {
+			t.Fatalf("--yes code/selection = %d/%t stdout=%q stderr=%q", code, initializer.appliedPlan.ManagedSwapSelected, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("dry-run reports offer without choosing", func(t *testing.T) {
+		initializer := &recordingGatewayInitializer{offerManagedSwap: true}
+		restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")
+		defer restore()
+		var stdout, stderr bytes.Buffer
+		code := Execute([]string{"init", "--gateway", "--public-ip", "8.8.8.8", "--dry-run", "--json"}, &stdout, &stderr)
+		if code != ExitSuccess || stderr.Len() != 0 || initializer.applyCalls != 0 {
+			t.Fatalf("dry-run code/apply = %d/%d stdout=%q stderr=%q", code, initializer.applyCalls, stdout.String(), stderr.String())
+		}
+		var result output.Result
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		managed := result.Data["managed_swap"].(map[string]any)
+		if managed["offered"] != true || managed["selected"] != false {
+			t.Fatalf("dry-run managed swap = %+v", managed)
+		}
+	})
 }
 
 func TestExecuteGatewayInitRejectsRoleFlagsBeforeBuilder(t *testing.T) {
@@ -165,10 +259,12 @@ func TestExecuteGatewayInitRejectsExistingNodeBeforeBuilder(t *testing.T) {
 const gatewayCLIHostID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 type recordingGatewayInitializer struct {
-	input      lifecycle.GatewayInitInput
-	planCalls  int
-	applyCalls int
-	planErr    error
+	input            lifecycle.GatewayInitInput
+	planCalls        int
+	applyCalls       int
+	planErr          error
+	offerManagedSwap bool
+	appliedPlan      lifecycle.GatewayInitPlan
 }
 
 func (initializer *recordingGatewayInitializer) Plan(_ context.Context, input lifecycle.GatewayInitInput) (lifecycle.GatewayInitPlan, error) {
@@ -181,18 +277,27 @@ func (initializer *recordingGatewayInitializer) Plan(_ context.Context, input li
 	if input.ExplicitSSHPort != nil {
 		port = *input.ExplicitSSHPort
 	}
-	return lifecycle.GatewayInitPlan{
+	plan := lifecycle.GatewayInitPlan{
 		Changed: true, HostID: gatewayCLIHostID,
 		Network: linuxplatform.GatewayNetworkPlan{
 			PublicIPv4: input.PublicIPv4, ClientCIDR: defaultString(input.ClientCIDR, model.DefaultClientCIDR),
 			NodeCIDR: defaultString(input.NodeCIDR, model.DefaultNodeCIDR), ExternalInterface: defaultString(input.ExternalInterface, "eth0"),
 		},
 		SSH: linuxplatform.SSHPortPlan{Port: port, Source: linuxplatform.SSHPortFromConnection},
-	}, nil
+	}
+	if initializer.offerManagedSwap {
+		plan.ManagedSwap = linuxplatform.ManagedSwapPlan{
+			Disposition: linuxplatform.ManagedSwapOffered, Offered: true,
+			Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: linuxplatform.ManagedSwapSizeBytes,
+			DiskReserve: linuxplatform.ManagedSwapDiskReserve,
+		}
+	}
+	return plan, nil
 }
 
 func (initializer *recordingGatewayInitializer) Apply(_ context.Context, plan lifecycle.GatewayInitPlan) (lifecycle.GatewayInitResult, error) {
 	initializer.applyCalls++
+	initializer.appliedPlan = plan
 	return lifecycle.GatewayInitResult{Changed: true, HostID: plan.HostID, TransactionID: "fw-ABC123", Network: plan.Network}, nil
 }
 
@@ -206,6 +311,28 @@ func defaultString(value, fallback string) string {
 type gatewayInitPrompt struct {
 	answer       string
 	visibleCalls int
+}
+
+type sequenceGatewayInitPrompt struct {
+	answers      []string
+	visibleCalls int
+}
+
+func (prompt *sequenceGatewayInitPrompt) ReadVisible(InteractionStep) (string, error) {
+	if prompt.visibleCalls >= len(prompt.answers) {
+		return "", errors.New("no prompt answer")
+	}
+	answer := prompt.answers[prompt.visibleCalls]
+	prompt.visibleCalls++
+	return answer, nil
+}
+
+func (*sequenceGatewayInitPrompt) ReadHidden(InteractionStep, int) ([]byte, error) {
+	return nil, errors.New("unexpected hidden prompt")
+}
+
+func (*sequenceGatewayInitPrompt) WriteSecret(InteractionStep, []byte) error {
+	return errors.New("unexpected secret output")
 }
 
 func (prompt *gatewayInitPrompt) ReadVisible(InteractionStep) (string, error) {

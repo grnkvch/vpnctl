@@ -57,6 +57,10 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway watchdog: %w", err)
 	}
+	managedSwap, err := linuxplatform.NewManagedSwapManager(paths.Root, paths.StateDir, linuxplatform.OSProbeRunner{})
+	if err != nil {
+		return nil, fmt.Errorf("create managed swap manager: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
@@ -64,6 +68,6 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	return lifecycle.NewGatewayInitializer(lifecycle.GatewayInitRuntime{
 		Paths: paths, Snapshot: snapshot, Manifest: manifest, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
-		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(),
+		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap,
 	})
 }

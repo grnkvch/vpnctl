@@ -1417,8 +1417,18 @@ vpnctl update rollback
 - Native shared daemons предпочтительнее отдельного процесса на каждый
   resource. Потребление controller в idle должно быть небольшим и проверяться
   benchmark; ориентир — не более примерно `20 MiB`.
-- На машине с малым объёмом RAM vpnctl предлагает создать управляемый `1 GB`
-  swap после показа plan и явного подтверждения.
+- На gateway с RAM меньше `1 GiB` и суммарным swap меньше `1 GiB` vpnctl
+  предлагает создать управляемый `1 GiB` swap после показа plan и отдельного
+  явного yes/no выбора. Отказ от swap не отменяет init; `--yes` принимает и
+  optional swap, и обычное подтверждение init. Предложение недоступно, если
+  после allocation останется меньше `512 MiB` свободного диска; существующий
+  достаточный swap не усваивается и не изменяется.
+- Managed swap имеет фиксированный путь `/var/lib/vpnctl/swapfile`, mode `0600`
+  и отдельный vpnctl-owned systemd unit; `/etc/fstab` не редактируется. Status
+  сверяет state record, файл, unit, enablement и active state. `uninstall`
+  отключает swap и удаляет unit, сохраняя allocation file и disabled ownership
+  record вместе с `/var/lib/vpnctl`; `purge` дополнительно удаляет точный
+  managed swap file. Чужой файл/unit/symlink не усваивается и не удаляется.
 - Release scope `v2.0` включает все requirements актуального snapshot, кроме
   пунктов, явно перечисленных ниже в разделе «Явно вне scope v2.0». Возможности
   v1 не считаются автоматически готовыми: они должны быть сохранены или

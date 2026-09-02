@@ -164,6 +164,123 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	}
 }
 
+func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accept", func(t *testing.T) {
+		harness := newGatewayInitHarness(t)
+		harness.initializer.runtime.Snapshot.Resources = lowMemoryGatewayResources()
+		harness.swap.plan = offeredGatewaySwapPlan(harness.paths)
+		plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+		if err != nil || !plan.ManagedSwap.Offered || plan.ManagedSwapSelected {
+			t.Fatalf("Plan() = %+v, %v", plan.ManagedSwap, err)
+		}
+		plan, err = plan.SelectManagedSwap(true)
+		if err != nil || !plan.ManagedSwapSelected || plan.desiredState.Host.ManagedSwap == nil {
+			t.Fatalf("SelectManagedSwap(true) = %+v, %v", plan, err)
+		}
+		harness.events.values = nil
+		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		want := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+		if !reflect.DeepEqual(harness.events.values, want) {
+			t.Fatalf("accept events = %v, want %v", harness.events.values, want)
+		}
+		state, err := harness.state.Load()
+		if err != nil || state.Host.ManagedSwap == nil || !state.Host.ManagedSwap.Enabled || state.Host.ManagedSwap.Path != linuxplatform.ManagedSwapLogicalPath || state.Host.ManagedSwap.SizeBytes != int64(linuxplatform.ManagedSwapSizeBytes) {
+			t.Fatalf("managed swap state = %+v, %v", state.Host.ManagedSwap, err)
+		}
+		second, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+		if err != nil || second.ManagedSwap.Disposition != linuxplatform.ManagedSwapAlreadyOwnedEnabled {
+			t.Fatalf("repeat swap status = %+v, %v", second.ManagedSwap, err)
+		}
+		if _, err := harness.initializer.Apply(context.Background(), second); err != nil {
+			t.Fatal(err)
+		}
+		if harness.swap.applyCalls != 1 {
+			t.Fatalf("repeat init recreated swap: %d calls", harness.swap.applyCalls)
+		}
+	})
+
+	t.Run("decline", func(t *testing.T) {
+		harness := newGatewayInitHarness(t)
+		harness.initializer.runtime.Snapshot.Resources = lowMemoryGatewayResources()
+		harness.swap.plan = offeredGatewaySwapPlan(harness.paths)
+		plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err = plan.SelectManagedSwap(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
+			t.Fatal(err)
+		}
+		state, err := harness.state.Load()
+		if err != nil || state.Host.ManagedSwap != nil || harness.swap.applyCalls != 0 {
+			t.Fatalf("declined swap state/calls = %+v/%d, %v", state.Host.ManagedSwap, harness.swap.applyCalls, err)
+		}
+	})
+
+	for _, test := range []struct {
+		name        string
+		disposition linuxplatform.ManagedSwapDisposition
+	}{
+		{name: "existing adequate", disposition: linuxplatform.ManagedSwapExistingAdequate},
+		{name: "insufficient disk", disposition: linuxplatform.ManagedSwapInsufficientDisk},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			harness := newGatewayInitHarness(t)
+			harness.swap.plan = linuxplatform.ManagedSwapPlan{
+				Disposition: test.disposition, Path: linuxplatform.ManagedSwapLogicalPath,
+				SizeBytes: linuxplatform.ManagedSwapSizeBytes, DiskReserve: linuxplatform.ManagedSwapDiskReserve,
+			}
+			plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+			if err != nil || plan.ManagedSwap.Offered {
+				t.Fatalf("Plan() swap = %+v, %v", plan.ManagedSwap, err)
+			}
+			if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
+				t.Fatal(err)
+			}
+			state, err := harness.state.Load()
+			if err != nil || state.Host.ManagedSwap != nil || harness.swap.applyCalls != 0 {
+				t.Fatalf("unavailable/existing state/calls = %+v/%d, %v", state.Host.ManagedSwap, harness.swap.applyCalls, err)
+			}
+		})
+	}
+}
+
+func TestGatewayInitStateFailurePurgesNewManagedSwap(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.initializer.runtime.Snapshot.Resources = lowMemoryGatewayResources()
+	harness.swap.plan = offeredGatewaySwapPlan(harness.paths)
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = plan.SelectManagedSwap(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.state.saveErr = errors.New("synthetic state failure")
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic state failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	want := []string{"state-load", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "watchdog-rollback", "swap-deactivate"}
+	if !reflect.DeepEqual(harness.events.values, want) {
+		t.Fatalf("rollback events = %v, want %v", harness.events.values, want)
+	}
+	if harness.swap.deactivateCalls != 1 {
+		t.Fatalf("swap rollback calls = %d", harness.swap.deactivateCalls)
+	}
+}
+
 func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	t.Parallel()
 
@@ -186,7 +303,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	initializer, err := NewGatewayInitializer(GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: stateStore, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits,
-		Watchdog: watchdog, Network: network,
+		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{},
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { return gatewayTestHostID, nil },
 	})
@@ -264,6 +381,7 @@ type gatewayInitHarness struct {
 	watchdogUnits *recordingWatchdogUnits
 	watchdog      *recordingGatewayWatchdog
 	network       *recordingGatewayNetwork
+	swap          *recordingGatewaySwap
 	events        *gatewayInitEvents
 	idCalls       int
 }
@@ -289,10 +407,11 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	watchdogUnits := &recordingWatchdogUnits{events: events, root: root}
 	watchdog := &recordingGatewayWatchdog{events: events}
 	network := &recordingGatewayNetwork{events: events}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, events: events}
+	swap := &recordingGatewaySwap{events: events}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
-		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network,
+		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
@@ -412,8 +531,8 @@ func assertGatewayRoleRequest(t *testing.T, request linuxplatform.RoleInstallati
 
 func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 	t.Helper()
-	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 {
-		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls)
+	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 {
+		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls)
 	}
 	for _, path := range []string{harness.paths.ConfigDir, harness.paths.StateDir, harness.paths.RuntimeDir} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -430,6 +549,7 @@ type recordingGatewayState struct {
 	store     *store.StateStore
 	events    *gatewayInitEvents
 	saveCalls int
+	saveErr   error
 }
 
 func (state *recordingGatewayState) Load() (model.State, error) {
@@ -440,6 +560,9 @@ func (state *recordingGatewayState) Load() (model.State, error) {
 func (state *recordingGatewayState) Save(expected uint64, candidate model.State) error {
 	state.events.add("state-save")
 	state.saveCalls++
+	if state.saveErr != nil {
+		return state.saveErr
+	}
 	return state.store.Save(expected, candidate)
 }
 
@@ -534,6 +657,55 @@ type recordingGatewayNetwork struct {
 	events *gatewayInitEvents
 	calls  int
 	err    error
+}
+
+type recordingGatewaySwap struct {
+	events          *gatewayInitEvents
+	plan            linuxplatform.ManagedSwapPlan
+	applyCalls      int
+	deactivateCalls int
+}
+
+func lowMemoryGatewayResources() linuxplatform.HostResources {
+	return linuxplatform.HostResources{MemoryTotalBytes: 512 << 20, DiskFreeBytes: 3 << 30}
+}
+
+func offeredGatewaySwapPlan(paths store.Paths) linuxplatform.ManagedSwapPlan {
+	return linuxplatform.ManagedSwapPlan{
+		Disposition: linuxplatform.ManagedSwapOffered, Offered: true,
+		Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: linuxplatform.ManagedSwapSizeBytes,
+		MemoryBytes: 512 << 20, DiskFreeBytes: 3 << 30, DiskReserve: linuxplatform.ManagedSwapDiskReserve,
+		PhysicalPath: filepath.Join(paths.StateDir, "swapfile"),
+		PhysicalUnit: filepath.Join(paths.Root, "etc", "systemd", "system", linuxplatform.ManagedSwapUnitName),
+	}
+}
+
+func (swap *recordingGatewaySwap) Plan(resources linuxplatform.HostResources) (linuxplatform.ManagedSwapPlan, error) {
+	if swap.plan.Disposition != "" {
+		return swap.plan, nil
+	}
+	return linuxplatform.ManagedSwapPlan{
+		Disposition: linuxplatform.ManagedSwapUnknownResources,
+		Path:        linuxplatform.ManagedSwapLogicalPath, SizeBytes: linuxplatform.ManagedSwapSizeBytes,
+		MemoryBytes: resources.MemoryTotalBytes, ExistingBytes: resources.SwapTotalBytes,
+		DiskFreeBytes: resources.DiskFreeBytes, DiskReserve: linuxplatform.ManagedSwapDiskReserve,
+	}, nil
+}
+
+func (swap *recordingGatewaySwap) Apply(_ context.Context, _ linuxplatform.ManagedSwapPlan) (model.ManagedSwap, error) {
+	if swap.events != nil {
+		swap.events.add("swap-apply")
+	}
+	swap.applyCalls++
+	return model.ManagedSwap{Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: int64(linuxplatform.ManagedSwapSizeBytes), Enabled: true}, nil
+}
+
+func (swap *recordingGatewaySwap) Deactivate(_ context.Context, _ model.ManagedSwap, _ bool) error {
+	if swap.events != nil {
+		swap.events.add("swap-deactivate")
+	}
+	swap.deactivateCalls++
+	return nil
 }
 
 type gatewayInitSystemdRunner struct{ calls []string }

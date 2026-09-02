@@ -26,24 +26,27 @@ type GatewayInitInput struct {
 }
 
 type GatewayInitPlan struct {
-	Changed            bool
-	AlreadyInitialized bool
-	HostID             string
-	Network            linuxplatform.GatewayNetworkPlan
-	SSH                linuxplatform.SSHPortPlan
-	Preflight          linuxplatform.GatewayPreflightPlan
-	FixedListeners     []string
-	Directories        []string
-	PresetDirectory    string
-	PKIPlaceholders    []string
-	Units              []string
-	WatchdogUnitFiles  []string
+	Changed             bool
+	AlreadyInitialized  bool
+	HostID              string
+	Network             linuxplatform.GatewayNetworkPlan
+	SSH                 linuxplatform.SSHPortPlan
+	Preflight           linuxplatform.GatewayPreflightPlan
+	FixedListeners      []string
+	Directories         []string
+	PresetDirectory     string
+	PKIPlaceholders     []string
+	Units               []string
+	WatchdogUnitFiles   []string
+	ManagedSwap         linuxplatform.ManagedSwapPlan
+	ManagedSwapSelected bool
 
-	desiredState  model.State
-	layout        GatewayLayoutPlan
-	roleRequest   linuxplatform.RoleInstallationRequest
-	watchdogUnits linuxplatform.WatchdogUnitInstallationPlan
-	firewall      linuxplatform.GatewayFirewallArtifact
+	desiredState     model.State
+	layout           GatewayLayoutPlan
+	roleRequest      linuxplatform.RoleInstallationRequest
+	watchdogUnits    linuxplatform.WatchdogUnitInstallationPlan
+	firewall         linuxplatform.GatewayFirewallArtifact
+	swapDecisionMade bool
 }
 
 type GatewayInitResult struct {
@@ -89,6 +92,12 @@ type GatewayInitNetworkActivator interface {
 	ActivateGateway(context.Context, linuxplatform.GatewayFirewallArtifact) error
 }
 
+type GatewayInitSwapManager interface {
+	Plan(linuxplatform.HostResources) (linuxplatform.ManagedSwapPlan, error)
+	Apply(context.Context, linuxplatform.ManagedSwapPlan) (model.ManagedSwap, error)
+	Deactivate(context.Context, model.ManagedSwap, bool) error
+}
+
 type GatewayInitRuntime struct {
 	Paths         store.Paths
 	Snapshot      linuxplatform.HostSnapshot
@@ -100,6 +109,7 @@ type GatewayInitRuntime struct {
 	WatchdogUnits GatewayInitWatchdogUnitInstaller
 	Watchdog      GatewayInitWatchdog
 	Network       GatewayInitNetworkActivator
+	Swap          GatewayInitSwapManager
 	Now           func() time.Time
 	NewHostID     model.UUIDGenerator
 }
@@ -109,7 +119,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -192,6 +202,10 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err != nil {
 		return GatewayInitPlan{}, err
 	}
+	managedSwap, err := initializer.runtime.Swap.Plan(snapshot.Resources)
+	if err != nil {
+		return GatewayInitPlan{}, fmt.Errorf("plan managed swap: %w", err)
+	}
 	hostID, err := model.AllocateUUID(nil, initializer.runtime.NewHostID)
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("allocate gateway host identity: %w", err)
@@ -211,7 +225,9 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 		Directories:    directories, PresetDirectory: layout.PresetDirectory,
 		PKIPlaceholders: append([]string(nil), layout.PKIPlaceholders...), Units: append([]string(nil), rolePlan.UnitsToStart...),
 		WatchdogUnitFiles: append([]string(nil), watchdogUnits.UnitFiles...),
+		ManagedSwap:       managedSwap,
 		desiredState:      desired, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
+		swapDecisionMade: !managedSwap.Offered,
 	}, nil
 }
 
@@ -224,10 +240,54 @@ func (initializer *GatewayInitializer) planExisting(input GatewayInitInput, snap
 		existing.Host.NodeCIDR != network.NodeCIDR || existing.Host.ExternalInterface != network.ExternalInterface || existing.Host.SSHPort != ssh.Port {
 		return GatewayInitPlan{}, fmt.Errorf("%w: use a planned migration instead of init", ErrGatewayInitConflict)
 	}
+	managedSwap := linuxplatform.ManagedSwapPlan{
+		Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: linuxplatform.ManagedSwapSizeBytes,
+		MemoryBytes: snapshot.Resources.MemoryTotalBytes, ExistingBytes: snapshot.Resources.SwapTotalBytes,
+		DiskFreeBytes: snapshot.Resources.DiskFreeBytes, DiskReserve: linuxplatform.ManagedSwapDiskReserve,
+	}
+	if existing.Host.ManagedSwap != nil && existing.Host.ManagedSwap.Enabled {
+		managedSwap.Disposition = linuxplatform.ManagedSwapAlreadyOwnedEnabled
+	} else if existing.Host.ManagedSwap != nil {
+		managedSwap.Disposition = linuxplatform.ManagedSwapAlreadyOwnedStopped
+	} else if snapshot.Resources.SwapTotalBytes >= linuxplatform.ManagedSwapSizeBytes {
+		managedSwap.Disposition = linuxplatform.ManagedSwapExistingAdequate
+	} else {
+		managedSwap.Disposition = linuxplatform.ManagedSwapUnknownResources
+	}
 	return GatewayInitPlan{
 		AlreadyInitialized: true, HostID: existing.Host.ID, Network: network, SSH: ssh,
-		FixedListeners: []string{"443/tcp", "8443/tcp", "51820/udp"}, desiredState: existing,
+		FixedListeners: []string{"443/tcp", "8443/tcp", "51820/udp"}, ManagedSwap: managedSwap,
+		desiredState: existing, swapDecisionMade: true,
 	}, nil
+}
+
+// SelectManagedSwap records the operator's explicit optional choice without
+// mutating the host. It is required before Apply whenever the plan offers swap.
+func (plan GatewayInitPlan) SelectManagedSwap(create bool) (GatewayInitPlan, error) {
+	if plan.AlreadyInitialized || !plan.Changed {
+		if create {
+			return GatewayInitPlan{}, fmt.Errorf("%w: managed swap cannot be selected for a no-op init", linuxplatform.ErrManagedSwapPlan)
+		}
+		plan.swapDecisionMade = true
+		return plan, nil
+	}
+	if create && !plan.ManagedSwap.Offered {
+		return GatewayInitPlan{}, fmt.Errorf("%w: managed swap is not available in this plan", linuxplatform.ErrManagedSwapPlan)
+	}
+	plan.ManagedSwapSelected = create
+	plan.swapDecisionMade = true
+	if plan.desiredState.SchemaVersion != 0 {
+		plan.desiredState.Host.ManagedSwap = nil
+		if create {
+			plan.desiredState.Host.ManagedSwap = &model.ManagedSwap{
+				Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: int64(linuxplatform.ManagedSwapSizeBytes), Enabled: true,
+			}
+		}
+		if err := plan.desiredState.Validate(); err != nil {
+			return GatewayInitPlan{}, fmt.Errorf("select managed swap: %w", err)
+		}
+	}
+	return plan, nil
 }
 
 func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayInitPlan) (GatewayInitResult, error) {
@@ -244,7 +304,7 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 		}
 		return GatewayInitResult{HostID: plan.HostID, Network: plan.Network, Units: []string{}}, nil
 	}
-	if !plan.Changed || plan.AlreadyInitialized || plan.HostID == "" || plan.desiredState.Host.ID != plan.HostID {
+	if !plan.Changed || plan.AlreadyInitialized || plan.HostID == "" || plan.desiredState.Host.ID != plan.HostID || !plan.swapDecisionMade {
 		return GatewayInitResult{}, fmt.Errorf("invalid gateway initialization plan")
 	}
 	if _, err := initializer.runtime.State.Load(); !errors.Is(err, store.ErrStateNotFound) {
@@ -266,13 +326,31 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 	if err != nil {
 		return GatewayInitResult{}, fmt.Errorf("arm gateway lockout watchdog: %w", err)
 	}
+	var createdSwap *model.ManagedSwap
+	statePersisted := false
 	fail := func(applyErr error) (GatewayInitResult, error) {
 		rollbackErr := initializer.runtime.Watchdog.RollbackNow(ctx, transaction.ID)
-		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr)
+		var swapErr error
+		if createdSwap != nil && !statePersisted {
+			swapErr = initializer.runtime.Swap.Deactivate(ctx, *createdSwap, true)
+		}
+		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, swapErr)
+	}
+	if plan.ManagedSwapSelected {
+		owned, err := initializer.runtime.Swap.Apply(ctx, plan.ManagedSwap)
+		if err != nil {
+			return fail(fmt.Errorf("create managed swap: %w", err))
+		}
+		if plan.desiredState.Host.ManagedSwap == nil || owned != *plan.desiredState.Host.ManagedSwap {
+			createdSwap = &owned
+			return fail(fmt.Errorf("managed swap result differs from the authoritative plan"))
+		}
+		createdSwap = &owned
 	}
 	if err := initializer.runtime.State.Save(0, plan.desiredState); err != nil {
 		return fail(fmt.Errorf("persist initial gateway state: %w", err))
 	}
+	statePersisted = true
 	if _, err := initializer.runtime.Roles.Apply(ctx, plan.roleRequest); err != nil {
 		return fail(fmt.Errorf("install gateway services: %w", err))
 	}

@@ -81,11 +81,6 @@ func executeGatewayInit(args []string, stdout, stderr io.Writer) int {
 		return emitGatewayInitFailure(emitter, category, code, message)
 	}
 	sshConnection, _ := gatewayInitLookupEnv("SSH_CONNECTION")
-	workflow := &gatewayInitWorkflow{initializer: initializer, input: lifecycle.GatewayInitInput{
-		PublicIPv4: parsed.PublicIPv4, ClientCIDR: parsed.ClientCIDR, NodeCIDR: parsed.NodeCIDR,
-		ExternalInterface: parsed.ExternalInterface, ExplicitSSHPort: parsed.SSHPort.pointer(), SSHConnection: sshConnection,
-	}}
-
 	var terminal PromptIO
 	var closer io.Closer
 	if !parsed.Yes && !parsed.DryRun {
@@ -93,6 +88,13 @@ func executeGatewayInit(args []string, stdout, stderr io.Writer) int {
 		if closer != nil {
 			defer closer.Close()
 		}
+	}
+	workflow := &gatewayInitWorkflow{
+		initializer: initializer, terminal: terminal, yes: parsed.Yes, dryRun: parsed.DryRun,
+		input: lifecycle.GatewayInitInput{
+			PublicIPv4: parsed.PublicIPv4, ClientCIDR: parsed.ClientCIDR, NodeCIDR: parsed.NodeCIDR,
+			ExternalInterface: parsed.ExternalInterface, ExplicitSSHPort: parsed.SSHPort.pointer(), SSHConnection: sshConnection,
+		},
 	}
 	outcome, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
 		CommandID: "init.gateway", Role: role, DryRun: parsed.DryRun, Yes: parsed.Yes, JSON: parsed.JSON,
@@ -208,6 +210,9 @@ func parseGatewayInitArguments(args []string) (gatewayInitArguments, bool, error
 type gatewayInitWorkflow struct {
 	initializer gatewayInitializerAPI
 	input       lifecycle.GatewayInitInput
+	terminal    PromptIO
+	yes         bool
+	dryRun      bool
 	plan        lifecycle.GatewayInitPlan
 	planned     bool
 }
@@ -216,6 +221,31 @@ func (workflow *gatewayInitWorkflow) Plan(ctx context.Context, _ *InteractionInp
 	plan, err := workflow.initializer.Plan(ctx, workflow.input)
 	if err != nil {
 		return MutationPlan{}, err
+	}
+	if plan.ManagedSwap.Offered && !workflow.dryRun {
+		accept := workflow.yes
+		if !workflow.yes {
+			if workflow.terminal == nil {
+				return MutationPlan{}, fmt.Errorf("%w: managed swap confirmation requires a controlling TTY or --yes", ErrInteractionRefused)
+			}
+			step := InteractionStep{
+				ID: StepManagedSwap, Phase: InteractionConsent, Prompt: PromptConfirm,
+				Decision: PromptDecision{Action: "prompt", Channel: controllingTTYPath, Reads: 1},
+			}
+			answer, err := workflow.terminal.ReadVisible(step)
+			if err != nil {
+				return MutationPlan{}, fmt.Errorf("%w: %s: %v", ErrPromptInput, StepManagedSwap, err)
+			}
+			var valid bool
+			accept, valid = parseConfirmation(answer)
+			if !valid {
+				return MutationPlan{}, fmt.Errorf("%w: %s accepts only y/yes/n/no", ErrPromptInput, StepManagedSwap)
+			}
+		}
+		plan, err = plan.SelectManagedSwap(accept)
+		if err != nil {
+			return MutationPlan{}, err
+		}
 	}
 	workflow.plan = plan
 	workflow.planned = true
@@ -238,11 +268,20 @@ func gatewayInitOutput(plan lifecycle.GatewayInitPlan, applied lifecycle.Gateway
 	if appliedResult {
 		changed = applied.Changed
 	}
+	disposition := plan.ManagedSwap.Disposition
+	if disposition == "" {
+		disposition = linuxplatform.ManagedSwapUnknownResources
+	}
 	result := output.NewResult("init.gateway", output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": changed, "role": "gateway", "public_ipv4": plan.Network.PublicIPv4,
 		"client_cidr": plan.Network.ClientCIDR, "node_cidr": plan.Network.NodeCIDR,
 		"external_interface": plan.Network.ExternalInterface, "ssh_port": plan.SSH.Port,
 		"fixed_listeners": output.SafeList{"443/tcp", "8443/tcp", "51820/udp"},
+		"managed_swap": output.SafeObject{
+			"status": string(disposition), "offered": plan.ManagedSwap.Offered,
+			"selected": plan.ManagedSwapSelected, "file_path": linuxplatform.ManagedSwapLogicalPath,
+			"size_bytes": linuxplatform.ManagedSwapSizeBytes,
+		},
 	})
 	if plan.HostID != "" {
 		result.ResourceIDs["host_id"] = plan.HostID
@@ -252,6 +291,15 @@ func gatewayInitOutput(plan lifecycle.GatewayInitPlan, applied lifecycle.Gateway
 		result.RequiresAction = append(result.RequiresAction, output.Action{
 			Code: "confirm_network", Message: "Confirm the network change from a newly established SSH session before the 120-second rollback deadline.",
 			Command: "vpnctl confirm " + applied.TransactionID, ResourceIDs: map[string]string{"transaction_id": applied.TransactionID},
+		})
+	}
+	if plan.ManagedSwap.Disposition == linuxplatform.ManagedSwapInsufficientDisk {
+		result.Warnings = append(result.Warnings, output.Message{
+			Code: "managed_swap_unavailable", Message: "Managed swap was not offered because creating 1 GB would leave less than 512 MB of free disk.",
+		})
+	} else if plan.ManagedSwap.Disposition == linuxplatform.ManagedSwapUnknownResources {
+		result.Warnings = append(result.Warnings, output.Message{
+			Code: "managed_swap_capacity_unknown", Message: "Managed swap was not offered because memory or free-disk capacity could not be verified.",
 		})
 	}
 	return result
@@ -283,11 +331,13 @@ func developmentComponentManifest() model.ComponentManifest {
 func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 	switch {
 	case errors.Is(err, lifecycle.ErrGatewayRoleConflict), errors.Is(err, lifecycle.ErrGatewayInitConflict),
-		errors.Is(err, lifecycle.ErrGatewayLayoutConflict), errors.Is(err, linuxplatform.ErrGatewayPreflightConflict):
+		errors.Is(err, lifecycle.ErrGatewayLayoutConflict), errors.Is(err, linuxplatform.ErrGatewayPreflightConflict),
+		errors.Is(err, linuxplatform.ErrManagedSwapConflict):
 		return output.CategoryConflict, "init_conflict", err.Error()
 	case errors.Is(err, linuxplatform.ErrUnsupportedHost), errors.Is(err, linuxplatform.ErrInvalidGatewayNetwork),
 		errors.Is(err, linuxplatform.ErrSSHPortUnverified), errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrConsentDeclined),
-		errors.Is(err, ErrPromptInput), errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags):
+		errors.Is(err, ErrPromptInput), errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags),
+		errors.Is(err, linuxplatform.ErrManagedSwapPlan):
 		return output.CategoryValidation, "init_validation", err.Error()
 	default:
 		return output.CategoryInternal, "init_internal_error", "vpnctl could not initialize the gateway"
@@ -321,5 +371,8 @@ func printGatewayInitHelp(writer io.Writer) {
 Usage:
   vpnctl init --gateway --public-ip <IPv4> [--client-cidr <CIDR>] [--node-cidr <CIDR>]
               [--external-interface <name>] [--ssh-port <port>] [--dry-run] [--yes] [--json]
+
+On a low-memory gateway, the plan may offer a managed 1 GB swap file. Declining
+that optional prompt continues initialization; --yes accepts the offer.
 `)
 }
