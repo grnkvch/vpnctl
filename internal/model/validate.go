@@ -244,6 +244,7 @@ func (state State) Validate() error {
 	}
 
 	operationIDs := make(map[string]struct{}, len(state.Operations))
+	operationRequestIDs := make(map[string]string, len(state.Operations))
 	for index, operation := range state.Operations {
 		if err := operation.Validate(); err != nil {
 			return wrap(indexPath("operations", index), err)
@@ -252,6 +253,12 @@ func (state State) Validate() error {
 			return invalid(indexPath("operations", index)+".id", "duplicates operation %s", operation.ID)
 		}
 		operationIDs[operation.ID] = struct{}{}
+		if operation.RequestID != "" {
+			if prior, duplicate := operationRequestIDs[operation.RequestID]; duplicate {
+				return invalid(indexPath("operations", index)+".request_id", "duplicates request owned by operation %s", prior)
+			}
+			operationRequestIDs[operation.RequestID] = operation.ID
+		}
 	}
 	loggingIDs := make(map[string]struct{}, len(state.Logging))
 	for index, session := range state.Logging {
@@ -295,6 +302,22 @@ func (state State) Validate() error {
 		}
 		if len(state.Nodes) == 1 && len(state.Nodes[0].IdempotencyRecords) != 0 {
 			return invalid("nodes[0].idempotency_records", "node-local state must not contain gateway idempotency history")
+		}
+		if len(state.Nodes) == 1 {
+			pendingRequestID := state.Nodes[0].Gateway.PendingRequestID
+			matchedPending := false
+			for index, operation := range state.Operations {
+				if operation.RequestID == "" || terminalOperationState(operation.State) {
+					continue
+				}
+				if pendingRequestID == "" || operation.RequestID != pendingRequestID {
+					return invalid(indexPath("operations", index)+".request_id", "non-terminal node request must match pending_request_id")
+				}
+				matchedPending = true
+			}
+			if pendingRequestID != "" && !matchedPending {
+				return invalid("nodes[0].gateway.pending_request_id", "must reference one non-terminal operation")
+			}
 		}
 		localID := ""
 		if len(state.Nodes) == 1 {

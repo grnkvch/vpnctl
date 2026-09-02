@@ -442,8 +442,28 @@ func validateStableRecordIdentities(before, after State) error {
 	}
 	for _, operation := range after.Operations {
 		old, exists := operations[operation.ID]
-		if exists && (old.Type != operation.Type || old.TargetKind != operation.TargetKind || old.TargetID != operation.TargetID || !old.CreatedAt.Equal(operation.CreatedAt)) {
-			return transitionError("operation %s identity fields are immutable", operation.ID)
+		if !exists {
+			if operation.State != OperationPending || !operation.UpdatedAt.Equal(operation.CreatedAt) {
+				return transitionError("new operation %s must start pending at its creation time", operation.ID)
+			}
+			for _, step := range operation.Steps {
+				if step.State != OperationPending || !step.UpdatedAt.Equal(operation.CreatedAt) {
+					return transitionError("new operation %s steps must start pending at its creation time", operation.ID)
+				}
+			}
+			continue
+		}
+		if err := validateOperationEvolution(old, operation); err != nil {
+			return err
+		}
+	}
+	currentOperations := make(map[string]struct{}, len(after.Operations))
+	for _, operation := range after.Operations {
+		currentOperations[operation.ID] = struct{}{}
+	}
+	for _, operation := range before.Operations {
+		if _, exists := currentOperations[operation.ID]; !exists && !terminalOperationState(operation.State) {
+			return transitionError("non-terminal operation %s cannot be removed", operation.ID)
 		}
 	}
 
@@ -466,6 +486,41 @@ func validateStableRecordIdentities(before, after State) error {
 		old, exists := backups[backup.ID]
 		if exists && !reflect.DeepEqual(old, backup) {
 			return transitionError("completed backup %s metadata is immutable", backup.ID)
+		}
+	}
+	return nil
+}
+
+func validateOperationEvolution(before, after Operation) error {
+	if before.Type != after.Type || before.TargetKind != after.TargetKind || before.TargetID != after.TargetID ||
+		before.RequestID != after.RequestID || before.ExpectedGeneration != after.ExpectedGeneration ||
+		before.DesiredGeneration != after.DesiredGeneration || !before.CreatedAt.Equal(after.CreatedAt) {
+		return transitionError("operation %s identity and generation fields are immutable", after.ID)
+	}
+	if after.UpdatedAt.Before(before.UpdatedAt) {
+		return transitionError("operation %s update time moved backwards", after.ID)
+	}
+	if before.State != after.State && !canTransitionOperation(before.State, after.State) {
+		return transitionError("operation %s cannot move from %s to %s", after.ID, before.State, after.State)
+	}
+	if len(before.Steps) != len(after.Steps) {
+		return transitionError("operation %s step plan is immutable", after.ID)
+	}
+	for index := range before.Steps {
+		oldStep := before.Steps[index]
+		newStep := after.Steps[index]
+		if oldStep.Name != newStep.Name {
+			return transitionError("operation %s step plan is immutable", after.ID)
+		}
+		if newStep.UpdatedAt.Before(oldStep.UpdatedAt) {
+			return transitionError("operation %s step %s update time moved backwards", after.ID, oldStep.Name)
+		}
+		if oldStep.State == newStep.State {
+			if !oldStep.UpdatedAt.Equal(newStep.UpdatedAt) {
+				return transitionError("operation %s step %s timestamp changed without a state transition", after.ID, oldStep.Name)
+			}
+		} else if !canTransitionOperation(oldStep.State, newStep.State) {
+			return transitionError("operation %s step %s cannot move from %s to %s", after.ID, oldStep.Name, oldStep.State, newStep.State)
 		}
 	}
 	return nil
