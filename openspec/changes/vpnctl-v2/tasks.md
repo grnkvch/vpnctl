@@ -68,7 +68,7 @@
 - [x] 6.6 Implement active node-record and credential-generation authorization on every control request; verify a cryptographically valid revoked or old-generation certificate is rejected immediately.
 - [x] 6.7 Implement gateway control-leaf automatic renewal at the 180-day window without data-plane restart; verify time-travel tests preserve node trust and public ingress identity.
 - [x] 6.8 Implement manual staged control-CA rotation with old/new overlap, impact reporting, node trust update, commit, and rollback; verify nodes on both accepted generations remain manageable during the window and only the new CA is trusted after commit.
-- [ ] 6.9 Implement unavailable/incompatible controller result behavior and node update preflight; verify failed management never mutates or tears down an already applied compatible data plane.
+- [x] 6.9 Implement unavailable/incompatible controller result behavior and node update preflight; verify failed management never mutates or tears down an already applied compatible data plane.
 
 ## 7. Presets, Policies, and Personal Clients
 

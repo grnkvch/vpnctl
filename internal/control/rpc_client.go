@@ -38,6 +38,36 @@ type RPCClient struct {
 	timeout   time.Duration
 }
 
+// CallManagement preserves local request validation errors, but turns an
+// unreachable/failed control transport into the same typed unavailable result
+// shape used by a reachable controller. It never retries and never queues the
+// request locally, so callers can fail without changing desired state.
+func (client *RPCClient) CallManagement(ctx context.Context, request RPCRequest) (RPCCallResult, error) {
+	if ctx == nil {
+		return RPCCallResult{}, fmt.Errorf("context is required")
+	}
+	if client == nil || client.tlsConfig == nil {
+		return RPCCallResult{}, fmt.Errorf("control RPC client is incomplete")
+	}
+	if err := request.Validate(); err != nil {
+		return RPCCallResult{}, err
+	}
+	if request.NodeID != client.nodeID {
+		return RPCCallResult{}, fmt.Errorf("%w: request node does not match client identity", ErrInvalidRPCIdentity)
+	}
+	result, err := client.Call(ctx, request)
+	if err == nil {
+		return result, nil
+	}
+	response := NewRPCResponse("unavailable", 0, json.RawMessage(`{}`))
+	response.ProtocolMajor = request.ProtocolMajor
+	response.ProtocolMinor = request.ProtocolMinor
+	response.ErrorCode = "controller_unavailable"
+	response.Message = "the gateway controller could not be reached for this management request"
+	response.RequiresAction = []string{"verify gateway control connectivity and retry the command"}
+	return RPCCallResult{StatusCode: http.StatusServiceUnavailable, Response: response}, nil
+}
+
 func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 	host, portText, err := net.SplitHostPort(config.Address)
 	if err != nil {
