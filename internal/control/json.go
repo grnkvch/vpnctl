@@ -7,6 +7,8 @@ import (
 	"io"
 )
 
+const maximumJSONDepth = 32
+
 func DecodeLocalRequest(data []byte) (LocalRequest, error) {
 	var request LocalRequest
 	if err := decodeStrictJSON(data, &request); err != nil {
@@ -30,9 +32,16 @@ func DecodeLocalResponse(data []byte) (LocalResponse, error) {
 }
 
 func decodeStrictJSON(data []byte, destination any) error {
+	return decodeStrictJSONWithDepth(data, destination, maximumJSONDepth)
+}
+
+func decodeStrictJSONWithDepth(data []byte, destination any, maximumDepth int) error {
+	if maximumDepth < 1 {
+		return fmt.Errorf("maximum JSON depth must be positive")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if err := walkJSONValue(decoder); err != nil {
+	if err := walkJSONValue(decoder, 1, maximumDepth); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -54,7 +63,10 @@ func decodeStrictJSON(data []byte, destination any) error {
 	return nil
 }
 
-func walkJSONValue(decoder *json.Decoder) error {
+func walkJSONValue(decoder *json.Decoder, depth, maximumDepth int) error {
+	if depth > maximumDepth {
+		return fmt.Errorf("JSON nesting exceeds %d levels", maximumDepth)
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -79,7 +91,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 				return fmt.Errorf("duplicate JSON field %q", key)
 			}
 			keys[key] = struct{}{}
-			if err := walkJSONValue(decoder); err != nil {
+			if err := walkJSONValue(decoder, depth+1, maximumDepth); err != nil {
 				return err
 			}
 		}
@@ -92,7 +104,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 		}
 	case '[':
 		for decoder.More() {
-			if err := walkJSONValue(decoder); err != nil {
+			if err := walkJSONValue(decoder, depth+1, maximumDepth); err != nil {
 				return err
 			}
 		}

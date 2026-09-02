@@ -37,6 +37,12 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !reflect.DeepEqual(plan.FixedListeners, []string{"443/tcp", "8443/tcp", "51820/udp"}) {
 		t.Fatalf("fixed listeners = %v", plan.FixedListeners)
 	}
+	firewall := string(plan.firewall.Definition())
+	if !strings.Contains(firewall, "elements = { 9443 }") ||
+		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @node_v4 tcp dport @node_tcp_ports accept`) ||
+		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 9443 accept") {
+		t.Fatalf("control RPC firewall scope is not node-overlay-only:\n%s", firewall)
+	}
 	if _, err := os.Lstat(harness.paths.ConfigDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only plan created config root: %v", err)
 	}

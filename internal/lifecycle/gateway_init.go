@@ -205,6 +205,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	firewall, err := linuxplatform.RenderGatewayFirewall(linuxplatform.GatewayFirewallInput{
 		ExternalInterface: network.ExternalInterface, SSHPort: ssh.Port,
 		ClientCIDR: network.ClientCIDR, NodeCIDR: network.NodeCIDR,
+		NodeTCPPorts: []int{control.RPCControlTCPPort},
 	})
 	if err != nil {
 		return GatewayInitPlan{}, err

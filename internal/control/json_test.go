@@ -1,6 +1,9 @@
 package control
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLocalRequestCodecRejectsAmbiguousJSON(t *testing.T) {
 	valid := `{"schema_version":1,"method":"observe"}`
@@ -12,6 +15,7 @@ func TestLocalRequestCodecRejectsAmbiguousJSON(t *testing.T) {
 		"unknown":   `{"schema_version":1,"method":"observe","extra":true}`,
 		"trailing":  valid + ` {}`,
 		"schema":    `{"schema_version":2,"method":"observe"}`,
+		"too-deep":  `{"schema_version":1,"method":"mutate","operation":"test.deep","payload":{"value":` + strings.Repeat("[", maximumJSONDepth+1) + `0` + strings.Repeat("]", maximumJSONDepth+1) + `}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := DecodeLocalRequest([]byte(input)); err == nil {
