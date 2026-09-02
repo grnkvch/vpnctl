@@ -1,0 +1,41 @@
+{
+  "runtime": {"GOOS": "linux", "GOARCH": "amd64", "EUID": 0},
+  "files": {
+    "/etc/os-release": {"kind": "regular", "content": "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04 LTS\"\n"},
+    "/run/systemd/system": {"kind": "directory", "content": ""},
+    "/proc/sys/net/ipv4/ip_forward": {"kind": "regular", "content": "0\n", "writable": false},
+    "/proc/meminfo": {"kind": "regular", "content": "MemTotal:         262144 kB\nMemAvailable:     100000 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n"}
+  },
+  "disk": {"TotalBytes": 5368709120, "FreeBytes": 1073741824},
+  "commands": [
+    {"name": "uname", "args": ["--machine"], "exit_code": 0, "stdout": "x86_64\n", "stderr": ""},
+    {"name": "systemctl", "args": ["--version"], "exit_code": 0, "stdout": "systemd 255\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "systemd-resolved.service"], "exit_code": 0, "stdout": "LoadState=not-found\nActiveState=inactive\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "ufw.service"], "exit_code": 0, "stdout": "LoadState=not-found\nActiveState=inactive\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "firewalld.service"], "exit_code": 0, "stdout": "LoadState=not-found\nActiveState=inactive\n", "stderr": ""},
+    {"name": "modprobe", "args": ["--dry-run", "wireguard"], "exit_code": 1, "stdout": "", "stderr": "modprobe: FATAL: Module wireguard not found\n"},
+    {"name": "nft", "args": ["--version"], "exit_code": 127, "stdout": "", "stderr": "nft: not found\n"},
+    {"name": "nft", "args": ["--json", "list", "tables"], "exit_code": 127, "stdout": "", "stderr": "nft: not found\n"},
+    {"name": "nft", "args": ["--check", "--file", "-"], "exit_code": 1, "stdout": "", "stderr": "Operation not supported\n"},
+    {"name": "ip", "args": ["-Version"], "exit_code": 0, "stdout": "ip utility, iproute2-6.1.0\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-4", "rule", "show"], "exit_code": 2, "stdout": "", "stderr": "RTNETLINK answers: Operation not supported\n"},
+    {"name": "ip", "args": ["-json", "-6", "rule", "show"], "exit_code": 2, "stdout": "", "stderr": "Address family not supported\n"},
+    {"name": "ip", "args": ["-json", "link", "show"], "exit_code": 0, "stdout": "[{\"ifindex\":1,\"ifname\":\"lo\",\"flags\":[\"LOOPBACK\",\"UP\"],\"mtu\":65536,\"operstate\":\"UNKNOWN\",\"link_type\":\"loopback\",\"address\":\"00:00:00:00:00:00\"}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "address", "show"], "exit_code": 0, "stdout": "[{\"ifname\":\"lo\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"127.0.0.1\",\"prefixlen\":8,\"scope\":\"host\"}]}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-4", "route", "show", "table", "all"], "exit_code": 0, "stdout": "[]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-6", "route", "show", "table", "all"], "exit_code": 2, "stdout": "", "stderr": "Address family not supported\n"},
+    {"name": "ss", "args": ["--no-header", "--numeric", "--listening", "--tcp", "--udp", "--process"], "exit_code": 0, "stdout": "", "stderr": ""}
+  ],
+  "expect": {
+    "missing_mandatory": ["tun", "kernel_wireguard", "nftables", "policy_routing", "conntrack_marks", "systemd_resolved", "ipv4_forwarding"],
+    "interfaces": ["lo"],
+    "container_interfaces": [],
+    "nftables_tables": [],
+    "active_services": [],
+    "listeners": [],
+    "routes": [],
+    "policy_rules": [],
+    "resources": {"memory_total_bytes": 268435456, "memory_free_bytes": 102400000, "swap_total_bytes": 0, "swap_free_bytes": 0, "disk_total_bytes": 5368709120, "disk_free_bytes": 1073741824},
+    "ipv4_forwarding_enabled": false
+  }
+}

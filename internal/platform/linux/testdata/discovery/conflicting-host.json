@@ -1,0 +1,42 @@
+{
+  "runtime": {"GOOS": "linux", "GOARCH": "amd64", "EUID": 0},
+  "files": {
+    "/etc/os-release": {"kind": "regular", "content": "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n"},
+    "/run/systemd/system": {"kind": "directory", "content": ""},
+    "/dev/net/tun": {"kind": "character_device", "content": ""},
+    "/sys/module/wireguard": {"kind": "directory", "content": ""},
+    "/proc/sys/net/ipv4/ip_forward": {"kind": "regular", "content": "1\n", "writable": true},
+    "/proc/meminfo": {"kind": "regular", "content": "MemTotal:         524288 kB\nMemAvailable:     180000 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n"}
+  },
+  "disk": {"TotalBytes": 10737418240, "FreeBytes": 4294967296},
+  "commands": [
+    {"name": "uname", "args": ["--machine"], "exit_code": 0, "stdout": "x86_64\n", "stderr": ""},
+    {"name": "systemctl", "args": ["--version"], "exit_code": 0, "stdout": "systemd 255 (255.4-1ubuntu8)\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "systemd-resolved.service"], "exit_code": 0, "stdout": "LoadState=loaded\nActiveState=active\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "ufw.service"], "exit_code": 0, "stdout": "LoadState=loaded\nActiveState=active\n", "stderr": ""},
+    {"name": "systemctl", "args": ["show", "--property=LoadState", "--property=ActiveState", "firewalld.service"], "exit_code": 0, "stdout": "LoadState=loaded\nActiveState=active\n", "stderr": ""},
+    {"name": "nft", "args": ["--version"], "exit_code": 0, "stdout": "nftables v1.0.9\n", "stderr": ""},
+    {"name": "nft", "args": ["--json", "list", "tables"], "exit_code": 0, "stdout": "{\"nftables\":[{\"metainfo\":{\"version\":\"1.0.9\"}},{\"table\":{\"family\":\"inet\",\"name\":\"filter\"}},{\"table\":{\"family\":\"ip\",\"name\":\"nat\"}},{\"table\":{\"family\":\"inet\",\"name\":\"vpnctl\"}}]}\n", "stderr": ""},
+    {"name": "nft", "args": ["--check", "--file", "-"], "exit_code": 0, "stdout": "", "stderr": ""},
+    {"name": "ip", "args": ["-Version"], "exit_code": 0, "stdout": "ip utility, iproute2-6.1.0\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-4", "rule", "show"], "exit_code": 0, "stdout": "[{\"priority\":0,\"from\":\"all\",\"table\":\"local\"},{\"priority\":10020,\"from\":\"all\",\"table\":20001,\"fwmark\":\"0x02000000\",\"fwmask\":\"0xff000000\"},{\"priority\":32766,\"from\":\"all\",\"table\":\"main\"},{\"priority\":32767,\"from\":\"all\",\"table\":\"default\"}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-6", "rule", "show"], "exit_code": 0, "stdout": "[{\"priority\":0,\"from\":\"all\",\"table\":\"local\"},{\"priority\":32766,\"from\":\"all\",\"table\":\"main\"}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "link", "show"], "exit_code": 0, "stdout": "[{\"ifindex\":1,\"ifname\":\"lo\",\"flags\":[\"LOOPBACK\",\"UP\"],\"mtu\":65536,\"operstate\":\"UNKNOWN\",\"link_type\":\"loopback\",\"address\":\"00:00:00:00:00:00\"},{\"ifindex\":2,\"ifname\":\"eth0\",\"flags\":[\"BROADCAST\",\"UP\"],\"mtu\":1500,\"operstate\":\"UP\",\"link_type\":\"ether\",\"address\":\"52:54:00:12:34:56\"},{\"ifindex\":3,\"ifname\":\"docker0\",\"flags\":[\"BROADCAST\",\"UP\"],\"mtu\":1500,\"operstate\":\"UP\",\"link_type\":\"ether\",\"address\":\"02:42:ac:11:00:01\"},{\"ifindex\":4,\"ifname\":\"br-abcdef123456\",\"flags\":[\"BROADCAST\",\"UP\"],\"mtu\":1500,\"operstate\":\"UP\",\"link_type\":\"ether\",\"address\":\"02:42:ac:12:00:01\"},{\"ifindex\":5,\"ifname\":\"wg0\",\"flags\":[\"POINTOPOINT\",\"UP\"],\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"link_type\":\"none\",\"address\":\"\"}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "address", "show"], "exit_code": 0, "stdout": "[{\"ifname\":\"lo\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"127.0.0.1\",\"prefixlen\":8,\"scope\":\"host\"}]},{\"ifname\":\"eth0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"192.0.2.10\",\"prefixlen\":24,\"scope\":\"global\"}]},{\"ifname\":\"docker0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"172.17.0.1\",\"prefixlen\":16,\"scope\":\"global\"}]},{\"ifname\":\"br-abcdef123456\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"172.18.0.1\",\"prefixlen\":16,\"scope\":\"global\"}]},{\"ifname\":\"wg0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.66.0.1\",\"prefixlen\":24,\"scope\":\"global\"}]}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-4", "route", "show", "table", "all"], "exit_code": 0, "stdout": "[{\"dst\":\"default\",\"dev\":\"wg0\",\"table\":20001,\"metric\":10},{\"dst\":\"default\",\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\",\"protocol\":\"dhcp\",\"table\":\"main\",\"metric\":100},{\"dst\":\"10.66.0.0/24\",\"dev\":\"wg0\",\"protocol\":\"kernel\",\"table\":\"main\"},{\"dst\":\"172.17.0.0/16\",\"dev\":\"docker0\",\"protocol\":\"kernel\",\"table\":\"main\"},{\"dst\":\"172.18.0.0/16\",\"dev\":\"br-abcdef123456\",\"protocol\":\"kernel\",\"table\":\"main\"}]\n", "stderr": ""},
+    {"name": "ip", "args": ["-json", "-6", "route", "show", "table", "all"], "exit_code": 0, "stdout": "[{\"dst\":\"::1\",\"dev\":\"lo\",\"protocol\":\"kernel\",\"table\":\"local\"}]\n", "stderr": ""},
+    {"name": "ss", "args": ["--no-header", "--numeric", "--listening", "--tcp", "--udp", "--process"], "exit_code": 0, "stdout": "tcp LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:((\"nginx\",pid=800,fd=6))\ntcp LISTEN 0 128 0.0.0.0:8443 0.0.0.0:* users:((\"python3\",pid=801,fd=4))\ntcp LISTEN 0 4096 127.0.0.1:3000 0.0.0.0:* users:((\"app\",pid=900,fd=7))\nudp UNCONN 0 0 0.0.0.0:51820 0.0.0.0:* users:((\"wireguard\",pid=802,fd=5))\n", "stderr": ""}
+  ],
+  "expect": {
+    "missing_mandatory": [],
+    "interfaces": ["lo", "eth0", "docker0", "br-abcdef123456", "wg0"],
+    "container_interfaces": ["br-abcdef123456", "docker0"],
+    "nftables_tables": ["inet/filter", "inet/vpnctl", "ip/nat"],
+    "active_services": ["firewalld.service", "systemd-resolved.service", "ufw.service"],
+    "listeners": ["tcp/0.0.0.0:443", "tcp/0.0.0.0:8443", "tcp/127.0.0.1:3000", "udp/0.0.0.0:51820"],
+    "routes": ["ipv4/20001/default/wg0", "ipv4/main/10.66.0.0/24/wg0", "ipv4/main/172.17.0.0/16/docker0", "ipv4/main/172.18.0.0/16/br-abcdef123456", "ipv4/main/default/eth0", "ipv6/local/::1/lo"],
+    "policy_rules": ["ipv4/0/local//", "ipv4/10020/20001/0x02000000/0xff000000", "ipv4/32766/main//", "ipv4/32767/default//", "ipv6/0/local//", "ipv6/32766/main//"],
+    "resources": {"memory_total_bytes": 536870912, "memory_free_bytes": 184320000, "swap_total_bytes": 0, "swap_free_bytes": 0, "disk_total_bytes": 10737418240, "disk_free_bytes": 4294967296},
+    "ipv4_forwarding_enabled": true
+  }
+}
