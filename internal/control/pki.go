@@ -59,6 +59,14 @@ type IssuedNodeCertificate struct {
 	Certificate    *x509.Certificate
 }
 
+type IssuedGatewayCertificate struct {
+	CertificatePEM []byte
+	PrivateKeyPEM  []byte
+	IdentityURI    string
+	OverlayIPv4    string
+	Certificate    *x509.Certificate
+}
+
 func GenerateGatewayControlMaterial(entropy io.Reader, gatewayID, overlayIPv4 string, issuedAt time.Time) (GatewayControlMaterial, error) {
 	if entropy == nil {
 		return GatewayControlMaterial{}, fmt.Errorf("entropy source is required")
@@ -199,6 +207,67 @@ func GenerateNodeControlCSR(entropy io.Reader, nodeID string) (NodeCSRMaterial, 
 		CSRPEM:        pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: requestDER}),
 		PrivateKeyPEM: privatePEM,
 		IdentityURI:   identity.String(),
+	}, nil
+}
+
+// IssueGatewayControlCertificate creates a fresh server key and leaf under an
+// existing control CA. It never changes CA or enrollment material and refuses
+// a leaf whose full five-year validity would outlive the signing CA.
+func IssueGatewayControlCertificate(entropy io.Reader, authorityCertificatePEM, authorityPrivateKeyPEM []byte, gatewayID, overlayIPv4 string, issuedAt time.Time) (IssuedGatewayCertificate, error) {
+	if entropy == nil {
+		return IssuedGatewayCertificate{}, fmt.Errorf("entropy source is required")
+	}
+	identity, err := controlIdentityURI("gateway", gatewayID)
+	if err != nil {
+		return IssuedGatewayCertificate{}, err
+	}
+	overlay, err := netip.ParseAddr(overlayIPv4)
+	if err != nil || !overlay.Is4() || overlay.String() != overlayIPv4 {
+		return IssuedGatewayCertificate{}, fmt.Errorf("%w: gateway overlay address must be canonical IPv4", ErrInvalidControlIdentity)
+	}
+	authority, authorityKey, err := parseControlAuthority(authorityCertificatePEM, authorityPrivateKeyPEM)
+	if err != nil {
+		return IssuedGatewayCertificate{}, err
+	}
+	issuedAt = issuedAt.UTC().Truncate(time.Second)
+	if issuedAt.IsZero() {
+		return IssuedGatewayCertificate{}, fmt.Errorf("%w: issuance time is required", ErrInvalidControlIdentity)
+	}
+	notAfter := issuedAt.Add(ControlLeafValidity)
+	if issuedAt.Before(authority.NotBefore) || notAfter.After(authority.NotAfter) {
+		return IssuedGatewayCertificate{}, fmt.Errorf("%w: control CA validity cannot cover a renewed gateway leaf", ErrInvalidControlIdentity)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(entropy)
+	if err != nil {
+		return IssuedGatewayCertificate{}, fmt.Errorf("generate gateway control key: %w", err)
+	}
+	serial, err := randomPositiveSerial(entropy)
+	if err != nil {
+		return IssuedGatewayCertificate{}, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "vpnctl gateway control leaf", Organization: []string{"vpnctl control"}},
+		NotBefore:    issuedAt.Add(-certificateBackdate), NotAfter: notAfter,
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true, URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.IP(overlay.AsSlice())},
+		SignatureAlgorithm: x509.PureEd25519, SubjectKeyId: publicKeyID(publicKey), AuthorityKeyId: append([]byte(nil), authority.SubjectKeyId...),
+	}
+	certificateDER, err := x509.CreateCertificate(entropy, template, authority, publicKey, authorityKey)
+	if err != nil {
+		return IssuedGatewayCertificate{}, fmt.Errorf("issue gateway control certificate: %w", err)
+	}
+	certificate, err := x509.ParseCertificate(certificateDER)
+	if err != nil {
+		return IssuedGatewayCertificate{}, fmt.Errorf("parse issued gateway control certificate: %w", err)
+	}
+	privatePEM, err := marshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return IssuedGatewayCertificate{}, err
+	}
+	return IssuedGatewayCertificate{
+		CertificatePEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER}),
+		PrivateKeyPEM:  privatePEM, IdentityURI: identity.String(), OverlayIPv4: overlayIPv4, Certificate: certificate,
 	}, nil
 }
 

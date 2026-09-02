@@ -74,6 +74,44 @@ func TestGatewayControlMaterialProfileAndTrustSeparation(t *testing.T) {
 	}
 }
 
+func TestIssueGatewayControlCertificateReusesOnlyControlCA(t *testing.T) {
+	t.Parallel()
+
+	issuedAt := time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC)
+	material, err := GenerateGatewayControlMaterial(rand.Reader, testGatewayID, "10.67.0.1", issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := parseCertificateForTest(t, material.GatewayCertificatePEM)
+	renewedAt := original.NotAfter.Add(-ControlRenewalWindow)
+	renewed, err := IssueGatewayControlCertificate(
+		rand.Reader, material.ControlCACertificatePEM, material.ControlCAPrivateKeyPEM,
+		testGatewayID, "10.67.0.1", renewedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.Certificate.SerialNumber.Cmp(original.SerialNumber) == 0 || bytes.Equal(renewed.PrivateKeyPEM, material.GatewayPrivateKeyPEM) ||
+		renewed.IdentityURI != "urn:vpnctl:gateway:"+testGatewayID || renewed.OverlayIPv4 != "10.67.0.1" {
+		t.Fatalf("renewed gateway identity = serial %s URI %q overlay %q", renewed.Certificate.SerialNumber, renewed.IdentityURI, renewed.OverlayIPv4)
+	}
+	ca := parseCertificateForTest(t, material.ControlCACertificatePEM)
+	if _, err := renewed.Certificate.Verify(x509.VerifyOptions{
+		Roots: newCertPool(ca), DNSName: "10.67.0.1", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: renewedAt,
+	}); err != nil {
+		t.Fatalf("renewed gateway chain = %v", err)
+	}
+	if !renewed.Certificate.NotAfter.Equal(renewedAt.Add(ControlLeafValidity)) || renewed.Certificate.NotAfter.After(ca.NotAfter) {
+		t.Fatalf("renewed validity = %s under CA %s", renewed.Certificate.NotAfter, ca.NotAfter)
+	}
+	if _, err := IssueGatewayControlCertificate(
+		rand.Reader, material.ControlCACertificatePEM, material.ControlCAPrivateKeyPEM,
+		testGatewayID, "10.67.0.1", ca.NotAfter.Add(-time.Hour),
+	); !errors.Is(err, ErrInvalidControlIdentity) {
+		t.Fatalf("CA-short renewal error = %v", err)
+	}
+}
+
 func TestNodeCSRAndIssuedCertificateBindOnlyAuthoritativeIdentity(t *testing.T) {
 	t.Parallel()
 

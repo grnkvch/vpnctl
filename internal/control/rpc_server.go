@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,11 +44,29 @@ type rpcLimits struct {
 
 type RPCServer struct {
 	overlayIPv4 string
+	gatewayID   string
 	protocols   *RPCProtocolRegistry
 	authorizer  RPCAuthorizer
 	now         func() time.Time
 	tlsConfig   *tls.Config
+	controlCA   *x509.Certificate
+	certificate atomic.Pointer[tls.Certificate]
 	limits      rpcLimits
+}
+
+type GatewayControlLeafActivation interface {
+	Activate()
+}
+
+type preparedGatewayControlLeaf struct {
+	server      *RPCServer
+	certificate *tls.Certificate
+}
+
+func (activation *preparedGatewayControlLeaf) Activate() {
+	if activation != nil && activation.server != nil && activation.certificate != nil {
+		activation.server.certificate.Store(activation.certificate)
+	}
 }
 
 func NewRPCServer(config RPCServerConfig) (*RPCServer, error) {
@@ -76,28 +95,66 @@ func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) 
 	if err != nil {
 		return nil, fmt.Errorf("load gateway control TLS identity: %w", err)
 	}
-	if leaf.PublicKeyAlgorithm != x509.Ed25519 || len(leaf.URIs) != 1 || leaf.URIs[0].String() != expectedURI.String() ||
-		len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != overlayIPv4 || len(leaf.DNSNames) != 0 || len(leaf.EmailAddresses) != 0 {
-		return nil, fmt.Errorf("%w: gateway certificate identity does not match configured overlay", ErrInvalidRPCIdentity)
-	}
 	clientCA, err := parseControlCACertificate(config.ClientCACertificatePEM)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots: newCertificatePool(clientCA), DNSName: overlayIPv4,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: config.Now().UTC(),
-	}); err != nil {
-		return nil, fmt.Errorf("verify gateway control TLS identity: %w", err)
+	if err := validateGatewayControlLeaf(leaf, expectedURI.String(), overlayIPv4, clientCA, config.Now().UTC()); err != nil {
+		return nil, err
 	}
-	return &RPCServer{
-		overlayIPv4: overlayIPv4, protocols: config.Protocols, authorizer: config.Authorizer, now: config.Now, limits: limits,
-		tlsConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-			Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
-			ClientCAs: newCertificatePool(clientCA), NextProtos: []string{"http/1.1"}, Time: config.Now,
+	server := &RPCServer{
+		overlayIPv4: overlayIPv4, gatewayID: config.GatewayID, protocols: config.Protocols,
+		authorizer: config.Authorizer, now: config.Now, controlCA: clientCA, limits: limits,
+	}
+	server.certificate.Store(&serverCertificate)
+	server.tlsConfig = &tls.Config{
+		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			certificate := server.certificate.Load()
+			if certificate == nil {
+				return nil, fmt.Errorf("gateway control certificate is unavailable")
+			}
+			return certificate, nil
 		},
-	}, nil
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  newCertificatePool(clientCA), NextProtos: []string{"http/1.1"}, Time: config.Now,
+	}
+	return server, nil
+}
+
+// PrepareGatewayControlLeaf completely validates a replacement leaf and key
+// without changing the live listener. Activate is then an infallible atomic
+// pointer swap, so unrelated data-plane processes are never restarted.
+func (server *RPCServer) PrepareGatewayControlLeaf(certificatePEM, privateKeyPEM []byte, now time.Time) (GatewayControlLeafActivation, error) {
+	if server == nil || server.controlCA == nil || server.gatewayID == "" || server.overlayIPv4 == "" {
+		return nil, fmt.Errorf("control RPC server is incomplete")
+	}
+	pair, leaf, err := parseTLSCertificate(certificatePEM, privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load renewed gateway control TLS identity: %w", err)
+	}
+	expectedURI, err := controlIdentityURI("gateway", server.gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGatewayControlLeaf(leaf, expectedURI.String(), server.overlayIPv4, server.controlCA, now.UTC()); err != nil {
+		return nil, err
+	}
+	return &preparedGatewayControlLeaf{server: server, certificate: &pair}, nil
+}
+
+func validateGatewayControlLeaf(leaf *x509.Certificate, expectedURI, overlayIPv4 string, authority *x509.Certificate, now time.Time) error {
+	if leaf == nil || authority == nil || leaf.PublicKeyAlgorithm != x509.Ed25519 || len(leaf.URIs) != 1 || leaf.URIs[0].String() != expectedURI ||
+		len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != overlayIPv4 || len(leaf.DNSNames) != 0 || len(leaf.EmailAddresses) != 0 {
+		return fmt.Errorf("%w: gateway certificate identity does not match configured overlay", ErrInvalidRPCIdentity)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots: newCertificatePool(authority), DNSName: overlayIPv4,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: now,
+	}); err != nil {
+		return fmt.Errorf("verify gateway control TLS identity: %w", err)
+	}
+	return nil
 }
 
 // ListenAndServe binds the fixed control port on only the derived gateway
