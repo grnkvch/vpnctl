@@ -50,7 +50,7 @@ func (authorizer *RPCNodeAuthorizer) AuthorizeRPC(_ context.Context, peer contro
 	}
 	for _, certificate := range state.Certificates {
 		if certificate.Kind == model.CertificateControlNode && certificate.OwnerKind == "node" && certificate.OwnerID == node.ID &&
-			certificate.Generation == node.CredentialGeneration && certificate.Fingerprint == peer.CertificateFingerprint {
+			certificate.EffectiveCredentialGeneration() == node.CredentialGeneration && certificate.Fingerprint == peer.CertificateFingerprint {
 			return control.RPCAuthorization{Authorized: true}, nil
 		}
 	}

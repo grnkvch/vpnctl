@@ -221,8 +221,17 @@ func (renewer *GatewayControlLeafRenewer) RenewIfNeeded(ctx context.Context) (Ga
 
 func gatewayControlCertificateIndexes(state model.State) (int, int, error) {
 	caIndex, leafIndex := -1, -1
+	rotationOperationID := ""
+	if _, operation, found, err := activeControlCARotation(state); err != nil {
+		return -1, -1, err
+	} else if found {
+		rotationOperationID = operation.ID
+	}
 	for index, certificate := range state.Certificates {
 		if certificate.OwnerKind != "host" || certificate.OwnerID != state.Host.ID {
+			continue
+		}
+		if rotationOperationID != "" && rotationCertificateIsStaged(certificate, rotationOperationID) {
 			continue
 		}
 		switch certificate.Kind {

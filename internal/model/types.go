@@ -318,21 +318,29 @@ type Expose struct {
 }
 
 type Certificate struct {
-	SchemaVersion  int             `json:"schema_version"`
-	ID             string          `json:"id"`
-	Kind           CertificateKind `json:"kind"`
-	OwnerKind      string          `json:"owner_kind"`
-	OwnerID        string          `json:"owner_id"`
-	Fingerprint    string          `json:"fingerprint"`
-	SerialHex      string          `json:"serial_hex"`
-	Subject        string          `json:"subject"`
-	SANs           []string        `json:"sans"`
-	NotBefore      time.Time       `json:"not_before"`
-	NotAfter       time.Time       `json:"not_after"`
-	WarningDays    int             `json:"warning_days"`
-	Generation     uint64          `json:"generation"`
-	CertificateRef string          `json:"certificate_ref"`
-	PrivateKeyRef  SecretRef       `json:"private_key_ref,omitempty"`
+	SchemaVersion        int             `json:"schema_version"`
+	ID                   string          `json:"id"`
+	Kind                 CertificateKind `json:"kind"`
+	OwnerKind            string          `json:"owner_kind"`
+	OwnerID              string          `json:"owner_id"`
+	Fingerprint          string          `json:"fingerprint"`
+	SerialHex            string          `json:"serial_hex"`
+	Subject              string          `json:"subject"`
+	SANs                 []string        `json:"sans"`
+	NotBefore            time.Time       `json:"not_before"`
+	NotAfter             time.Time       `json:"not_after"`
+	WarningDays          int             `json:"warning_days"`
+	Generation           uint64          `json:"generation"`
+	CredentialGeneration uint64          `json:"credential_generation,omitempty"`
+	CertificateRef       string          `json:"certificate_ref"`
+	PrivateKeyRef        SecretRef       `json:"private_key_ref,omitempty"`
+}
+
+func (certificate Certificate) EffectiveCredentialGeneration() uint64 {
+	if certificate.CredentialGeneration != 0 {
+		return certificate.CredentialGeneration
+	}
+	return certificate.Generation
 }
 
 type EnrollmentIdentity struct {

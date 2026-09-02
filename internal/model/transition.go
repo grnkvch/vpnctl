@@ -439,6 +439,9 @@ func validateCertificateTransitions(before, after []Certificate) error {
 		if old.Kind != certificate.Kind || old.OwnerKind != certificate.OwnerKind || old.OwnerID != certificate.OwnerID {
 			return transitionError("certificate %s kind and owner are immutable", certificate.ID)
 		}
+		if old.CredentialGeneration != certificate.CredentialGeneration {
+			return transitionError("certificate %s credential generation is immutable", certificate.ID)
+		}
 	}
 	return nil
 }

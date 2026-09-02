@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -62,7 +63,7 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 	if err != nil || peer.NodeID != config.NodeID {
 		return nil, fmt.Errorf("%w: node certificate does not match configured node", ErrInvalidRPCIdentity)
 	}
-	controlCA, err := parseControlCACertificate(config.CACertificatePEM)
+	controlCAs, err := parseControlCACertificateBundle(config.CACertificatePEM)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 		config.Now = time.Now
 	}
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots: newCertificatePool(controlCA), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: config.Now().UTC(),
+		Roots: newCertificatePool(controlCAs...), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: config.Now().UTC(),
 	}); err != nil {
 		return nil, fmt.Errorf("verify node control TLS identity: %w", err)
 	}
@@ -81,7 +82,7 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 	if timeout <= 0 || timeout > time.Minute {
 		return nil, fmt.Errorf("control RPC client timeout must be positive and no more than one minute")
 	}
-	roots := newCertificatePool(controlCA)
+	roots := newCertificatePool(controlCAs...)
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		RootCAs: roots, Certificates: []tls.Certificate{clientCertificate}, ServerName: host, NextProtos: []string{"http/1.1"}, Time: config.Now,
@@ -98,6 +99,40 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 		},
 	}
 	return &RPCClient{address: config.Address, nodeID: config.NodeID, tlsConfig: tlsConfig, timeout: timeout}, nil
+}
+
+func parseControlCACertificateBundle(certificatePEM []byte) ([]*x509.Certificate, error) {
+	remaining := bytes.TrimSpace(certificatePEM)
+	certificates := make([]*x509.Certificate, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	for len(remaining) != 0 {
+		block, rest := pem.Decode(remaining)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("control CA bundle must contain only PEM certificates")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse control CA certificate: %w", err)
+		}
+		if !certificate.IsCA || !certificate.BasicConstraintsValid || certificate.PublicKeyAlgorithm != x509.Ed25519 ||
+			certificate.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return nil, fmt.Errorf("control CA certificate is not an Ed25519 certificate authority")
+		}
+		fingerprint := certificateFingerprint(certificate)
+		if _, duplicate := seen[fingerprint]; duplicate {
+			return nil, fmt.Errorf("control CA bundle contains a duplicate authority")
+		}
+		seen[fingerprint] = struct{}{}
+		certificates = append(certificates, certificate)
+		if len(certificates) > 2 {
+			return nil, fmt.Errorf("control CA bundle must contain one or two authorities")
+		}
+		remaining = bytes.TrimSpace(rest)
+	}
+	if len(certificates) == 0 {
+		return nil, fmt.Errorf("control CA bundle must contain one or two authorities")
+	}
+	return certificates, nil
 }
 
 // Call creates a new HTTP transport for exactly one request and closes it on

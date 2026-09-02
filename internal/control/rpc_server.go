@@ -49,8 +49,7 @@ type RPCServer struct {
 	authorizer  RPCAuthorizer
 	now         func() time.Time
 	tlsConfig   *tls.Config
-	controlCA   *x509.Certificate
-	certificate atomic.Pointer[tls.Certificate]
+	tlsState    atomic.Pointer[rpcTLSState]
 	limits      rpcLimits
 }
 
@@ -58,14 +57,20 @@ type GatewayControlLeafActivation interface {
 	Activate()
 }
 
-type preparedGatewayControlLeaf struct {
-	server      *RPCServer
+type rpcTLSState struct {
 	certificate *tls.Certificate
+	controlCAs  []*x509.Certificate
+	clientCAs   *x509.CertPool
 }
 
-func (activation *preparedGatewayControlLeaf) Activate() {
-	if activation != nil && activation.server != nil && activation.certificate != nil {
-		activation.server.certificate.Store(activation.certificate)
+type preparedGatewayControlTLS struct {
+	server *RPCServer
+	state  *rpcTLSState
+}
+
+func (activation *preparedGatewayControlTLS) Activate() {
+	if activation != nil && activation.server != nil && activation.state != nil {
+		activation.server.tlsState.Store(activation.state)
 	}
 }
 
@@ -104,20 +109,29 @@ func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) 
 	}
 	server := &RPCServer{
 		overlayIPv4: overlayIPv4, gatewayID: config.GatewayID, protocols: config.Protocols,
-		authorizer: config.Authorizer, now: config.Now, controlCA: clientCA, limits: limits,
+		authorizer: config.Authorizer, now: config.Now, limits: limits,
 	}
-	server.certificate.Store(&serverCertificate)
+	server.tlsState.Store(&rpcTLSState{
+		certificate: &serverCertificate,
+		controlCAs:  []*x509.Certificate{clientCA},
+		clientCAs:   newCertificatePool(clientCA),
+	})
 	server.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			certificate := server.certificate.Load()
-			if certificate == nil {
-				return nil, fmt.Errorf("gateway control certificate is unavailable")
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			state := server.tlsState.Load()
+			if state == nil || state.certificate == nil || state.clientCAs == nil {
+				return nil, fmt.Errorf("gateway control TLS state is unavailable")
 			}
-			return certificate, nil
+			return &tls.Config{
+				MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
+				Certificates: []tls.Certificate{*state.certificate},
+				ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: state.clientCAs,
+				NextProtos: []string{"http/1.1"}, Time: server.now,
+			}, nil
 		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  newCertificatePool(clientCA), NextProtos: []string{"http/1.1"}, Time: config.Now,
+		NextProtos: []string{"http/1.1"}, Time: config.Now,
 	}
 	return server, nil
 }
@@ -126,8 +140,12 @@ func newRPCServer(config RPCServerConfig, limits rpcLimits) (*RPCServer, error) 
 // without changing the live listener. Activate is then an infallible atomic
 // pointer swap, so unrelated data-plane processes are never restarted.
 func (server *RPCServer) PrepareGatewayControlLeaf(certificatePEM, privateKeyPEM []byte, now time.Time) (GatewayControlLeafActivation, error) {
-	if server == nil || server.controlCA == nil || server.gatewayID == "" || server.overlayIPv4 == "" {
+	if server == nil || server.gatewayID == "" || server.overlayIPv4 == "" {
 		return nil, fmt.Errorf("control RPC server is incomplete")
+	}
+	current := server.tlsState.Load()
+	if current == nil || len(current.controlCAs) == 0 || current.clientCAs == nil {
+		return nil, fmt.Errorf("control RPC TLS state is unavailable")
 	}
 	pair, leaf, err := parseTLSCertificate(certificatePEM, privateKeyPEM)
 	if err != nil {
@@ -137,10 +155,66 @@ func (server *RPCServer) PrepareGatewayControlLeaf(certificatePEM, privateKeyPEM
 	if err != nil {
 		return nil, err
 	}
-	if err := validateGatewayControlLeaf(leaf, expectedURI.String(), server.overlayIPv4, server.controlCA, now.UTC()); err != nil {
+	if err := validateGatewayControlLeafAuthorities(leaf, expectedURI.String(), server.overlayIPv4, current.controlCAs, now.UTC()); err != nil {
 		return nil, err
 	}
-	return &preparedGatewayControlLeaf{server: server, certificate: &pair}, nil
+	return &preparedGatewayControlTLS{server: server, state: &rpcTLSState{
+		certificate: &pair,
+		controlCAs:  append([]*x509.Certificate(nil), current.controlCAs...),
+		clientCAs:   current.clientCAs,
+	}}, nil
+}
+
+// PrepareGatewayControlTLS validates a complete control-plane TLS generation.
+// The returned activation changes the served leaf and accepted node CAs in one
+// atomic pointer swap, which makes staged CA commit and rollback infallible.
+func (server *RPCServer) PrepareGatewayControlTLS(certificatePEM, privateKeyPEM []byte, clientCACertificatePEMs [][]byte, now time.Time) (GatewayControlLeafActivation, error) {
+	if server == nil || server.gatewayID == "" || server.overlayIPv4 == "" {
+		return nil, fmt.Errorf("control RPC server is incomplete")
+	}
+	if len(clientCACertificatePEMs) < 1 || len(clientCACertificatePEMs) > 2 {
+		return nil, fmt.Errorf("control RPC requires one or two accepted client CAs")
+	}
+	pair, leaf, err := parseTLSCertificate(certificatePEM, privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load gateway control TLS identity: %w", err)
+	}
+	authorities := make([]*x509.Certificate, 0, len(clientCACertificatePEMs))
+	seen := make(map[string]struct{}, len(clientCACertificatePEMs))
+	for _, certificatePEM := range clientCACertificatePEMs {
+		authority, err := parseControlCACertificate(certificatePEM)
+		if err != nil {
+			return nil, err
+		}
+		fingerprint := certificateFingerprint(authority)
+		if _, duplicate := seen[fingerprint]; duplicate {
+			return nil, fmt.Errorf("control RPC client CA bundle contains a duplicate authority")
+		}
+		seen[fingerprint] = struct{}{}
+		authorities = append(authorities, authority)
+	}
+	expectedURI, err := controlIdentityURI("gateway", server.gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGatewayControlLeafAuthorities(leaf, expectedURI.String(), server.overlayIPv4, authorities, now.UTC()); err != nil {
+		return nil, err
+	}
+	return &preparedGatewayControlTLS{server: server, state: &rpcTLSState{
+		certificate: &pair, controlCAs: authorities, clientCAs: newCertificatePool(authorities...),
+	}}, nil
+}
+
+func validateGatewayControlLeafAuthorities(leaf *x509.Certificate, expectedURI, overlayIPv4 string, authorities []*x509.Certificate, now time.Time) error {
+	var verificationErrors []error
+	for _, authority := range authorities {
+		if err := validateGatewayControlLeaf(leaf, expectedURI, overlayIPv4, authority, now); err == nil {
+			return nil
+		} else {
+			verificationErrors = append(verificationErrors, err)
+		}
+	}
+	return fmt.Errorf("gateway control leaf is not issued by an accepted control CA: %w", errors.Join(verificationErrors...))
 }
 
 func validateGatewayControlLeaf(leaf *x509.Certificate, expectedURI, overlayIPv4 string, authority *x509.Certificate, now time.Time) error {

@@ -659,6 +659,9 @@ func (certificate Certificate) Validate() error {
 	if certificate.Generation == 0 {
 		return invalid("generation", "must be positive")
 	}
+	if certificate.CredentialGeneration != 0 && certificate.Kind != CertificateControlNode {
+		return invalid("credential_generation", "is allowed only for a node control certificate")
+	}
 	if err := validateOpaqueRef("certificate_ref", certificate.CertificateRef); err != nil {
 		return err
 	}
