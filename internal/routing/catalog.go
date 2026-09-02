@@ -32,8 +32,9 @@ type PresetStateReader interface {
 }
 
 type PresetCatalog struct {
-	paths store.Paths
-	state PresetStateReader
+	paths   store.Paths
+	state   PresetStateReader
+	updates PresetTemplateUpdateSource
 }
 
 type PresetIssue struct {
@@ -50,14 +51,15 @@ type PresetAssignment struct {
 }
 
 type PresetSourceView struct {
-	Name      string
-	Filename  string
-	Path      string
-	Present   bool
-	Valid     bool
-	SHA256    string
-	Selectors []model.Selector
-	Issues    []PresetIssue
+	Name            string
+	Filename        string
+	Path            string
+	Present         bool
+	Valid           bool
+	SHA256          string
+	BuiltinRevision uint64
+	Selectors       []model.Selector
+	Issues          []PresetIssue
 }
 
 type PresetEffectiveView struct {
@@ -70,14 +72,17 @@ type PresetEffectiveView struct {
 }
 
 type PresetSummary struct {
-	Name             string
-	SourcePresent    bool
-	SourceValid      bool
-	EffectivePresent bool
-	SourceChanged    bool
-	SelectorChanged  bool
-	Assignments      []PresetAssignment
-	Issues           []PresetIssue
+	Name                     string
+	SourcePresent            bool
+	SourceValid              bool
+	EffectivePresent         bool
+	SourceChanged            bool
+	SelectorChanged          bool
+	Builtin                  bool
+	BuiltinRevision          uint64
+	AvailableBuiltinRevision uint64
+	Assignments              []PresetAssignment
+	Issues                   []PresetIssue
 }
 
 type PresetListResult struct {
@@ -91,7 +96,13 @@ type PresetShowResult struct {
 	Source          *PresetSourceView
 	Effective       *PresetEffectiveView
 	Assignments     []PresetAssignment
+	BuiltinUpdate   *PresetBuiltinUpdateView
 	Issues          []PresetIssue
+}
+
+type PresetBuiltinUpdateView struct {
+	SourceRevision    uint64
+	AvailableRevision uint64
 }
 
 type PresetValidationResult struct {
@@ -133,14 +144,59 @@ type PresetDeleteCheck struct {
 }
 
 func NewPresetCatalog(paths store.Paths, state PresetStateReader) (*PresetCatalog, error) {
+	updates, err := CurrentBuiltinPresetUpdateCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("load built-in preset template catalog: %w", err)
+	}
+	return NewPresetCatalogWithUpdates(paths, state, updates)
+}
+
+func NewPresetCatalogWithUpdates(paths store.Paths, state PresetStateReader, updates PresetTemplateUpdateSource) (*PresetCatalog, error) {
 	if state == nil {
 		return nil, fmt.Errorf("preset catalog state reader is required")
+	}
+	if updates == nil {
+		return nil, fmt.Errorf("preset catalog built-in update source is required")
 	}
 	want, err := store.NewPaths(paths.Root)
 	if err != nil || want != paths {
 		return nil, fmt.Errorf("preset catalog paths do not match the system root")
 	}
-	return &PresetCatalog{paths: paths, state: state}, nil
+	return &PresetCatalog{paths: paths, state: state, updates: updates}, nil
+}
+
+func (catalog *PresetCatalog) builtinUpdateView(name string, source *PresetSourceView) *PresetBuiltinUpdateView {
+	latest, err := catalog.updates.Latest(name)
+	if err != nil {
+		return nil
+	}
+	view := &PresetBuiltinUpdateView{}
+	if source == nil || !source.Present {
+		view.AvailableRevision = latest.Revision
+		return view
+	}
+	view.SourceRevision = source.BuiltinRevision
+	if source.BuiltinRevision == 0 {
+		return view
+	}
+	update, err := catalog.updates.Update(name, source.BuiltinRevision)
+	if err == nil {
+		view.AvailableRevision = update.Next.Revision
+	}
+	return view
+}
+
+func (catalog *PresetCatalog) annotateBuiltinSummary(summary *PresetSummary, source PresetSourceView) {
+	if summary == nil {
+		return
+	}
+	view := catalog.builtinUpdateView(summary.Name, &source)
+	if view == nil {
+		return
+	}
+	summary.Builtin = true
+	summary.BuiltinRevision = view.SourceRevision
+	summary.AvailableBuiltinRevision = view.AvailableRevision
 }
 
 func (catalog *PresetCatalog) List() (PresetListResult, error) {
@@ -157,6 +213,7 @@ func (catalog *PresetCatalog) List() (PresetListResult, error) {
 		}
 		effective, active := inspection.effective[key]
 		summary := summarizePreset(source.view, effective, active, inspection.assignments[key])
+		catalog.annotateBuiltinSummary(&summary, source.view)
 		summary.Issues = appendMatchingPresetIssues(summary.Issues, inspection.issues, summary.Name)
 		items = append(items, summary)
 		seen[key] = struct{}{}
@@ -166,6 +223,7 @@ func (catalog *PresetCatalog) List() (PresetListResult, error) {
 			continue
 		}
 		summary := summarizePreset(PresetSourceView{Name: effective.Name}, effective, true, inspection.assignments[key])
+		catalog.annotateBuiltinSummary(&summary, PresetSourceView{Name: effective.Name})
 		summary.Issues = appendMatchingPresetIssues(summary.Issues, inspection.issues, summary.Name)
 		items = append(items, summary)
 	}
@@ -208,9 +266,10 @@ func (catalog *PresetCatalog) Show(name string) (PresetShowResult, error) {
 		issues = append(issues, source.Issues...)
 	}
 	issues = appendMatchingPresetIssues(issues, inspection.issues, name)
+	builtinUpdate := catalog.builtinUpdateView(name, source)
 	return PresetShowResult{
 		StateGeneration: inspection.state.Generation, Source: source, Effective: effective,
-		Assignments: clonePresetAssignments(inspection.assignments[key]), Issues: issues,
+		Assignments: clonePresetAssignments(inspection.assignments[key]), BuiltinUpdate: builtinUpdate, Issues: issues,
 	}, nil
 }
 
@@ -230,12 +289,16 @@ func (catalog *PresetCatalog) Diff() (PresetDiffResult, error) {
 	if err != nil {
 		return PresetDiffResult{}, err
 	}
+	return diffPresetInspection(inspection), nil
+}
+
+func diffPresetInspection(inspection presetCatalogInspection) PresetDiffResult {
 	result := PresetDiffResult{
 		StateGeneration: inspection.state.Generation, Valid: len(inspection.issues) == 0,
 		Changes: []PresetChange{}, Issues: clonePresetIssues(inspection.issues),
 	}
 	if !result.Valid {
-		return result, nil
+		return result
 	}
 	sources := make(map[string]inspectedPresetSource, len(inspection.sources))
 	names := make(map[string]string, len(inspection.sources)+len(inspection.effective))
@@ -265,7 +328,7 @@ func (catalog *PresetCatalog) Diff() (PresetDiffResult, error) {
 			result.Changes = append(result.Changes, change)
 		}
 	}
-	return result, nil
+	return result
 }
 
 // CheckDelete is a read-only guard for reviewed source-removal workflows. It
@@ -328,9 +391,17 @@ func (catalog *PresetCatalog) inspect() (presetCatalogInspection, error) {
 	if state.Host.Role != model.RoleGateway {
 		return presetCatalogInspection{}, fmt.Errorf("preset catalog requires gateway state")
 	}
-	sources, issues, err := inspectPresetSources(catalog.paths.PresetsDir)
+	sources, setIssues, err := inspectPresetSources(catalog.paths.PresetsDir)
 	if err != nil {
 		return presetCatalogInspection{}, err
+	}
+	return analyzePresetSources(state, sources, setIssues), nil
+}
+
+func analyzePresetSources(state model.State, sources []inspectedPresetSource, setIssues []PresetIssue) presetCatalogInspection {
+	issues := clonePresetIssues(setIssues)
+	for _, source := range sources {
+		issues = append(issues, source.view.Issues...)
 	}
 	effective := make(map[string]PresetEffectiveView, len(state.Presets))
 	for _, preset := range state.Presets {
@@ -390,7 +461,7 @@ func (catalog *PresetCatalog) inspect() (presetCatalogInspection, error) {
 		}
 	}
 	sortPresetIssues(issues)
-	return presetCatalogInspection{state: state, sources: sources, effective: effective, assignments: assignments, issues: issues}, nil
+	return presetCatalogInspection{state: state, sources: sources, effective: effective, assignments: assignments, issues: issues}
 }
 
 func inspectPresetSources(directoryPath string) ([]inspectedPresetSource, []PresetIssue, error) {
@@ -432,7 +503,6 @@ func inspectPresetSources(directoryPath string) ([]inspectedPresetSource, []Pres
 		}
 		source := inspectPresetSourceFile(directoryPath, filename)
 		sources = append(sources, source)
-		issues = append(issues, source.view.Issues...)
 		totalSelectors += len(source.view.Selectors)
 		if totalSelectors > PresetMaximumSetSelectors {
 			issues = append(issues, newPresetIssue("too_many_preset_selectors", "", "", fmt.Sprintf("preset source set exceeds %d total selectors", PresetMaximumSetSelectors)))
@@ -460,6 +530,16 @@ func inspectPresetSourceFile(directoryPath, filename string) inspectedPresetSour
 		view.Issues = append(view.Issues, issue)
 		return inspectedPresetSource{view: view, key: key}
 	}
+	return inspectPresetSourceData(directoryPath, filename, data)
+}
+
+func inspectPresetSourceData(directoryPath, filename string, data []byte) inspectedPresetSource {
+	baseName := strings.TrimSuffix(filename, ".yaml")
+	view := PresetSourceView{
+		Name: safePresetName(baseName), Filename: safePresetFilename(filename), Path: filepath.Join(directoryPath, filename),
+		Present: true, Issues: []PresetIssue{},
+	}
+	key := strings.ToLower(baseName)
 	digest := sha256.Sum256(data)
 	view.SHA256 = hex.EncodeToString(digest[:])
 	ast, err := DecodePresetDocument(data)
@@ -474,6 +554,9 @@ func inspectPresetSourceFile(directoryPath, filename string) inspectedPresetSour
 		return inspectedPresetSource{view: view, ast: ast, key: key}
 	}
 	view.Valid = true
+	if revision, err := builtinPresetRevision(data, ast.Name); err == nil {
+		view.BuiltinRevision = revision
+	}
 	view.Selectors = append([]model.Selector(nil), ast.Selectors...)
 	return inspectedPresetSource{view: view, ast: ast, key: key}
 }

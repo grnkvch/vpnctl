@@ -64,3 +64,37 @@ preset that is still assigned to any node or client is a whole-set validation
 error until every assignment is explicitly removed. There is no separate
 public `preset delete` command; source creation, editing, and deletion remain
 explicit filesystem operations followed by the reviewed apply flow.
+
+## Reviewed built-in template updates
+
+Built-in sources carry a comment-only marker such as
+`# vpnctl built-in-template: telegram@1`. The marker does not add a YAML field
+or broaden the public selector schema. Marker-less sources are accepted only as
+the legacy revision-1 base; a malformed, duplicated, unknown, or stale revision
+cannot be guessed and makes template update return a conflict. Releases retain
+the embedded adjacent base revisions needed for an offline three-way merge;
+there is no remote ruleset or background fetch.
+
+The merge compares the embedded base, the current user source, and the next
+embedded template by logical `(selector type, value)` matcher. Disjoint
+upstream changes and operator additions/exclusions are preserved. If both sides
+change the same matcher's include/exclude membership incompatibly, the source
+is left byte-identical and the conflicting matchers are reported. A successful
+merge is rendered back into canonical selector order with the next revision
+marker; comments and formatting other than the managed header are intentionally
+not semantic and may be normalized after review.
+
+Planning is read-only and binds the review to the complete source-set hash and
+authoritative state generation. Apply rejects a stale plan if any preset source
+or state generation changed after review. A deleted built-in remains absent
+until an explicit update, which restores the latest embedded revision.
+
+Immediate update atomically replaces only the selected source and publishes a
+new effective generation for that preset and its assigned policies. Other valid
+manual edits remain pending for the general `vpnctl apply` flow; invalid files
+anywhere still reject the complete candidate before mutation. Deferred update
+atomically replaces only the YAML and leaves authoritative/effective state
+unchanged. A state-write failure proven to have left the old generation active
+restores the exact prior YAML (or removes an explicitly restored file); an
+uncertain/committed write is reported without attempting a destructive blind
+rollback.

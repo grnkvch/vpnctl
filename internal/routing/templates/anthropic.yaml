@@ -1,3 +1,4 @@
+# vpnctl built-in-template: anthropic@1
 # Editable vpnctl preset source. Changes become active only after reviewed apply.
 schema_version: 1
 name: anthropic
