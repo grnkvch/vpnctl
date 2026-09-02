@@ -53,7 +53,7 @@
 - [x] 5.5 Implement preflight conflicts for UFW/firewalld, reserved ports, incompatible routes/TUN/WireGuard, and unmanaged reverse proxies while permitting non-conflicting foreign resources; verify conflicts produce actionable plans and zero mutation.
 - [x] 5.6 Implement the controller-independent systemd watchdog snapshot/rollback executable and 120-second timer; verify controller/CLI kill and timeout restore only prior vpnctl rules, routes, rules, and sysctls.
 - [x] 5.7 Implement `vpnctl confirm <id>` with one-time IDs and proof of a newly established post-activation SSH session; verify original-session, reused-ID, wrong-port, expired, and successful-new-session cases.
-- [ ] 5.8 Implement role-scoped systemd unit/config installation and `Restart=on-failure`; verify gateway and node init never install or start the other role's services.
+- [x] 5.8 Implement role-scoped systemd unit/config installation and `Restart=on-failure`; verify gateway and node init never install or start the other role's services.
 - [ ] 5.9 Implement idempotent `init --gateway` planning/application with fixed ports, default pools, explicit public IP, host ownership, presets, PKI placeholders, and lockout watchdog; verify a second identical init has no effect.
 - [ ] 5.10 Implement idempotent `init --node` without join or gateway services and reject role changes; verify node state is initialized but contains no enrolled identity or active tunnel.
 - [ ] 5.11 Implement the optional managed 1 GB swap plan, confirmed creation, status, and lifecycle ownership; verify accept, decline, existing-swap, insufficient-disk, uninstall, and purge behaviors.
