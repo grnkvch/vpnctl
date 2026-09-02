@@ -66,7 +66,6 @@ var (
 	commandPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)*$`)
 	codePattern    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	safeKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	unsafeKeyPart  = regexp.MustCompile(`(^|_)(secret|token|private_key|authorization|passphrase|password|request_body|response_body|webhook_path|public_url|probe_url)($|_)`)
 )
 
 func NewResult(command string, status Status, category ExitCategory, data SafeObject) Result {
@@ -269,7 +268,7 @@ func validateSafeList(path string, values SafeList, depth int) error {
 }
 
 func validateSafeKey(key string) error {
-	if !safeKeyPattern.MatchString(key) || unsafeKeyPart.MatchString(key) {
+	if !safeKeyPattern.MatchString(key) || !ClassifyField(key).AllowedInResult {
 		return fmt.Errorf("key is not allowed by the safe output contract")
 	}
 	return nil

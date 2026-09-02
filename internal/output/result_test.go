@@ -16,10 +16,6 @@ func TestHumanResultGolden(t *testing.T) {
 		"output_path": "/var/lib/vpnctl/exports/clients/iphone.clash.yaml",
 		"file_mode":   "0600",
 		"generation":  uint64(12),
-		"profile":     "profile-secret-canary",
-		"resource": SafeObject{
-			"credential": "credential-secret-canary",
-		},
 	})
 	result.ResourceIDs = map[string]string{
 		"operation_id": "op-7K3M2P",

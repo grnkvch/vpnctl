@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -107,5 +108,43 @@ func TestHumanEmitterUsesSameResultAndExitContract(t *testing.T) {
 	}
 	if !strings.HasPrefix(stdout.String(), "DEGRADED status\n") || stderr.Len() != 0 {
 		t.Fatalf("human streams stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestEmitterStreamsNeverExposeOpaqueSensitiveValues(t *testing.T) {
+	t.Parallel()
+
+	secret, err := output.NewSecretString("Authorization-Bearer-token-canary")
+	if err != nil {
+		t.Fatalf("NewSecretString() error = %v", err)
+	}
+	path, err := output.NewSensitivePath("/telegram/webhook/path-canary")
+	if err != nil {
+		t.Fatalf("NewSensitivePath() error = %v", err)
+	}
+	for _, jsonMode := range []bool{false, true} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		emitter, err := NewResultEmitter(&stdout, &stderr, jsonMode)
+		if err != nil {
+			t.Fatalf("NewResultEmitter() error = %v", err)
+		}
+		if err := emitter.Progress(fmt.Sprintf("request authorization=%s path=%s", secret, path)); err != nil {
+			t.Fatalf("Progress() error = %v", err)
+		}
+		result := output.NewResult("doctor", output.StatusOK, output.CategorySuccess, output.SafeObject{
+			"scope":  "ingress",
+			"checks": output.SafeList{},
+		})
+		result.Warnings = []output.Message{{Code: "probe_skipped", Message: fmt.Sprintf("probe %s skipped for %s", path, secret)}}
+		if _, err := emitter.Emit(result); err != nil {
+			t.Fatalf("Emit(json=%t) error = %v", jsonMode, err)
+		}
+		combined := stdout.String() + stderr.String()
+		for _, canary := range []string{"Authorization-Bearer-token-canary", "/telegram/webhook/path-canary"} {
+			if strings.Contains(combined, canary) {
+				t.Errorf("emitter json=%t leaked %q in %q", jsonMode, canary, combined)
+			}
+		}
 	}
 }

@@ -1,0 +1,8 @@
+secret string: <redacted>
+secret value: <redacted>
+secret quoted: <redacted>
+secret detail: <redacted>
+path string: <sensitive-path>
+path value: <sensitive-path>
+path quoted: <sensitive-path>
+path detail: <sensitive-path>
