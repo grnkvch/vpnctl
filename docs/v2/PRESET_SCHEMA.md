@@ -39,3 +39,28 @@ Composition keeps preset boundaries. Each preset first evaluates its own
 then unioned. An explicit include in one preset can therefore reselect a domain
 or IP excluded by another preset. Source rule order and preset file order do not
 change the normalized composition.
+
+## Source inspection and pending changes
+
+The gateway treats files in `presets.d` as a candidate source set and the
+presets stored in authoritative state as the last active effective generation.
+The read-only `preset list`, `preset show`, `preset validate`, and `preset diff`
+operations compare those two views; they never publish state or rewrite source
+files.
+
+Validation always covers the complete source set. Each `*.yaml` entry must be a
+bounded regular file rather than a symlink, its document name must equal its
+filename, and all documents must form one valid composition. A validation
+failure rejects the candidate set as a whole, so `diff` returns issues without
+a partial change plan and the previous effective generation remains active.
+
+Diffs distinguish a raw source change from a normalized selector change. A
+comment-only edit is therefore visible and reviewable without being reported as
+a routing-semantic change. Added and removed selectors, presets, and affected
+node/client assignments are returned in deterministic order.
+
+Deleting an unassigned YAML source is a valid pending deletion. Deleting a
+preset that is still assigned to any node or client is a whole-set validation
+error until every assignment is explicitly removed. There is no separate
+public `preset delete` command; source creation, editing, and deletion remain
+explicit filesystem operations followed by the reviewed apply flow.

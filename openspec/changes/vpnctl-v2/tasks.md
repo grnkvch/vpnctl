@@ -75,7 +75,7 @@
 - [x] 7.1 Define and implement the public versioned preset YAML schema and normalized selector AST without actions/raw Mihomo fields; verify unknown types/actions/outbounds fail whole-set validation.
 - [x] 7.2 Ship editable `telegram`, `openai`, and `anthropic` templates and initialize them only when absent; verify update never recreates a user-deleted preset or mutates user source implicitly.
 - [x] 7.3 Implement include-minus-exclude and cross-preset union normalization with order independence; verify property tests cover reordered files/rules and cross-preset reselection.
-- [ ] 7.4 Implement preset list/show/validate/diff and assigned-preset deletion guard; verify manual invalid edits leave the prior effective generation active.
+- [x] 7.4 Implement preset list/show/validate/diff and assigned-preset deletion guard; verify manual invalid edits leave the prior effective generation active.
 - [ ] 7.5 Implement reviewed three-way built-in template update with user additions/exclusions preservation, immediate/deferred apply, and merge conflicts; verify safe and unsafe merge fixtures.
 - [ ] 7.6 Implement atomic full policy set/clear for current node and explicit client target, including unknown/empty validation and pending node policy; verify no incremental or automatic assignment path exists.
 - [ ] 7.7 Implement client add/list/show with immutable identity, unique name, stable address, explicit atomic initial presets, and secret-free views; verify at least five isolated clients and duplicate/unknown failures.
