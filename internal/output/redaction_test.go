@@ -172,6 +172,19 @@ func TestSecretAcceptsArbitraryBinaryMaterial(t *testing.T) {
 	}
 }
 
+func TestSecretDestroyClearsRetainedValue(t *testing.T) {
+	t.Parallel()
+
+	secret := mustSecret(t, "short-lived-token")
+	secret.Destroy()
+	if err := secret.Use(func([]byte) error { return nil }); err == nil {
+		t.Fatal("Secret.Use() succeeded after Destroy()")
+	}
+	secret.Destroy()
+	var nilSecret *Secret
+	nilSecret.Destroy()
+}
+
 func FuzzOpaqueSensitiveFormatting(f *testing.F) {
 	for _, seed := range []string{"invite token", "private key", "Authorization: Bearer abc", "request body", "/telegram/webhook"} {
 		f.Add(seed)

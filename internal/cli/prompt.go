@@ -37,6 +37,15 @@ func (inputs *InteractionInputs) Take(stepID string) []byte {
 	return value
 }
 
+// Copy returns a caller-owned copy for validation without transferring or
+// extending ownership of the retained hidden input. The caller must wipe it.
+func (inputs *InteractionInputs) Copy(stepID string) []byte {
+	if inputs == nil {
+		return nil
+	}
+	return append([]byte(nil), inputs.values[stepID]...)
+}
+
 func (inputs *InteractionInputs) Destroy() {
 	if inputs == nil {
 		return
@@ -51,8 +60,39 @@ func (inputs *InteractionInputs) Destroy() {
 // complete plan has proven that every required channel exists. Output steps are
 // deliberately deferred until the authoritative operation succeeds.
 func ReadInteractionInputs(plan InteractionPlan, terminal PromptIO) (*InteractionInputs, error) {
-	if err := plan.RequireAllowed(); err != nil {
+	if err := requireInteractionPhases(plan, InteractionInput, InteractionConsent, InteractionOutput); err != nil {
 		return nil, err
+	}
+	return readInteractionPhases(plan, terminal, InteractionInput, InteractionConsent)
+}
+
+// ReadSecretInputs performs only hidden pre-plan input. It also preflights the
+// one-time output channel so a secret-issuing operation cannot activate a token
+// when no controlling TTY was available at command start.
+func ReadSecretInputs(plan InteractionPlan, terminal PromptIO) (*InteractionInputs, error) {
+	if err := requireInteractionPhases(plan, InteractionInput, InteractionOutput); err != nil {
+		return nil, err
+	}
+	return readInteractionPhases(plan, terminal, InteractionInput)
+}
+
+// ReadConsent performs the post-plan consent phase. The complete interaction
+// plan, including any required one-time output, is checked before prompting.
+func ReadConsent(plan InteractionPlan, terminal PromptIO) error {
+	if err := requireInteractionPhases(plan, InteractionConsent, InteractionOutput); err != nil {
+		return err
+	}
+	inputs, err := readInteractionPhases(plan, terminal, InteractionConsent)
+	if inputs != nil {
+		inputs.Destroy()
+	}
+	return err
+}
+
+func readInteractionPhases(plan InteractionPlan, terminal PromptIO, phases ...InteractionPhase) (*InteractionInputs, error) {
+	selected := make(map[InteractionPhase]struct{}, len(phases))
+	for _, phase := range phases {
+		selected[phase] = struct{}{}
 	}
 	inputs := &InteractionInputs{values: make(map[string][]byte)}
 	fail := func(err error) (*InteractionInputs, error) {
@@ -60,7 +100,7 @@ func ReadInteractionInputs(plan InteractionPlan, terminal PromptIO) (*Interactio
 		return nil, err
 	}
 	for _, step := range plan.Steps {
-		if step.Phase == InteractionOutput || step.Decision.Action == "proceed" {
+		if _, run := selected[step.Phase]; !run || step.Decision.Action == "proceed" {
 			continue
 		}
 		if step.Decision.Action != "prompt" {
@@ -108,6 +148,19 @@ func ReadInteractionInputs(plan InteractionPlan, terminal PromptIO) (*Interactio
 		}
 	}
 	return inputs, nil
+}
+
+func requireInteractionPhases(plan InteractionPlan, phases ...InteractionPhase) error {
+	selected := make(map[InteractionPhase]struct{}, len(phases))
+	for _, phase := range phases {
+		selected[phase] = struct{}{}
+	}
+	for _, step := range plan.Steps {
+		if _, checked := selected[step.Phase]; checked && step.Decision.Action == "refuse" {
+			return fmt.Errorf("%w: %s: %s", ErrInteractionRefused, plan.CommandID, step.Decision.Reason)
+		}
+	}
+	return nil
 }
 
 // WriteInteractionSecret writes a newly issued token exactly once through the

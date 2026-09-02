@@ -129,6 +129,16 @@ func (secret Secret) Use(callback func([]byte) error) error {
 	return callback(temporary)
 }
 
+// Destroy clears the retained copy best-effort. Callers that keep a Secret
+// beyond one narrow operation should defer this immediately after creation.
+func (secret *Secret) Destroy() {
+	if secret == nil {
+		return
+	}
+	clear(secret.value)
+	secret.value = nil
+}
+
 func (Secret) String() string   { return RedactedMarker }
 func (Secret) GoString() string { return RedactedMarker }
 func (Secret) Format(state fmt.State, _ rune) {
