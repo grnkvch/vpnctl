@@ -31,7 +31,7 @@
 - [x] 3.4 Implement the system path resolver for `/etc/vpnctl`, `/var/lib/vpnctl`, and `/run/vpnctl` with injectable test roots; verify commands launched from different working directories resolve identical role/state paths.
 - [x] 3.5 Implement validated atomic JSON writes using temp file, fsync, rename, directory fsync, and one prior generation; verify kill/fault-injection tests never accept partial state and can load the previous snapshot.
 - [x] 3.6 Implement root-only secret storage with opaque references, no-follow file creation, atomic replacement, and permission repair diagnostics; verify symlink, mode, concurrent write, and secret/non-secret serialization tests.
-- [ ] 3.7 Implement deterministic generated-artifact manifests with content hashes, source state/policy/credential generations, and drift comparison; verify identical state renders identical non-secret output and changed input marks only affected artifacts.
+- [x] 3.7 Implement deterministic generated-artifact manifests with content hashes, source state/policy/credential generations, and drift comparison; verify identical state renders identical non-secret output and changed input marks only affected artifacts.
 - [ ] 3.8 Implement bounded per-node idempotency storage with 30-day and 1024-record pruning and redacted result summaries; verify both eviction bounds and absence of bodies, paths, and secrets in persisted records.
 - [ ] 3.9 Implement operation records for pending/active/degraded/failed sagas and locally persisted node request IDs; verify restart and lost-response fixtures resume the same operation rather than create a duplicate.
 
