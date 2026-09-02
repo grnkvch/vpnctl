@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "format": {
+    "name": "vpnctl-backup-v1",
+    "header_bytes": 64,
+    "record_header_bytes": 17,
+    "kdf": "argon2id-v19",
+    "salt_bytes": 16,
+    "key_bytes": 32,
+    "aead": "xchacha20-poly1305",
+    "nonce_bytes": 24,
+    "nonce_prefix_bytes": 16,
+    "tag_bytes": 16,
+    "chunk_bytes": 1048576,
+    "final_record_required": true,
+    "header_authenticated": true
+  },
+  "selected_kdf": {
+    "memory_kib": 65536,
+    "time": 3,
+    "lanes": 4
+  },
+  "restore_limits": {
+    "minimum_memory_kib": 65536,
+    "maximum_memory_kib": 131072,
+    "minimum_time": 3,
+    "maximum_time": 6,
+    "minimum_lanes": 1,
+    "maximum_lanes": 4,
+    "minimum_chunk_bytes": 65536,
+    "maximum_chunk_bytes": 4194304
+  },
+  "acceptance_bounds": {
+    "selected_kdf_max_milliseconds": 2000,
+    "selected_kdf_max_rss_kib": 131072,
+    "correctness_max_rss_kib": 262144
+  },
+  "kdf_candidates": [
+    {"id": "m32768-t3-p4", "memory_kib": 32768, "time": 3, "lanes": 4},
+    {"id": "m65536-t3-p1", "memory_kib": 65536, "time": 3, "lanes": 1},
+    {"id": "m65536-t3-p4", "memory_kib": 65536, "time": 3, "lanes": 4},
+    {"id": "m65536-t4-p4", "memory_kib": 65536, "time": 4, "lanes": 4},
+    {"id": "m98304-t3-p4", "memory_kib": 98304, "time": 3, "lanes": 4}
+  ],
+  "aead_candidates": [
+    {"id": "aes-256-gcm-1m", "algorithm": "aes-256-gcm", "chunk_bytes": 1048576},
+    {"id": "xchacha20-poly1305-64k", "algorithm": "xchacha20-poly1305", "chunk_bytes": 65536},
+    {"id": "xchacha20-poly1305-1m", "algorithm": "xchacha20-poly1305", "chunk_bytes": 1048576},
+    {"id": "xchacha20-poly1305-4m", "algorithm": "xchacha20-poly1305", "chunk_bytes": 4194304}
+  ]
+}

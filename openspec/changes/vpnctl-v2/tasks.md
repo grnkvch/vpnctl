@@ -20,7 +20,7 @@
 - [x] 2.8 Prototype nftables hooks, fwmark allocation, conntrack retention, policy routes, TUN readiness guard, recovery allowlist, ingress-response symmetry, and atomic rollback; verify boot/crash/restart/uninstall fault tests show no selected TCP/UDP/IPv6 direct leak and no unrelated-node traffic breakage.
 - [x] 2.9 Prototype systemd-resolved integration and candidate Mihomo DNS modes with Linux applications and rendered Clash-compatible profiles validated by pinned Mihomo; verify selected/direct query separation, gateway-DNS failure, cache behavior, classic port-53 capture, and clean restoration select one documented mode, deferring actual Clash Mi DNS behavior to task 16.11.
 - [x] 2.10 Prototype the Ed25519 control CA/leaf and enrollment-signature formats plus HTTPS/1.1 JSON RPC limits; verify Go/OpenSSL interoperability, URI SAN validation, renewal/overlap, signed transcript replay resistance, and bounded malformed-request behavior.
-- [ ] 2.11 Select and benchmark backup KDF/AEAD parameters under 512 MB RAM; verify encryption/decryption, wrong-passphrase authentication failure, corruption detection, and documented memory/time bounds.
+- [x] 2.11 Select and benchmark backup KDF/AEAD parameters under 512 MB RAM; verify encryption/decryption, wrong-passphrase authentication failure, corruption detection, and documented memory/time bounds.
 - [ ] 2.12 Consolidate spike outcomes into ADRs and a pinned component/limit manifest; verify every conditional provider and open design parameter has a development-accepted value or explicitly selected fallback and every deferred deployed-service gate is assigned to section 16 before dependent production tasks start.
 
 ## 3. Versioned Model, Store, and Secrets
