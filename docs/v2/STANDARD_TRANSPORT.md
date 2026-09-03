@@ -55,8 +55,8 @@ or inspect the restricted transport.
 Runtime role and health are independent. A missing or stale handshake reports
 an active standard transport as degraded without selecting standby. An
 inactive standby can report unavailable while remaining the configured
-standby. Non-mutating four-path testing and manual make-before-break switching
-remain tasks 8.7 and 8.8.
+standby. Provider-neutral non-mutating four-path test orchestration is in
+place; manual make-before-break switching remains task 8.8.
 
 ## Packet acceptance
 

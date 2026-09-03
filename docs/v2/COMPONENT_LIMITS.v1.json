@@ -181,6 +181,13 @@
       ],
       "performance_slo": false
     },
+    "transport_test": {
+      "total_timeout_seconds": 45,
+      "step_timeout_seconds": 30,
+      "cleanup_timeout_seconds": 10,
+      "automatic_fallback": false,
+      "writes_authoritative_state": false
+    },
     "routing": {
       "mark_mask": "0xff000000",
       "direct_mark": "0x01000000",

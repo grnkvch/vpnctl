@@ -909,7 +909,13 @@ vpnctl transport switch <standard|restricted> [--defer]
   внутри Clash/Mihomo profile.
 - `transport test` временно поднимает и проверяет target transport, включая
   control, reverse tunnel и TCP/UDP probes, затем удаляет test connection и не
-  меняет production routing.
+  меняет production routing. Общий deadline равен `45s`, один provider stage
+  ограничен `30s`, а обязательный rollback выполняется в отдельном `10s`
+  cleanup context даже после отмены основного test. До и после проверки
+  canonical local state сравнивается целиком; изменение active/pending/config
+  или любой generation возвращает conflict вместо ложного стабильного
+  результата. Test workflow не имеет state writer и не вызывает
+  `Activate`/`Drain`/standby fallback.
 - `transport switch` выполняет make-before-break:
   устанавливает target connection, переносит control path, поднимает новый
   reverse tunnel, проверяет его, переключает selected traffic, даёт старым

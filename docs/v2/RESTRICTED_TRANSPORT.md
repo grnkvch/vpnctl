@@ -3,8 +3,9 @@
 Tasks 8.3-8.6 implement the restricted-provider foundation, mandatory
 UDP-over-TCP readiness, the pinned handshake-host lifecycle, and independent
 gateway listener supervision. It remains a development-gated path: explicit
-test/switch operations belong to tasks 8.7-8.8, and testing against a deployed
-gateway/node plus real Clash Mi to release gate 16.11.
+non-mutating test orchestration is implemented, explicit switching belongs to
+task 8.8, and testing against a deployed gateway/node plus real Clash Mi to
+release gate 16.11.
 
 ## Pinned provider contract
 
