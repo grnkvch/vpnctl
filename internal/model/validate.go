@@ -26,6 +26,7 @@ var (
 	errorCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
 	protocolPattern    = regexp.MustCompile(`^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$`)
 	inviteIDPattern    = regexp.MustCompile(`^inv-[A-Z2-7]{6}$`)
+	recoveryIDPattern  = regexp.MustCompile(`^rec-[A-Z2-7]{6}$`)
 )
 
 func (state State) Validate() error {
@@ -118,6 +119,14 @@ func (state State) Validate() error {
 				return invalid(indexPath("nodes", index)+".name", "duplicates active node name owned by %s", prior)
 			}
 			nodeNames[key] = node.ID
+		}
+	}
+	for index, invite := range state.Invites {
+		if invite.Purpose != "recover" {
+			continue
+		}
+		if _, found := nodes[invite.NodeID]; !found {
+			return invalid(indexPath("invites", index)+".node_id", "references an unknown node")
 		}
 	}
 	clients := make(map[string]Client, len(state.Clients))
@@ -918,8 +927,33 @@ func (invite Invite) Validate() error {
 	if err := validateSchema("invite", invite.SchemaVersion, ResourceSchemaVersion); err != nil {
 		return err
 	}
-	if !inviteIDPattern.MatchString(invite.ID) {
-		return invalid("id", "must be inv- followed by six upper-case base32 characters")
+	purpose := invite.Purpose
+	if purpose == "" {
+		purpose = "enroll"
+	}
+	switch purpose {
+	case "enroll":
+		if !inviteIDPattern.MatchString(invite.ID) {
+			return invalid("id", "must be inv- followed by six upper-case base32 characters")
+		}
+		if invite.NodeID != "" || invite.CredentialGeneration != 0 || invite.BindingFingerprint != "" {
+			return invalid("purpose", "enrollment invite cannot carry recovery binding")
+		}
+	case "recover":
+		if !recoveryIDPattern.MatchString(invite.ID) {
+			return invalid("id", "must be rec- followed by six upper-case base32 characters")
+		}
+		if err := validateUUID("node_id", invite.NodeID); err != nil {
+			return err
+		}
+		if invite.CredentialGeneration == 0 {
+			return invalid("credential_generation", "must be positive")
+		}
+		if err := validateFingerprint("binding_fingerprint", invite.BindingFingerprint); err != nil {
+			return err
+		}
+	default:
+		return invalid("purpose", "unsupported value %q", invite.Purpose)
 	}
 	if err := validateName("node_name", invite.NodeName); err != nil {
 		return err
@@ -927,7 +961,7 @@ func (invite Invite) Validate() error {
 	if !protocolPattern.MatchString(invite.ControlProtocol) {
 		return invalid("control_protocol", "must be canonical major.minor")
 	}
-	if err := validateInviteEndpoint(invite.GatewayEndpoint); err != nil {
+	if err := validateInviteEndpoint(invite.GatewayEndpoint, purpose); err != nil {
 		return err
 	}
 	if err := validateFingerprint("enrollment_fingerprint", invite.EnrollmentFingerprint); err != nil {
@@ -976,11 +1010,15 @@ func (invite Invite) Validate() error {
 	return nil
 }
 
-func validateInviteEndpoint(value string) error {
+func validateInviteEndpoint(value, purpose string) error {
 	endpoint, err := url.Parse(value)
+	wantedPath := "/.well-known/vpnctl/enroll"
+	if purpose == "recover" {
+		wantedPath = "/.well-known/vpnctl/recover"
+	}
 	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-		endpoint.Port() != "" || endpoint.Path != "/.well-known/vpnctl/enroll" {
-		return invalid("gateway_endpoint", "must be a canonical IP-only HTTPS enrollment endpoint")
+		endpoint.Port() != "" || endpoint.Path != wantedPath {
+		return invalid("gateway_endpoint", "must be the canonical IP-only HTTPS endpoint for its purpose")
 	}
 	address, err := netip.ParseAddr(endpoint.Hostname())
 	if err != nil || !address.Is4() || address.String() != endpoint.Hostname() {

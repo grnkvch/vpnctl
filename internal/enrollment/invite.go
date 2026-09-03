@@ -500,6 +500,9 @@ func (manager *InviteManager) Status() ([]InviteStatus, error) {
 	now := canonicalTime(manager.now())
 	statuses := make([]InviteStatus, 0, len(state.Invites))
 	for _, invite := range state.Invites {
+		if invite.Purpose != "" && invite.Purpose != invitePurpose {
+			continue
+		}
 		statuses = append(statuses, inviteStatus(invite, now))
 	}
 	sort.Slice(statuses, func(left, right int) bool {
@@ -765,6 +768,9 @@ func ensureNodeNameAvailable(state model.State, nodeName string, now time.Time) 
 		}
 	}
 	for _, invite := range state.Invites {
+		if invite.Purpose != "" && invite.Purpose != invitePurpose {
+			continue
+		}
 		reserved := invite.State == model.InviteConsumed ||
 			(invite.State == model.InviteActive && !now.Before(invite.IssuedAt) && now.Before(invite.ExpiresAt))
 		if reserved && strings.EqualFold(invite.NodeName, nodeName) {

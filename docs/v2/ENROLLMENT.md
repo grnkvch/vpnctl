@@ -1,9 +1,9 @@
 # vpnctl v2 enrollment invites
 
 This document fixes the task-9.1 invite lifecycle, task-9.2 public protocol
-boundary, task-9.3 node-owned credential boundary, and task-9.4 initial join
-saga. It also fixes task-9.5 joined-node idempotency and gateway inspection;
-the recovery-token lifecycle follows in task 9.9.
+boundary, task-9.3 node-owned credential boundary, task-9.4 initial join saga,
+task-9.5 joined-node idempotency and gateway inspection, and task-9.9
+same-node break-glass recovery.
 
 ## Issuance and persistence
 
@@ -77,8 +77,9 @@ path, while `vpnctl-recovery-v1` is accepted only with `purpose=recover` on the
 recovery path. A wrong path, purpose, prefix, unknown route, malformed token,
 unknown token, terminal token, or replay returns the same fixed `404` response.
 This avoids turning the endpoint into an invite-status oracle. Recovery routing
-is implemented now, but issuing and authoritatively validating recovery tokens
-remains task 9.9.
+uses the same bounded handler through a purpose mux, while issuance,
+authorization, proof verification, and consumption remain separate from the
+ordinary enrollment coordinator.
 
 The request envelope contains schema version 1, purpose, the one-time token, a
 canonical unpadded-base64url 128-bit node nonce, and one bounded JSON object.
@@ -291,6 +292,66 @@ private node and enter that token through hidden input. The status/doctor
 projection exposes only node/certificate identifiers, fingerprint, generation,
 expiry and warning metadata; it has no credential-reference, token, private-key,
 or public enrollment path.
+
+## Same-node break-glass recovery
+
+Gateway recovery-token issuance is confirmed, immediate, and available only
+for an existing `active` node at or after the exact expiry of its current
+control leaf. It is not a second enrollment path: a deleted name/ID is not
+visible, a revoked node is ineligible, and an unexpired node must use ordinary
+`node rotate`. The gateway stores a purpose-separated `rec-*` record containing
+the immutable node ID, current credential generation, and expired leaf
+fingerprint. The canonical `vpnctl-recovery-v1` token binds those fields, the
+reserved IP-only recovery endpoint, stable enrollment fingerprint, protocol,
+the issuing gateway generation, and an independent 256-bit secret. Its validity
+is exactly 15 minutes and it is invalid at `now >= expires_at`. Any intervening
+gateway mutation makes the conservative generation-bound token stale; the
+operator must explicitly issue another one.
+
+The token is necessary but not sufficient. The original node reads its current
+generation control private key locally and signs a domain-separated recovery
+proof. That proof binds the recovery ID, a fresh 128-bit node nonce, immutable
+node ID, exact current/next generations, unique request ID, and all four new
+credential commitments. The gateway verifies it against the public key in the
+exact expired certificate fingerprint stored in the recovery record. A copied
+token, another node identity, a freshly generated substitute key, or a cloned
+state without the original private credential is rejected before credential
+staging or token consumption. A byte-for-byte clone of the entire protected
+secret store is cryptographically the same software identity and is outside
+the software-only physical-host distinction; concurrent/replayed attempts are
+still reduced to one winner by token consumption and generation CAS and such
+cloning remains unsupported operationally.
+
+After confirmation on the node, it generates a complete generation-scoped set
+locally: a new Ed25519 control key/CSR, WireGuard key pair, restricted identity,
+and reverse-tunnel token. Only the CSR/WireGuard public key and the two required
+shared credentials cross to the gateway. The public `/.well-known/vpnctl/recover`
+exchange uses the existing stable enrollment signing key and a `recover`
+transcript, so nginx's current ingress certificate cannot substitute the
+assignment. The signed assignment repeats the immutable ID/name/address,
+manual active transport, presets, policy generation/hash, expose IDs, exact
+next credential generation, gateway generation, control protocol, and hashes
+of both new leaf bytes and metadata.
+
+Gateway preparation reuses the complete four-member rotation readiness
+boundary. Its one authoritative compare-and-swap both publishes the new node,
+certificate, and transport generation and changes the exact recovery record to
+`consumed` with the signed-transcript replay hash. There is no state containing
+a consumed token with old credentials. Once that generation is known new, the
+gateway returns the already signed response even if bounded old-generation
+drain needs later repair; returning an HTTP rejection at that point could make
+the node destroy the only matching fresh set.
+
+The node pins the already stored enrollment public key, reconstructs the
+recovery transcript, checks every stable field, verifies the new leaf against
+its existing control CA and new CSR, stages and activates all new local
+credentials, and commits one local generation. Before a possible gateway
+commit, failures remove only attempt-owned generation files and leave the token
+active. After a possible or known gateway commit, failures retain the complete
+new set and report an uncertain/pending reconciliation instead of rolling back
+to the expired identity. Successful completion drains and removes the complete
+old generation on both hosts while name, ID, overlay IP, policy, exposes, and
+manual transport selection remain unchanged.
 
 ## Signed response and atomic consumption
 

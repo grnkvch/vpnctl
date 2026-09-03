@@ -66,6 +66,41 @@ type PublicEnrollmentCoordinator interface {
 	PreparePublicEnrollment(context.Context, PublicEnrollmentRequest) (PublicEnrollmentTransaction, error)
 }
 
+// PublicEnrollmentCoordinatorMux keeps enrollment and recovery as separate
+// purpose-specific implementations while allowing one reserved HTTPS handler
+// to serve both paths.
+type PublicEnrollmentCoordinatorMux struct {
+	enrollment PublicEnrollmentCoordinator
+	recovery   PublicEnrollmentCoordinator
+}
+
+func NewPublicEnrollmentCoordinatorMux(
+	enrollment PublicEnrollmentCoordinator,
+	recovery PublicEnrollmentCoordinator,
+) (*PublicEnrollmentCoordinatorMux, error) {
+	if enrollment == nil || recovery == nil {
+		return nil, fmt.Errorf("public enrollment and recovery coordinators are required")
+	}
+	return &PublicEnrollmentCoordinatorMux{enrollment: enrollment, recovery: recovery}, nil
+}
+
+func (mux *PublicEnrollmentCoordinatorMux) PreparePublicEnrollment(
+	ctx context.Context,
+	request PublicEnrollmentRequest,
+) (PublicEnrollmentTransaction, error) {
+	if mux == nil || ctx == nil {
+		return nil, ErrPublicEnrollmentUnavailable
+	}
+	switch request.Purpose {
+	case PurposeEnroll:
+		return mux.enrollment.PreparePublicEnrollment(ctx, request)
+	case PurposeRecover:
+		return mux.recovery.PreparePublicEnrollment(ctx, request)
+	default:
+		return nil, ErrPublicEnrollmentRejected
+	}
+}
+
 type PublicEnrollmentHandlerConfig struct {
 	PublicIPv4  string
 	Signer      *EnrollmentTranscriptSigner

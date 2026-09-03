@@ -194,7 +194,9 @@ func validateInviteTransitions(before, after []Invite) error {
 			}
 			continue
 		}
-		if old.SchemaVersion != invite.SchemaVersion || old.ID != invite.ID || old.NodeName != invite.NodeName ||
+		if old.SchemaVersion != invite.SchemaVersion || old.ID != invite.ID || old.Purpose != invite.Purpose ||
+			old.NodeName != invite.NodeName || old.NodeID != invite.NodeID ||
+			old.CredentialGeneration != invite.CredentialGeneration || old.BindingFingerprint != invite.BindingFingerprint ||
 			old.ControlProtocol != invite.ControlProtocol || old.GatewayEndpoint != invite.GatewayEndpoint ||
 			old.EnrollmentFingerprint != invite.EnrollmentFingerprint || old.SecretHash != invite.SecretHash ||
 			!old.IssuedAt.Equal(invite.IssuedAt) || !old.ExpiresAt.Equal(invite.ExpiresAt) {

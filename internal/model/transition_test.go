@@ -374,6 +374,38 @@ func TestTransitionRejectsIdentityReplacementAndGenerationErrors(t *testing.T) {
 	}
 }
 
+func TestRecoveryInviteBindingIsImmutableAndConsumptionIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	before := gatewayState()
+	before.Invites = append(before.Invites, validRecoveryInvite(&before))
+	consumed := cloneState(t, before)
+	consumed.Generation++
+	at := consumed.Invites[0].IssuedAt.Add(time.Minute)
+	consumed.Invites[0].State = InviteConsumed
+	consumed.Invites[0].ConsumedAt = &at
+	consumed.Invites[0].ConsumptionHash = digest("1")
+	if err := ValidateTransition(before, consumed); err != nil {
+		t.Fatalf("ValidateTransition(recovery consumption) error = %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Invite){
+		"node":       func(invite *Invite) { invite.NodeID = clientID },
+		"generation": func(invite *Invite) { invite.CredentialGeneration++ },
+		"binding":    func(invite *Invite) { invite.BindingFingerprint = fingerprint("a") },
+		"purpose":    func(invite *Invite) { invite.Purpose = "enroll" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneState(t, before)
+			candidate.Generation++
+			mutate(&candidate.Invites[0])
+			if err := ValidateTransition(before, candidate); !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("ValidateTransition(%s binding mutation) error = %v", name, err)
+			}
+		})
+	}
+}
+
 func TestGenerationOverflow(t *testing.T) {
 	t.Parallel()
 

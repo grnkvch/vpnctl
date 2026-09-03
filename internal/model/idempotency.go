@@ -156,7 +156,7 @@ func validateIdempotencyHistory(records []IdempotencyRecord) error {
 
 func validOperationType(operation OperationType) bool {
 	switch operation {
-	case OperationInit, OperationJoin, OperationApply, OperationRepair, OperationRotate, OperationRevoke, OperationDelete, OperationTransportSwitch, OperationHandshakeHost, OperationExposeCreate, OperationExposeRemove, OperationCertificateRotate, OperationTrustRotate, OperationRestore, OperationUpdate, OperationUninstall, OperationPurge:
+	case OperationInit, OperationJoin, OperationApply, OperationRepair, OperationRotate, OperationRecover, OperationRevoke, OperationDelete, OperationTransportSwitch, OperationHandshakeHost, OperationExposeCreate, OperationExposeRemove, OperationCertificateRotate, OperationTrustRotate, OperationRestore, OperationUpdate, OperationUninstall, OperationPurge:
 		return true
 	default:
 		return false

@@ -108,7 +108,7 @@
 - [x] 9.6 Implement immediate gateway node revoke, connection termination, expose disable, diagnostic retention, and delete-after-revoke cleanup; verify an offline revoked node cannot reconnect through control, either transport, or tunnel.
 - [x] 9.7 Implement node-local atomic full credential rotation with parallel old/new control, standard, restricted, and tunnel generations, health checks, switch, drain, and rollback; verify injected failure at every phase leaves either the complete old or complete new set active.
 - [x] 9.8 Implement 180-day node certificate warnings in status/doctor and refusal of ordinary rotate after expiry; verify time-travel cases direct expired nodes to recovery.
-- [ ] 9.9 Implement gateway/node recovery commands with confirmed, same-node-ID, one-time 15-minute tokens and atomic full credential replacement; verify preservation of name/IP/policies/exposes and rejection of revoked, deleted, cloned, wrong-host, and replay attempts.
+- [x] 9.9 Implement gateway/node recovery commands with confirmed, same-node-ID, one-time 15-minute tokens and atomic full credential replacement; verify preservation of name/IP/policies/exposes and rejection of revoked, deleted, cloned, wrong-host, and replay attempts.
 
 ## 10. Host-Wide Routing and Split DNS
 

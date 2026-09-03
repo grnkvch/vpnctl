@@ -93,6 +93,21 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 			cancelled := state.Invites[0].IssuedAt.Add(time.Minute)
 			state.Invites[0].CancelledAt = &cancelled
 		}, want: "active invite cannot"},
+		{name: "recovery invite unknown node", mutate: func(state *State) {
+			invite := validRecoveryInvite(state)
+			invite.NodeID = "66666666-6666-4666-8666-666666666666"
+			state.Invites = append(state.Invites, invite)
+		}, want: "references an unknown node"},
+		{name: "recovery invite wrong endpoint", mutate: func(state *State) {
+			invite := validRecoveryInvite(state)
+			invite.GatewayEndpoint = "https://" + state.Host.PublicIPv4 + "/.well-known/vpnctl/enroll"
+			state.Invites = append(state.Invites, invite)
+		}, want: "canonical IP-only HTTPS endpoint"},
+		{name: "recovery invite missing binding", mutate: func(state *State) {
+			invite := validRecoveryInvite(state)
+			invite.BindingFingerprint = ""
+			state.Invites = append(state.Invites, invite)
+		}, want: "binding_fingerprint"},
 		{name: "missing authoritative handshake host", mutate: func(state *State) { state.HandshakeHost = nil }, want: "requires an authoritative handshake-host selection"},
 		{name: "handshake list differs from manifest", mutate: func(state *State) { state.HandshakeHost.ListVersion++ }, want: "must match the installed component manifest"},
 		{name: "invalid handshake candidate id", mutate: func(state *State) { state.HandshakeHost.CandidateID = "Microsoft" }, want: "candidate_id"},
@@ -624,6 +639,19 @@ func validInvite(state *State) Invite {
 		SchemaVersion: ResourceSchemaVersion, ID: "inv-ABC234", NodeName: "invited-node",
 		ControlProtocol: state.Components.ControlProtocols[0], GatewayEndpoint: "https://" + state.Host.PublicIPv4 + "/.well-known/vpnctl/enroll",
 		EnrollmentFingerprint: state.EnrollmentIdentity.Fingerprint, SecretHash: digest("7"), State: InviteActive,
+		IssuedAt: issuedAt, ExpiresAt: issuedAt.Add(InviteTTL),
+	}
+}
+
+func validRecoveryInvite(state *State) Invite {
+	issuedAt := utc(2026, time.September, 3, 10, 0)
+	return Invite{
+		SchemaVersion: ResourceSchemaVersion, ID: "rec-ABC234", Purpose: "recover",
+		NodeName: state.Nodes[0].Name, NodeID: state.Nodes[0].ID,
+		CredentialGeneration: state.Nodes[0].CredentialGeneration, BindingFingerprint: fingerprint("f"),
+		ControlProtocol:       state.Components.ControlProtocols[0],
+		GatewayEndpoint:       "https://" + state.Host.PublicIPv4 + "/.well-known/vpnctl/recover",
+		EnrollmentFingerprint: state.EnrollmentIdentity.Fingerprint, SecretHash: digest("8"), State: InviteActive,
 		IssuedAt: issuedAt, ExpiresAt: issuedAt.Add(InviteTTL),
 	}
 }

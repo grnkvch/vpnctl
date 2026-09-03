@@ -58,6 +58,45 @@ func TestPublicEnrollmentHandlerSignsAndAtomicallyConsumesInvite(t *testing.T) {
 	}
 }
 
+func TestPublicEnrollmentCoordinatorMuxKeepsPurposeImplementationsSeparate(t *testing.T) {
+	enrollmentCoordinator := &purposeRecordingCoordinator{purpose: PurposeEnroll}
+	recoveryCoordinator := &purposeRecordingCoordinator{purpose: PurposeRecover}
+	mux, err := NewPublicEnrollmentCoordinatorMux(enrollmentCoordinator, recoveryCoordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, purpose := range []EnrollmentPurpose{PurposeEnroll, PurposeRecover} {
+		if _, err := mux.PreparePublicEnrollment(context.Background(), PublicEnrollmentRequest{Purpose: purpose}); !errors.Is(err, ErrPublicEnrollmentRejected) {
+			t.Fatalf("PreparePublicEnrollment(%s) error = %v", purpose, err)
+		}
+	}
+	if enrollmentCoordinator.calls != 1 || recoveryCoordinator.calls != 1 {
+		t.Fatalf("mux calls enrollment=%d recovery=%d", enrollmentCoordinator.calls, recoveryCoordinator.calls)
+	}
+	if _, err := mux.PreparePublicEnrollment(context.Background(), PublicEnrollmentRequest{Purpose: "delete"}); !errors.Is(err, ErrPublicEnrollmentRejected) {
+		t.Fatalf("unknown purpose error = %v", err)
+	}
+	if enrollmentCoordinator.calls != 1 || recoveryCoordinator.calls != 1 {
+		t.Fatal("unknown purpose reached a purpose-specific coordinator")
+	}
+}
+
+type purposeRecordingCoordinator struct {
+	purpose EnrollmentPurpose
+	calls   int
+}
+
+func (coordinator *purposeRecordingCoordinator) PreparePublicEnrollment(
+	_ context.Context,
+	request PublicEnrollmentRequest,
+) (PublicEnrollmentTransaction, error) {
+	coordinator.calls++
+	if request.Purpose != coordinator.purpose {
+		return nil, errors.New("wrong purpose routed")
+	}
+	return nil, ErrPublicEnrollmentRejected
+}
+
 func TestPublicEnrollmentScanningAndWrongPurposeAreIndistinguishable(t *testing.T) {
 	tests := []struct {
 		name    string

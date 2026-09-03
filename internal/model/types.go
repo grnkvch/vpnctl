@@ -96,6 +96,7 @@ const (
 	OperationApply             OperationType = "apply"
 	OperationRepair            OperationType = "repair"
 	OperationRotate            OperationType = "rotate"
+	OperationRecover           OperationType = "recover"
 	OperationRevoke            OperationType = "revoke"
 	OperationDelete            OperationType = "delete"
 	OperationTransportSwitch   OperationType = "transport-switch"
@@ -204,12 +205,16 @@ type State struct {
 }
 
 // Invite is the gateway-authoritative, non-secret half of a one-time node
-// enrollment token. SecretHash is a one-way digest; plaintext token material
-// is never persisted in State.
+// enrollment or recovery token. Empty Purpose is the backward-compatible
+// enrollment value. SecretHash is one-way; plaintext is never persisted.
 type Invite struct {
 	SchemaVersion         int         `json:"schema_version"`
 	ID                    string      `json:"id"`
+	Purpose               string      `json:"purpose,omitempty"`
 	NodeName              string      `json:"node_name"`
+	NodeID                string      `json:"node_id,omitempty"`
+	CredentialGeneration  uint64      `json:"credential_generation,omitempty"`
+	BindingFingerprint    string      `json:"binding_fingerprint,omitempty"`
 	ControlProtocol       string      `json:"control_protocol"`
 	GatewayEndpoint       string      `json:"gateway_endpoint"`
 	EnrollmentFingerprint string      `json:"enrollment_fingerprint"`

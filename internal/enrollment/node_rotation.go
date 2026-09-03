@@ -227,6 +227,35 @@ func (manager *GatewayNodeRotationManager) Prepare(
 	ctx context.Context,
 	request *NodeRotationRequest,
 ) (NodeRotationGatewayPreparation, error) {
+	return manager.prepare(ctx, request, model.OperationRotate, false)
+}
+
+// PrepareRecovery stages the same complete credential set as ordinary
+// rotation, but only for an active node whose current control certificate is
+// already expired. The caller must separately authenticate and atomically
+// consume a recovery authorization during CommitRecovery.
+func (manager *GatewayNodeRotationManager) PrepareRecovery(
+	ctx context.Context,
+	request *NodeRotationRequest,
+) (*GatewayNodeRotationPreparation, error) {
+	prepared, err := manager.prepare(ctx, request, model.OperationRecover, true)
+	if err != nil {
+		return nil, err
+	}
+	concrete, ok := prepared.(*GatewayNodeRotationPreparation)
+	if !ok {
+		prepared.Destroy()
+		return nil, ErrPublicEnrollmentUnavailable
+	}
+	return concrete, nil
+}
+
+func (manager *GatewayNodeRotationManager) prepare(
+	ctx context.Context,
+	request *NodeRotationRequest,
+	operation model.OperationType,
+	requireExpired bool,
+) (NodeRotationGatewayPreparation, error) {
 	if manager == nil || manager.state == nil || manager.secrets == nil || manager.runtime == nil || ctx == nil {
 		return nil, fmt.Errorf("gateway node rotation manager is incomplete")
 	}
@@ -252,7 +281,11 @@ func (manager *GatewayNodeRotationManager) Prepare(
 		return nil, err
 	}
 	preparedAt := canonicalTime(manager.options.Now())
-	if err := refuseExpiredNodeRotation(state, node, preparedAt); err != nil {
+	if requireExpired {
+		if _, err := validateRecoverableNode(state, node, preparedAt); err != nil {
+			return nil, err
+		}
+	} else if err := refuseExpiredNodeRotation(state, node, preparedAt); err != nil {
 		return nil, err
 	}
 	if _, findErr := node.FindIdempotencyResult(request.RequestID, preparedAt); findErr == nil {
@@ -277,7 +310,7 @@ func (manager *GatewayNodeRotationManager) Prepare(
 	if err != nil {
 		return nil, err
 	}
-	candidateState, certificate, err := buildGatewayNodeRotationState(state, node, request, issued, certificateID, preparedAt)
+	candidateState, certificate, err := buildGatewayNodeRotationState(state, node, request, issued, certificateID, preparedAt, operation)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +371,11 @@ func buildGatewayNodeRotationState(
 	issued control.IssuedNodeCertificate,
 	certificateID string,
 	preparedAt time.Time,
+	operation model.OperationType,
 ) (model.State, model.Certificate, error) {
+	if operation != model.OperationRotate && operation != model.OperationRecover {
+		return model.State{}, model.Certificate{}, fmt.Errorf("unsupported node credential replacement operation %q", operation)
+	}
 	nextStateGeneration, err := model.NextGeneration(state.Generation)
 	if err != nil {
 		return model.State{}, model.Certificate{}, err
@@ -355,7 +392,7 @@ func buildGatewayNodeRotationState(
 		request.PublicExchange.MaterialHashes[NodeTunnelCredentialHashName],
 	)
 	rotatedNode, _, replay, err := rotatedNode.StoreIdempotencyResult(model.IdempotencyRecord{
-		RequestID: request.RequestID, Operation: model.OperationRotate, ResultStatus: model.ResultOK,
+		RequestID: request.RequestID, Operation: operation, ResultStatus: model.ResultOK,
 		ResultHash: resultHash, StateGeneration: nextStateGeneration, RecordedAt: preparedAt,
 	}, preparedAt)
 	if err != nil || replay {
@@ -554,7 +591,48 @@ func (preparation *GatewayNodeRotationPreparation) Commit(ctx context.Context) (
 	if preparation.committed {
 		return NodeRotationGatewayCommit{State: NodeRotationCommitNew, GatewayStateGeneration: preparation.candidate.Candidate.Generation}, nil
 	}
-	before, candidate := preparation.candidate.Before, preparation.candidate.Candidate
+	return preparation.commitLocked(preparation.candidate.Candidate)
+}
+
+// CommitRecovery consumes the exact one-time authorization in the same
+// compare-and-swap that publishes the new credential generation. No state can
+// therefore contain a consumed token with the old credential set.
+func (preparation *GatewayNodeRotationPreparation) CommitRecovery(
+	ctx context.Context,
+	authorization RecoveryAuthorization,
+	replayHash string,
+	now time.Time,
+) (NodeRotationGatewayCommit, error) {
+	if preparation == nil || ctx == nil {
+		return NodeRotationGatewayCommit{}, fmt.Errorf("gateway node recovery commit is incomplete")
+	}
+	preparation.mu.Lock()
+	defer preparation.mu.Unlock()
+	if preparation.destroyed || preparation.aborted || !preparation.staged || !preparation.activated {
+		return NodeRotationGatewayCommit{}, fmt.Errorf("gateway node recovery preparation is not active")
+	}
+	if preparation.committed {
+		return NodeRotationGatewayCommit{}, ErrRecoveryConsumed
+	}
+	if preparation.candidate.NodeID != authorization.NodeID ||
+		preparation.candidate.CurrentGeneration != authorization.CredentialGeneration ||
+		preparation.candidate.RequestedGeneration != authorization.RequestedCredentialGeneration ||
+		preparation.candidate.Before.Generation != authorization.ExpectedStateGeneration {
+		return NodeRotationGatewayCommit{}, ErrRecoveryPlanStale
+	}
+	candidate := preparation.candidate.Candidate
+	if err := consumeRecoveryCandidate(preparation.candidate.Before, &candidate, authorization, replayHash, now); err != nil {
+		return NodeRotationGatewayCommit{}, err
+	}
+	if err := model.ValidateTransition(preparation.candidate.Before, candidate); err != nil {
+		return NodeRotationGatewayCommit{}, fmt.Errorf("build atomic node recovery transition: %w", err)
+	}
+	preparation.candidate.Candidate = candidate
+	return preparation.commitLocked(candidate)
+}
+
+func (preparation *GatewayNodeRotationPreparation) commitLocked(candidate model.State) (NodeRotationGatewayCommit, error) {
+	before := preparation.candidate.Before
 	saveErr := preparation.manager.state.Save(before.Generation, candidate)
 	if saveErr == nil {
 		preparation.committed = true
