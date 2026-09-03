@@ -87,6 +87,30 @@ other new application packet is dropped. In ready state, selected IPv4 is
 marked for the TUN, selected IPv6 is marked and dropped because v2 has no full
 IPv6 data plane, and unmatched traffic receives a retained direct mark.
 
+## IPv6 boundary
+
+Version 2.0 does not carry IPv6 through either gateway transport. A selected
+IPv6 literal or CIDR is therefore always marked selected and dropped by the
+independent kernel guard. An IPv6 address placed in
+`selected_resolved_v6` after a selected AAAA classification receives the same
+verdict. Retained selected conntrack traffic is checked by address family and
+dropped before the general retained-selected rule, so it cannot bypass the
+IPv6 boundary.
+
+These paths share the named `selected_ipv6_drop` packet/byte counter. The
+passive internal diagnostic reports mode `selected-block-only`,
+`full_data_plane=false`, the counter values, the number of current resolved
+selected entries, and unmatched behavior `preserve-system`. It reads only the
+owned nftables objects; it does not generate traffic, resolve a name, update a
+set, or repair policy.
+
+Unmatched IPv6 is not globally disabled. vpnctl leaves it to the host's
+existing IPv6 addresses, routes, and upstream availability, so
+`preserve-system` is not a promise that the host has working IPv6. The managed
+resolver integration that supplies selected AAAA entries is task 10.7; DoH,
+DoT, and hardcoded-address classification limits remain explicit task-10.10
+diagnostics rather than a claim of universal interception.
+
 Guard installation snapshots the prior vpnctl-owned network scope first. Any
 failure while setting sysctls, routes, rules, or the atomic nftables batch
 restores that snapshot. Readiness activation follows the inverse-safe order:

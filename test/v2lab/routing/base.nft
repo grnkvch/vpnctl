@@ -11,6 +11,12 @@ table inet vpnctl_v2_spike_routing {
     elements = { 2001:db8:1::10 }
   }
 
+  set selected_resolved_v6 {
+    type ipv6_addr
+    flags interval
+    elements = { 2001:db8:1::11 }
+  }
+
   counter selected_ipv4 {}
   counter selected_ipv6_drop {}
   counter selected_retained {}
@@ -75,12 +81,22 @@ table inet vpnctl_v2_spike_routing {
   }
 
   chain ready {
+    meta nfproto ipv6 ct state established,related meta mark & 0xff000000 == 0x02000000 \
+      counter name selected_ipv6_drop drop
     ct state established,related meta mark & 0xff000000 == 0x02000000 \
       counter name selected_retained return
     ct state established,related meta mark & 0xff000000 == 0x01000000 \
       counter name direct_retained return
 
-    ip6 daddr @selected_v6 counter name selected_ipv6_drop drop
+    ip6 daddr @selected_resolved_v6 \
+      meta mark set (meta mark & 0x00ffffff) | 0x02000000 \
+      ct mark set meta mark \
+      counter name selected_ipv6_drop drop
+
+    ip6 daddr @selected_v6 \
+      meta mark set (meta mark & 0x00ffffff) | 0x02000000 \
+      ct mark set meta mark \
+      counter name selected_ipv6_drop drop
 
     ip daddr @selected_v4 \
       meta mark set (meta mark & 0x00ffffff) | 0x02000000 \

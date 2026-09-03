@@ -37,15 +37,20 @@ func TestRenderNodeRoutingGuardUsesAcceptedMarksAndFailClosedChains(t *testing.T
 		`iifname "vpnctl-wg" ct state new tcp dport 17000 meta mark set (meta mark & 0x00ffffff) | 0x04000000 ct mark set meta mark return`,
 		"chain readiness {\n    jump not_ready\n  }",
 		"ct state established,related meta mark & 0xff000000 == 0x01000000 return\n    drop",
-		"ip6 daddr @selected_resolved_v6 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark drop",
+		"counter selected_ipv6_drop {}",
+		"meta nfproto ipv6 ct state established,related meta mark & 0xff000000 == 0x02000000 counter name selected_ipv6_drop drop",
+		"ip6 daddr @selected_resolved_v6 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark counter name selected_ipv6_drop drop",
 		"ip daddr @selected_resolved_v4 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark return",
 		"ip daddr 10.1.2.0/24 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark return",
 		"ip daddr 10.1.0.0/16 meta mark set (meta mark & 0x00ffffff) | 0x01000000 ct mark set meta mark return",
-		"ip6 daddr 2001:db8:1:2::/64 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark drop",
+		"ip6 daddr 2001:db8:1:2::/64 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark counter name selected_ipv6_drop drop",
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf("node routing guard lacks %q:\n%s", required, content)
 		}
+	}
+	if count := strings.Count(content, "counter name selected_ipv6_drop"); count != 4 {
+		t.Fatalf("selected IPv6 drop counter references = %d, want retained, resolved, and both static selected paths:\n%s", count, content)
 	}
 	for _, forbidden := range []string{"flush ruleset", "masquerade", "redirect", "queue", "log ", "0x00000000 ==", "jump ready\n  }\n\n  chain not_ready"} {
 		if strings.Contains(content, forbidden) {
@@ -272,6 +277,65 @@ func TestNodeRoutingGuardReadyAndCrashTransitionsUseSafeOrder(t *testing.T) {
 	}
 }
 
+func TestNodeRoutingGuardIPv6DiagnosticsArePassiveAndBounded(t *testing.T) {
+	t.Parallel()
+	runner := newNodeRoutingGuardRunner()
+	runner.tableDefinition = string(nodeRoutingGuardFixture(t).NFTablesDefinition())
+	runner.ipv6CounterJSON = []byte(`{"nftables":[{"metainfo":{"json_schema_version":1}},{"counter":{"family":"inet","name":"selected_ipv6_drop","table":"vpnctl","handle":7,"packets":9,"bytes":666}}]}`)
+	runner.ipv6SetJSON = []byte(`{"nftables":[{"set":{"family":"inet","name":"selected_resolved_v6","table":"vpnctl","type":"ipv6_addr","handle":8,"flags":["interval"],"elem":["2001:db8::1","2001:db8::2"]}}]}`)
+	manager, err := NewNodeRoutingGuardManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := manager.IPv6Diagnostics(context.Background())
+	if err != nil {
+		t.Fatalf("IPv6Diagnostics() error = %v", err)
+	}
+	want := NodeRoutingIPv6Diagnostics{
+		SchemaVersion: NodeRoutingIPv6DiagnosticsSchemaVersion,
+		Mode:          NodeRoutingIPv6ModeSelectedBlockOnly, FullDataPlane: false,
+		UnmatchedBehavior:   NodeRoutingIPv6UnmatchedPreserveSystem,
+		SelectedDropPackets: 9, SelectedDropBytes: 666, ResolvedSelectedEntries: 2,
+	}
+	if diagnostics != want || diagnostics.Validate() != nil {
+		t.Fatalf("IPv6Diagnostics() = %+v, want %+v", diagnostics, want)
+	}
+	calls := runner.joinedCalls()
+	for _, required := range []string{
+		"nft --stateless -nn list table inet vpnctl",
+		"nft --json list counter inet vpnctl selected_ipv6_drop",
+		"nft --json list set inet vpnctl selected_resolved_v6",
+	} {
+		if !strings.Contains(calls, required) {
+			t.Errorf("IPv6 diagnostics lack passive read %q:\n%s", required, calls)
+		}
+	}
+	if strings.Contains(calls, "--file") || strings.Contains(calls, "ip ") || strings.Contains(calls, "systemctl") {
+		t.Fatalf("IPv6 diagnostics mutated or probed the data plane:\n%s", calls)
+	}
+}
+
+func TestNodeRoutingGuardIPv6DiagnosticsRejectMalformedOrForeignObjects(t *testing.T) {
+	t.Parallel()
+	validCounter := []byte(`{"nftables":[{"counter":{"family":"inet","name":"selected_ipv6_drop","table":"vpnctl","packets":0,"bytes":0}}]}`)
+	validSet := []byte(`{"nftables":[{"set":{"family":"inet","name":"selected_resolved_v6","table":"vpnctl","type":"ipv6_addr"}}]}`)
+	for name, values := range map[string][2][]byte{
+		"malformed counter": {[]byte(`{`), validSet},
+		"missing counter":   {[]byte(`{"nftables":[]}`), validSet},
+		"foreign counter":   {[]byte(`{"nftables":[{"counter":{"family":"inet","name":"foreign","table":"vpnctl"}}]}`), validSet},
+		"malformed set":     {validCounter, []byte(`{`)},
+		"missing set":       {validCounter, []byte(`{"nftables":[]}`)},
+		"wrong set type":    {validCounter, []byte(`{"nftables":[{"set":{"family":"inet","name":"selected_resolved_v6","table":"vpnctl","type":"ipv4_addr"}}]}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := parseNodeRoutingIPv6Diagnostics(values[0], values[1]); err == nil {
+				t.Fatal("malformed IPv6 diagnostic objects were accepted")
+			}
+		})
+	}
+}
+
 func TestNodeRoutingGuardWaitReadyKeepsBootClosedUntilAllListenersExist(t *testing.T) {
 	t.Parallel()
 	runner := newNodeRoutingGuardRunner()
@@ -464,6 +528,8 @@ type nodeRoutingGuardRunner struct {
 	rulesInstalled  bool
 	tunReady        bool
 	dnsReady        bool
+	ipv6CounterJSON []byte
+	ipv6SetJSON     []byte
 }
 
 func newNodeRoutingGuardRunner() *nodeRoutingGuardRunner { return &nodeRoutingGuardRunner{} }
@@ -482,6 +548,10 @@ func (runner *nodeRoutingGuardRunner) Run(_ context.Context, command linuxplatfo
 			return linuxplatform.ProbeResult{ExitCode: 1, Stderr: []byte("No such file or directory")}, nil
 		}
 		return linuxplatform.ProbeResult{Stdout: []byte(runner.tableDefinition)}, nil
+	case key == "nft --json list counter inet vpnctl selected_ipv6_drop":
+		return linuxplatform.ProbeResult{Stdout: append([]byte(nil), runner.ipv6CounterJSON...)}, nil
+	case key == "nft --json list set inet vpnctl selected_resolved_v6":
+		return linuxplatform.ProbeResult{Stdout: append([]byte(nil), runner.ipv6SetJSON...)}, nil
 	case key == "nft --check --file -":
 		return linuxplatform.ProbeResult{}, nil
 	case key == "nft --file -":

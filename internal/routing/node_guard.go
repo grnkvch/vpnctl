@@ -19,6 +19,8 @@ const (
 	NodeRoutingGuardSchemaVersion  = 1
 	NodeRoutingGuardConfigFileName = "routing-guard.json"
 	NodeRoutingGuardOwnerComment   = "vpnctl:v2:node-routing-guard"
+	NodeRoutingSelectedIPv6Set     = "selected_resolved_v6"
+	NodeRoutingSelectedIPv6Counter = "selected_ipv6_drop"
 
 	maximumNodeRoutingGuardConfigBytes = 1 << 20
 	maximumNodeRecoveryPorts           = 16
@@ -265,7 +267,8 @@ func renderNodeRoutingGuardNFTables(config NodeRoutingGuardConfig, matchers NFTa
 	fmt.Fprintf(&rules, "table %s %s {\n", linuxplatform.VPNCTLNFTablesFamily, linuxplatform.VPNCTLNFTablesTable)
 	fmt.Fprintf(&rules, "  comment %s\n\n", strconv.Quote(NodeRoutingGuardOwnerComment))
 	rules.WriteString("  set selected_resolved_v4 {\n    type ipv4_addr\n    flags interval\n  }\n\n")
-	rules.WriteString("  set selected_resolved_v6 {\n    type ipv6_addr\n    flags interval\n  }\n\n")
+	fmt.Fprintf(&rules, "  set %s {\n    type ipv6_addr\n    flags interval\n  }\n\n", NodeRoutingSelectedIPv6Set)
+	fmt.Fprintf(&rules, "  counter %s {}\n\n", NodeRoutingSelectedIPv6Counter)
 	rules.WriteString("  chain prerouting_mangle {\n")
 	fmt.Fprintf(&rules, "    type filter hook prerouting priority %d; policy accept;\n\n", linuxplatform.VPNCTLNFTablesManglePriority)
 	writeNodeRoutingConntrackRestore(&rules, mask)
@@ -292,12 +295,14 @@ func renderNodeRoutingGuardNFTables(config NodeRoutingGuardConfig, matchers NFTa
 	fmt.Fprintf(&rules, "    ct state established,related meta mark & %s == %s return\n", mask, direct)
 	rules.WriteString("    drop\n  }\n\n")
 	rules.WriteString("  chain ready {\n")
+	fmt.Fprintf(&rules, "    meta nfproto ipv6 ct state established,related meta mark & %s == %s counter name %s drop\n", mask, selected, NodeRoutingSelectedIPv6Counter)
 	fmt.Fprintf(&rules, "    ct state established,related meta mark & %s == %s return\n", mask, selected)
 	fmt.Fprintf(&rules, "    ct state established,related meta mark & %s == %s return\n\n", mask, direct)
 	if config.ActiveTransport != "" {
 		fmt.Fprintf(&rules, "    ip daddr %s meta mark set (meta mark & %s) | %s ct mark set meta mark return\n", config.GatewayOverlayIPv4, preserved, selected)
 	}
-	fmt.Fprintf(&rules, "    ip6 daddr @selected_resolved_v6 meta mark set (meta mark & %s) | %s ct mark set meta mark drop\n", preserved, selected)
+	fmt.Fprintf(&rules, "    ip6 daddr @%s meta mark set (meta mark & %s) | %s ct mark set meta mark counter name %s drop\n",
+		NodeRoutingSelectedIPv6Set, preserved, selected, NodeRoutingSelectedIPv6Counter)
 	for _, decision := range matchers.program.ipv6 {
 		writeNodeRoutingIPv6Decision(&rules, decision, preserved, direct, selected)
 	}
@@ -336,12 +341,14 @@ func writeNodeRoutingIPv4Decision(rules *strings.Builder, decision MatcherDecisi
 func writeNodeRoutingIPv6Decision(rules *strings.Builder, decision MatcherDecisionRule, preserved, direct, selected string) {
 	mark := direct
 	verdict := "return"
+	counter := ""
 	if decision.Selected {
 		mark = selected
 		verdict = "drop"
+		counter = " counter name " + NodeRoutingSelectedIPv6Counter
 	}
-	fmt.Fprintf(rules, "    ip6 daddr %s meta mark set (meta mark & %s) | %s ct mark set meta mark %s\n",
-		decision.Value, preserved, mark, verdict)
+	fmt.Fprintf(rules, "    ip6 daddr %s meta mark set (meta mark & %s) | %s ct mark set meta mark%s %s\n",
+		decision.Value, preserved, mark, counter, verdict)
 }
 
 func nftMark(mark uint64) string { return fmt.Sprintf("0x%08x", mark) }

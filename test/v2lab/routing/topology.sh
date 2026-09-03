@@ -65,6 +65,7 @@ prepare() {
   ip -n "$direct_ns" address add 198.51.100.50/32 dev lo
   ip -n "$gateway_ns" address add 198.51.100.50/32 dev lo
   ip -n "$direct_ns" -6 address add 2001:db8:1::10/128 dev lo nodad
+  ip -n "$direct_ns" -6 address add 2001:db8:1::11/128 dev lo nodad
   ip -n "$direct_ns" -6 address add 2001:db8:1::20/128 dev lo nodad
 
   ip -n "$node_ns" link set v2direct0 up

@@ -22,7 +22,7 @@
     },
     {
       "path": "test/v2lab/routing/manifest.json",
-      "sha256": "7ff6bcb3125e6372a905405af98f1cae022a9cf6bd62e5f7ef99b0a25b19f776"
+      "sha256": "f7c71bdaf7199758cd16b777a6c3ad32d3bd207a17cce6923207ae3f11a9d1d7"
     },
     {
       "path": "test/v2lab/dns/manifest.json",

@@ -42,6 +42,11 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 			PreroutingPriority int    `json:"prerouting_priority"`
 			OutputPriority     int    `json:"output_priority"`
 		} `json:"nftables"`
+		Targets struct {
+			SelectedIPv6         string `json:"selected_ipv6"`
+			SelectedResolvedIPv6 string `json:"selected_resolved_ipv6"`
+			DirectIPv6           string `json:"direct_ipv6"`
+		} `json:"targets"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
 		t.Fatalf("decode routing spike manifest: %v", err)
@@ -63,6 +68,9 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		manifest.NFTables.PreroutingPriority != -150 || manifest.NFTables.OutputPriority != -150 {
 		t.Fatalf("unexpected nftables allocation: %+v", manifest.NFTables)
 	}
+	if manifest.Targets.SelectedIPv6 != "2001:db8:1::10" || manifest.Targets.SelectedResolvedIPv6 != "2001:db8:1::11" || manifest.Targets.DirectIPv6 != "2001:db8:1::20" {
+		t.Fatalf("unexpected IPv6 routing targets: %+v", manifest.Targets)
+	}
 
 	nftables := readContractFile(t, filepath.Join(fixtureRoot, "base.nft"))
 	for _, required := range []string{
@@ -71,7 +79,10 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"meta mark set ct mark", "ct mark set meta mark",
 		"iifname \"v2gateway0\" ct state new tcp dport 18082", "jump readiness",
 		"ct state established,related meta mark & 0xff000000 == 0x01000000",
-		"ip6 daddr @selected_v6 counter name selected_ipv6_drop drop",
+		"set selected_resolved_v6", "elements = { 2001:db8:1::11 }",
+		"meta nfproto ipv6 ct state established,related meta mark & 0xff000000 == 0x02000000",
+		"ip6 daddr @selected_resolved_v6", "ip6 daddr @selected_v6",
+		"ct mark set meta mark", "counter name selected_ipv6_drop drop",
 		"counter name not_ready_drop drop", "counter name foreign_bits_preserved",
 	} {
 		if !strings.Contains(nftables, required) {
@@ -130,6 +141,12 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 			t.Errorf("routing unit %s does not enforce the no-log default", unit)
 		}
 	}
+	directUnit := readContractFile(t, filepath.Join(fixtureRoot, "systemd", "vpnctl-v2-spike-routing-direct.service"))
+	for _, required := range []string{"[2001:db8:1::11]:18080=direct-v6-resolved-selected", "[2001:db8:1::20]:18080=direct-v6-unmatched"} {
+		if !strings.Contains(directUnit, required) {
+			t.Errorf("routing direct fixture is missing %q", required)
+		}
+	}
 
 	fault := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
@@ -152,6 +169,8 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"refusing to overwrite unowned routing spike path", "node_policy guard after-nft",
 		"node_policy assert-clean", "root_network_snapshot", "foreign_snapshot",
 		"gateway-outage", "transport-outage", "outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]}",
+		"blocked_node tcp 2001:db8:1::11", "blocked_node udp 2001:db8:1::11",
+		"selected_drop_packets: $ipv6_drop_packets", "resolved_aaaa_tcp_udp_blocked: true", "unmatched_behavior: \"preserve-system\"",
 		"trap 'clean_runtime_best_effort' EXIT", "uninstall_internal true", "owner-checked routing spike resources removed",
 	} {
 		if !strings.Contains(orchestrator, required) {

@@ -322,6 +322,10 @@ prepare() {
   wait_node_request tcp 203.0.113.10 direct-selected
   wait_node_request udp 203.0.113.10 direct-selected
   wait_node_request tcp 203.0.113.20 direct-unmatched
+  wait_node_request tcp 2001:db8:1::10 direct-v6-selected
+  wait_node_request udp 2001:db8:1::10 direct-v6-selected
+  wait_node_request tcp 2001:db8:1::11 direct-v6-resolved-selected
+  wait_node_request udp 2001:db8:1::11 direct-v6-resolved-selected
   wait_node_request tcp 2001:db8:1::20 direct-v6-unmatched
   if unit_active "$guard_unit" || unit_active "$engine_unit"; then
     echo "routing guard or engine became active during prepare" >&2
@@ -361,7 +365,7 @@ verification_cleanup() {
 
 verify() {
   local evidence_dir=${1:-"$artifact_root/evidence-$(date -u +%Y%m%dT%H%M%SZ)"}
-  local gateway_ip resource_dir foreign_counter
+  local gateway_ip resource_dir foreign_counter ipv6_drop_counter resolved_ipv6_entries
   assert_lab_instance "$node_instance"
   assert_lab_instance "$gateway_instance"
   assert_other_spikes_inactive
@@ -397,6 +401,8 @@ verify() {
   blocked_node udp 203.0.113.20
   blocked_node tcp 2001:db8:1::10
   blocked_node udp 2001:db8:1::10
+  blocked_node tcp 2001:db8:1::11
+  blocked_node udp 2001:db8:1::11
   blocked_node tcp 2001:db8:1::20
   blocked_node udp 2001:db8:1::20
   recovery_node
@@ -410,6 +416,8 @@ verify() {
   request_node udp 203.0.113.20 direct-unmatched
   blocked_node tcp 2001:db8:1::10
   blocked_node udp 2001:db8:1::10
+  blocked_node tcp 2001:db8:1::11
+  blocked_node udp 2001:db8:1::11
   request_node tcp 2001:db8:1::20 direct-v6-unmatched
   request_node udp 2001:db8:1::20 direct-v6-unmatched
   node_probe request --protocol udp --host 203.0.113.20 --port 18080 \
@@ -422,6 +430,16 @@ verify() {
   foreign_counter=$(jq '[.nftables[] | .counter? | select(.name == "foreign_bits_preserved") | .packets] | add // 0' "$evidence_dir/ready-nft.json")
   if [ "$foreign_counter" -lt 1 ]; then
     echo "routing mark namespace did not preserve lower foreign bits" >&2
+    exit 1
+  fi
+  ipv6_drop_counter=$(jq '[.nftables[] | .counter? | select(.name == "selected_ipv6_drop") | .packets] | if length == 1 then .[0] else -1 end' "$evidence_dir/ready-nft.json")
+  if [ "$ipv6_drop_counter" -lt 4 ]; then
+    echo "selected IPv6 TCP/UDP paths did not increment the shared drop counter" >&2
+    exit 1
+  fi
+  resolved_ipv6_entries=$(jq '[.nftables[] | .set? | select(.name == "selected_resolved_v6") | .elem[]?] | length' "$evidence_dir/ready-nft.json")
+  if [ "$resolved_ipv6_entries" -ne 1 ]; then
+    echo "selected resolved IPv6 fixture set differs from its one-address contract" >&2
     exit 1
   fi
 
@@ -452,6 +470,8 @@ verify() {
   blocked_node udp 203.0.113.20
   blocked_node tcp 2001:db8:1::10
   blocked_node udp 2001:db8:1::10
+  blocked_node tcp 2001:db8:1::11
+  blocked_node udp 2001:db8:1::11
   blocked_node tcp 2001:db8:1::20
   blocked_node udp 2001:db8:1::20
   recovery_node
@@ -463,6 +483,11 @@ verify() {
   request_node udp 203.0.113.10 direct-selected
   request_node tcp 203.0.113.20 direct-unmatched
   request_node tcp 2001:db8:1::10 direct-v6-selected
+  request_node udp 2001:db8:1::10 direct-v6-selected
+  request_node tcp 2001:db8:1::11 direct-v6-resolved-selected
+  request_node udp 2001:db8:1::11 direct-v6-resolved-selected
+  request_node tcp 2001:db8:1::20 direct-v6-unmatched
+  request_node udp 2001:db8:1::20 direct-v6-unmatched
   foreign_snapshot "$evidence_dir/foreign-after-uninstall"
   assert_same_files "$evidence_dir/foreign-before-nft.txt" "$evidence_dir/foreign-after-uninstall-nft.txt" "foreign nftables table after policy uninstall"
   assert_same_files "$evidence_dir/foreign-before-rule.txt" "$evidence_dir/foreign-after-uninstall-rule.txt" "foreign policy rule after policy uninstall"
@@ -485,6 +510,8 @@ verify() {
     --arg ingress_mark "$(manifest_value '.marks.ingress_response')" \
     --argjson selected_table "$(manifest_value '.routing.selected_table')" \
     --argjson gateway_table "$(manifest_value '.routing.gateway_table')" \
+    --argjson ipv6_drop_packets "$ipv6_drop_counter" \
+    --argjson resolved_ipv6_entries "$resolved_ipv6_entries" \
     --slurpfile gateway_outage "$evidence_dir/gateway-outage.json" \
     --slurpfile transport_outage "$evidence_dir/transport-outage.json" \
     '{
@@ -495,6 +522,7 @@ verify() {
       hooks: {prerouting_priority: -150, output_route_priority: -150, after_conntrack: true},
       boot: {guard_before_tun: true, new_application_blocked: true, recovery_allowed: true},
       ready: {selected_tcp_gateway: true, selected_udp_gateway: true, unmatched_ipv4_direct: true, unmatched_ipv6_direct: true, selected_ipv6_blocked: true},
+      ipv6: {mode: "selected-block-only", full_data_plane: false, unmatched_behavior: "preserve-system", static_tcp_udp_blocked: true, resolved_aaaa_tcp_udp_blocked: true, unrelated_tcp_udp_direct: true, selected_drop_packets: $ipv6_drop_packets, resolved_selected_entries: $resolved_ipv6_entries},
       outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]},
       conntrack: {established_direct_retained_after_crash: true, selected_never_failed_direct: true},
       ingress: {response_symmetry_gateway: true},

@@ -39,6 +39,7 @@
     "selected_ipv4": "203.0.113.10",
     "direct_ipv4": "203.0.113.20",
     "selected_ipv6": "2001:db8:1::10",
+    "selected_resolved_ipv6": "2001:db8:1::11",
     "direct_ipv6": "2001:db8:1::20",
     "echo_port": 18080,
     "ingress_port": 18082,
