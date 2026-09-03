@@ -223,8 +223,11 @@ func enrolledNodeUpdateState(t *testing.T, now time.Time, gatewayGeneration uint
 		Lifecycle: model.LifecycleActive, OverlayIPv4: "10.67.0.2", CredentialGeneration: 1,
 		AssignedPresets: []string{}, ActiveTransport: model.TransportStandard, IdempotencyRecords: []model.IdempotencyRecord{},
 		Gateway: &model.GatewayTrust{
-			PublicIPv4: "203.0.113.10", EnrollmentFingerprint: testNodeUpdateFingerprint(0x11),
-			ControlCAFingerprints: []string{testNodeUpdateFingerprint(0x22)}, LastKnownGatewayGeneration: gatewayGeneration,
+			PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1", ControlProtocol: "1.0",
+			EnrollmentFingerprint: testNodeUpdateFingerprint(0x11), EnrollmentPublicKeyRef: "enrollment-public:gateway",
+			ControlCAFingerprints: []string{testNodeUpdateFingerprint(0x22)}, ControlCACertificateRefs: []string{"control-cert:gateway-ca-g1"},
+			StandardPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", RestrictedServerCredentialRef: "restricted-upstream:gateway-g1",
+			LastKnownGatewayGeneration: gatewayGeneration,
 		},
 		CreatedAt: now,
 	})

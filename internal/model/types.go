@@ -304,11 +304,18 @@ type IdempotencyRecord struct {
 }
 
 type GatewayTrust struct {
-	PublicIPv4                 string   `json:"public_ipv4"`
-	EnrollmentFingerprint      string   `json:"enrollment_fingerprint"`
-	ControlCAFingerprints      []string `json:"control_ca_fingerprints"`
-	LastKnownGatewayGeneration uint64   `json:"last_known_gateway_generation"`
-	PendingRequestID           string   `json:"pending_request_id,omitempty"`
+	PublicIPv4                    string    `json:"public_ipv4"`
+	NodeCIDR                      string    `json:"node_cidr"`
+	GatewayOverlayIPv4            string    `json:"gateway_overlay_ipv4"`
+	ControlProtocol               string    `json:"control_protocol"`
+	EnrollmentFingerprint         string    `json:"enrollment_fingerprint"`
+	EnrollmentPublicKeyRef        string    `json:"enrollment_public_key_ref"`
+	ControlCAFingerprints         []string  `json:"control_ca_fingerprints"`
+	ControlCACertificateRefs      []string  `json:"control_ca_certificate_refs"`
+	StandardPublicKey             string    `json:"standard_public_key"`
+	RestrictedServerCredentialRef SecretRef `json:"restricted_server_credential_ref"`
+	LastKnownGatewayGeneration    uint64    `json:"last_known_gateway_generation"`
+	PendingRequestID              string    `json:"pending_request_id,omitempty"`
 }
 
 type Client struct {

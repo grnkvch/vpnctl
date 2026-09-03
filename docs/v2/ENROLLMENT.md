@@ -1,8 +1,9 @@
 # vpnctl v2 enrollment invites
 
 This document fixes the task-9.1 invite lifecycle, task-9.2 public protocol
-boundary, and task-9.3 node-owned credential boundary. The cross-host join saga
-follows in task 9.4; the recovery-token lifecycle follows in task 9.9.
+boundary, task-9.3 node-owned credential boundary, and task-9.4 initial join
+saga. Joined-node replay/reconciliation follows in task 9.5; the recovery-token
+lifecycle follows in task 9.9.
 
 ## Issuance and persistence
 
@@ -109,12 +110,66 @@ be serialized through ordinary JSON formatters.
 
 The gateway needs the restricted and tunnel values because those are shared
 authentication credentials. The node can expose exactly those two values to
-the later join coordinator only as a short-lived non-serializable secret
+the join coordinator only as a short-lived non-serializable secret
 payload whose bytes must match the public commitments. There is no equivalent
 path for the control or WireGuard private key: only their CSR/public key can
-leave the node. Task 9.4 will carry the secret payload inside the authenticated
-HTTPS enrollment transaction and publish only public values, hashes, and
-opaque references in authoritative gateway state.
+leave the node. Join carries the secret payload inside the authenticated HTTPS
+enrollment transaction and publishes only public values, hashes, and opaque
+references in authoritative gateway state.
+
+## Initial join saga
+
+`vpnctl join <standard|restricted> [preset...]` is node-only and accepts the
+invite exclusively through the common hidden controlling-terminal input. Its
+read-only CLI plan validates the explicit transport and present preset array;
+key generation and network exchange begin only after availability-impact
+confirmation. There is no automatic transport choice and no implicit preset.
+
+The node must be initialized and have no joined identity. It allocates a fresh
+UUID, stages its four generation-1 credentials locally, and sends a canonical
+secret request containing the public exchange plus only the committed
+restricted/tunnel values. A proven gateway rejection removes only credentials
+created by that attempt. Unknown gateway presets are rejected before any
+readiness call or gateway secret write, leaving the invite active and both
+authoritative states without a node.
+
+The gateway compares the authenticated invite generation, reserves the exact
+case-insensitive name and immutable ID, allocates the next node-pool address,
+and resolves requested names only against its applied effective presets. It
+loads exactly one active control CA, issues the node leaf from the submitted
+CSR, derives the gateway WireGuard public key, and returns only the restricted
+server credential needed by the node—not the gateway ShadowTLS bootstrap
+credential. Both standard and restricted records are built; the explicit
+choice is active and the other is standby.
+
+Before commit, the mandatory readiness boundary must report gateway staging,
+control mTLS, standard transport, restricted TCP/UoT, and reverse tunnel as
+healthy for the complete candidate. A missing result fails closed. After that
+gate, the gateway owner-creates the node control certificate, restricted
+identity, and tunnel token, then consumes the invite and appends the node,
+optional explicit policy, both transports, and certificate in one validated
+compare-and-swap state generation. A proven state-write failure removes only
+the secrets created by that transaction. A write whose outcome cannot be
+proven is retained for reconciliation rather than risking deletion of a
+committed identity.
+
+The signed response binds the assigned name/ID/IP, active transport, canonical
+preset names and effective selectors, control protocol and trust roots,
+handshake-host identity/version, gateway state generation, and exact hashes of
+all delivered material. The node pins the enrollment DER-SPKI fingerprint from
+the invite, reconstructs the transcript, verifies the CA and leaf profile plus
+CSR public-key equality, and commits one local generation containing gateway
+trust, both transports, the optional policy, and public certificate metadata.
+The CA, enrollment public key, node certificate, and restricted server
+credential use owner-create-only local references. Node control and WireGuard
+private keys never have a gateway storage path.
+
+This is a reconcilable saga, not distributed consensus. Once the gateway has
+committed, a lost, malformed, or locally unpersistable response is explicitly
+`uncertain`: node credentials are retained and no local authoritative node is
+invented. Task 9.5 supplies repeated-join/idempotency reconciliation for that
+case. Pre-commit validation and readiness failures are definitive and roll
+back the fresh node credentials immediately.
 
 ## Signed response and atomic consumption
 

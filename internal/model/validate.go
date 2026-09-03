@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/netip"
@@ -91,6 +92,13 @@ func (state State) Validate() error {
 	for index, node := range state.Nodes {
 		if err := node.Validate(); err != nil {
 			return wrap(indexPath("nodes", index), err)
+		}
+		if node.Gateway != nil {
+			prefix, _ := netip.ParsePrefix(node.Gateway.NodeCIDR)
+			address, _ := netip.ParseAddr(node.OverlayIPv4)
+			if !prefix.Contains(address) || address == netip.MustParseAddr(node.Gateway.GatewayOverlayIPv4) {
+				return invalid(indexPath("nodes", index)+".overlay_ipv4", "must be a non-gateway address inside gateway.node_cidr")
+			}
 		}
 		for recordIndex, record := range node.IdempotencyRecords {
 			if record.StateGeneration > state.Generation {
@@ -590,13 +598,33 @@ func (trust GatewayTrust) Validate() error {
 	if err := validateIPv4("public_ipv4", trust.PublicIPv4); err != nil {
 		return err
 	}
+	prefix, err := netip.ParsePrefix(trust.NodeCIDR)
+	if err != nil || !prefix.Addr().Is4() || prefix.Masked() != prefix || prefix.String() != trust.NodeCIDR {
+		return invalid("node_cidr", "must be a canonical IPv4 prefix")
+	}
+	if err := validateIPv4("gateway_overlay_ipv4", trust.GatewayOverlayIPv4); err != nil {
+		return err
+	}
+	if !prefix.Contains(netip.MustParseAddr(trust.GatewayOverlayIPv4)) || prefix.Addr().Next().String() != trust.GatewayOverlayIPv4 {
+		return invalid("gateway_overlay_ipv4", "must be the first host address in node_cidr")
+	}
+	if !protocolPattern.MatchString(trust.ControlProtocol) {
+		return invalid("control_protocol", "must be a major.minor version")
+	}
 	if err := validateFingerprint("enrollment_fingerprint", trust.EnrollmentFingerprint); err != nil {
+		return err
+	}
+	if err := validateOpaqueRef("enrollment_public_key_ref", trust.EnrollmentPublicKeyRef); err != nil {
 		return err
 	}
 	if len(trust.ControlCAFingerprints) == 0 || len(trust.ControlCAFingerprints) > 2 {
 		return invalid("control_ca_fingerprints", "must contain one or two fingerprints")
 	}
+	if len(trust.ControlCACertificateRefs) != len(trust.ControlCAFingerprints) {
+		return invalid("control_ca_certificate_refs", "must match control_ca_fingerprints")
+	}
 	seen := make(map[string]struct{}, len(trust.ControlCAFingerprints))
+	seenRefs := make(map[string]struct{}, len(trust.ControlCACertificateRefs))
 	for index, fingerprint := range trust.ControlCAFingerprints {
 		if err := validateFingerprint(indexPath("control_ca_fingerprints", index), fingerprint); err != nil {
 			return err
@@ -605,6 +633,21 @@ func (trust GatewayTrust) Validate() error {
 			return invalid(indexPath("control_ca_fingerprints", index), "duplicates a fingerprint")
 		}
 		seen[fingerprint] = struct{}{}
+		certificateRef := trust.ControlCACertificateRefs[index]
+		if err := validateOpaqueRef(indexPath("control_ca_certificate_refs", index), certificateRef); err != nil {
+			return err
+		}
+		if _, duplicate := seenRefs[certificateRef]; duplicate {
+			return invalid(indexPath("control_ca_certificate_refs", index), "duplicates a certificate reference")
+		}
+		seenRefs[certificateRef] = struct{}{}
+	}
+	standardPublicKey, err := base64.StdEncoding.Strict().DecodeString(trust.StandardPublicKey)
+	if err != nil || len(standardPublicKey) != 32 || base64.StdEncoding.EncodeToString(standardPublicKey) != trust.StandardPublicKey {
+		return invalid("standard_public_key", "must be canonical base64 for 256 bits")
+	}
+	if err := validateOpaqueRef("restricted_server_credential_ref", string(trust.RestrictedServerCredentialRef)); err != nil {
+		return err
 	}
 	if trust.LastKnownGatewayGeneration == 0 {
 		return invalid("last_known_gateway_generation", "must be positive")

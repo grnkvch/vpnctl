@@ -71,6 +71,53 @@ type PolicyCommitResult struct {
 	Desired                DesiredPolicy
 }
 
+// ResolveEffectiveAssignment maps an explicit set of requested preset names
+// to the gateway's already-applied effective preset generation. It accepts an
+// explicit empty slice for an all-direct assignment and never reads editable
+// source files, whose unapplied contents are not authoritative.
+func ResolveEffectiveAssignment(presets []model.Preset, requested []string) ([]string, []model.Selector, string, error) {
+	if presets == nil || requested == nil {
+		return nil, nil, "", fmt.Errorf("effective presets and requested assignment must be present arrays")
+	}
+	effective := make(map[string]model.Preset, len(presets))
+	for _, preset := range presets {
+		if err := preset.Validate(); err != nil {
+			return nil, nil, "", fmt.Errorf("invalid effective preset %s: %w", preset.Name, err)
+		}
+		key := strings.ToLower(preset.Name)
+		if _, duplicate := effective[key]; duplicate {
+			return nil, nil, "", fmt.Errorf("effective presets duplicate %s", preset.Name)
+		}
+		effective[key] = preset
+	}
+	seen := make(map[string]struct{}, len(requested))
+	names := make([]string, 0, len(requested))
+	for _, requestedName := range requested {
+		if err := validatePresetName(requestedName); err != nil {
+			return nil, nil, "", err
+		}
+		key := strings.ToLower(requestedName)
+		if _, duplicate := seen[key]; duplicate {
+			return nil, nil, "", fmt.Errorf("policy assignment duplicates preset %s", requestedName)
+		}
+		preset, found := effective[key]
+		if !found {
+			return nil, nil, "", fmt.Errorf("%w: %s", ErrPolicyUnknownPreset, requestedName)
+		}
+		seen[key] = struct{}{}
+		names = append(names, preset.Name)
+	}
+	sort.Slice(names, func(left, right int) bool { return presetNameLess(names[left], names[right]) })
+	selectors, effectiveHash, err := effectivePolicy(names, effective)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if selectors == nil {
+		selectors = []model.Selector{}
+	}
+	return names, selectors, effectiveHash, nil
+}
+
 func (result PolicyCommitResult) OutputResult() output.Result {
 	status := output.StatusOK
 	if result.Pending {

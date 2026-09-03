@@ -266,6 +266,14 @@ func TestNodeRoleStateBoundaries(t *testing.T) {
 			state.Clients = append(state.Clients, client)
 		}, want: "gateway client"},
 		{name: "missing gateway trust", mutate: func(state *State) { state.Nodes[0].Gateway = nil }, want: "requires gateway trust"},
+		{name: "invalid trusted node cidr", mutate: func(state *State) { state.Nodes[0].Gateway.NodeCIDR = "10.67.0.1/24" }, want: "node_cidr"},
+		{name: "wrong trusted gateway overlay", mutate: func(state *State) { state.Nodes[0].Gateway.GatewayOverlayIPv4 = "10.67.0.2" }, want: "first host"},
+		{name: "missing trusted control protocol", mutate: func(state *State) { state.Nodes[0].Gateway.ControlProtocol = "" }, want: "control_protocol"},
+		{name: "missing enrollment public ref", mutate: func(state *State) { state.Nodes[0].Gateway.EnrollmentPublicKeyRef = "" }, want: "enrollment_public_key_ref"},
+		{name: "mismatched trusted ca refs", mutate: func(state *State) { state.Nodes[0].Gateway.ControlCACertificateRefs = []string{} }, want: "must match"},
+		{name: "invalid trusted standard public key", mutate: func(state *State) { state.Nodes[0].Gateway.StandardPublicKey = "invalid" }, want: "standard_public_key"},
+		{name: "missing restricted upstream ref", mutate: func(state *State) { state.Nodes[0].Gateway.RestrictedServerCredentialRef = "" }, want: "restricted_server_credential_ref"},
+		{name: "local overlay outside trusted cidr", mutate: func(state *State) { state.Nodes[0].OverlayIPv4 = "10.68.0.2" }, want: "inside gateway.node_cidr"},
 		{name: "gateway-only host field", mutate: func(state *State) { state.Host.PublicIPv4 = "203.0.113.10" }, want: "gateway-only"},
 		{name: "gateway enrollment signer", mutate: func(state *State) { state.EnrollmentIdentity = gatewayState().EnrollmentIdentity }, want: "gateway-only"},
 		{name: "foreign policy", mutate: func(state *State) { state.Policies[0].TargetID = clientID }, want: "unknown node"},
@@ -601,10 +609,12 @@ func nodeState() State {
 
 func gatewayTrust() *GatewayTrust {
 	return &GatewayTrust{
-		PublicIPv4:                 "203.0.113.10",
-		EnrollmentFingerprint:      fingerprint("d"),
-		ControlCAFingerprints:      []string{fingerprint("e")},
-		LastKnownGatewayGeneration: 7,
+		PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1",
+		ControlProtocol: "1.0", EnrollmentFingerprint: fingerprint("d"),
+		EnrollmentPublicKeyRef: "enrollment-public:gateway", ControlCAFingerprints: []string{fingerprint("e")},
+		ControlCACertificateRefs:      []string{"control-cert:gateway-ca-g1"},
+		StandardPublicKey:             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		RestrictedServerCredentialRef: "restricted-upstream:gateway-g1", LastKnownGatewayGeneration: 7,
 	}
 }
 

@@ -25,6 +25,16 @@ type PreparedEnrollmentArtifacts struct {
 	PublicKeyHashes  map[string][sha256.Size]byte
 	AssignmentSHA256 [sha256.Size]byte
 	ResponseData     *output.Secret
+	Committer        PreparedEnrollmentCommitter
+}
+
+// PreparedEnrollmentCommitter owns any staged join resources and must consume
+// the invite in the same gateway-state transition that publishes them.
+// Builders that do not add resources may leave it nil and use invite-only
+// consumption, preserving the generic public enrollment boundary.
+type PreparedEnrollmentCommitter interface {
+	Commit(context.Context, string) error
+	Destroy()
 }
 
 type InviteEnrollmentCoordinator struct {
@@ -65,6 +75,9 @@ func (coordinator *InviteEnrollmentCoordinator) PreparePublicEnrollment(
 		return nil, err
 	}
 	if artifacts.ResponseData == nil {
+		if artifacts.Committer != nil {
+			artifacts.Committer.Destroy()
+		}
 		return nil, ErrPublicEnrollmentUnavailable
 	}
 	transcript, err := NewEnrollmentTranscript(
@@ -74,11 +87,15 @@ func (coordinator *InviteEnrollmentCoordinator) PreparePublicEnrollment(
 	)
 	if err != nil {
 		artifacts.ResponseData.Destroy()
+		if artifacts.Committer != nil {
+			artifacts.Committer.Destroy()
+		}
 		return nil, ErrPublicEnrollmentUnavailable
 	}
 	return &inviteEnrollmentTransaction{
 		invites: coordinator.invites, authorization: authorization, transcript: transcript,
 		fingerprint: authorization.EnrollmentFingerprint, responseData: artifacts.ResponseData,
+		committer: artifacts.Committer,
 	}, nil
 }
 
@@ -89,6 +106,7 @@ type inviteEnrollmentTransaction struct {
 	transcript    EnrollmentTranscript
 	fingerprint   string
 	responseData  *output.Secret
+	committer     PreparedEnrollmentCommitter
 	committed     bool
 	destroyed     bool
 }
@@ -130,7 +148,13 @@ func (transaction *inviteEnrollmentTransaction) Commit(ctx context.Context, repl
 	if transaction.destroyed || transaction.committed || transaction.invites == nil {
 		return ErrPublicEnrollmentRejected
 	}
-	if _, err := transaction.invites.CommitAuthorized(ctx, transaction.authorization, replayHash); err != nil {
+	var err error
+	if transaction.committer != nil {
+		err = transaction.committer.Commit(ctx, replayHash)
+	} else {
+		_, err = transaction.invites.CommitAuthorized(ctx, transaction.authorization, replayHash)
+	}
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrPublicEnrollmentRejected, err)
 	}
 	transaction.committed = true
@@ -149,6 +173,10 @@ func (transaction *inviteEnrollmentTransaction) Destroy() {
 	if transaction.responseData != nil {
 		transaction.responseData.Destroy()
 	}
+	if transaction.committer != nil {
+		transaction.committer.Destroy()
+	}
 	transaction.responseData = nil
+	transaction.committer = nil
 	transaction.destroyed = true
 }

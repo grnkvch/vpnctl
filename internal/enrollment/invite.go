@@ -382,6 +382,19 @@ func (manager *InviteManager) AuthorizeInvite(encoded []byte) (InviteAuthorizati
 // CommitAuthorized atomically consumes the invite and the exact signed
 // exchange replay hash in one authoritative state generation.
 func (manager *InviteManager) CommitAuthorized(ctx context.Context, authorization InviteAuthorization, consumptionHash string) (InviteConsumeResult, error) {
+	return manager.commitAuthorizedMutation(ctx, authorization, consumptionHash, nil)
+}
+
+// commitAuthorizedMutation is the single gateway-state commit point used by
+// join. mutate may add the prepared node resources to candidate, but must not
+// perform I/O: invite consumption and resource publication then share one
+// validated state generation and one compare-and-swap Save.
+func (manager *InviteManager) commitAuthorizedMutation(
+	ctx context.Context,
+	authorization InviteAuthorization,
+	consumptionHash string,
+	mutate func(current model.State, candidate *model.State) error,
+) (InviteConsumeResult, error) {
 	if manager == nil {
 		return InviteConsumeResult{}, fmt.Errorf("invite manager is required")
 	}
@@ -430,6 +443,11 @@ func (manager *InviteManager) CommitAuthorized(ctx context.Context, authorizatio
 	candidate.Generation, err = model.NextGeneration(state.Generation)
 	if err != nil {
 		return InviteConsumeResult{}, err
+	}
+	if mutate != nil {
+		if err := mutate(state, &candidate); err != nil {
+			return InviteConsumeResult{}, fmt.Errorf("build authorized enrollment transition: %w", err)
+		}
 	}
 	if err := model.ValidateTransition(state, candidate); err != nil {
 		return InviteConsumeResult{}, fmt.Errorf("build invite consumption transition: %w", err)

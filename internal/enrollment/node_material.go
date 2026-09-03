@@ -191,6 +191,82 @@ type NodeCredentialRuntime struct {
 	WireGuardRunner wireguard.Runner
 }
 
+type nodeSharedCredentialWire struct {
+	SchemaVersion        int    `json:"schema_version"`
+	RestrictedCredential string `json:"restricted_credential"`
+	TunnelCredential     string `json:"tunnel_credential"`
+}
+
+// NodeSharedCredentialExchange keeps the two necessarily shared symmetric
+// credentials out of ordinary values and formatting. It deliberately has no
+// accessor for either asymmetric private key.
+type NodeSharedCredentialExchange struct {
+	secret output.Secret
+}
+
+func decodeNodeSharedCredentialExchange(encoded []byte, exchange NodePublicExchange) (*NodeSharedCredentialExchange, error) {
+	if err := exchange.Validate(); err != nil {
+		return nil, err
+	}
+	var wire nodeSharedCredentialWire
+	if err := control.DecodeRPCPayload(json.RawMessage(encoded), &wire); err != nil {
+		return nil, fmt.Errorf("decode node shared credentials: %w", err)
+	}
+	restrictedCredential := []byte(wire.RestrictedCredential)
+	tunnelCredential := []byte(wire.TunnelCredential)
+	defer clear(restrictedCredential)
+	defer clear(tunnelCredential)
+	if wire.SchemaVersion != NodeSharedExchangeSchemaVersion {
+		return nil, fmt.Errorf("unsupported node shared credential schema")
+	}
+	if _, err := restricted.DecodeIdentitySecret(restrictedCredential); err != nil ||
+		sha256Hex(restrictedCredential) != exchange.MaterialHashes[NodeRestrictedCredentialHashName] {
+		return nil, fmt.Errorf("node restricted credential does not match public commitment")
+	}
+	if validateNodeTunnelCredential(tunnelCredential) != nil ||
+		sha256Hex(tunnelCredential) != exchange.MaterialHashes[NodeTunnelCredentialHashName] {
+		return nil, fmt.Errorf("node tunnel credential does not match public commitment")
+	}
+	canonical, err := json.Marshal(wire)
+	if err != nil || !bytes.Equal(canonical, encoded) {
+		clear(canonical)
+		return nil, fmt.Errorf("node shared credential exchange must be canonical JSON")
+	}
+	secret, err := output.NewSecret(canonical)
+	clear(canonical)
+	if err != nil {
+		return nil, err
+	}
+	return &NodeSharedCredentialExchange{secret: secret}, nil
+}
+
+func (exchange *NodeSharedCredentialExchange) Use(callback func(restrictedCredential, tunnelCredential []byte) error) error {
+	if exchange == nil || callback == nil {
+		return fmt.Errorf("node shared credential callback is required")
+	}
+	return exchange.secret.Use(func(encoded []byte) error {
+		var wire nodeSharedCredentialWire
+		if err := control.DecodeRPCPayload(json.RawMessage(encoded), &wire); err != nil {
+			return fmt.Errorf("decode retained node shared credentials: %w", err)
+		}
+		restrictedCredential := []byte(wire.RestrictedCredential)
+		tunnelCredential := []byte(wire.TunnelCredential)
+		defer clear(restrictedCredential)
+		defer clear(tunnelCredential)
+		return callback(restrictedCredential, tunnelCredential)
+	})
+}
+
+func (exchange *NodeSharedCredentialExchange) Destroy() {
+	if exchange != nil {
+		exchange.secret.Destroy()
+	}
+}
+
+func (NodeSharedCredentialExchange) MarshalJSON() ([]byte, error) {
+	return nil, output.ErrSensitiveSerialization
+}
+
 type NodeCredentialProvisioner struct {
 	secrets NodeCredentialSecretStore
 	runtime NodeCredentialRuntime
@@ -360,11 +436,7 @@ func (provisioner *NodeCredentialProvisioner) SharedCredentialPayload(installati
 		sha256Hex(tunnelCredential) != installation.PublicExchange.MaterialHashes[NodeTunnelCredentialHashName] {
 		return nil, fmt.Errorf("node tunnel credential does not match public commitment")
 	}
-	encoded, err := json.Marshal(struct {
-		SchemaVersion        int    `json:"schema_version"`
-		RestrictedCredential string `json:"restricted_credential"`
-		TunnelCredential     string `json:"tunnel_credential"`
-	}{
+	encoded, err := json.Marshal(nodeSharedCredentialWire{
 		SchemaVersion:        NodeSharedExchangeSchemaVersion,
 		RestrictedCredential: string(restrictedCredential), TunnelCredential: string(tunnelCredential),
 	})
