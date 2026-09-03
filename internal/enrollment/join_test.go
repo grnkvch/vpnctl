@@ -95,7 +95,7 @@ func TestJoinedNodeAuthenticatesToTunnelWithGatewayAuthoritativeState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorizer, err := tunnel.NewLoginAuthorizationServer(fixture.gatewayState, source)
+	authorizer, err := tunnel.NewAuthorizationServer(fixture.gatewayState, source)
 	if err != nil {
 		t.Fatal(err)
 	}

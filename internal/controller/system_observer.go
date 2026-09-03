@@ -131,7 +131,7 @@ func RunSystemController(ctx context.Context, paths store.Paths) error {
 	if err != nil {
 		return err
 	}
-	authorizer, err := tunnel.NewLoginAuthorizationServer(state, credentials)
+	authorizer, err := tunnel.NewAuthorizationServer(state, credentials)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func runSystemControllerServices(ctx context.Context, controllerService, authori
 		run  systemControllerService
 	}{
 		{name: "gateway controller", run: controllerService},
-		{name: "tunnel Login authorization", run: authorizationService},
+		{name: "tunnel authorization", run: authorizationService},
 	}
 	for _, service := range services {
 		service := service

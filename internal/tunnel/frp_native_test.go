@@ -107,8 +107,8 @@ func TestFRPNativeLoginUsesProductionAuthorizerAndEffectiveZeroPool(t *testing.T
 
 	authorizer, _, _ := loginAuthorizationFixture(t)
 	decisions := make(chan string, 8)
-	authorizer.observe = func(allowed, unavailable bool, reason string) {
-		decisions <- fmt.Sprintf("%t/%t/%s", allowed, unavailable, reason)
+	authorizer.observe = func(operation string, allowed, unavailable bool, reason string) {
+		decisions <- fmt.Sprintf("%s/%t/%t/%s", operation, allowed, unavailable, reason)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -149,13 +149,144 @@ func TestFRPNativeLoginUsesProductionAuthorizerAndEffectiveZeroPool(t *testing.T
 
 	select {
 	case decision := <-decisions:
-		if decision != "true/false/identity_valid" {
+		if decision != "Login/true/false/identity_valid" {
 			t.Fatalf("native Login decision = %q", decision)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("pinned frpc did not reach the production Login authorizer")
 	}
 	waitForNativeEstablishedTunnel(t, 17000, 2)
+}
+
+func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
+	frpsBinary := os.Getenv("VPNCTL_FRPS")
+	frpcBinary := os.Getenv("VPNCTL_FRPC")
+	if frpsBinary == "" || frpcBinary == "" {
+		t.Skip("set VPNCTL_FRPS and VPNCTL_FRPC to pinned Linux binaries")
+	}
+	root := t.TempDir()
+	certificatePEM, privateKeyPEM := nativeFRPTLSIdentity(t)
+	certificatePath := filepath.Join(root, "tunnel-server.crt")
+	privateKeyPath := filepath.Join(root, "tunnel-server.key")
+	serverConfigPath := filepath.Join(root, "frps.toml")
+	clientConfigPath := filepath.Join(root, "frpc.toml")
+	maliciousConfigPath := filepath.Join(root, "frpc-malicious.toml")
+	serverConfig := renderFRPServerConfig(netip.MustParseAddrPort("127.0.0.1:17000"), certificatePath, privateKeyPath)
+	serverConfig = bytes.Replace(serverConfig, []byte(`ops = ["Login", "NewProxy", "Ping"]`), []byte(`ops = ["Login", "NewProxy"]`), 1)
+	session := testFRPSession(t)
+	session.Mappings = session.Mappings[:1]
+	clientConfig := renderFRPClientConfig(netip.MustParseAddrPort("127.0.0.1:17000"), session, testTunnelCredential, certificatePath)
+	maliciousConfig := bytes.Replace(append([]byte(nil), clientConfig...), []byte("remotePort = 20000"), []byte("remotePort = 20002"), 1)
+	for path, content := range map[string][]byte{
+		certificatePath: certificatePEM, privateKeyPath: privateKeyPEM,
+		serverConfigPath: serverConfig, clientConfigPath: clientConfig, maliciousConfigPath: maliciousConfig,
+	} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	authorizer, _, _ := loginAuthorizationFixture(t)
+	decisions := make(chan string, 32)
+	authorizer.observe = func(operation string, allowed, unavailable bool, reason string) {
+		decisions <- fmt.Sprintf("%s/%t/%t/%s", operation, allowed, unavailable, reason)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	authorizationResult := make(chan error, 1)
+	go func() { authorizationResult <- authorizer.Serve(ctx) }()
+	waitForNativeTCPListener(t, FRPAuthorizationAddress)
+
+	serverCommand := exec.CommandContext(ctx, frpsBinary, "-c", serverConfigPath)
+	serverCommand.Stdout = io.Discard
+	serverCommand.Stderr = io.Discard
+	if err := serverCommand.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	serverResult := make(chan error, 1)
+	go func() { serverResult <- serverCommand.Wait() }()
+	waitForNativeTCPListener(t, "127.0.0.1:17000")
+
+	maliciousContext, stopMalicious := context.WithCancel(ctx)
+	maliciousCommand := exec.CommandContext(maliciousContext, frpcBinary, "-c", maliciousConfigPath)
+	maliciousCommand.Stdout = io.Discard
+	maliciousCommand.Stderr = io.Discard
+	if err := maliciousCommand.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	maliciousResult := make(chan error, 1)
+	go func() { maliciousResult <- maliciousCommand.Wait() }()
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Login/true/false/identity_valid":       false,
+		"NewProxy/false/false/mapping_mismatch": false,
+	})
+	assertNoNativeTCPListener(t, "127.0.0.1:20002")
+	stopMalicious()
+	select {
+	case <-maliciousResult:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("malicious pinned frpc did not stop")
+	}
+
+	clientCommand := exec.CommandContext(ctx, frpcBinary, "-c", clientConfigPath)
+	clientCommand.Stdout = io.Discard
+	clientCommand.Stderr = io.Discard
+	if err := clientCommand.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	clientResult := make(chan error, 1)
+	go func() { clientResult <- clientCommand.Wait() }()
+	t.Cleanup(func() {
+		cancel()
+		for _, result := range []<-chan error{clientResult, serverResult, authorizationResult} {
+			select {
+			case <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("native frp NewProxy fixture did not stop")
+			}
+		}
+	})
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Login/true/false/identity_valid":   false,
+		"NewProxy/true/false/mapping_valid": false,
+	})
+	waitForNativeTCPListener(t, "127.0.0.1:20000")
+	waitForNativeEstablishedTunnel(t, 17000, 2)
+}
+
+func waitForNativeAuthorizationDecisions(t *testing.T, decisions <-chan string, wanted map[string]bool) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	remaining := len(wanted)
+	for remaining > 0 {
+		select {
+		case decision := <-decisions:
+			seen, expected := wanted[decision]
+			if expected && !seen {
+				wanted[decision] = true
+				remaining--
+			}
+		case <-deadline:
+			t.Fatalf("native authorization decisions incomplete: %v", wanted)
+		}
+	}
+}
+
+func assertNoNativeTCPListener(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("tcp4", address, 50*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			t.Fatalf("unauthorized native listener %s became reachable", address)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func waitForNativeTCPListener(t *testing.T, address string) {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -142,6 +143,157 @@ func TestLoginAuthorizationFailsClosedOnControllerOrCredentialError(t *testing.T
 	}
 }
 
+func TestNewProxyAuthorizationAllowsOnlyExactAuthoritativeMapping(t *testing.T) {
+	t.Parallel()
+
+	server, state, credentials := loginAuthorizationFixture(t)
+	name, err := MappingName(testNodeA, testExposeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := newProxyAuthorizationContent(t, testNodeA, 1, testTunnelCredential, name, "tcp", 20000, 1)
+	recorder := serveAuthorization(t, server, "NewProxy", content)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("authorization status = %d", recorder.Code)
+	}
+	var response frpAuthorizationResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Reject || response.Unchange == nil || !*response.Unchange || response.RejectReason != "" || response.Content != nil {
+		t.Fatalf("allowed response envelope = reject:%t unchange:%v reason:%q content:%v", response.Reject, response.Unchange, response.RejectReason, response.Content)
+	}
+	if state.loads != 1 || len(credentials.calls) != 1 || credentials.calls[0] != testNodeA+"/1" {
+		t.Fatalf("authorization dependencies = state:%d credentials:%v", state.loads, credentials.calls)
+	}
+}
+
+func TestNewProxyAuthorizationRejectsMaliciousStaleDisabledAndCrossNodeMappings(t *testing.T) {
+	t.Parallel()
+
+	nameA, _ := MappingName(testNodeA, testExposeA)
+	nameB, _ := MappingName(testNodeB, testExposeB)
+	tests := []struct {
+		name        string
+		nodeID      string
+		token       func(*recordingAuthorizationCredentials) string
+		mappingName string
+		proxyType   string
+		port        int64
+		generation  uint64
+		mutateState func(*model.State)
+		wantReason  string
+	}{
+		{name: "unknown name", nodeID: testNodeA, mappingName: "vpnctl-n-unregistered", proxyType: "tcp", port: 20000, generation: 1, wantReason: "mapping_mismatch"},
+		{name: "unsupported type", nodeID: testNodeA, mappingName: nameA, proxyType: "udp", port: 20000, generation: 1, wantReason: "mapping_mismatch"},
+		{name: "arbitrary port", nodeID: testNodeA, mappingName: nameA, proxyType: "tcp", port: 20002, generation: 1, wantReason: "mapping_mismatch"},
+		{name: "stale expose generation", nodeID: testNodeA, mappingName: nameA, proxyType: "tcp", port: 20000, generation: 2, wantReason: "mapping_mismatch"},
+		{name: "disabled expose", nodeID: testNodeA, mappingName: nameA, proxyType: "tcp", port: 20000, generation: 1, mutateState: func(state *model.State) { state.Exposes[0].State = model.ExposeDisabled }, wantReason: "mapping_mismatch"},
+		{name: "cross-node owner", nodeID: testNodeA, mappingName: nameB, proxyType: "tcp", port: 20001, generation: 1, wantReason: "mapping_mismatch"},
+		{name: "cross-node identity", nodeID: testNodeB, token: func(credentials *recordingAuthorizationCredentials) string {
+			return string(credentials.values[testNodeB+"/1"])
+		}, mappingName: nameA, proxyType: "tcp", port: 20000, generation: 1, wantReason: "mapping_mismatch"},
+		{name: "revoked node", nodeID: testNodeA, mappingName: nameA, proxyType: "tcp", port: 20000, generation: 1, mutateState: func(state *model.State) { state.Nodes[0].Lifecycle = model.LifecycleRevoked }, wantReason: "revoked"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server, state, credentials := loginAuthorizationFixture(t)
+			if test.mutateState != nil {
+				test.mutateState(&state.state)
+			}
+			token := testTunnelCredential
+			if test.token != nil {
+				token = test.token(credentials)
+			}
+			decision := server.authorizeNewProxy(newProxyAuthorizationContent(t, test.nodeID, 1, token, test.mappingName, test.proxyType, test.port, test.generation))
+			if decision.allowed || decision.unavailable || decision.reason != test.wantReason {
+				t.Fatalf("decision = allowed:%t unavailable:%t reason:%q", decision.allowed, decision.unavailable, decision.reason)
+			}
+		})
+	}
+}
+
+func TestNewProxyAuthorizationReloadsStateAndFailsClosedOnAuthoritativeErrors(t *testing.T) {
+	t.Parallel()
+
+	server, state, credentials := loginAuthorizationFixture(t)
+	name, _ := MappingName(testNodeA, testExposeA)
+	oldContent := newProxyAuthorizationContent(t, testNodeA, 1, testTunnelCredential, name, "tcp", 20000, 1)
+	if decision := server.authorizeNewProxy(oldContent); !decision.allowed {
+		t.Fatalf("initial decision = %+v", decision)
+	}
+	state.state.Exposes[0].TunnelPort = 20002
+	state.state.Exposes[0].Generation = 2
+	if decision := server.authorizeNewProxy(oldContent); decision.allowed || decision.unavailable || decision.reason != "mapping_mismatch" {
+		t.Fatalf("stale decision = %+v", decision)
+	}
+	newContent := newProxyAuthorizationContent(t, testNodeA, 1, testTunnelCredential, name, "tcp", 20002, 2)
+	if decision := server.authorizeNewProxy(newContent); !decision.allowed {
+		t.Fatalf("updated decision = %+v", decision)
+	}
+
+	state.err = errors.New("authoritative-state-path-canary")
+	if decision := server.authorizeNewProxy(newContent); decision.allowed || !decision.unavailable || decision.reason != "controller_error" {
+		t.Fatalf("state-error decision = %+v", decision)
+	}
+	recorder := serveAuthorization(t, server, "NewProxy", newContent)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "vpnctl authorization unavailable") ||
+		strings.Contains(recorder.Body.String(), "canary") || strings.Contains(recorder.Body.String(), testTunnelCredential) {
+		t.Fatalf("state-error response was not sanitized: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+
+	server, state, credentials = loginAuthorizationFixture(t)
+	credentials.err = errors.New("credential-path-canary")
+	if decision := server.authorizeNewProxy(oldContent); decision.allowed || !decision.unavailable || decision.reason != "controller_error" {
+		t.Fatalf("credential-error decision = %+v", decision)
+	}
+
+	server, state, _ = loginAuthorizationFixture(t)
+	state.state.Exposes = append(state.state.Exposes, state.state.Exposes[0])
+	if decision := server.authorizeNewProxy(oldContent); decision.allowed || !decision.unavailable || decision.reason != "controller_error" {
+		t.Fatalf("duplicate-mapping decision = %+v", decision)
+	}
+
+	server, state, _ = loginAuthorizationFixture(t)
+	state.state.Exposes[0].TunnelPort = 1024
+	if decision := server.authorizeNewProxy(oldContent); decision.allowed || !decision.unavailable || decision.reason != "controller_error" {
+		t.Fatalf("invalid-authoritative-mapping decision = %+v", decision)
+	}
+}
+
+func TestNewProxyAuthorizationRejectsMalformedIdentityAndMapping(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := loginAuthorizationFixture(t)
+	name, _ := MappingName(testNodeA, testExposeA)
+	valid := newProxyAuthorizationContent(t, testNodeA, 1, testTunnelCredential, name, "tcp", 20000, 1)
+	tests := []struct {
+		name   string
+		mutate func(map[string]json.RawMessage)
+	}{
+		{name: "missing user", mutate: func(content map[string]json.RawMessage) { delete(content, "user") }},
+		{name: "missing user metas", mutate: func(content map[string]json.RawMessage) { content["user"] = json.RawMessage(`{}`) }},
+		{name: "missing mapping metas", mutate: func(content map[string]json.RawMessage) { delete(content, "metas") }},
+		{name: "noncanonical generation", mutate: func(content map[string]json.RawMessage) { content["metas"] = json.RawMessage(`{"generation":"01"}`) }},
+		{name: "fractional port", mutate: func(content map[string]json.RawMessage) { content["remote_port"] = json.RawMessage(`20000.0`) }},
+		{name: "missing name", mutate: func(content map[string]json.RawMessage) { delete(content, "proxy_name") }},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			content := cloneRawMessageMap(valid)
+			defer clearRawMessageMap(content)
+			test.mutate(content)
+			decision := server.authorizeNewProxy(content)
+			if decision.allowed || decision.unavailable {
+				t.Fatalf("malformed decision = %+v", decision)
+			}
+		})
+	}
+}
+
 func TestLoginAuthorizationHTTPBoundaryRejectsMalformedAndOverloadedRequests(t *testing.T) {
 	t.Parallel()
 
@@ -237,10 +389,10 @@ func TestLoginAuthorizationConstructorRejectsMissingDependencies(t *testing.T) {
 
 	state := &recordingAuthorizationState{}
 	credentials := &recordingAuthorizationCredentials{}
-	if _, err := NewLoginAuthorizationServer(nil, credentials); err == nil {
+	if _, err := NewAuthorizationServer(nil, credentials); err == nil {
 		t.Fatal("constructor accepted a missing state reader")
 	}
-	if _, err := NewLoginAuthorizationServer(state, nil); err == nil {
+	if _, err := NewAuthorizationServer(state, nil); err == nil {
 		t.Fatal("constructor accepted a missing credential source")
 	}
 }
@@ -300,7 +452,7 @@ func (source *recordingAuthorizationCredentials) TunnelCredential(nodeID string,
 	return append([]byte(nil), value...), nil
 }
 
-func loginAuthorizationFixture(t *testing.T) (*LoginAuthorizationServer, *recordingAuthorizationState, *recordingAuthorizationCredentials) {
+func loginAuthorizationFixture(t *testing.T) (*AuthorizationServer, *recordingAuthorizationState, *recordingAuthorizationCredentials) {
 	t.Helper()
 	first := testNode(testNodeA)
 	second := testNode(testNodeB)
@@ -309,6 +461,10 @@ func loginAuthorizationFixture(t *testing.T) (*LoginAuthorizationServer, *record
 	state := &recordingAuthorizationState{state: model.State{
 		Host:  model.Host{Role: model.RoleGateway},
 		Nodes: []model.Node{first, second},
+		Exposes: []model.Expose{
+			testExpose(testExposeA, testNodeA, "first", 20000, model.ExposeReady),
+			testExpose(testExposeB, testNodeB, "second", 20001, model.ExposeReady),
+		},
 	}}
 	secondCredential, err := GenerateCredential(bytes.NewReader(bytes.Repeat([]byte{0x22}, CredentialBytes)))
 	if err != nil {
@@ -318,7 +474,7 @@ func loginAuthorizationFixture(t *testing.T) (*LoginAuthorizationServer, *record
 		testNodeA + "/1": []byte(testTunnelCredential),
 		testNodeB + "/1": secondCredential,
 	}}
-	server, err := NewLoginAuthorizationServer(state, credentials)
+	server, err := NewAuthorizationServer(state, credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +496,7 @@ func loginAuthorizationContent(t *testing.T, nodeID string, generation uint64, t
 	}
 }
 
-func serveLoginAuthorization(t *testing.T, server *LoginAuthorizationServer, content map[string]json.RawMessage) *httptest.ResponseRecorder {
+func serveLoginAuthorization(t *testing.T, server *AuthorizationServer, content map[string]json.RawMessage) *httptest.ResponseRecorder {
 	t.Helper()
 	body := encodeLoginAuthorizationRequest(t, content)
 	recorder := httptest.NewRecorder()
@@ -357,4 +513,44 @@ func encodeLoginAuthorizationRequest(t *testing.T, content map[string]json.RawMe
 		t.Fatal(err)
 	}
 	return body
+}
+
+func newProxyAuthorizationContent(t *testing.T, nodeID string, credentialGeneration uint64, token, name, proxyType string, port int64, exposeGeneration uint64) map[string]json.RawMessage {
+	t.Helper()
+	identityMetadata, err := json.Marshal(map[string]string{
+		"node_id": nodeID, "generation": fmt.Sprint(credentialGeneration), "tunnel_token": token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := json.Marshal(map[string]json.RawMessage{
+		"metas": identityMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappingMetadata, err := json.Marshal(map[string]string{"generation": fmt.Sprint(exposeGeneration)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]json.RawMessage{
+		"user":        user,
+		"proxy_name":  json.RawMessage(strconv.Quote(name)),
+		"proxy_type":  json.RawMessage(strconv.Quote(proxyType)),
+		"remote_port": json.RawMessage(fmt.Sprint(port)),
+		"metas":       mappingMetadata,
+	}
+}
+
+func serveAuthorization(t *testing.T, server *AuthorizationServer, operation string, content map[string]json.RawMessage) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(frpAuthorizationRequest{Version: FRPAuthorizationProtocol, Op: operation, Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, FRPAuthorizationPath+"?version="+FRPAuthorizationProtocol+"&op="+operation, bytes.NewReader(body))
+	server.ServeHTTP(recorder, request)
+	clear(body)
+	return recorder
 }

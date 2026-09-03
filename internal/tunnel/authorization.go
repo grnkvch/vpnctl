@@ -34,15 +34,15 @@ type AuthorizationStateReader interface {
 	Load() (model.State, error)
 }
 
-// LoginAuthorizationServer implements the pinned frp HTTP-plugin boundary.
+// AuthorizationServer implements the pinned frp HTTP-plugin boundary.
 // It has no mutation interface and reloads authoritative state for every
-// Login, so revocation and generation changes take effect without a restart.
-type LoginAuthorizationServer struct {
+// decision, so revocation and generation changes take effect without restart.
+type AuthorizationServer struct {
 	state       AuthorizationStateReader
 	credentials FRPNodeCredentialSource
 	listen      func(string, string) (net.Listener, error)
 	admission   chan struct{}
-	observe     func(bool, bool, string)
+	observe     func(string, bool, bool, string)
 }
 
 type frpAuthorizationRequest struct {
@@ -58,29 +58,35 @@ type frpAuthorizationResponse struct {
 	Content      map[string]json.RawMessage `json:"content,omitempty"`
 }
 
-type loginAuthorizationDecision struct {
+type authorizationDecision struct {
 	allowed     bool
 	unavailable bool
 	reason      string
+	unchange    bool
 	content     map[string]json.RawMessage
 }
 
-func NewLoginAuthorizationServer(state AuthorizationStateReader, credentials FRPNodeCredentialSource) (*LoginAuthorizationServer, error) {
+type authorizedNodeIdentity struct {
+	state model.State
+	node  model.Node
+}
+
+func NewAuthorizationServer(state AuthorizationStateReader, credentials FRPNodeCredentialSource) (*AuthorizationServer, error) {
 	if state == nil || credentials == nil {
-		return nil, fmt.Errorf("tunnel Login authorization dependencies are incomplete")
+		return nil, fmt.Errorf("tunnel authorization dependencies are incomplete")
 	}
-	return &LoginAuthorizationServer{
+	return &AuthorizationServer{
 		state: state, credentials: credentials, listen: net.Listen,
 		admission: make(chan struct{}, FRPAuthorizationMaxConcurrent),
 	}, nil
 }
 
-func (server *LoginAuthorizationServer) Serve(ctx context.Context) error {
+func (server *AuthorizationServer) Serve(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("context is required")
 	}
 	if server == nil || server.state == nil || server.credentials == nil || server.listen == nil || server.admission == nil {
-		return fmt.Errorf("tunnel Login authorization server is incomplete")
+		return fmt.Errorf("tunnel authorization server is incomplete")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil
@@ -125,7 +131,7 @@ func (server *LoginAuthorizationServer) Serve(ctx context.Context) error {
 	return nil
 }
 
-func (server *LoginAuthorizationServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func (server *AuthorizationServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
@@ -140,7 +146,8 @@ func (server *LoginAuthorizationServer) ServeHTTP(writer http.ResponseWriter, re
 		writeFRPAuthorizationResponse(writer, http.StatusServiceUnavailable, unavailableFRPAuthorizationResponse())
 		return
 	}
-	if request.Method != http.MethodPost || request.URL.Path != FRPAuthorizationPath || !exactLoginOperationQuery(request) {
+	operation, validQuery := exactAuthorizationOperationQuery(request)
+	if request.Method != http.MethodPost || request.URL.Path != FRPAuthorizationPath || !validQuery {
 		writeFRPAuthorizationResponse(writer, http.StatusBadRequest, deniedFRPAuthorizationResponse())
 		return
 	}
@@ -156,21 +163,30 @@ func (server *LoginAuthorizationServer) ServeHTTP(writer http.ResponseWriter, re
 	}
 	defer clear(body)
 	parsed, err := decodeFRPAuthorizationRequest(body)
-	if err != nil || parsed.Version != FRPAuthorizationProtocol || parsed.Op != "Login" {
+	if err != nil || parsed.Version != FRPAuthorizationProtocol || parsed.Op != operation {
 		writeFRPAuthorizationResponse(writer, http.StatusBadRequest, deniedFRPAuthorizationResponse())
 		return
 	}
 	defer clearRawMessageMap(parsed.Content)
-	decision := server.authorizeLogin(parsed.Content)
+	var decision authorizationDecision
+	switch operation {
+	case "Login":
+		decision = server.authorizeLogin(parsed.Content)
+	case "NewProxy":
+		decision = server.authorizeNewProxy(parsed.Content)
+	default:
+		writeFRPAuthorizationResponse(writer, http.StatusBadRequest, deniedFRPAuthorizationResponse())
+		return
+	}
 	defer clearRawMessageMap(decision.content)
 	if server.observe != nil {
-		server.observe(decision.allowed, decision.unavailable, decision.reason)
+		server.observe(operation, decision.allowed, decision.unavailable, decision.reason)
 	}
 	switch {
 	case decision.allowed:
-		changed := false
+		unchange := decision.unchange
 		writeFRPAuthorizationResponse(writer, http.StatusOK, frpAuthorizationResponse{
-			Reject: false, Unchange: &changed, Content: decision.content,
+			Reject: false, Unchange: &unchange, Content: decision.content,
 		})
 	case decision.unavailable:
 		writeFRPAuthorizationResponse(writer, http.StatusOK, unavailableFRPAuthorizationResponse())
@@ -179,29 +195,94 @@ func (server *LoginAuthorizationServer) ServeHTTP(writer http.ResponseWriter, re
 	}
 }
 
-func (server *LoginAuthorizationServer) authorizeLogin(content map[string]json.RawMessage) loginAuthorizationDecision {
+func (server *AuthorizationServer) authorizeLogin(content map[string]json.RawMessage) authorizationDecision {
 	metadata, ok := rawJSONObject(content["metas"])
 	if !ok {
-		return loginAuthorizationDecision{reason: "missing_identity"}
+		return authorizationDecision{reason: "missing_identity"}
 	}
 	defer clearRawMessageMap(metadata)
+	poolCount, ok := rawJSONInteger(content["pool_count"])
+	if !ok || poolCount != 1 {
+		return authorizationDecision{reason: "pool_input_not_one"}
+	}
+	_, decision := server.authorizeNodeIdentity(metadata)
+	if !decision.allowed {
+		return decision
+	}
+	normalized := cloneRawMessageMap(content)
+	normalized["pool_count"] = json.RawMessage("0")
+	return authorizationDecision{allowed: true, reason: "identity_valid", content: normalized}
+}
+
+func (server *AuthorizationServer) authorizeNewProxy(content map[string]json.RawMessage) authorizationDecision {
+	user, ok := rawJSONObject(content["user"])
+	if !ok {
+		return authorizationDecision{reason: "missing_identity"}
+	}
+	defer clearRawMessageMap(user)
+	identityMetadata, ok := rawJSONObject(user["metas"])
+	if !ok {
+		return authorizationDecision{reason: "missing_identity"}
+	}
+	defer clearRawMessageMap(identityMetadata)
+	identity, decision := server.authorizeNodeIdentity(identityMetadata)
+	if !decision.allowed {
+		return decision
+	}
+
+	name, nameOK := rawJSONString(content["proxy_name"])
+	proxyType, typeOK := rawJSONString(content["proxy_type"])
+	remotePort, portOK := rawJSONInteger(content["remote_port"])
+	mappingMetadata, metadataOK := rawJSONObject(content["metas"])
+	if !metadataOK {
+		return authorizationDecision{reason: "mapping_mismatch"}
+	}
+	defer clearRawMessageMap(mappingMetadata)
+	generationText, generationOK := rawJSONString(mappingMetadata["generation"])
+	generation, err := strconv.ParseUint(generationText, 10, 64)
+	if !nameOK || !typeOK || !portOK || remotePort < 1 || remotePort > 65535 || !generationOK ||
+		err != nil || generation == 0 || strconv.FormatUint(generation, 10) != generationText {
+		return authorizationDecision{reason: "mapping_mismatch"}
+	}
+
+	matches := 0
+	for index := range identity.state.Exposes {
+		expose := identity.state.Exposes[index]
+		if expose.NodeID != identity.node.ID || expose.State == model.ExposeDisabled {
+			continue
+		}
+		mapping, err := MappingFromExpose(expose)
+		if err != nil {
+			return authorizationDecision{unavailable: true, reason: "controller_error"}
+		}
+		if mapping.Name == name && string(mapping.Protocol) == proxyType &&
+			int64(mapping.GatewayEndpoint.Port()) == remotePort && mapping.Generation == generation {
+			matches++
+		}
+	}
+	if matches == 0 {
+		return authorizationDecision{reason: "mapping_mismatch"}
+	}
+	if matches != 1 {
+		return authorizationDecision{unavailable: true, reason: "controller_error"}
+	}
+	return authorizationDecision{allowed: true, unchange: true, reason: "mapping_valid"}
+}
+
+func (server *AuthorizationServer) authorizeNodeIdentity(metadata map[string]json.RawMessage) (authorizedNodeIdentity, authorizationDecision) {
 	nodeID, nodeOK := rawJSONString(metadata["node_id"])
 	generationText, generationOK := rawJSONString(metadata["generation"])
 	token, tokenOK := rawJSONString(metadata["tunnel_token"])
-	if !nodeOK || !generationOK || !tokenOK || validateUUID("tunnel Login node ID", nodeID) != nil {
-		return loginAuthorizationDecision{reason: "missing_identity"}
+	if !nodeOK || !generationOK || !tokenOK || validateUUID("tunnel authorization node ID", nodeID) != nil {
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "missing_identity"}
 	}
 	generation, err := strconv.ParseUint(generationText, 10, 64)
 	if err != nil || generation == 0 || strconv.FormatUint(generation, 10) != generationText {
-		return loginAuthorizationDecision{reason: "generation_mismatch"}
-	}
-	poolCount, ok := rawJSONInteger(content["pool_count"])
-	if !ok || poolCount != 1 {
-		return loginAuthorizationDecision{reason: "pool_input_not_one"}
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "generation_mismatch"}
 	}
 	state, err := server.state.Load()
 	if err != nil || state.Host.Role != model.RoleGateway {
-		return loginAuthorizationDecision{unavailable: true, reason: "controller_error"}
+		return authorizedNodeIdentity{}, authorizationDecision{unavailable: true, reason: "controller_error"}
 	}
 	var authoritative *model.Node
 	for index := range state.Nodes {
@@ -209,36 +290,34 @@ func (server *LoginAuthorizationServer) authorizeLogin(content map[string]json.R
 			continue
 		}
 		if authoritative != nil {
-			return loginAuthorizationDecision{unavailable: true, reason: "controller_error"}
+			return authorizedNodeIdentity{}, authorizationDecision{unavailable: true, reason: "controller_error"}
 		}
 		authoritative = &state.Nodes[index]
 	}
 	if authoritative == nil {
-		return loginAuthorizationDecision{reason: "unknown_node"}
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "unknown_node"}
 	}
 	if authoritative.Lifecycle != model.LifecycleActive {
-		return loginAuthorizationDecision{reason: "revoked"}
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "revoked"}
 	}
 	if authoritative.CredentialGeneration != generation {
-		return loginAuthorizationDecision{reason: "generation_mismatch"}
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "generation_mismatch"}
 	}
 	expected, err := server.credentials.TunnelCredential(nodeID, generation)
 	if err != nil {
-		return loginAuthorizationDecision{unavailable: true, reason: "controller_error"}
+		return authorizedNodeIdentity{}, authorizationDecision{unavailable: true, reason: "controller_error"}
 	}
 	defer clear(expected)
 	commitment, err := NewCredentialCommitment(nodeID, generation, expected)
 	if err != nil {
-		return loginAuthorizationDecision{unavailable: true, reason: "controller_error"}
+		return authorizedNodeIdentity{}, authorizationDecision{unavailable: true, reason: "controller_error"}
 	}
 	tokenBytes := []byte(token)
 	defer clear(tokenBytes)
 	if !commitment.Matches(nodeID, generation, tokenBytes) {
-		return loginAuthorizationDecision{reason: "token_mismatch"}
+		return authorizedNodeIdentity{}, authorizationDecision{reason: "token_mismatch"}
 	}
-	normalized := cloneRawMessageMap(content)
-	normalized["pool_count"] = json.RawMessage("0")
-	return loginAuthorizationDecision{allowed: true, reason: "identity_valid", content: normalized}
+	return authorizedNodeIdentity{state: state, node: *authoritative}, authorizationDecision{allowed: true, reason: "identity_valid"}
 }
 
 func decodeFRPAuthorizationRequest(body []byte) (frpAuthorizationRequest, error) {
@@ -323,15 +402,18 @@ func walkAuthorizationJSON(decoder *json.Decoder, depth int) error {
 	return nil
 }
 
-func exactLoginOperationQuery(request *http.Request) bool {
+func exactAuthorizationOperationQuery(request *http.Request) (string, bool) {
 	query := request.URL.Query()
 	if len(query) != 2 {
-		return false
+		return "", false
 	}
 	operations, operationPresent := query["op"]
 	versions, versionPresent := query["version"]
-	return operationPresent && len(operations) == 1 && operations[0] == "Login" &&
-		versionPresent && len(versions) == 1 && versions[0] == FRPAuthorizationProtocol
+	if !operationPresent || len(operations) != 1 || !versionPresent || len(versions) != 1 || versions[0] != FRPAuthorizationProtocol {
+		return "", false
+	}
+	operation := operations[0]
+	return operation, operation == "Login" || operation == "NewProxy"
 }
 
 func rawJSONObject(value json.RawMessage) (map[string]json.RawMessage, bool) {

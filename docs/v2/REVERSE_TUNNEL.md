@@ -129,7 +129,7 @@ same logical tunnel configuration and credential. Full node rotation instead
 creates a new reference, value, and commitment as part of the next atomic
 credential generation.
 
-## Login authorization
+## Login and mapping authorization
 
 The gateway controller owns the frp server-plugin endpoint in addition to its
 root-only Unix management socket, while `frps` remains an independent service.
@@ -139,8 +139,8 @@ allows only `AF_INET` and `AF_UNIX`. If either controller listener fails, the
 controller process exits and `frps` fails closed for new plugin decisions; it
 does not replace the authorizer with a cached or permissive decision.
 
-Only a versioned frp `0.1.0` `Login` request at
-`/handler?version=0.1.0&op=Login` is accepted in task 11.4. The HTTP boundary
+Only versioned frp `0.1.0` `Login` and `NewProxy` requests at the matching
+`/handler?version=0.1.0&op=<operation>` endpoint are accepted. The HTTP boundary
 has three-second read/write/header/idle deadlines, an 8 KiB header cap, a
 64 KiB body cap, JSON depth and duplicate-field checks, and 32 non-blocking
 concurrent admissions. Malformed, oversized, unsupported, or overloaded input
@@ -161,13 +161,29 @@ Login `pool_count = 1`. Only after complete identity authorization does the
 adapter return otherwise unchanged Login content with `pool_count = 0`.
 Every other input is rejected. Native acceptance with the official binaries
 observed one persistent TCP control connection and no preloaded work
-connection. `NewProxy` authorization and authenticated heartbeat/revocation
-handling remain the next provider tasks; until those are implemented they are
-denied rather than admitted provisionally.
+connection.
+
+Every `NewProxy` request independently repeats the same current node identity
+authorization using `content.user.metas`; a prior successful Login is not an
+authorization cache. The proxy announcement must then match exactly one
+non-disabled authoritative expose owned by that node: its full deterministic
+mapping name, TCP type, expose generation, and persisted tunnel port must all
+be identical. The provider's fixed `proxyBindAddr = 127.0.0.1`, managed port
+range, and this exact port match make the authorized endpoint loopback-only.
+Unknown, stale, disabled, cross-node, malformed, or ambiguous announcements are
+rejected. Invalid authoritative mapping data and state/store failures return
+the generic unavailable rejection.
+
+Native acceptance with official frp first admitted the node Login but rejected
+an otherwise valid announcement changed from authoritative TCP `20000` to
+`20002`; no listener appeared on `20002`. A subsequent exact announcement
+bound only `127.0.0.1:20000` and retained one persistent control connection.
+Authenticated heartbeat/revocation handling remains a later provider task;
+until implemented, `Ping` is denied rather than admitted provisionally.
 
 ## Deferred provider work
 
-Tasks 11.5-11.9 supply mapping authorization, atomic dynamic reload,
-readiness/reconnect behavior, authenticated revoke handling, and the release
-resource gate. Those additions must preserve this topology, identity,
-allocation, credential, and fail-closed authorization contract.
+Tasks 11.6-11.9 supply atomic dynamic reload, readiness/reconnect behavior,
+authenticated revoke handling, and the release resource gate. Those additions
+must preserve this topology, identity, allocation, credential, and fail-closed
+authorization contract.
