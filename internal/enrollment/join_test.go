@@ -553,6 +553,13 @@ func joinGatewayState(t *testing.T, secrets *store.SecretStore, now time.Time) (
 		}
 	}
 	state := inviteGatewayState(now)
+	state.Components.Components = append(state.Components.Components, model.ComponentPin{
+		Name: transport.RestrictedProviderName, Version: transport.RestrictedProviderVersion,
+		Source: "vpnctl-release-bundle", Bundled: true, SHA256: transport.RestrictedProviderSHA256,
+		Capabilities: []string{
+			"tun-routing", "redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "uot-v2",
+		},
+	})
 	state.EnrollmentIdentity.Fingerprint = identity.EnrollmentFingerprint
 	state.EnrollmentIdentity.PublicKeyRef = control.EnrollmentPublicKeyRef
 	state.EnrollmentIdentity.PrivateKeyRef = control.EnrollmentPrivateKeyRef

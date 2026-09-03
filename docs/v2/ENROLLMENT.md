@@ -201,6 +201,37 @@ its own identity resources; the gateway retains only the public/as-required
 shared half for that node. No node may adopt another node's reference or
 credential during enrollment.
 
+## Revocation and deletion
+
+`vpnctl node revoke <name-or-id>` is a gateway-only, confirmed, immediate
+security action with no deferred mode. Its plan binds the immutable node ID,
+credential generation, affected expose IDs, exact gateway credential
+references, and authoritative state generation without serializing that
+layout. Commit first moves the node to `revoked`, disables both transport
+records, and moves every owned expose to `disabled` in one state generation.
+It deliberately retains the node, policy, transports, certificate metadata,
+disabled exposes, address, and revocation time for diagnosis.
+
+After the state commit, the gateway runtime must exhaustively confirm control,
+WireGuard, restricted TCP, reverse-tunnel, and expose-mapping termination. The
+gateway then removes its node certificate copy, restricted identity, and
+tunnel token. Missing runtime confirmation or failed file cleanup returns a
+pending repair action but never restores active authority. Control
+authorization reloads lifecycle state per request, standard and restricted
+renders omit every disabled/non-active identity, and the tunnel credential is
+removed; an offline node therefore cannot regain a path merely by reconnecting
+with its old generation. A repeated revoke advances no generation but repeats
+runtime reconciliation and credential cleanup safely.
+
+`vpnctl node delete <name-or-id>` is separately confirmed and is rejected
+until the record is revoked. It does not contact or mutate the private VPS.
+The gateway changes the retained record to `deleted`, clears assigned presets,
+and removes its policies, transports, exposes, node certificates, and any
+remaining credential files in one state transition plus runtime cleanup.
+Other nodes and their credentials/configuration are preserved. Deleted records
+remain as immutable lifecycle tombstones in authoritative state but are hidden
+from ordinary `node list/show`.
+
 ## Signed response and atomic consumption
 
 The gateway creates an independent non-zero 128-bit nonce for each accepted
