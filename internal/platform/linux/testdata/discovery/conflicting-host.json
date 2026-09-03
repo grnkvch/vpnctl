@@ -29,6 +29,7 @@
   ],
   "expect": {
     "missing_mandatory": [],
+    "dns_resolvers_ipv4": [],
     "interfaces": ["lo", "eth0", "docker0", "br-abcdef123456", "wg0"],
     "container_interfaces": ["br-abcdef123456", "docker0"],
     "nftables_tables": ["inet/filter", "inet/vpnctl", "ip/nat"],

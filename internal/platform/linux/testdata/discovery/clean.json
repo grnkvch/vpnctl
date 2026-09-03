@@ -2,6 +2,7 @@
   "runtime": {"GOOS": "linux", "GOARCH": "amd64", "EUID": 0},
   "files": {
     "/etc/os-release": {"kind": "regular", "content": "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n"},
+    "/run/systemd/resolve/resolv.conf": {"kind": "regular", "content": "# managed by systemd-resolved\nnameserver 192.0.2.53\nnameserver 192.0.2.54\n"},
     "/run/systemd/system": {"kind": "directory", "content": ""},
     "/dev/net/tun": {"kind": "character_device", "content": ""},
     "/sys/module/wireguard": {"kind": "directory", "content": ""},
@@ -29,6 +30,7 @@
   ],
   "expect": {
     "missing_mandatory": [],
+    "dns_resolvers_ipv4": ["192.0.2.53", "192.0.2.54"],
     "interfaces": ["lo", "eth0"],
     "container_interfaces": [],
     "nftables_tables": [],

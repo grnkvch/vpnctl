@@ -54,10 +54,18 @@ type spikeBaseline struct {
 			WatchdogSeconds      int    `json:"watchdog_seconds"`
 		} `json:"routing"`
 		DNS struct {
-			PolicyMode             string `json:"policy_mode"`
-			CompatibilityMode      string `json:"compatibility_mode"`
-			SelectedDirectFallback bool   `json:"selected_direct_fallback"`
-			FakeIPModeSelected     bool   `json:"fake_ip_mode_selected"`
+			PolicyMode              string   `json:"policy_mode"`
+			CompatibilityMode       string   `json:"compatibility_mode"`
+			SelectedDirectFallback  bool     `json:"selected_direct_fallback"`
+			FakeIPModeSelected      bool     `json:"fake_ip_mode_selected"`
+			GatewayListeners        []string `json:"gateway_listeners"`
+			GatewayDefaultUpstreams []string `json:"gateway_default_upstreams_ipv4"`
+			MaximumUpstreams        int      `json:"maximum_upstreams"`
+			GatewayExchangeTimeout  int      `json:"gateway_exchange_timeout_seconds"`
+			GatewayMaximumQueries   int      `json:"gateway_maximum_concurrent_queries"`
+			GatewayMaximumUDPBytes  int      `json:"gateway_maximum_udp_bytes"`
+			GatewayMaximumTCPBytes  int      `json:"gateway_maximum_tcp_bytes"`
+			GatewayMaximumTCPTurns  int      `json:"gateway_maximum_tcp_queries_per_connection"`
 		} `json:"dns"`
 		ControlRPC struct {
 			Protocol                 string `json:"protocol"`
@@ -205,6 +213,12 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 	}
 	if limits.DNS.PolicyMode != "policy-redir-host" || limits.DNS.CompatibilityMode != "direct-redir-host" || limits.DNS.SelectedDirectFallback || limits.DNS.FakeIPModeSelected {
 		t.Errorf("unexpected DNS mode contract: %#v", limits.DNS)
+	}
+	if len(limits.DNS.GatewayListeners) != 2 || limits.DNS.GatewayListeners[0] != "10.66.0.1:53" || limits.DNS.GatewayListeners[1] != "10.67.0.1:53" ||
+		len(limits.DNS.GatewayDefaultUpstreams) != 2 || limits.DNS.GatewayDefaultUpstreams[0] != "1.1.1.1" || limits.DNS.GatewayDefaultUpstreams[1] != "8.8.8.8" ||
+		limits.DNS.MaximumUpstreams != 8 || limits.DNS.GatewayExchangeTimeout != 5 || limits.DNS.GatewayMaximumQueries != 128 ||
+		limits.DNS.GatewayMaximumUDPBytes != 4096 || limits.DNS.GatewayMaximumTCPBytes != 65535 || limits.DNS.GatewayMaximumTCPTurns != 64 {
+		t.Errorf("unexpected shared gateway DNS limits: %#v", limits.DNS)
 	}
 	if limits.ControlRPC.Protocol != "1.0" || limits.ControlRPC.TLSMinimum != "1.3" || limits.ControlRPC.HTTP != "1.1" || limits.ControlRPC.RequestBytes != 65536 || limits.ControlRPC.ResponseBytes != 262144 || limits.ControlRPC.HeaderBytes != 8192 || limits.ControlRPC.MaxJSONDepth != 32 || limits.ControlRPC.MaxConcurrentConnections != 16 {
 		t.Errorf("unexpected control RPC contract: %#v", limits.ControlRPC)

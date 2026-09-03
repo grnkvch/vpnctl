@@ -12,7 +12,7 @@ Selected node traffic must be gateway-or-block for both TCP and UDP, while unrel
 - Use nftables output/prerouting priority `-150`; RPDB priorities `10000/10010/10020`; selected/gateway tables `20001/20002`; an unreachable selected default at metric `42760`; and a ready TUN default at metric `10`. Every value is conflict-checked internal state, not public CLI API.
 - Activate routes before switching classification to ready, and switch classification back before removing routes. IPv6 selected traffic is carried equivalently or blocked; it never becomes a direct bypass.
 - Select Mihomo `policy-redir-host` for normal policy DNS and `direct-redir-host` only for explicit v1-compatible direct mode. Keep systemd-resolved's stub, route global `~.` to `127.0.0.1:1053`, disable its second cache, and capture/restore existing link DNS state exactly.
-- Redirect ordinary local TCP/UDP port 53 through the managed resolver. Only its dedicated UID and systemd loopback stubs bypass capture.
+- Redirect ordinary local TCP/UDP port 53 through the managed resolver. The systemd loopback stubs and only provider sockets carrying the exact direct/recovery marks bypass capture; the host-wide routing process needs no dedicated UID.
 - Accept pinned Mihomo stale-while-revalidate only for an answer previously validated through gateway DNS: it is returned at TTL 1 while refresh remains gateway-only. A new selected name fails during gateway-DNS outage; a new direct name continues. The cache remains capacity-bounded to 4096 entries.
 - Reject the fake-IP whitelist mode because it can synthesize a fresh selected answer without an eager gateway DNS lookup. Do not hard-code a future fake-IP range; the usual range collided with the lab underlay and would require conflict detection.
 

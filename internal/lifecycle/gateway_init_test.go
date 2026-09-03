@@ -45,8 +45,12 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if len(plan.TransportConfigFiles) != 4 {
 		t.Fatalf("gateway transport config files = %v", plan.TransportConfigFiles)
 	}
+	if plan.DNSConfigFile != filepath.Join(harness.paths.ConfigDir, "generated", "gateway", routing.GatewayDNSConfigFileName) {
+		t.Fatalf("gateway DNS config file = %q", plan.DNSConfigFile)
+	}
 	firewall := string(plan.firewall.Definition())
-	if !strings.Contains(firewall, "elements = { 9443 }") ||
+	if !strings.Contains(firewall, "elements = { 53, 9443 }") ||
+		!strings.Contains(firewall, "set client_tcp_ports") || !strings.Contains(firewall, "set client_udp_ports") ||
 		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @active_node_v4 tcp dport @node_tcp_ports accept`) ||
 		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 9443 accept") {
 		t.Fatalf("control RPC firewall scope is not node-overlay-only:\n%s", firewall)
@@ -470,6 +474,19 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 			t.Fatalf("gateway transport artifact %s = %v, %v", name, info, err)
 		}
 	}
+	dnsConfigPath := filepath.Join(paths.ConfigDir, "generated", "gateway", routing.GatewayDNSConfigFileName)
+	dnsContent, err := os.ReadFile(dnsConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsConfig, err := routing.DecodeGatewayDNSConfig(dnsContent)
+	if err != nil || !reflect.DeepEqual(dnsConfig.ListenIPv4, []string{"10.66.0.1", "10.67.0.1"}) ||
+		!reflect.DeepEqual(dnsConfig.UpstreamIPv4, model.DefaultGatewayDNSUpstreams()) {
+		t.Fatalf("gateway DNS config = %+v, %v", dnsConfig, err)
+	}
+	if info, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "gateway", routing.GatewayDNSReadyFileName)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("gateway DNS readiness marker = %v, %v", info, err)
+	}
 	standardConfig, err := os.ReadFile(filepath.Join(paths.ConfigDir, "generated", "gateway", transport.StandardConfigFileName))
 	if err != nil || !bytes.Contains(standardConfig, []byte("ListenPort = 51820")) {
 		t.Fatalf("gateway standard config = %q, %v", standardConfig, err)
@@ -698,8 +715,9 @@ func validGatewayInitInput() GatewayInitInput {
 func validGatewaySnapshot() linuxplatform.HostSnapshot {
 	available := linuxplatform.Capability{Available: true, Detail: "test"}
 	return linuxplatform.HostSnapshot{
-		SchemaVersion: linuxplatform.HostSnapshotSchemaVersion,
-		OS:            linuxplatform.OSRelease{ID: "ubuntu", VersionID: "24.04"}, KernelOS: "linux", Architecture: "amd64", EffectiveUID: 0,
+		SchemaVersion:    linuxplatform.HostSnapshotSchemaVersion,
+		DNSResolversIPv4: []string{"198.18.0.2"},
+		OS:               linuxplatform.OSRelease{ID: "ubuntu", VersionID: "24.04"}, KernelOS: "linux", Architecture: "amd64", EffectiveUID: 0,
 		Capabilities: linuxplatform.Capabilities{
 			Linux: available, AMD64: available, Ubuntu2404: available, Root: available, Systemd: available,
 			TUN: available, KernelWireGuard: available, NFTables: available, PolicyRouting: available,
@@ -758,6 +776,9 @@ func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 	}
 	if state.HandshakeHost == nil || *state.HandshakeHost != gatewayTestHandshakeHost() {
 		t.Fatalf("initial handshake-host state = %+v", state.HandshakeHost)
+	}
+	if state.DNS == nil || state.DNS.Scope != model.DNSUpstreamGateway || !reflect.DeepEqual(state.DNS.IPv4, model.DefaultGatewayDNSUpstreams()) {
+		t.Fatalf("initial gateway DNS state = %+v", state.DNS)
 	}
 	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 2 || state.EnrollmentIdentity == nil {
 		t.Fatalf("initial PKI state = presets:%v certificates:%v enrollment:%v", state.Presets, state.Certificates, state.EnrollmentIdentity)
@@ -827,6 +848,11 @@ func assertGatewayRoleRequest(t *testing.T, request linuxplatform.RoleInstallati
 	for _, required := range transport.GatewayListenerFileNames() {
 		if !containsString(configNames, required) {
 			t.Fatalf("gateway init omitted transport artifact %s from %v", required, configNames)
+		}
+	}
+	for _, required := range []string{routing.GatewayDNSConfigFileName, routing.GatewayDNSReadyFileName} {
+		if !containsString(configNames, required) {
+			t.Fatalf("gateway init omitted shared DNS artifact %s from %v", required, configNames)
 		}
 	}
 }

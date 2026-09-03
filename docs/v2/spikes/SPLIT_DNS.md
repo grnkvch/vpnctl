@@ -10,7 +10,7 @@ The fake-IP whitelist candidate was validated but rejected. It returned syntheti
 
 The node keeps the systemd-resolved stub and installs an owned drop-in that routes global `~.` DNS to Mihomo on `127.0.0.1:1053`, clears fallback DNS, and disables resolved's cache. Existing per-link DNS, route domains, default-route state, resolver files, and the `/etc/resolv.conf` target are captured and restored exactly. If an existing link owns `~.`, vpnctl temporarily replaces only that route domain after snapshotting it so resolved cannot race the underlay server.
 
-An owned nftables output-NAT table redirects classic TCP/UDP destination port 53 to Mihomo. Only the dedicated resolver UID and the systemd loopback stubs bypass that redirect; the resolver UID is therefore the only process allowed to contact configured upstreams without recursion. Production activation must remain behind the routing readiness guard selected by task 2.8.
+The spike used a dedicated resolver UID to isolate its disposable fixture. Production uses no UID scope: its owned nftables output-NAT table redirects classic TCP/UDP destination port 53 to Mihomo, while systemd loopback stubs and provider sockets carrying the exact direct/recovery marks bypass recursion. Production activation remains behind the routing readiness guard selected by task 2.8.
 
 ## Failure and cache semantics
 

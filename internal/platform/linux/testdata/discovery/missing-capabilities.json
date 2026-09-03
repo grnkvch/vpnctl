@@ -28,6 +28,7 @@
   ],
   "expect": {
     "missing_mandatory": ["tun", "kernel_wireguard", "nftables", "policy_routing", "conntrack_marks", "systemd_resolved", "ipv4_forwarding"],
+    "dns_resolvers_ipv4": [],
     "interfaces": ["lo"],
     "container_interfaces": [],
     "nftables_tables": [],

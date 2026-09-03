@@ -6,11 +6,52 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vgrinkevich/vpnctl/internal/model"
 )
+
+func parseResolverIPv4(content []byte) ([]string, error) {
+	result := make([]string, 0, 2)
+	seen := make(map[string]struct{})
+	for lineNumber, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "nameserver" {
+			continue
+		}
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("resolver line %d is malformed", lineNumber+1)
+		}
+		address, err := netip.ParseAddr(fields[1])
+		if err != nil {
+			return nil, fmt.Errorf("resolver line %d has an invalid address", lineNumber+1)
+		}
+		if !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() {
+			continue
+		}
+		canonical := address.String()
+		if canonical != fields[1] {
+			return nil, fmt.Errorf("resolver line %d is not canonical", lineNumber+1)
+		}
+		if _, duplicate := seen[canonical]; duplicate {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		result = append(result, canonical)
+		if len(result) == model.MaximumDNSUpstreams {
+			break
+		}
+	}
+	return result, nil
+}
 
 var containerInterfacePattern = regexp.MustCompile(`^(docker[0-9]*|br-[a-f0-9]+|cni[0-9]+|cni-|flannel|virbr[0-9]*|podman[0-9]*|lxcbr[0-9]*)`)
 

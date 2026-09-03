@@ -39,6 +39,18 @@ func (state State) Validate() error {
 	if err := state.Host.Validate(); err != nil {
 		return wrap("host", err)
 	}
+	if state.DNS != nil {
+		if err := state.DNS.Validate(); err != nil {
+			return wrap("dns", err)
+		}
+		wantScope := DNSUpstreamDirect
+		if state.Host.Role == RoleGateway {
+			wantScope = DNSUpstreamGateway
+		}
+		if state.DNS.Scope != wantScope {
+			return invalid("dns.scope", "must be %s for role %s", wantScope, state.Host.Role)
+		}
+	}
 	if err := state.Components.Validate(); err != nil {
 		return wrap("components", err)
 	}
@@ -407,6 +419,30 @@ func (state State) Validate() error {
 				return invalid(indexPath("exposes", index), "node state may contain only its local exposes")
 			}
 		}
+	}
+	return nil
+}
+
+func (dns DNSUpstreamState) Validate() error {
+	if err := validateSchema("dns upstream state", dns.SchemaVersion, ResourceSchemaVersion); err != nil {
+		return err
+	}
+	if dns.Scope != DNSUpstreamGateway && dns.Scope != DNSUpstreamDirect {
+		return invalid("scope", "must be gateway or direct")
+	}
+	if dns.IPv4 == nil || len(dns.IPv4) == 0 || len(dns.IPv4) > MaximumDNSUpstreams {
+		return invalid("ipv4", "must contain between 1 and %d addresses", MaximumDNSUpstreams)
+	}
+	seen := make(map[string]struct{}, len(dns.IPv4))
+	for index, value := range dns.IPv4 {
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != value {
+			return invalid(indexPath("ipv4", index), "must be a canonical non-loopback unicast IPv4 address")
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return invalid(indexPath("ipv4", index), "duplicates %s", value)
+		}
+		seen[value] = struct{}{}
 	}
 	return nil
 }

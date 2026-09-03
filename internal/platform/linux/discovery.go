@@ -31,6 +31,7 @@ func (discoverer *Discoverer) Discover(ctx context.Context) (HostSnapshot, error
 		SchemaVersion:     HostSnapshotSchemaVersion,
 		KernelOS:          discoverer.runtime.GOOS,
 		EffectiveUID:      discoverer.runtime.EUID,
+		DNSResolversIPv4:  []string{},
 		Interfaces:        []NetworkInterface{},
 		Routes:            []Route{},
 		PolicyRules:       []PolicyRule{},
@@ -50,6 +51,7 @@ func (discoverer *Discoverer) Discover(ctx context.Context) (HostSnapshot, error
 	if err := discoverer.discoverSystemd(ctx, &snapshot); err != nil {
 		return HostSnapshot{}, err
 	}
+	discoverer.discoverDNSResolvers(&snapshot)
 	discoverer.discoverTUN(&snapshot)
 	if err := discoverer.discoverWireGuard(ctx, &snapshot); err != nil {
 		return HostSnapshot{}, err
@@ -67,6 +69,31 @@ func (discoverer *Discoverer) Discover(ctx context.Context) (HostSnapshot, error
 	discoverer.discoverResources(&snapshot)
 	discoverer.finalize(&snapshot)
 	return snapshot, nil
+}
+
+func (discoverer *Discoverer) discoverDNSResolvers(snapshot *HostSnapshot) {
+	var issues []error
+	for _, path := range []string{"/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"} {
+		content, err := discoverer.files.ReadFile(path)
+		if err != nil {
+			issues = append(issues, err)
+			continue
+		}
+		resolvers, err := parseResolverIPv4(content)
+		if err != nil {
+			issues = append(issues, err)
+			continue
+		}
+		if len(resolvers) != 0 {
+			snapshot.DNSResolversIPv4 = resolvers
+			return
+		}
+	}
+	detail := "no non-loopback IPv4 resolver was found"
+	if len(issues) != 0 {
+		detail += ": " + issues[0].Error()
+	}
+	snapshot.ProbeIssues = append(snapshot.ProbeIssues, ProbeIssue{Probe: "dns_resolvers_ipv4", Message: detail, Mandatory: false})
 }
 
 func (discoverer *Discoverer) discoverArchitecture(ctx context.Context, snapshot *HostSnapshot) error {

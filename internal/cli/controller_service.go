@@ -25,6 +25,7 @@ var (
 	runRestrictedTransportService = func(ctx context.Context, paths store.Paths) error {
 		return transport.RunRestrictedGatewayService(ctx, paths, linuxplatform.OSProbeRunner{}, transport.OSRestrictedProcessRunner{})
 	}
+	runGatewayDNSService  = routing.RunGatewayDNSService
 	runNodeRoutingService = func(ctx context.Context, paths store.Paths) error {
 		return routing.RunNodeRoutingService(ctx, paths, linuxplatform.OSProbeRunner{}, routing.OSNodeRoutingProcessRunner{})
 	}
@@ -59,6 +60,9 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	case "gateway-restricted":
 		serviceName = "gateway restricted transport"
 		err = runRestrictedTransportService(ctx, paths)
+	case "gateway-dns":
+		serviceName = "gateway DNS"
+		err = runGatewayDNSService(ctx, paths)
 	case "node-standard":
 		serviceName = "node standard transport"
 		err = runStandardTransportService(ctx, paths, model.RoleNode)

@@ -75,6 +75,10 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "state schema", mutate: func(state *State) { state.SchemaVersion++ }, want: "schema_version"},
 		{name: "zero generation", mutate: func(state *State) { state.Generation = 0 }, want: "generation"},
 		{name: "unknown role", mutate: func(state *State) { state.Host.Role = Role("proxy") }, want: "role"},
+		{name: "gateway DNS uses direct scope", mutate: func(state *State) { state.DNS.Scope = DNSUpstreamDirect }, want: "must be gateway"},
+		{name: "duplicate DNS upstream", mutate: func(state *State) { state.DNS.IPv4 = []string{"1.1.1.1", "1.1.1.1"} }, want: "duplicates"},
+		{name: "IPv6 DNS upstream", mutate: func(state *State) { state.DNS.IPv4 = []string{"2606:4700:4700::1111"} }, want: "IPv4"},
+		{name: "local DNS upstream", mutate: func(state *State) { state.DNS.IPv4 = []string{"127.0.0.53"} }, want: "non-loopback"},
 		{name: "unsupported platform", mutate: func(state *State) { state.Host.Architecture = "arm64" }, want: "platform"},
 		{name: "missing explicit public ip", mutate: func(state *State) { state.Host.PublicIPv4 = "" }, want: "public_ipv4"},
 		{name: "overlapping pools", mutate: func(state *State) { state.Host.NodeCIDR = state.Host.ClientCIDR }, want: "overlaps"},
@@ -493,6 +497,11 @@ func gatewayState() State {
 			Generation:    1,
 			CreatedAt:     created,
 		},
+		DNS: &DNSUpstreamState{
+			SchemaVersion: ResourceSchemaVersion,
+			Scope:         DNSUpstreamGateway,
+			IPv4:          DefaultGatewayDNSUpstreams(),
+		},
 		Invites: []Invite{},
 		Nodes: []Node{{
 			SchemaVersion:        ResourceSchemaVersion,
@@ -613,6 +622,7 @@ func nodeState() State {
 	}
 	state.Nodes[0].Gateway = gatewayTrust()
 	state.EnrollmentIdentity = nil
+	state.DNS = &DNSUpstreamState{SchemaVersion: ResourceSchemaVersion, Scope: DNSUpstreamDirect, IPv4: []string{"192.0.2.53"}}
 	state.Clients = []Client{}
 	state.Presets = []Preset{}
 	state.Policies = state.Policies[:1]
@@ -620,6 +630,15 @@ func nodeState() State {
 	state.Certificates = state.Certificates[1:]
 	state.Backups = []Backup{}
 	return state
+}
+
+func TestDefaultGatewayDNSUpstreamsReturnsDefensiveDefaults(t *testing.T) {
+	t.Parallel()
+	first := DefaultGatewayDNSUpstreams()
+	first[0] = "9.9.9.9"
+	if got := DefaultGatewayDNSUpstreams(); !reflect.DeepEqual(got, []string{"1.1.1.1", "8.8.8.8"}) {
+		t.Fatalf("gateway DNS defaults were mutable: %v", got)
+	}
 }
 
 func gatewayTrust() *GatewayTrust {

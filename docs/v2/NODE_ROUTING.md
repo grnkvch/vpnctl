@@ -33,6 +33,12 @@ uses the node-direct resolver list for every lookup, without changing traffic
 routing rules. Fake IP remains disabled in both modes. An empty policy renders
 an explicit empty policy map in policy mode and a single final `MATCH,DIRECT`.
 
+Fresh node initialization reads the underlying IPv4 nameservers from
+systemd-resolved's non-stub resolver file, excludes loopback and IPv6 entries,
+and records that ordered list as node-owned `direct` DNS state. Gateway state
+owns a separate `gateway` list initialized to `1.1.1.1` and `8.8.8.8`; the two
+scopes cannot coexist in one host state or serve as fallback for one another.
+
 Every node config contains a non-selectable `VPNCTL-DIRECT-DNS` provider
 outbound. Direct upstream queries use this outbound and its fixed direct socket
 mark; gateway upstream queries use the active standard/restricted outbound and

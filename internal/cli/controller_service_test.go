@@ -45,9 +45,36 @@ func TestInternalGatewayControllerServiceIsHiddenAndSignalBound(t *testing.T) {
 		t.Fatalf("service called=%t stdout=%q stderr=%q", called, stdout.String(), stderr.String())
 	}
 
-	called = false
-	if code := Execute([]string{"__service", "gateway-dns"}, &stdout, &stderr); code != ExitValidation || called {
-		t.Fatalf("unsupported service code/called = %d/%t", code, called)
+}
+
+func TestInternalGatewayDNSServiceDispatchAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runGatewayDNSService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runGatewayDNSService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	called := false
+	runGatewayDNSService = func(_ context.Context, received store.Paths) error {
+		called = true
+		if received != paths {
+			t.Fatalf("gateway DNS paths = %+v", received)
+		}
+		return errors.New("query-name-canary")
+	}
+	var stderr bytes.Buffer
+	if code := Execute([]string{"__service", "gateway-dns"}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+		t.Fatalf("gateway DNS service code = %d", code)
+	}
+	if !called || stderr.String() != "gateway DNS service failed\n" || strings.Contains(stderr.String(), "canary") {
+		t.Fatalf("gateway DNS dispatch called=%t stderr=%q", called, stderr.String())
 	}
 }
 

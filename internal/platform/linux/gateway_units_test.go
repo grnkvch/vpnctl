@@ -1,6 +1,9 @@
 package linux
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,6 +55,16 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 				}
 			}
 		}
+		if unit.Name == "vpnctl-dns.service" {
+			for _, required := range []string{
+				"ExecStart=/usr/local/bin/vpnctl __service gateway-dns", "After=vpnctl-standard.service", "Requires=vpnctl-standard.service",
+				"RestrictAddressFamilies=AF_INET", "CapabilityBoundingSet=CAP_NET_BIND_SERVICE", "TimeoutStopSec=10s",
+			} {
+				if !strings.Contains(content, required) {
+					t.Errorf("gateway DNS unit missing %q", required)
+				}
+			}
+		}
 	}
 	if want := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(names, want) {
 		t.Fatalf("gateway rendered units = %v, want %v", names, want)
@@ -76,5 +89,30 @@ func TestRenderGatewayRoleInstallationRejectsUnsafeBinaryPath(t *testing.T) {
 		if _, err := RenderGatewayRoleInstallation(path); err == nil {
 			t.Errorf("unsafe binary path %q was accepted", path)
 		}
+	}
+}
+
+func TestGatewayRoleSystemdUnitsParseWithNativeSystemdAnalyze(t *testing.T) {
+	binary := os.Getenv("VPNCTL_SYSTEMD_ANALYZE")
+	if binary == "" {
+		t.Skip("set VPNCTL_SYSTEMD_ANALYZE to a Linux systemd-analyze binary")
+	}
+	request, err := RenderGatewayRoleInstallation("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	paths := make([]string, 0, len(request.Units))
+	for _, unit := range request.Units {
+		path := filepath.Join(directory, unit.Name)
+		if err := os.WriteFile(path, unit.Content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	command := exec.Command(binary, append([]string{"verify"}, paths...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("systemd-analyze rejected gateway units: %v:\n%s", err, output)
 	}
 }

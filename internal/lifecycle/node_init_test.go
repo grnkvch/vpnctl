@@ -116,6 +116,19 @@ func TestNodeInitUnsupportedHostMakesNoChange(t *testing.T) {
 	}
 }
 
+func TestNodeInitRequiresDiscoveredDirectDNSBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	harness := newNodeInitHarness(t)
+	harness.initializer.runtime.Snapshot.DNSResolversIPv4 = []string{}
+	if _, err := harness.initializer.Plan(context.Background()); err == nil || !strings.Contains(err.Error(), "direct DNS") || !strings.Contains(err.Error(), "ipv4") {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if harness.roles.planCalls != 0 || harness.roles.applyCalls != 0 || harness.state.saveCalls != 0 || harness.idCalls != 0 {
+		t.Fatalf("missing DNS mutation/planning = plans:%d applies:%d saves:%d ids:%d", harness.roles.planCalls, harness.roles.applyCalls, harness.state.saveCalls, harness.idCalls)
+	}
+}
+
 func TestNodeInitConcreteInstallerStagesNoGatewayOrActiveUnits(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +315,9 @@ func assertInitialUnjoinedNodeState(t *testing.T, stateStore NodeInitStateStore)
 	}
 	if state.Nodes == nil || state.Transports == nil || state.Certificates == nil {
 		t.Fatal("unjoined node resource collections are not explicit empty arrays")
+	}
+	if state.DNS == nil || state.DNS.Scope != model.DNSUpstreamDirect || !reflect.DeepEqual(state.DNS.IPv4, []string{"198.18.0.2"}) {
+		t.Fatalf("initial node direct DNS state = %+v", state.DNS)
 	}
 }
 

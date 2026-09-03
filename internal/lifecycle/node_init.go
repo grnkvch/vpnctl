@@ -113,6 +113,14 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	if !errors.Is(loadErr, store.ErrStateNotFound) {
 		return NodeInitPlan{}, fmt.Errorf("load authoritative state: %w", loadErr)
 	}
+	directDNS := model.DNSUpstreamState{
+		SchemaVersion: model.ResourceSchemaVersion,
+		Scope:         model.DNSUpstreamDirect,
+		IPv4:          append([]string(nil), snapshot.DNSResolversIPv4...),
+	}
+	if err := directDNS.Validate(); err != nil {
+		return NodeInitPlan{}, fmt.Errorf("discover node direct DNS: %w", err)
+	}
 
 	layout, err := initializer.runtime.Layout.PlanFresh()
 	if err != nil {
@@ -129,7 +137,7 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	if err != nil {
 		return NodeInitPlan{}, fmt.Errorf("allocate node host identity: %w", err)
 	}
-	desired := initialNodeState(hostID, initializer.runtime.Now().UTC(), initializer.runtime.Manifest)
+	desired := initialNodeState(hostID, initializer.runtime.Now().UTC(), initializer.runtime.Manifest, directDNS.IPv4)
 	if err := desired.Validate(); err != nil {
 		return NodeInitPlan{}, fmt.Errorf("build initial node state: %w", err)
 	}
@@ -185,7 +193,12 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 	return NodeInitResult{Changed: true, HostID: plan.HostID, Units: append([]string(nil), plan.Units...)}, nil
 }
 
-func initialNodeState(hostID string, initializedAt time.Time, manifest model.ComponentManifest) model.State {
+func initialNodeState(hostID string, initializedAt time.Time, manifest model.ComponentManifest, directDNS []string) model.State {
+	dns := model.DNSUpstreamState{
+		SchemaVersion: model.ResourceSchemaVersion,
+		Scope:         model.DNSUpstreamDirect,
+		IPv4:          append([]string(nil), directDNS...),
+	}
 	return model.State{
 		SchemaVersion: model.StateSchemaVersion, Generation: 1,
 		Host: model.Host{
@@ -194,7 +207,7 @@ func initialNodeState(hostID string, initializedAt time.Time, manifest model.Com
 		},
 		Invites: []model.Invite{}, Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
-		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: manifest,
+		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: manifest, DNS: &dns,
 	}
 }
 

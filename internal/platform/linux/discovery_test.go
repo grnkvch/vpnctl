@@ -37,8 +37,11 @@ func TestDiscoveryFixtures(t *testing.T) {
 			if got := snapshot.MissingMandatoryCapabilities(); !reflect.DeepEqual(got, fixture.Expect.MissingMandatory) {
 				t.Fatalf("missing capabilities = %v, want %v", got, fixture.Expect.MissingMandatory)
 			}
-			if snapshot.SchemaVersion != HostSnapshotSchemaVersion || snapshot.Interfaces == nil || snapshot.Routes == nil || snapshot.PolicyRules == nil || snapshot.ContainerNetworks == nil || snapshot.Listeners == nil || snapshot.NFTablesTables == nil || snapshot.Services == nil || snapshot.ProbeIssues == nil {
+			if snapshot.SchemaVersion != HostSnapshotSchemaVersion || snapshot.DNSResolversIPv4 == nil || snapshot.Interfaces == nil || snapshot.Routes == nil || snapshot.PolicyRules == nil || snapshot.ContainerNetworks == nil || snapshot.Listeners == nil || snapshot.NFTablesTables == nil || snapshot.Services == nil || snapshot.ProbeIssues == nil {
 				t.Fatalf("snapshot omitted versioned or required collection: %+v", snapshot)
+			}
+			if !reflect.DeepEqual(snapshot.DNSResolversIPv4, fixture.Expect.DNSResolversIPv4) {
+				t.Fatalf("DNS resolvers = %v, want %v", snapshot.DNSResolversIPv4, fixture.Expect.DNSResolversIPv4)
 			}
 			assertFixtureNames(t, "interfaces", interfaceNames(snapshot.Interfaces), fixture.Expect.Interfaces)
 			assertFixtureNames(t, "containers", containerNames(snapshot.ContainerNetworks), fixture.Expect.ContainerInterfaces)
@@ -176,6 +179,15 @@ func TestDiscoveryParsersRejectMalformedOrAmbiguousInputs(t *testing.T) {
 			t.Errorf("splitSocketAddress(%q) error = %v", socket, err)
 		}
 	}
+	resolvers, err := parseResolverIPv4([]byte("# generated\nnameserver 127.0.0.53\nnameserver 192.0.2.53\nnameserver 2001:db8::53\nnameserver 192.0.2.53\nnameserver 198.51.100.53\n"))
+	if err != nil || !reflect.DeepEqual(resolvers, []string{"192.0.2.53", "198.51.100.53"}) {
+		t.Fatalf("parseResolverIPv4() = %v, %v", resolvers, err)
+	}
+	for _, malformed := range [][]byte{[]byte("nameserver\n"), []byte("nameserver not-an-ip\n"), []byte("nameserver 192.000.2.1\n")} {
+		if _, err := parseResolverIPv4(malformed); err == nil {
+			t.Fatalf("parseResolverIPv4(%q) accepted malformed input", malformed)
+		}
+	}
 }
 
 type discoveryFixture struct {
@@ -202,6 +214,7 @@ type fixtureCommand struct {
 
 type discoveryFixtureExpectation struct {
 	MissingMandatory      []string      `json:"missing_mandatory"`
+	DNSResolversIPv4      []string      `json:"dns_resolvers_ipv4"`
 	Interfaces            []string      `json:"interfaces"`
 	ContainerInterfaces   []string      `json:"container_interfaces"`
 	NFTablesTables        []string      `json:"nftables_tables"`

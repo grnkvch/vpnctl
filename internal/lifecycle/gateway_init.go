@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
@@ -42,6 +43,7 @@ type GatewayInitPlan struct {
 	PKIPlaceholders      []string
 	Units                []string
 	TransportConfigFiles []string
+	DNSConfigFile        string
 	WatchdogUnitFiles    []string
 	ManagedSwap          linuxplatform.ManagedSwapPlan
 	ManagedSwapSelected  bool
@@ -210,10 +212,6 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err != nil {
 		return GatewayInitPlan{}, err
 	}
-	rolePlan, err := initializer.runtime.Roles.Plan(roleRequest)
-	if err != nil {
-		return GatewayInitPlan{}, fmt.Errorf("plan gateway services: %w", err)
-	}
 	watchdogUnits, err := initializer.runtime.WatchdogUnits.Plan(initializer.runtime.BinaryPath)
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("plan watchdog units: %w", err)
@@ -235,8 +233,21 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err := desired.Validate(); err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("build initial gateway state: %w", err)
 	}
+	dns, err := routing.RenderGatewayDNSConfig(desired)
+	if err != nil {
+		return GatewayInitPlan{}, fmt.Errorf("render shared gateway DNS: %w", err)
+	}
+	roleRequest.Configs = append(roleRequest.Configs,
+		linuxplatform.RoleConfigFile{Name: routing.GatewayDNSConfigFileName, Content: dns.Bytes()},
+		linuxplatform.RoleConfigFile{Name: routing.GatewayDNSReadyFileName, Content: []byte("schema_version=1\n")},
+	)
+	rolePlan, err := initializer.runtime.Roles.Plan(roleRequest)
+	if err != nil {
+		return GatewayInitPlan{}, fmt.Errorf("plan gateway services: %w", err)
+	}
 	firewall, err := RenderGatewayIdentityFirewall(desired, GatewayIdentityFirewallServices{
-		NodeTCPPorts: []int{control.RPCControlTCPPort},
+		ClientTCPPorts: []int{routing.GatewayDNSPort}, ClientUDPPorts: []int{routing.GatewayDNSPort},
+		NodeTCPPorts: []int{routing.GatewayDNSPort, control.RPCControlTCPPort}, NodeUDPPorts: []int{routing.GatewayDNSPort},
 	})
 	if err != nil {
 		return GatewayInitPlan{}, err
@@ -259,6 +270,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 		Directories:    directories, PresetDirectory: layout.PresetDirectory, PresetFiles: presetFiles,
 		PKIPlaceholders: append([]string(nil), layout.PKIPlaceholders...), Units: append([]string(nil), rolePlan.UnitsToStart...),
 		TransportConfigFiles: transportConfigFiles,
+		DNSConfigFile:        filepath.Join(initializer.runtime.Paths.ConfigDir, "generated", "gateway", routing.GatewayDNSConfigFileName),
 		WatchdogUnitFiles:    append([]string(nil), watchdogUnits.UnitFiles...),
 		ManagedSwap:          managedSwap,
 		HandshakeHost:        handshakeHost,
@@ -459,6 +471,11 @@ func planGatewayInputs(input GatewayInitInput, snapshot linuxplatform.HostSnapsh
 
 func initialGatewayState(hostID string, initializedAt time.Time, network linuxplatform.GatewayNetworkPlan, sshPort int, manifest model.ComponentManifest, selected model.HandshakeHost) model.State {
 	selection := selected
+	dns := model.DNSUpstreamState{
+		SchemaVersion: model.ResourceSchemaVersion,
+		Scope:         model.DNSUpstreamGateway,
+		IPv4:          model.DefaultGatewayDNSUpstreams(),
+	}
 	return model.State{
 		SchemaVersion: model.StateSchemaVersion, Generation: 1,
 		Host: model.Host{
@@ -470,7 +487,7 @@ func initialGatewayState(hostID string, initializedAt time.Time, network linuxpl
 		Invites: []model.Invite{}, Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
 		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: manifest,
-		HandshakeHost: &selection,
+		HandshakeHost: &selection, DNS: &dns,
 	}
 }
 

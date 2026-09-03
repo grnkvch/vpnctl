@@ -216,7 +216,7 @@ func nodeUpdateManifest(version string, protocols []string) model.ComponentManif
 
 func enrolledNodeUpdateState(t *testing.T, now time.Time, gatewayGeneration uint64, manifest model.ComponentManifest) model.State {
 	t.Helper()
-	state := initialNodeState(nodeUpdateHostID, now, manifest)
+	state := initialNodeState(nodeUpdateHostID, now, manifest, []string{"192.0.2.53"})
 	state.Generation = 2
 	state.Nodes = append(state.Nodes, model.Node{
 		SchemaVersion: model.ResourceSchemaVersion, ID: nodeUpdateNodeID, Name: "private-node",

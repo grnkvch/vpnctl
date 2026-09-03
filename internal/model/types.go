@@ -16,6 +16,14 @@ const (
 	RoleNode    Role = "node"
 )
 
+type DNSUpstreamScope string
+
+const (
+	DNSUpstreamGateway  DNSUpstreamScope = "gateway"
+	DNSUpstreamDirect   DNSUpstreamScope = "direct"
+	MaximumDNSUpstreams                  = 8
+)
+
 type Lifecycle string
 
 const (
@@ -190,6 +198,7 @@ type State struct {
 	HandshakeHost       *HandshakeHost       `json:"handshake_host,omitempty"`
 	HandshakeHostChange *HandshakeHostChange `json:"handshake_host_change,omitempty"`
 	EnrollmentIdentity  *EnrollmentIdentity  `json:"enrollment_signing_identity,omitempty"`
+	DNS                 *DNSUpstreamState    `json:"dns,omitempty"`
 	Invites             []Invite             `json:"invites"`
 	Nodes               []Node               `json:"nodes"`
 	Clients             []Client             `json:"clients"`
@@ -202,6 +211,20 @@ type State struct {
 	Logging             []LoggingSession     `json:"logging"`
 	Backups             []Backup             `json:"backups"`
 	Components          ComponentManifest    `json:"components"`
+}
+
+// DNSUpstreamState deliberately stores only one role-owned upstream list.
+// Gateway state owns selected-path resolvers; node state owns direct-path
+// resolvers. Keeping the scopes mutually exclusive prevents either data plane
+// from silently using the other list as a fallback.
+type DNSUpstreamState struct {
+	SchemaVersion int              `json:"schema_version"`
+	Scope         DNSUpstreamScope `json:"scope"`
+	IPv4          []string         `json:"ipv4"`
+}
+
+func DefaultGatewayDNSUpstreams() []string {
+	return []string{"1.1.1.1", "8.8.8.8"}
 }
 
 // Invite is the gateway-authoritative, non-secret half of a one-time node

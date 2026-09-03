@@ -67,7 +67,7 @@ func TestRenderGatewayIdentityFirewallRejectsInvalidOrNonGatewayState(t *testing
 	if artifact, err := RenderGatewayIdentityFirewall(state, GatewayIdentityFirewallServices{}); err == nil || len(artifact.Definition()) != 0 {
 		t.Fatalf("invalid state rendered a firewall: %q, %v", artifact.Definition(), err)
 	}
-	node := initialNodeState(identityFirewallID(100), time.Date(2026, time.September, 3, 15, 0, 0, 0, time.UTC), gatewayTestManifest())
+	node := initialNodeState(identityFirewallID(100), time.Date(2026, time.September, 3, 15, 0, 0, 0, time.UTC), gatewayTestManifest(), []string{"192.0.2.53"})
 	if artifact, err := RenderGatewayIdentityFirewall(node, GatewayIdentityFirewallServices{}); err == nil || len(artifact.Definition()) != 0 {
 		t.Fatalf("node state rendered a gateway firewall: %q, %v", artifact.Definition(), err)
 	}

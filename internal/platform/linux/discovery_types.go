@@ -36,6 +36,7 @@ type HostSnapshot struct {
 	EffectiveUID          int                `json:"effective_uid"`
 	Capabilities          Capabilities       `json:"capabilities"`
 	IPv4ForwardingEnabled bool               `json:"ipv4_forwarding_enabled"`
+	DNSResolversIPv4      []string           `json:"dns_resolvers_ipv4"`
 	Interfaces            []NetworkInterface `json:"interfaces"`
 	Routes                []Route            `json:"routes"`
 	PolicyRules           []PolicyRule       `json:"policy_rules"`

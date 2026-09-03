@@ -61,10 +61,23 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 `
 		}
+		if mode == "gateway-dns" {
+			serviceIsolation = `UMask=0077
+TimeoutStopSec=10s
+RestrictAddressFamilies=AF_INET
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+`
+		}
+		dependencies := "After=network-online.target\nWants=network-online.target"
+		if mode == "gateway-dns" {
+			dependencies += "\nAfter=vpnctl-standard.service\nRequires=vpnctl-standard.service"
+		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s
-After=network-online.target
-Wants=network-online.target
+%s
 ConditionPathExists=/etc/vpnctl/generated/gateway/%s.ready
 StartLimitIntervalSec=0
 
@@ -86,7 +99,7 @@ TasksMax=128
 
 [Install]
 WantedBy=multi-user.target
-`, mode, mode, binaryPath, mode, serviceIsolation)
+`, mode, dependencies, mode, binaryPath, mode, serviceIsolation)
 		units = append(units, RoleUnitFile{Name: name, Content: []byte(content), Enable: true, Start: true})
 	}
 	request := RoleInstallationRequest{
