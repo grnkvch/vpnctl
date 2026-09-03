@@ -12,15 +12,17 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 7.12 выполнено `66/156`
+и проходят strict validation. После завершения task 8.1 выполнено `67/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
 client exports, полного lifecycle standard-client credentials и state-derived
-gateway isolation включительно. Следующая задача — 8.1 (единый transport
-provider lifecycle). Фактический Clash Mi остаётся release-gate 16.11, real
-WireGuard peer publication — задачей 8.2, а restricted alternative в Clash
-export — задачей 8.10.
+gateway isolation включительно. Единый provider lifecycle фиксирует opaque
+render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
+явную active/standby пару и отсутствие health-driven переключения. Следующая
+задача — 8.2 (реальный standard WireGuard provider). Фактический Clash Mi
+остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
+8.10.
 
 ### 1. Product contract
 

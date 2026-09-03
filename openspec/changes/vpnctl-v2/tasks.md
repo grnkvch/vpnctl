@@ -87,7 +87,7 @@
 
 ## 8. Standard and Restricted Transports
 
-- [ ] 8.1 Implement transport provider interfaces for render, validate, test, activate, health, drain, and rollback with one active/one standby state; verify fake-provider tests enforce no automatic switch and single-active steady state.
+- [x] 8.1 Implement transport provider interfaces for render, validate, test, activate, health, drain, and rollback with one active/one standby state; verify fake-provider tests enforce no automatic switch and single-active steady state.
 - [ ] 8.2 Implement pinned standard WireGuard gateway/node services on `51820/UDP`, overlay routes, per-identity credentials, and health observations; verify multiple clients/nodes reach permitted gateway services and internet without lateral access.
 - [ ] 8.3 Implement the selected restricted provider from spike results on `8443/TCP` with strict DPI-resistant mode and no UDP listener; verify rendered configuration and socket tests match the pinned manifest.
 - [ ] 8.4 Implement selected restricted UDP-over-TCP and mandatory readiness probes; verify broken UoT blocks activation and both TCP/UDP have no direct or native-UDP fallback.
