@@ -12,15 +12,19 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 8.1 выполнено `67/156`
+и проходят strict validation. После завершения task 8.2 выполнено `68/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
 client exports, полного lifecycle standard-client credentials и state-derived
-gateway isolation включительно. Единый provider lifecycle фиксирует opaque
+gateway isolation и реального standard WireGuard transport включительно.
+Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
-явную active/standby пару и отсутствие health-driven переключения. Следующая
-задача — 8.2 (реальный standard WireGuard provider). Фактический Clash Mi
+явную active/standby пару и отсутствие health-driven переключения. Standard
+gateway/node config, per-identity peer credentials, UDP/51820 service wrapper,
+overlay bootstrap route и passive health реализованы и прошли real kernel lab
+с пятью clients и двумя nodes. Следующая задача — 8.3 (restricted provider на
+8443/TCP). Фактический Clash Mi
 остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
 8.10.
 
@@ -742,6 +746,33 @@ vpnctl dns reset
 
 - `standard` transport — WireGuard. Он является окончательным выбором для
   стандартного режима и необходим для совместимости/миграции v1.
+- Gateway standard identity хранится отдельно как provider-owned root-only
+  secret `wireguard-key:gateway-standard-g1`; наружу передаются только opaque
+  reference, generation и public key. Gateway config содержит отдельный
+  уникальный public key и точный overlay `/32` каждого active client/node,
+  включая standard standby для active node, но исключая disabled/revoked.
+- Один kernel interface `vpnctl-wg` слушает только `51820/UDP`, получает `.1`
+  обоих client/node pools и не содержит `iptables`/NAT hooks: firewall и NAT
+  остаются исключительной ответственностью production-rendered `inet vpnctl`.
+- Node standard config проверяет соответствие локального private key его
+  authoritative public key, использует gateway public IPv4 на UDP/51820,
+  `AllowedIPs = 0.0.0.0/0`, keepalive 25 и `Table = off`. Сам сервис добавляет
+  только node-overlay gateway `.1/32`; selected/default table создаёт поздний
+  fail-closed routing layer, поэтому WireGuard не может неявно перехватить
+  unmatched traffic.
+- Hidden `gateway-standard`/`node-standard` service modes проверяют root-only
+  config через `wg-quick strip`, отказываются удалять чужой одноимённый
+  interface при несовпадающем public key, проверяют listener/key после старта
+  и снимают interface при остановке. Ready-marker publication и boot/restart
+  supervision обоих gateway transports остаются task 8.6.
+- Passive health читает только `wg show`/`ip address`, проверяет key, exact
+  addresses/AllowedIPs, UDP/51820 и freshness handshake; не запускает probes,
+  service repair или standby. Runtime role отделена от condition: отсутствие
+  handshake делает выбранный standard `degraded`, но не меняет active choice.
+- Namespace acceptance на pinned 1-vCPU/512-MiB/10-GiB lab создал пять client
+  и два node peers с независимыми real keys/handshakes, подтвердил TCP+UDP NAT
+  egress и role-scoped DNS/control/tunnel access, заблокировал четыре lateral
+  направления и полностью удалил namespace/runtime после проверки.
 - `restricted` — технологически нейтральное обещание DPI-resistant transport.
   Shadowsocks + ShadowTLS v3 остаётся ведущим кандидатом, но должен быть
   подтверждён prototype/benchmark; это средство достижения DPI resistance, а

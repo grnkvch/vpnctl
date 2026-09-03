@@ -4,25 +4,28 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 func TestInternalGatewayControllerServiceIsHiddenAndSignalBound(t *testing.T) {
 	previousPaths := gatewayControllerServicePaths
 	previousRun := runGatewayControllerService
-	previousContext := gatewayControllerContext
+	previousContext := internalServiceContext
 	t.Cleanup(func() {
 		gatewayControllerServicePaths = previousPaths
 		runGatewayControllerService = previousRun
-		gatewayControllerContext = previousContext
+		internalServiceContext = previousContext
 	})
 	paths, _ := store.NewPaths(t.TempDir())
 	gatewayControllerServicePaths = func() store.Paths { return paths }
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	gatewayControllerContext = func() (context.Context, context.CancelFunc) {
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return ctx, func() {}
 	}
 	called := false
@@ -50,12 +53,12 @@ func TestInternalGatewayControllerServiceIsHiddenAndSignalBound(t *testing.T) {
 
 func TestInternalGatewayControllerServiceFailureIsSanitized(t *testing.T) {
 	previousRun := runGatewayControllerService
-	previousContext := gatewayControllerContext
+	previousContext := internalServiceContext
 	t.Cleanup(func() {
 		runGatewayControllerService = previousRun
-		gatewayControllerContext = previousContext
+		internalServiceContext = previousContext
 	})
-	gatewayControllerContext = func() (context.Context, context.CancelFunc) {
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return context.Background(), func() {}
 	}
 	runGatewayControllerService = func(context.Context, store.Paths) error {
@@ -67,5 +70,46 @@ func TestInternalGatewayControllerServiceFailureIsSanitized(t *testing.T) {
 	}
 	if bytes.Contains(stderr.Bytes(), []byte("secret-canary")) {
 		t.Fatalf("service failure leaked implementation detail: %q", stderr.String())
+	}
+}
+
+func TestInternalStandardServicesDispatchRoleAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runStandardTransportService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runStandardTransportService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	var roles []model.Role
+	runStandardTransportService = func(_ context.Context, received store.Paths, role model.Role) error {
+		if received != paths {
+			t.Fatalf("standard service paths = %+v", received)
+		}
+		roles = append(roles, role)
+		if role == model.RoleNode {
+			return errors.New("private-key-canary")
+		}
+		return nil
+	}
+	var stderr bytes.Buffer
+	if code := Execute([]string{"__service", "gateway-standard"}, &bytes.Buffer{}, &stderr); code != ExitSuccess {
+		t.Fatalf("gateway standard code = %d, stderr = %q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Execute([]string{"__service", "node-standard"}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+		t.Fatalf("node standard code = %d, stderr = %q", code, stderr.String())
+	}
+	if got := fmt.Sprint(roles); got != "[gateway node]" {
+		t.Fatalf("standard roles = %s", got)
+	}
+	if strings.Contains(stderr.String(), "private-key-canary") || stderr.String() != "node standard transport service failed\n" {
+		t.Fatalf("standard error was not sanitized: %q", stderr.String())
 	}
 }

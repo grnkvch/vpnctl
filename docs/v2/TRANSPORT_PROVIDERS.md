@@ -50,3 +50,7 @@ The public non-mutating test workflow is task 8.7. The only component allowed
 to create a new selection is the confirmed make-before-break saga in task 8.8,
 which must persist the authoritative state transition after successful target
 activation and bounded old-path drain.
+
+The concrete standard renderer, service, credential ownership, passive health
+semantics, and packet-level acceptance contract are documented in
+[`STANDARD_TRANSPORT.md`](./STANDARD_TRANSPORT.md).
