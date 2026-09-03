@@ -40,7 +40,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	}
 	firewall := string(plan.firewall.Definition())
 	if !strings.Contains(firewall, "elements = { 9443 }") ||
-		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @node_v4 tcp dport @node_tcp_ports accept`) ||
+		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @active_node_v4 tcp dport @node_tcp_ports accept`) ||
 		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 9443 accept") {
 		t.Fatalf("control RPC firewall scope is not node-overlay-only:\n%s", firewall)
 	}

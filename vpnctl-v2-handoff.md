@@ -12,15 +12,15 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 7.11 выполнено `65/156`
+и проходят strict validation. После завершения task 7.12 выполнено `66/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
-client exports и полного lifecycle standard-client credentials включительно.
-Следующая задача — 7.12 (gateway firewall isolation для clients/nodes).
-Фактический Clash Mi остаётся release-gate 16.11, real WireGuard peer
-publication — задачей 8.2, а restricted alternative в Clash export — задачей
-8.10.
+client exports, полного lifecycle standard-client credentials и state-derived
+gateway isolation включительно. Следующая задача — 8.1 (единый transport
+provider lifecycle). Фактический Clash Mi остаётся release-gate 16.11, real
+WireGuard peer publication — задачей 8.2, а restricted alternative в Clash
+export — задачей 8.10.
 
 ### 1. Product contract
 
@@ -251,7 +251,10 @@ vpnctl client export <name-or-id> <clash|wireguard>
   прямые dependencies: credential для обоих форматов, policy только для Clash.
   State-level acceptance немедленно отвергает старый/revoked/disabled public
   key; task 8.2 использует этот контракт при публикации реальных gateway peers,
-  а packet-level lateral isolation остаётся отдельной задачей 7.12.
+  а gateway firewall уже разрешает input/forward/NAT только source IP активных
+  identities. Pool-level rules блокируют все четыре lateral направления;
+  packet gate также доказал internet egress активных client/node и отказ для
+  unallocated source до conntrack acceptance.
 - `rotate` сохраняет identity name, immutable ID, overlay IP и policy, атомарно
   активирует новое standard credential generation, удаляет старый private key,
   помечает предыдущие exports stale и требует нового export/ручной замены.

@@ -83,7 +83,7 @@
 - [x] 7.9 Implement Clash/Mihomo export from normalized policy and split DNS, initially with standard and later restricted alternatives; verify pinned Mihomo parses the rendered Clash-compatible profile, selected rules end in gateway-or-block semantics, and unmatched traffic ends direct, deferring import into actual Clash Mi to task 16.11.
 - [x] 7.10 Implement managed/custom export paths, `0600` files, `0700` directories, atomic overwrite rules, `--force`, scp hints, generation metadata, and no stdout profile; verify file/permission/staleness/output tests.
 - [x] 7.11 Implement client policy/credential staleness, rotation, immediate revoke, delete-after-revoke, and export deletion; verify old profiles stop connecting and full-tunnel WireGuard does not become stale on preset-only edits.
-- [ ] 7.12 Implement client/client, client/node, and node/node gateway isolation rules tied to active identities; verify packet-level lateral attempts are blocked while internet egress works.
+- [x] 7.12 Implement client/client, client/node, and node/node gateway isolation rules tied to active identities; verify packet-level lateral attempts are blocked while internet egress works.
 
 ## 8. Standard and Restricted Transports
 

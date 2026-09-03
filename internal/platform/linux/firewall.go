@@ -27,6 +27,8 @@ type GatewayFirewallInput struct {
 	ClientCIDR        string
 	NodeCIDR          string
 	OverlayInterface  string
+	ActiveClientIPv4  []string
+	ActiveNodeIPv4    []string
 	ClientTCPPorts    []int
 	ClientUDPPorts    []int
 	NodeTCPPorts      []int
@@ -74,7 +76,10 @@ func RenderGatewayFirewall(input GatewayFirewallInput) (GatewayFirewallArtifact,
 	fmt.Fprintf(&rules, "table %s %s {\n", GatewayFirewallFamily, GatewayFirewallTable)
 	renderAddressSet(&rules, "client_v4", normalized.ClientCIDR)
 	renderAddressSet(&rules, "node_v4", normalized.NodeCIDR)
-	renderAddressSet(&rules, "overlay_v4", normalized.ClientCIDR+", "+normalized.NodeCIDR)
+	renderAddressListSet(&rules, "active_client_v4", normalized.ActiveClientIPv4)
+	renderAddressListSet(&rules, "active_node_v4", normalized.ActiveNodeIPv4)
+	activeOverlay := append(append([]string(nil), normalized.ActiveClientIPv4...), normalized.ActiveNodeIPv4...)
+	renderAddressListSet(&rules, "active_overlay_v4", activeOverlay)
 	rules.WriteString(`  set blocked_egress_v4 {
     type ipv4_addr
     flags interval
@@ -87,22 +92,28 @@ func RenderGatewayFirewall(input GatewayFirewallInput) (GatewayFirewallArtifact,
 	renderPortSet(&rules, "node_tcp_ports", normalized.NodeTCPPorts)
 	renderPortSet(&rules, "node_udp_ports", normalized.NodeUDPPorts)
 
+	rules.WriteString("  chain active_identity_guard {\n")
+	rules.WriteString("    ip saddr @active_overlay_v4 return\n")
+	rules.WriteString("    drop\n")
+	rules.WriteString("  }\n\n")
+
 	rules.WriteString("  chain input {\n")
 	rules.WriteString("    type filter hook input priority filter; policy drop;\n\n")
 	rules.WriteString("    ct state invalid drop\n")
+	fmt.Fprintf(&rules, "    iifname %s jump active_identity_guard\n", nftString(normalized.OverlayInterface))
 	rules.WriteString("    ct state { established, related } accept\n")
 	rules.WriteString("    iifname \"lo\" accept\n")
 	if len(normalized.ClientTCPPorts) != 0 {
-		fmt.Fprintf(&rules, "    iifname %s ip saddr @client_v4 tcp dport @client_tcp_ports accept\n", nftString(normalized.OverlayInterface))
+		fmt.Fprintf(&rules, "    iifname %s ip saddr @active_client_v4 tcp dport @client_tcp_ports accept\n", nftString(normalized.OverlayInterface))
 	}
 	if len(normalized.ClientUDPPorts) != 0 {
-		fmt.Fprintf(&rules, "    iifname %s ip saddr @client_v4 udp dport @client_udp_ports accept\n", nftString(normalized.OverlayInterface))
+		fmt.Fprintf(&rules, "    iifname %s ip saddr @active_client_v4 udp dport @client_udp_ports accept\n", nftString(normalized.OverlayInterface))
 	}
 	if len(normalized.NodeTCPPorts) != 0 {
-		fmt.Fprintf(&rules, "    iifname %s ip saddr @node_v4 tcp dport @node_tcp_ports accept\n", nftString(normalized.OverlayInterface))
+		fmt.Fprintf(&rules, "    iifname %s ip saddr @active_node_v4 tcp dport @node_tcp_ports accept\n", nftString(normalized.OverlayInterface))
 	}
 	if len(normalized.NodeUDPPorts) != 0 {
-		fmt.Fprintf(&rules, "    iifname %s ip saddr @node_v4 udp dport @node_udp_ports accept\n", nftString(normalized.OverlayInterface))
+		fmt.Fprintf(&rules, "    iifname %s ip saddr @active_node_v4 udp dport @node_udp_ports accept\n", nftString(normalized.OverlayInterface))
 	}
 	fmt.Fprintf(&rules, "    ip saddr 0.0.0.0/0 tcp dport { %s } accept\n", renderPorts(publicTCPPorts))
 	fmt.Fprintf(&rules, "    ip saddr 0.0.0.0/0 udp dport %d accept\n", GatewayWireGuardUDPPort)
@@ -111,18 +122,19 @@ func RenderGatewayFirewall(input GatewayFirewallInput) (GatewayFirewallArtifact,
 	rules.WriteString("  chain forward {\n")
 	rules.WriteString("    type filter hook forward priority filter; policy drop;\n\n")
 	rules.WriteString("    ct state invalid drop\n")
-	rules.WriteString("    ct state { established, related } accept\n")
 	rules.WriteString("    ip saddr @client_v4 ip daddr @client_v4 drop\n")
 	rules.WriteString("    ip saddr @client_v4 ip daddr @node_v4 drop\n")
 	rules.WriteString("    ip saddr @node_v4 ip daddr @client_v4 drop\n")
 	rules.WriteString("    ip saddr @node_v4 ip daddr @node_v4 drop\n")
-	fmt.Fprintf(&rules, "    iifname %s ip saddr @overlay_v4 ip daddr @blocked_egress_v4 drop\n", nftString(normalized.OverlayInterface))
-	fmt.Fprintf(&rules, "    iifname %s oifname %s ip saddr @overlay_v4 accept\n", nftString(normalized.OverlayInterface), nftString(normalized.ExternalInterface))
+	fmt.Fprintf(&rules, "    iifname %s jump active_identity_guard\n", nftString(normalized.OverlayInterface))
+	rules.WriteString("    ct state { established, related } accept\n")
+	fmt.Fprintf(&rules, "    iifname %s ip saddr @active_overlay_v4 ip daddr @blocked_egress_v4 drop\n", nftString(normalized.OverlayInterface))
+	fmt.Fprintf(&rules, "    iifname %s oifname %s ip saddr @active_overlay_v4 accept\n", nftString(normalized.OverlayInterface), nftString(normalized.ExternalInterface))
 	rules.WriteString("  }\n\n")
 
 	rules.WriteString("  chain postrouting {\n")
 	rules.WriteString("    type nat hook postrouting priority srcnat; policy accept;\n\n")
-	fmt.Fprintf(&rules, "    oifname %s ip saddr @overlay_v4 masquerade\n", nftString(normalized.ExternalInterface))
+	fmt.Fprintf(&rules, "    oifname %s ip saddr @active_overlay_v4 masquerade\n", nftString(normalized.ExternalInterface))
 	rules.WriteString("  }\n")
 	rules.WriteString("}\n")
 
@@ -157,6 +169,14 @@ func validateGatewayFirewallInput(input GatewayFirewallInput) (GatewayFirewallIn
 	if clientErr == nil && nodeErr == nil && clientPrefix.Overlaps(nodePrefix) {
 		issues = append(issues, "client_cidr overlaps node_cidr")
 	}
+	activeClients, activeClientsErr := validateFirewallIdentityAddresses("active_client_ipv4", input.ActiveClientIPv4, clientPrefix, clientErr == nil)
+	if activeClientsErr != nil {
+		issues = append(issues, activeClientsErr.Error())
+	}
+	activeNodes, activeNodesErr := validateFirewallIdentityAddresses("active_node_ipv4", input.ActiveNodeIPv4, nodePrefix, nodeErr == nil)
+	if activeNodesErr != nil {
+		issues = append(issues, activeNodesErr.Error())
+	}
 	clientTCP, clientTCPErr := validatePortList("client_tcp_ports", input.ClientTCPPorts)
 	if clientTCPErr != nil {
 		issues = append(issues, clientTCPErr.Error())
@@ -183,11 +203,40 @@ func validateGatewayFirewallInput(input GatewayFirewallInput) (GatewayFirewallIn
 		ClientCIDR:        clientPrefix.String(),
 		NodeCIDR:          nodePrefix.String(),
 		OverlayInterface:  overlayInterface,
+		ActiveClientIPv4:  activeClients,
+		ActiveNodeIPv4:    activeNodes,
 		ClientTCPPorts:    clientTCP,
 		ClientUDPPorts:    clientUDP,
 		NodeTCPPorts:      nodeTCP,
 		NodeUDPPorts:      nodeUDP,
 	}, nil
+}
+
+func validateFirewallIdentityAddresses(field string, values []string, pool netip.Prefix, poolValid bool) ([]string, error) {
+	if !poolValid {
+		return []string{}, nil
+	}
+	unique := make(map[netip.Addr]struct{}, len(values))
+	for _, value := range values {
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() || address.String() != value {
+			return nil, fmt.Errorf("%s must contain only canonical IPv4 addresses", field)
+		}
+		if !pool.Contains(address) || address == pool.Addr() || address == pool.Addr().Next() || !pool.Contains(address.Next()) {
+			return nil, fmt.Errorf("%s address %s is not an allocatable identity in %s", field, address, pool)
+		}
+		unique[address] = struct{}{}
+	}
+	addresses := make([]netip.Addr, 0, len(unique))
+	for address := range unique {
+		addresses = append(addresses, address)
+	}
+	sort.Slice(addresses, func(left, right int) bool { return addresses[left].Less(addresses[right]) })
+	result := make([]string, len(addresses))
+	for index, address := range addresses {
+		result[index] = address.String()
+	}
+	return result, nil
 }
 
 func canonicalFirewallPool(value string) (netip.Prefix, error) {
@@ -225,6 +274,15 @@ func renderAddressSet(rules *bytes.Buffer, name, elements string) {
 	rules.WriteString("    type ipv4_addr\n")
 	rules.WriteString("    flags interval\n")
 	fmt.Fprintf(rules, "    elements = { %s }\n", elements)
+	rules.WriteString("  }\n\n")
+}
+
+func renderAddressListSet(rules *bytes.Buffer, name string, addresses []string) {
+	fmt.Fprintf(rules, "  set %s {\n", name)
+	rules.WriteString("    type ipv4_addr\n")
+	if len(addresses) != 0 {
+		fmt.Fprintf(rules, "    elements = { %s }\n", strings.Join(addresses, ", "))
+	}
 	rules.WriteString("  }\n\n")
 }
 

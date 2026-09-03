@@ -93,6 +93,7 @@ prepare() {
   ip -n "$gateway_ns" address add 10.67.0.1/24 dev vpnctl-wg
   ip -n "$overlay_ns" address add 10.66.0.2/24 dev gateway0
   ip -n "$overlay_ns" address add 10.67.0.2/24 dev gateway0
+  ip -n "$overlay_ns" address add 10.66.0.99/24 dev gateway0
   ip -n "$overlay_ns" address add 198.51.100.99/32 dev gateway0
 
   ip -n "$gateway_ns" address add 192.0.2.1/24 dev eth0
@@ -228,12 +229,15 @@ verify_packets() {
   request "$overlay_ns" udp 10.66.0.1 53 internal-dns --bind 10.67.0.2
   blocked "$overlay_ns" tcp 10.66.0.1 9443 --bind 10.66.0.2
   blocked "$overlay_ns" tcp 10.66.0.1 17000 --bind 10.66.0.2
+  blocked "$overlay_ns" udp 10.66.0.1 53 --bind 10.66.0.99
   request "$gateway_ns" tcp 127.0.0.1 9999 forbidden-tcp
 
   request "$overlay_ns" tcp 192.0.2.2 18080 internet-tcp
   request "$overlay_ns" udp 192.0.2.2 18080 internet-udp
+  request "$overlay_ns" tcp 192.0.2.2 18080 internet-tcp --bind 10.67.0.2
   blocked "$overlay_ns" tcp 192.168.50.2 18081
   blocked "$overlay_ns" tcp 169.254.50.2 18081
+  blocked "$overlay_ns" tcp 192.0.2.2 18080 --bind 10.66.0.99
   blocked "$overlay_ns" tcp 192.0.2.2 18080 --bind 198.51.100.99
 
   blocked "$overlay_ns" tcp 10.66.0.3 18082 --bind 10.66.0.2

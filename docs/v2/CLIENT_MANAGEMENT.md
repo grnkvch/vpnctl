@@ -31,8 +31,21 @@ choosing the lowest free client-pool address. An active or revoked client's
 address is stable; a concurrent creation invalidates an older plan rather than
 silently moving it. Five-client acceptance covers independent UUIDs, addresses,
 public keys, private-key references, and target-owned policy/transport records.
-Packet-level client/client, client/node, and node/node blocking remains the
-dedicated task-7.12 firewall gate.
+The gateway firewall compiler consumes validated authoritative state and puts
+only active client/node overlay IPv4 addresses into role-specific allow sets.
+Revoked, deleted, unallocated, cross-pool, gateway, network, and broadcast
+addresses cannot enter those sets.
+
+An overlay-interface identity guard runs before conntrack acceptance for both
+gateway input and forwarding, so an inactive source cannot survive merely via
+an established flow. Client and node pools remain destination deny zones in all
+four lateral directions before ordinary established/related forwarding.
+Only active identities can reach their role-allowed gateway services, forward
+to the external interface, or receive masquerading; unmatched forwarding and
+all overlay IPv6 remain default-denied. Real nftables namespace tests prove
+active client and node TCP/UDP internet egress, unallocated-source rejection,
+and client/client, client/node, node/client, and node/node blocking while
+preserving a foreign table byte-for-byte.
 
 ## Secret-free inspection
 

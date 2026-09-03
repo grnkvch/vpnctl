@@ -203,14 +203,6 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("plan watchdog units: %w", err)
 	}
-	firewall, err := linuxplatform.RenderGatewayFirewall(linuxplatform.GatewayFirewallInput{
-		ExternalInterface: network.ExternalInterface, SSHPort: ssh.Port,
-		ClientCIDR: network.ClientCIDR, NodeCIDR: network.NodeCIDR,
-		NodeTCPPorts: []int{control.RPCControlTCPPort},
-	})
-	if err != nil {
-		return GatewayInitPlan{}, err
-	}
 	managedSwap, err := initializer.runtime.Swap.Plan(snapshot.Resources)
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("plan managed swap: %w", err)
@@ -223,6 +215,12 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	desired := initialGatewayState(hostID, initializedAt, network, ssh.Port, initializer.runtime.Manifest)
 	if err := desired.Validate(); err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("build initial gateway state: %w", err)
+	}
+	firewall, err := RenderGatewayIdentityFirewall(desired, GatewayIdentityFirewallServices{
+		NodeTCPPorts: []int{control.RPCControlTCPPort},
+	})
+	if err != nil {
+		return GatewayInitPlan{}, err
 	}
 	directories := make([]string, len(layout.Directories))
 	for index, directory := range layout.Directories {

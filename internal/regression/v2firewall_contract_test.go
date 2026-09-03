@@ -16,20 +16,22 @@ func TestV2GatewayFirewallNamespaceContract(t *testing.T) {
 		"table inet vpnctl", "type filter hook input priority filter; policy drop;",
 		"ip saddr 0.0.0.0/0 tcp dport { 443, 2222, 8443 } accept",
 		"ip saddr 0.0.0.0/0 udp dport 51820 accept",
-		"ip saddr @client_v4 tcp dport @client_tcp_ports accept",
-		"ip saddr @node_v4 tcp dport @node_tcp_ports accept",
+		"set active_client_v4", "set active_node_v4", "set active_overlay_v4",
+		"chain active_identity_guard", "ip saddr @active_overlay_v4 return",
+		"ip saddr @active_client_v4 tcp dport @client_tcp_ports accept",
+		"ip saddr @active_node_v4 tcp dport @node_tcp_ports accept",
 		"type filter hook forward priority filter; policy drop;",
 		"ip saddr @client_v4 ip daddr @client_v4 drop",
 		"ip saddr @client_v4 ip daddr @node_v4 drop",
 		"ip saddr @node_v4 ip daddr @client_v4 drop",
 		"ip saddr @node_v4 ip daddr @node_v4 drop",
-		"ip daddr @blocked_egress_v4 drop", "ip saddr @overlay_v4 masquerade",
+		"ip daddr @blocked_egress_v4 drop", "ip saddr @active_overlay_v4 masquerade",
 	} {
 		if !strings.Contains(rules, required) {
 			t.Errorf("gateway firewall golden is missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"flush ruleset", "udp dport 443", "udp dport 8443", "policy accept;\n\n    ct state invalid drop"} {
+	for _, forbidden := range []string{"flush ruleset", "udp dport 443", "udp dport 8443", "policy accept;\n\n    ct state invalid drop", "ip saddr @overlay_v4"} {
 		if strings.Contains(rules, forbidden) || strings.Contains(minimalRules, forbidden) {
 			t.Errorf("gateway firewall golden contains forbidden behavior %q", forbidden)
 		}
@@ -43,6 +45,9 @@ func TestV2GatewayFirewallNamespaceContract(t *testing.T) {
 		"blocked \"$wan_ns\" udp 192.0.2.1 443", "blocked \"$wan_ns\" udp 192.0.2.1 8443",
 		"blocked \"$wan_ns\" tcp 192.0.2.1 17000", "blocked \"$wan_ns\" tcp 192.0.2.1 53",
 		"internal-control --bind 10.67.0.2", "9443 --bind 10.66.0.2",
+		"blocked \"$overlay_ns\" udp 10.66.0.1 53 --bind 10.66.0.99",
+		"internet-tcp --bind 10.67.0.2",
+		"blocked \"$overlay_ns\" tcp 192.0.2.2 18080 --bind 10.66.0.99",
 		"blocked \"$overlay_ns\" tcp 169.254.50.2 18081",
 		"blocked \"$overlay_ns\" tcp 10.66.0.3 18082 --bind 10.66.0.2",
 		"blocked \"$overlay_ns\" tcp 10.67.0.3 18082 --bind 10.67.0.2",

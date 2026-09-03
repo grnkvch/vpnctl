@@ -21,6 +21,7 @@ func TestRenderGatewayFirewallMatchesGolden(t *testing.T) {
 			name: "internal services", golden: "gateway.nft",
 			input: GatewayFirewallInput{
 				ExternalInterface: "eth0", SSHPort: 2222, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+				ActiveClientIPv4: []string{"10.66.0.2"}, ActiveNodeIPv4: []string{"10.67.0.2"},
 				ClientTCPPorts: []int{53}, ClientUDPPorts: []int{53},
 				NodeTCPPorts: []int{17000, 9443, 53, 9443}, NodeUDPPorts: []int{53},
 			},
@@ -101,12 +102,20 @@ func TestGatewayFirewallEnforcesPublicPortAndIsolationContract(t *testing.T) {
 
 	artifact := mustGatewayFirewall(t, GatewayFirewallInput{
 		ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+		ActiveClientIPv4: []string{"10.66.0.2"}, ActiveNodeIPv4: []string{"10.67.0.2"},
 	})
 	rules := string(artifact.Definition())
 	required := []string{
 		"type filter hook input priority filter; policy drop;",
 		"ct state { established, related } accept",
 		`iifname "lo" accept`,
+		"set active_client_v4 {",
+		"elements = { 10.66.0.2 }",
+		"set active_node_v4 {",
+		"elements = { 10.67.0.2 }",
+		"chain active_identity_guard {",
+		"ip saddr @active_overlay_v4 return",
+		`iifname "vpnctl-wg" jump active_identity_guard`,
 		"ip saddr 0.0.0.0/0 tcp dport { 22, 443, 8443 } accept",
 		"ip saddr 0.0.0.0/0 udp dport 51820 accept",
 		"type filter hook forward priority filter; policy drop;",
@@ -114,15 +123,15 @@ func TestGatewayFirewallEnforcesPublicPortAndIsolationContract(t *testing.T) {
 		"ip saddr @client_v4 ip daddr @node_v4 drop",
 		"ip saddr @node_v4 ip daddr @client_v4 drop",
 		"ip saddr @node_v4 ip daddr @node_v4 drop",
-		`iifname "vpnctl-wg" oifname "eth0" ip saddr @overlay_v4 accept`,
-		`oifname "eth0" ip saddr @overlay_v4 masquerade`,
+		`iifname "vpnctl-wg" oifname "eth0" ip saddr @active_overlay_v4 accept`,
+		`oifname "eth0" ip saddr @active_overlay_v4 masquerade`,
 	}
 	for _, fragment := range required {
 		if !strings.Contains(rules, fragment) {
 			t.Errorf("firewall is missing %q", fragment)
 		}
 	}
-	for _, forbidden := range []string{"udp dport 443", "udp dport 8443", "policy accept;\n\n    ct state invalid drop"} {
+	for _, forbidden := range []string{"udp dport 443", "udp dport 8443", "policy accept;\n\n    ct state invalid drop", "ip saddr @overlay_v4"} {
 		if strings.Contains(rules, forbidden) {
 			t.Errorf("firewall contains forbidden input/forward behavior %q", forbidden)
 		}
@@ -134,6 +143,7 @@ func TestRenderGatewayFirewallIsDeterministicAndDoesNotMutateInput(t *testing.T)
 
 	input := GatewayFirewallInput{
 		ExternalInterface: "eth0", SSHPort: 8443, ClientCIDR: "10.80.0.0/24", NodeCIDR: "10.81.0.0/24",
+		ActiveClientIPv4: []string{"10.80.0.9", "10.80.0.2", "10.80.0.9"}, ActiveNodeIPv4: []string{"10.81.0.3", "10.81.0.2"},
 		ClientTCPPorts: []int{9443, 53, 9443}, ClientUDPPorts: []int{5353, 53},
 		NodeTCPPorts: []int{17000, 9443}, NodeUDPPorts: []int{5353},
 	}
@@ -141,15 +151,20 @@ func TestRenderGatewayFirewallIsDeterministicAndDoesNotMutateInput(t *testing.T)
 	beforeClientUDP := append([]int(nil), input.ClientUDPPorts...)
 	beforeNodeTCP := append([]int(nil), input.NodeTCPPorts...)
 	beforeNodeUDP := append([]int(nil), input.NodeUDPPorts...)
+	beforeClients := append([]string(nil), input.ActiveClientIPv4...)
+	beforeNodes := append([]string(nil), input.ActiveNodeIPv4...)
 	first := mustGatewayFirewall(t, input)
 	if !reflect.DeepEqual(input.ClientTCPPorts, beforeClientTCP) || !reflect.DeepEqual(input.ClientUDPPorts, beforeClientUDP) ||
-		!reflect.DeepEqual(input.NodeTCPPorts, beforeNodeTCP) || !reflect.DeepEqual(input.NodeUDPPorts, beforeNodeUDP) {
+		!reflect.DeepEqual(input.NodeTCPPorts, beforeNodeTCP) || !reflect.DeepEqual(input.NodeUDPPorts, beforeNodeUDP) ||
+		!reflect.DeepEqual(input.ActiveClientIPv4, beforeClients) || !reflect.DeepEqual(input.ActiveNodeIPv4, beforeNodes) {
 		t.Fatal("RenderGatewayFirewall() mutated its input slices")
 	}
 	input.ClientTCPPorts = []int{53, 9443}
 	input.ClientUDPPorts = []int{53, 5353}
 	input.NodeTCPPorts = []int{9443, 17000}
 	input.NodeUDPPorts = []int{5353}
+	input.ActiveClientIPv4 = []string{"10.80.0.2", "10.80.0.9"}
+	input.ActiveNodeIPv4 = []string{"10.81.0.2", "10.81.0.3"}
 	second := mustGatewayFirewall(t, input)
 	if !bytes.Equal(first.Definition(), second.Definition()) {
 		t.Fatalf("equivalent inputs rendered differently:\n%s\n%s", first.Definition(), second.Definition())
@@ -166,6 +181,9 @@ func TestRenderGatewayFirewallRejectsInvalidInputsBeforeOutput(t *testing.T) {
 		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.1/24", NodeCIDR: "10.67.0.0/24"},
 		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.66.0.128/25"},
 		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24", NodeTCPPorts: []int{0}},
+		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24", ActiveClientIPv4: []string{"10.67.0.2"}},
+		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24", ActiveClientIPv4: []string{"10.66.0.1"}},
+		{ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24", ActiveNodeIPv4: []string{"10.67.0.255"}},
 	}
 	for _, input := range tests {
 		artifact, err := RenderGatewayFirewall(input)
