@@ -190,6 +190,35 @@ func TestDiscoveryParsersRejectMalformedOrAmbiguousInputs(t *testing.T) {
 	}
 }
 
+func TestDiscoverResolverIPv4UsesCurrentNonStubSystemdSourceThenFallback(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	systemdPath := filepath.Join(root, "run", "systemd", "resolve")
+	if err := os.MkdirAll(systemdPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(systemdPath, "resolv.conf"), []byte("nameserver 127.0.0.1\nnameserver 192.0.2.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "resolv.conf"), []byte("nameserver 198.51.100.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resolvers, err := DiscoverResolverIPv4(root)
+	if err != nil || !reflect.DeepEqual(resolvers, []string{"192.0.2.53"}) {
+		t.Fatalf("DiscoverResolverIPv4(systemd) = %v, %v", resolvers, err)
+	}
+	if err := os.WriteFile(filepath.Join(systemdPath, "resolv.conf"), []byte("nameserver 127.0.0.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resolvers, err = DiscoverResolverIPv4(root)
+	if err != nil || !reflect.DeepEqual(resolvers, []string{"198.51.100.53"}) {
+		t.Fatalf("DiscoverResolverIPv4(fallback) = %v, %v", resolvers, err)
+	}
+}
+
 type discoveryFixture struct {
 	Runtime  RuntimeFacts                `json:"runtime"`
 	Files    map[string]fixtureFile      `json:"files"`

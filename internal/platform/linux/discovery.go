@@ -96,6 +96,40 @@ func (discoverer *Discoverer) discoverDNSResolvers(snapshot *HostSnapshot) {
 	snapshot.ProbeIssues = append(snapshot.ProbeIssues, ProbeIssue{Probe: "dns_resolvers_ipv4", Message: detail, Mandatory: false})
 }
 
+// DiscoverResolverIPv4 repeats only the resolver part of host discovery. DNS
+// reset uses it after initialization so it observes current underlay values,
+// excludes local stubs, and does not rerun unrelated host capability probes.
+func DiscoverResolverIPv4(root string) ([]string, error) {
+	files, err := newRootFileSystem(root)
+	if err != nil {
+		return nil, err
+	}
+	var firstErr error
+	for _, path := range []string{"/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"} {
+		content, err := files.ReadFile(path)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		resolvers, err := parseResolverIPv4(content)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if len(resolvers) != 0 {
+			return resolvers, nil
+		}
+	}
+	if firstErr != nil {
+		return nil, fmt.Errorf("discover non-loopback IPv4 resolvers: %w", firstErr)
+	}
+	return nil, fmt.Errorf("discover non-loopback IPv4 resolvers: none found")
+}
+
 func (discoverer *Discoverer) discoverArchitecture(ctx context.Context, snapshot *HostSnapshot) error {
 	result, err := discoverer.run(ctx, "architecture", ProbeCommand{Name: "uname", Args: []string{"--machine"}}, true, snapshot)
 	if err != nil {

@@ -44,6 +44,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 1 && args[0] == "--json" && args[1] == "confirm" {
 		return executeConfirm(append(append([]string(nil), args[2:]...), "--json"), stdout, stderr)
 	}
+	if isDNSInvocation(args) {
+		return executeDNS(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -879,6 +882,7 @@ Commands:
   setup      Preview or perform one-shot server setup
   apply      Apply current server config to the local system
   confirm    Confirm a lockout-risk transaction from a new SSH session
+  dns        Show or change role-owned IPv4 DNS upstreams
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets

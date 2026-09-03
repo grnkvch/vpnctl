@@ -39,6 +39,23 @@ and records that ordered list as node-owned `direct` DNS state. Gateway state
 owns a separate `gateway` list initialized to `1.1.1.1` and `8.8.8.8`; the two
 scopes cannot coexist in one host state or serve as fallback for one another.
 
+`vpnctl dns show`, `vpnctl dns set <IPv4>...`, and `vpnctl dns reset` infer that
+scope from the initialized host role. Gateway reset restores `1.1.1.1` and
+`8.8.8.8`; node reset rereads the current systemd-resolved non-stub resolver
+source, falls back to `/etc/resolv.conf`, and refuses the operation when no
+non-loopback IPv4 resolver can be found. A node update rewrites only the direct
+DNS references in its generated Mihomo file and preserves its current
+`policy`/`direct` renderer mode. A gateway update rewrites and restarts only the
+shared forwarder, so it does not change node configs or previously exported
+client profiles.
+
+Runtime activation and authoritative-state commit form one compensating
+transaction. A restart failure restores the exact previous root-only config;
+an authoritative-state write failure after activation also restores and
+restarts the previous runtime. Existing config drift is a conflict instead of
+being overwritten. `--dry-run` performs discovery and validation but writes no
+state, config, or service state.
+
 Every node config contains a non-selectable `VPNCTL-DIRECT-DNS` provider
 outbound. Direct upstream queries use this outbound and its fixed direct socket
 mark; gateway upstream queries use the active standard/restricted outbound and

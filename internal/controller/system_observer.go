@@ -105,7 +105,11 @@ func NewSystemController(paths store.Paths) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewController(ControllerRuntime{Paths: paths, State: state, Observer: observer})
+	dispatcher, err := NewGatewayDNSMutationDispatcher(paths, linuxplatform.OSProbeRunner{})
+	if err != nil {
+		return nil, err
+	}
+	return NewController(ControllerRuntime{Paths: paths, State: state, Observer: observer, Dispatcher: dispatcher})
 }
 
 func RunSystemController(ctx context.Context, paths store.Paths) error {

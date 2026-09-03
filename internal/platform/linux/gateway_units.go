@@ -48,6 +48,7 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 UMask=0077
 TimeoutStopSec=30s
+ReadWritePaths=/etc/vpnctl/generated/gateway
 `
 		}
 		if mode == "gateway-restricted" {

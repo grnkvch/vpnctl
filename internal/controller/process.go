@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sync"
 	"time"
@@ -50,6 +51,22 @@ type PassiveObserver interface {
 
 type MutationDispatcher interface {
 	Dispatch(context.Context, model.State, string, json.RawMessage) (model.State, json.RawMessage, error)
+}
+
+// PreparedMutationDispatcher is the data-plane-safe mutation path. Prepare is
+// read-only; Apply activates the candidate runtime before authoritative state
+// is committed, and Rollback restores the exact previous runtime if that state
+// commit fails. Legacy pure-state dispatchers remain supported above.
+type PreparedMutationDispatcher interface {
+	Prepare(context.Context, model.State, string, json.RawMessage) (PreparedMutation, error)
+}
+
+type PreparedMutation struct {
+	Candidate model.State
+	Data      json.RawMessage
+	Changed   bool
+	Apply     func(context.Context) error
+	Rollback  func(context.Context) error
 }
 
 type ControllerRuntime struct {
@@ -213,6 +230,9 @@ func (controller *Controller) mutateResponse(request control.LocalRequest) contr
 	if request.ExpectedGeneration != 0 && request.ExpectedGeneration != state.Generation {
 		return localFailureWithGeneration("generation_conflict", "authoritative state generation changed", state.Generation)
 	}
+	if dispatcher, ok := controller.runtime.Dispatcher.(PreparedMutationDispatcher); ok {
+		return controller.applyPreparedMutation(state, request, dispatcher)
+	}
 	candidate, data, err := controller.runtime.Dispatcher.Dispatch(context.Background(), state, request.Operation, append(json.RawMessage(nil), request.Payload...))
 	if err != nil {
 		return localFailureWithGeneration("mutation_failed", "local mutation was rejected", state.Generation)
@@ -228,6 +248,50 @@ func (controller *Controller) mutateResponse(request control.LocalRequest) contr
 		data = json.RawMessage(`{}`)
 	}
 	return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: candidate.Generation, Data: data}
+}
+
+func (controller *Controller) applyPreparedMutation(state model.State, request control.LocalRequest, dispatcher PreparedMutationDispatcher) control.LocalResponse {
+	prepared, err := dispatcher.Prepare(context.Background(), state, request.Operation, append(json.RawMessage(nil), request.Payload...))
+	if err != nil {
+		return localFailureWithGeneration("mutation_failed", "local mutation was rejected", state.Generation)
+	}
+	if len(prepared.Data) == 0 {
+		prepared.Data = json.RawMessage(`{}`)
+	}
+	if !prepared.Changed {
+		return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: state.Generation, Data: prepared.Data}
+	}
+	if prepared.Apply == nil || prepared.Rollback == nil {
+		return localFailureWithGeneration("mutation_failed", "local mutation was rejected", state.Generation)
+	}
+	applyContext, cancelApply := context.WithTimeout(context.Background(), control.LocalTimeout)
+	err = prepared.Apply(applyContext)
+	cancelApply()
+	if err != nil {
+		return localFailureWithGeneration("runtime_apply_failed", "DNS runtime could not be activated", state.Generation)
+	}
+	if err := controller.runtime.State.Save(state.Generation, prepared.Candidate); err != nil {
+		observed, loadErr := controller.runtime.State.Load()
+		if loadErr == nil && reflect.DeepEqual(observed, prepared.Candidate) {
+			controller.recordObservation(context.Background(), observed)
+			return localFailureWithGeneration("state_write_failed", "authoritative state activation completed without a durable success acknowledgement", observed.Generation)
+		}
+		if loadErr != nil || !reflect.DeepEqual(observed, state) {
+			return localFailureWithGeneration("rollback_failed", "authoritative state outcome is ambiguous; runtime was left on the prepared candidate", state.Generation)
+		}
+		rollbackContext, cancelRollback := context.WithTimeout(context.Background(), control.LocalTimeout)
+		rollbackErr := prepared.Rollback(rollbackContext)
+		cancelRollback()
+		if rollbackErr != nil {
+			return localFailureWithGeneration("rollback_failed", "runtime rollback failed after authoritative state write failure", state.Generation)
+		}
+		if errors.Is(err, store.ErrStateConflict) {
+			return localFailureWithGeneration("generation_conflict", ErrControllerGeneration.Error(), state.Generation)
+		}
+		return localFailureWithGeneration("state_write_failed", "authoritative state could not be committed", state.Generation)
+	}
+	controller.recordObservation(context.Background(), prepared.Candidate)
+	return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: prepared.Candidate.Generation, Data: prepared.Data}
 }
 
 func (controller *Controller) recordObservation(ctx context.Context, state model.State) {

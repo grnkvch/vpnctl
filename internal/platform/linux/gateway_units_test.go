@@ -38,7 +38,10 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 			t.Errorf("gateway unit %s is not enabled and started", unit.Name)
 		}
 		if unit.Name == "vpnctl-controller.service" {
-			for _, required := range []string{"RuntimeDirectory=vpnctl", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes", "UMask=0077", "TimeoutStopSec=30s"} {
+			for _, required := range []string{
+				"RuntimeDirectory=vpnctl", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes", "UMask=0077", "TimeoutStopSec=30s",
+				"ReadWritePaths=/etc/vpnctl/generated/gateway",
+			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("controller unit missing %q", required)
 				}

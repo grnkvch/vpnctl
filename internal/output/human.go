@@ -20,6 +20,7 @@ var humanScalarFields = map[string]struct{}{
 	"overall":          {},
 	"role":             {},
 	"scope":            {},
+	"upstreams":        {},
 	"sha256":           {},
 	"valid":            {},
 }

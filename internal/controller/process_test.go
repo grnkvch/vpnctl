@@ -132,6 +132,54 @@ func TestControllerRestartOnlyObservesDataPlane(t *testing.T) {
 	}
 }
 
+func TestControllerPreparedMutationAppliesBeforeStateAndRollsBackOnWriteFailure(t *testing.T) {
+	paths, persisted := controllerTestState(t, model.RoleGateway)
+	state, err := persisted.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name           string
+		failSave       bool
+		commitThenFail bool
+		wantOK         bool
+		wantCode       string
+	}{
+		{name: "commit", wantOK: true},
+		{name: "rollback", failSave: true, wantCode: "state_write_failed"},
+		{name: "committed without durable acknowledgement", failSave: true, commitThenFail: true, wantCode: "state_write_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateStore := &preparedMutationStateStore{state: state, failSave: test.failSave, commitThenFail: test.commitThenFail}
+			dispatcher := &preparedTestDispatcher{}
+			server, err := NewController(ControllerRuntime{Paths: paths, State: stateStore, Observer: &recordingObserver{}, Dispatcher: dispatcher})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := server.mutateResponse(control.LocalRequest{
+				SchemaVersion: control.LocalSchemaVersion, Method: control.LocalMutate, Operation: "dns.set",
+				ExpectedGeneration: state.Generation, Payload: json.RawMessage(`{"ipv4":["9.9.9.9"]}`),
+			})
+			if response.OK != test.wantOK || response.ErrorCode != test.wantCode {
+				t.Fatalf("prepared response = %+v", response)
+			}
+			if dispatcher.applies != 1 {
+				t.Fatalf("apply calls = %d", dispatcher.applies)
+			}
+			wantRollbacks := 0
+			if test.failSave && !test.commitThenFail {
+				wantRollbacks = 1
+			}
+			if dispatcher.rollbacks != wantRollbacks {
+				t.Fatalf("rollback calls = %d, want %d", dispatcher.rollbacks, wantRollbacks)
+			}
+			if test.failSave && !test.commitThenFail && stateStore.state.Generation != state.Generation {
+				t.Fatal("failed state write changed authoritative state")
+			}
+		})
+	}
+}
+
 func TestControllerGracefulStopWaitsForAcceptedMutation(t *testing.T) {
 	paths, stateStore := controllerTestState(t, model.RoleGateway)
 	dispatcher := &blockingMutationDispatcher{started: make(chan struct{}), release: make(chan struct{})}
@@ -367,6 +415,59 @@ func (dispatcher *serialMutationDispatcher) Dispatch(_ context.Context, state mo
 type blockingMutationDispatcher struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+type preparedMutationStateStore struct {
+	state          model.State
+	failSave       bool
+	commitThenFail bool
+}
+
+func (stateStore *preparedMutationStateStore) Load() (model.State, error) {
+	return stateStore.state, nil
+}
+
+func (stateStore *preparedMutationStateStore) Save(expected uint64, candidate model.State) error {
+	if stateStore.failSave {
+		if stateStore.commitThenFail {
+			stateStore.state = candidate
+		}
+		return errors.New("injected state write failure")
+	}
+	if expected != stateStore.state.Generation {
+		return store.ErrStateConflict
+	}
+	stateStore.state = candidate
+	return nil
+}
+
+type preparedTestDispatcher struct {
+	applies   int
+	rollbacks int
+}
+
+func (*preparedTestDispatcher) Dispatch(context.Context, model.State, string, json.RawMessage) (model.State, json.RawMessage, error) {
+	return model.State{}, nil, errors.New("legacy dispatch must not be used")
+}
+
+func (dispatcher *preparedTestDispatcher) Prepare(_ context.Context, state model.State, _ string, _ json.RawMessage) (PreparedMutation, error) {
+	state.Generation++
+	if state.Host.SSHPort == 22 {
+		state.Host.SSHPort = 2222
+	} else {
+		state.Host.SSHPort = 22
+	}
+	return PreparedMutation{
+		Candidate: state, Changed: true, Data: json.RawMessage(`{"changed":true}`),
+		Apply: func(context.Context) error {
+			dispatcher.applies++
+			return nil
+		},
+		Rollback: func(context.Context) error {
+			dispatcher.rollbacks++
+			return nil
+		},
+	}, nil
 }
 
 func (dispatcher *blockingMutationDispatcher) Dispatch(_ context.Context, state model.State, _ string, _ json.RawMessage) (model.State, json.RawMessage, error) {
