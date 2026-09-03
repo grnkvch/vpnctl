@@ -275,34 +275,13 @@ func IssueNodeControlCertificate(entropy io.Reader, authorityCertificatePEM, aut
 	if entropy == nil {
 		return IssuedNodeCertificate{}, fmt.Errorf("entropy source is required")
 	}
-	expectedIdentity, err := controlIdentityURI("node", authoritativeNodeID)
-	if err != nil {
-		return IssuedNodeCertificate{}, err
-	}
 	authority, authorityKey, err := parseControlAuthority(authorityCertificatePEM, authorityPrivateKeyPEM)
 	if err != nil {
 		return IssuedNodeCertificate{}, err
 	}
-	requestDER, err := decodeSinglePEM(csrPEM, "CERTIFICATE REQUEST")
+	request, expectedIdentity, err := parseAndValidateNodeControlCSR(csrPEM, authoritativeNodeID)
 	if err != nil {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: %v", ErrInvalidNodeCSR, err)
-	}
-	request, err := x509.ParseCertificateRequest(requestDER)
-	if err != nil {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: parse request: %v", ErrInvalidNodeCSR, err)
-	}
-	if request.SignatureAlgorithm != x509.PureEd25519 {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: signature algorithm must be Ed25519", ErrInvalidNodeCSR)
-	}
-	if _, ok := request.PublicKey.(ed25519.PublicKey); !ok {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: public key must be Ed25519", ErrInvalidNodeCSR)
-	}
-	if err := request.CheckSignature(); err != nil {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: signature validation failed", ErrInvalidNodeCSR)
-	}
-	if len(request.URIs) != 1 || request.URIs[0].String() != expectedIdentity.String() ||
-		len(request.DNSNames) != 0 || len(request.IPAddresses) != 0 || len(request.EmailAddresses) != 0 {
-		return IssuedNodeCertificate{}, fmt.Errorf("%w: SAN must contain only authoritative URI %s", ErrInvalidNodeCSR, expectedIdentity)
+		return IssuedNodeCertificate{}, err
 	}
 	issuedAt = issuedAt.UTC().Truncate(time.Second)
 	if issuedAt.IsZero() {
@@ -337,6 +316,42 @@ func IssueNodeControlCertificate(entropy io.Reader, authorityCertificatePEM, aut
 		IdentityURI:    expectedIdentity.String(),
 		Certificate:    certificate,
 	}, nil
+}
+
+// ValidateNodeControlCSR applies the same profile used by certificate
+// issuance without requiring access to the gateway control CA.
+func ValidateNodeControlCSR(csrPEM []byte, authoritativeNodeID string) error {
+	_, _, err := parseAndValidateNodeControlCSR(csrPEM, authoritativeNodeID)
+	return err
+}
+
+func parseAndValidateNodeControlCSR(csrPEM []byte, authoritativeNodeID string) (*x509.CertificateRequest, *url.URL, error) {
+	expectedIdentity, err := controlIdentityURI("node", authoritativeNodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	requestDER, err := decodeSinglePEM(csrPEM, "CERTIFICATE REQUEST")
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidNodeCSR, err)
+	}
+	request, err := x509.ParseCertificateRequest(requestDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: parse request: %v", ErrInvalidNodeCSR, err)
+	}
+	if request.SignatureAlgorithm != x509.PureEd25519 {
+		return nil, nil, fmt.Errorf("%w: signature algorithm must be Ed25519", ErrInvalidNodeCSR)
+	}
+	if _, ok := request.PublicKey.(ed25519.PublicKey); !ok {
+		return nil, nil, fmt.Errorf("%w: public key must be Ed25519", ErrInvalidNodeCSR)
+	}
+	if err := request.CheckSignature(); err != nil {
+		return nil, nil, fmt.Errorf("%w: signature validation failed", ErrInvalidNodeCSR)
+	}
+	if len(request.URIs) != 1 || request.URIs[0].String() != expectedIdentity.String() ||
+		len(request.DNSNames) != 0 || len(request.IPAddresses) != 0 || len(request.EmailAddresses) != 0 {
+		return nil, nil, fmt.Errorf("%w: SAN must contain only authoritative URI %s", ErrInvalidNodeCSR, expectedIdentity)
+	}
+	return request, expectedIdentity, nil
 }
 
 func GatewayOverlayIPv4(nodeCIDR string) (string, error) {

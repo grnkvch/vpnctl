@@ -1,8 +1,8 @@
 # vpnctl v2 enrollment invites
 
-This document fixes the task-9.1 invite lifecycle and task-9.2 public protocol
-boundary. Node-local key generation and the cross-host join saga follow in
-tasks 9.3 and 9.4; the recovery-token lifecycle follows in task 9.9.
+This document fixes the task-9.1 invite lifecycle, task-9.2 public protocol
+boundary, and task-9.3 node-owned credential boundary. The cross-host join saga
+follows in task 9.4; the recovery-token lifecycle follows in task 9.9.
 
 ## Issuance and persistence
 
@@ -87,6 +87,34 @@ body, 8 KiB headers, JSON depth 32, five-second handler deadline, and at most 16
 concurrent sessions. The public response is at most 256 KiB and always carries
 `Cache-Control: no-store`; nginx supplies the edge read/header/idle bounds and
 rate enforcement when the reserved routes are integrated in section 12.
+
+## Node-owned credential material
+
+Before enrollment, the node creates four independent generation-scoped
+credential domains locally: an Ed25519 control private key and signed PKCS#10
+CSR, a WireGuard private/public key pair, a 256-bit restricted-transport
+identity credential, and a 256-bit reverse-tunnel credential. The four private
+values are published only to owner-create-only references in the node's
+mode-`0700` secret tree as mode-`0600` files. A failed or cancelled preparation
+removes only the references created by that attempt and never replaces or
+deletes a pre-existing value.
+
+The strict schema-version-1 public exchange contains only the immutable node
+ID, credential generation, canonical CSR PEM, canonical WireGuard public key,
+and exactly four named SHA-256 commitments. The CSR must be Ed25519-signed and
+request only the authoritative `urn:vpnctl:node:<uuid>` URI SAN. Unknown,
+duplicate, non-canonical, oversized, identity-mismatched, or hash-mismatched
+fields are rejected. Credential-reference and installation aggregates cannot
+be serialized through ordinary JSON formatters.
+
+The gateway needs the restricted and tunnel values because those are shared
+authentication credentials. The node can expose exactly those two values to
+the later join coordinator only as a short-lived non-serializable secret
+payload whose bytes must match the public commitments. There is no equivalent
+path for the control or WireGuard private key: only their CSR/public key can
+leave the node. Task 9.4 will carry the secret payload inside the authenticated
+HTTPS enrollment transaction and publish only public values, hashes, and
+opaque references in authoritative gateway state.
 
 ## Signed response and atomic consumption
 

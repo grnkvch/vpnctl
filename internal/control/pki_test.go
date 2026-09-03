@@ -124,6 +124,9 @@ func TestNodeCSRAndIssuedCertificateBindOnlyAuthoritativeIdentity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := ValidateNodeControlCSR(request.CSRPEM, testNodeID); err != nil {
+		t.Fatalf("validate node CSR without CA: %v", err)
+	}
 	csr := parseCSRForTest(t, request.CSRPEM)
 	if csr.SignatureAlgorithm != x509.PureEd25519 || len(csr.URIs) != 1 || csr.URIs[0].String() != request.IdentityURI {
 		t.Fatalf("node CSR profile = %s %v", csr.SignatureAlgorithm, csr.URIs)
