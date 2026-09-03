@@ -24,6 +24,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 const joinTestNodeID = "20000000-0000-4000-8000-000000000004"
@@ -72,6 +73,61 @@ func TestAtomicJoinPublishesBothHostsAndConsumesInvite(t *testing.T) {
 			assertJoinTransportSelection(t, nodeState, test.transport)
 			assertJoinSecretsAndPrivateKeyBoundary(t, fixture, gateway, nodeState)
 		})
+	}
+}
+
+func TestJoinedNodeAuthenticatesToTunnelWithGatewayAuthoritativeState(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); err != nil {
+		t.Fatal(err)
+	}
+	references, err := NewNodeCredentialReferences(joinTestNodeID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := fixture.nodeSecrets.Get(references.TunnelCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(credential)
+	source, err := tunnel.NewStoreCredentialSource(fixture.gatewaySecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := tunnel.NewLoginAuthorizationServer(fixture.gatewayState, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBody, err := json.Marshal(map[string]any{
+		"version": tunnel.FRPAuthorizationProtocol,
+		"op":      "Login",
+		"content": map[string]any{
+			"version":    tunnel.FRPProviderVersion,
+			"pool_count": 1,
+			"metas": map[string]string{
+				"node_id": joinTestNodeID, "generation": "1", "tunnel_token": string(credential),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(requestBody)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, tunnel.FRPAuthorizationPath+"?version="+tunnel.FRPAuthorizationProtocol+"&op=Login", bytes.NewReader(requestBody))
+	authorizer.ServeHTTP(recorder, request)
+	var response struct {
+		Reject  bool `json:"reject"`
+		Content struct {
+			PoolCount int `json:"pool_count"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || response.Reject || response.Content.PoolCount != 0 {
+		t.Fatalf("joined-node Login result = status:%d reject:%t pool:%d", recorder.Code, response.Reject, response.Content.PoolCount)
 	}
 }
 

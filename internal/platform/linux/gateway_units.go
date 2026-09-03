@@ -48,6 +48,7 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 UMask=0077
 TimeoutStopSec=30s
+RestrictAddressFamilies=AF_INET AF_UNIX
 ReadWritePaths=/etc/vpnctl/generated/gateway
 `
 		}

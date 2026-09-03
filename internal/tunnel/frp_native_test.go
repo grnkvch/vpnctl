@@ -1,16 +1,23 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"math/big"
+	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +77,143 @@ func TestFRPNativeConfigsWithPinnedBinaries(t *testing.T) {
 	if err := ValidatePinnedFRPConfig(context.Background(), runner, frpcBinary, clientConfigPath); err != nil {
 		t.Fatalf("native frpc validation failed: %v", err)
 	}
+}
+
+func TestFRPNativeLoginUsesProductionAuthorizerAndEffectiveZeroPool(t *testing.T) {
+	frpsBinary := os.Getenv("VPNCTL_FRPS")
+	frpcBinary := os.Getenv("VPNCTL_FRPC")
+	if frpsBinary == "" || frpcBinary == "" {
+		t.Skip("set VPNCTL_FRPS and VPNCTL_FRPC to pinned Linux binaries")
+	}
+	root := t.TempDir()
+	certificatePEM, privateKeyPEM := nativeFRPTLSIdentity(t)
+	certificatePath := filepath.Join(root, "tunnel-server.crt")
+	privateKeyPath := filepath.Join(root, "tunnel-server.key")
+	serverConfigPath := filepath.Join(root, "frps.toml")
+	clientConfigPath := filepath.Join(root, "frpc.toml")
+	serverConfig := renderFRPServerConfig(netip.MustParseAddrPort("127.0.0.1:17000"), certificatePath, privateKeyPath)
+	serverConfig = bytes.Replace(serverConfig, []byte(`ops = ["Login", "NewProxy", "Ping"]`), []byte(`ops = ["Login"]`), 1)
+	session := testFRPSession(t)
+	session.Mappings = []Mapping{}
+	clientConfig := renderFRPClientConfig(netip.MustParseAddrPort("127.0.0.1:17000"), session, testTunnelCredential, certificatePath)
+	for path, content := range map[string][]byte{
+		certificatePath: certificatePEM, privateKeyPath: privateKeyPEM,
+		serverConfigPath: serverConfig, clientConfigPath: clientConfig,
+	} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	authorizer, _, _ := loginAuthorizationFixture(t)
+	decisions := make(chan string, 8)
+	authorizer.observe = func(allowed, unavailable bool, reason string) {
+		decisions <- fmt.Sprintf("%t/%t/%s", allowed, unavailable, reason)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	authorizationResult := make(chan error, 1)
+	go func() { authorizationResult <- authorizer.Serve(ctx) }()
+	waitForNativeTCPListener(t, FRPAuthorizationAddress)
+
+	serverCommand := exec.CommandContext(ctx, frpsBinary, "-c", serverConfigPath)
+	serverCommand.Stdout = io.Discard
+	serverCommand.Stderr = io.Discard
+	if err := serverCommand.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	serverResult := make(chan error, 1)
+	go func() { serverResult <- serverCommand.Wait() }()
+	waitForNativeTCPListener(t, "127.0.0.1:17000")
+
+	clientCommand := exec.CommandContext(ctx, frpcBinary, "-c", clientConfigPath)
+	clientCommand.Stdout = io.Discard
+	clientCommand.Stderr = io.Discard
+	if err := clientCommand.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	clientResult := make(chan error, 1)
+	go func() { clientResult <- clientCommand.Wait() }()
+	t.Cleanup(func() {
+		cancel()
+		for _, result := range []<-chan error{clientResult, serverResult, authorizationResult} {
+			select {
+			case <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("native frp Login fixture did not stop")
+			}
+		}
+	})
+
+	select {
+	case decision := <-decisions:
+		if decision != "true/false/identity_valid" {
+			t.Fatalf("native Login decision = %q", decision)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pinned frpc did not reach the production Login authorizer")
+	}
+	waitForNativeEstablishedTunnel(t, 17000, 2)
+}
+
+func waitForNativeTCPListener(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("native listener %s did not become ready", address)
+}
+
+func waitForNativeEstablishedTunnel(t *testing.T, port, wantEntries int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	stable := 0
+	for time.Now().Before(deadline) {
+		entries, err := establishedTCPEntries(port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entries == wantEntries {
+			stable++
+			if stable == 3 {
+				return
+			}
+		} else {
+			stable = 0
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	entries, _ := establishedTCPEntries(port)
+	t.Fatalf("established TCP/%d entries = %d, want stable %d (one control connection)", port, entries, wantEntries)
+}
+
+func establishedTCPEntries(port int) (int, error) {
+	content, err := os.ReadFile("/proc/net/tcp")
+	if err != nil {
+		return 0, err
+	}
+	wantPort := strings.ToUpper(strconv.FormatInt(int64(port), 16))
+	count := 0
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[3] != "01" {
+			continue
+		}
+		_, localPort, localOK := strings.Cut(fields[1], ":")
+		_, remotePort, remoteOK := strings.Cut(fields[2], ":")
+		if localOK && remoteOK && (localPort == wantPort || remotePort == wantPort) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func nativeFRPTLSIdentity(t *testing.T) ([]byte, []byte) {

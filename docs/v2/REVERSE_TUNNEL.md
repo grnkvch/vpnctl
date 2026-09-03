@@ -129,9 +129,45 @@ same logical tunnel configuration and credential. Full node rotation instead
 creates a new reference, value, and commitment as part of the next atomic
 credential generation.
 
+## Login authorization
+
+The gateway controller owns the frp server-plugin endpoint in addition to its
+root-only Unix management socket, while `frps` remains an independent service.
+The plugin listener is fixed to IPv4 loopback `127.0.0.1:19091`; it cannot be
+configured to a wildcard or public address. Controller systemd confinement
+allows only `AF_INET` and `AF_UNIX`. If either controller listener fails, the
+controller process exits and `frps` fails closed for new plugin decisions; it
+does not replace the authorizer with a cached or permissive decision.
+
+Only a versioned frp `0.1.0` `Login` request at
+`/handler?version=0.1.0&op=Login` is accepted in task 11.4. The HTTP boundary
+has three-second read/write/header/idle deadlines, an 8 KiB header cap, a
+64 KiB body cap, JSON depth and duplicate-field checks, and 32 non-blocking
+concurrent admissions. Malformed, oversized, unsupported, or overloaded input
+is rejected with one static credential-free response. Server error logging is
+discarded by default.
+
+For each valid request the authorizer reloads authoritative state. It requires
+the exact canonical immutable node ID, active lifecycle, canonical current
+credential generation, and the credential stored for that node/generation.
+The submitted value is checked through the node/generation-bound commitment;
+unknown, revoked, stale, invalid, and cross-node attempts all fail. State,
+role, duplicate-record, credential-store, or stored-credential errors return a
+separate but equally generic unavailable rejection. Neither response exposes
+which identity check failed.
+
+Pinned `frpc` 0.69.0 normalizes its declared `transport.poolCount = 0` to
+Login `pool_count = 1`. Only after complete identity authorization does the
+adapter return otherwise unchanged Login content with `pool_count = 0`.
+Every other input is rejected. Native acceptance with the official binaries
+observed one persistent TCP control connection and no preloaded work
+connection. `NewProxy` authorization and authenticated heartbeat/revocation
+handling remain the next provider tasks; until those are implemented they are
+denied rather than admitted provisionally.
+
 ## Deferred provider work
 
-Tasks 11.4-11.9 supply local-only connection and mapping authorization, atomic
-dynamic reload, readiness/reconnect behavior, revoke handling, and the release
+Tasks 11.5-11.9 supply mapping authorization, atomic dynamic reload,
+readiness/reconnect behavior, authenticated revoke handling, and the release
 resource gate. Those additions must preserve this topology, identity,
-allocation, and credential contract.
+allocation, credential, and fail-closed authorization contract.
