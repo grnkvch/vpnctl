@@ -135,7 +135,7 @@ func TestRenderGatewayRestrictedConfigRejectsSharedIdentityCredentialAndManifest
 	}
 }
 
-func TestRenderNodeRestrictedConfigIsStrictTCPOnlyAndHasNoListener(t *testing.T) {
+func TestRenderNodeRestrictedConfigIsStrictUoTFailClosedAndHasNoListener(t *testing.T) {
 	t.Parallel()
 	node := restrictedNodeFixture()
 	transport := restrictedTransportFixture(model.TargetNode, node.ID, model.TransportActive, 4, "www.microsoft.com")
@@ -154,19 +154,28 @@ func TestRenderNodeRestrictedConfigIsStrictTCPOnlyAndHasNoListener(t *testing.T)
 	config := string(candidate.Bytes())
 	for _, required := range []string{
 		"log-level: silent", "name: VPNCTL-RESTRICTED", "server: 203.0.113.10", "port: 8443",
-		"udp: false", "udp-over-tcp: false", "plugin: shadow-tls", `host: "www.microsoft.com"`,
-		"version: 3", "strict-mode: true", "MATCH,DIRECT",
+		"udp: true", "udp-over-tcp: true", "udp-over-tcp-version: 2", "plugin: shadow-tls", `host: "www.microsoft.com"`,
+		"version: 3", "strict-mode: true", "name: VPNCTL-RESTRICTED-UDP", "REJECT-DROP",
+		"NETWORK,UDP,VPNCTL-RESTRICTED-UDP", "MATCH,VPNCTL-RESTRICTED",
 	} {
 		if !strings.Contains(config, required) {
 			t.Fatalf("node restricted config lacks %q:\n%s", required, config)
 		}
 	}
-	if strings.Contains(config, "listeners:") || strings.Contains(config, "mixed-port:") || strings.Contains(config, "socks-port:") || strings.Contains(config, "udp-over-tcp: true") {
-		t.Fatalf("node restricted config owns a listener or premature UoT:\n%s", config)
+	if strings.Contains(config, "listeners:") || strings.Contains(config, "mixed-port:") || strings.Contains(config, "socks-port:") || strings.Contains(config, "DIRECT") {
+		t.Fatalf("node restricted config owns a listener or permits direct fallback:\n%s", config)
 	}
 	weakened := bytes.Replace(candidate.Bytes(), []byte("strict-mode: true"), []byte("strict-mode: false"), 1)
 	if err := ValidateNodeRestrictedConfig(weakened); err == nil || !strings.Contains(err.Error(), "strict ShadowTLS") {
 		t.Fatalf("weakened strict-mode error = %v", err)
+	}
+	brokenUoT := bytes.Replace(candidate.Bytes(), []byte("udp-over-tcp: true"), []byte("udp-over-tcp: false"), 1)
+	if err := ValidateNodeRestrictedConfig(brokenUoT); err == nil || !strings.Contains(err.Error(), "pinned UoT") {
+		t.Fatalf("disabled UoT error = %v", err)
+	}
+	directFallback := bytes.Replace(candidate.Bytes(), []byte("MATCH,VPNCTL-RESTRICTED"), []byte("MATCH,DIRECT"), 1)
+	if err := ValidateNodeRestrictedConfig(directFallback); err == nil {
+		t.Fatal("restricted node validator accepted direct fallback")
 	}
 }
 
@@ -208,6 +217,7 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 				Cipher           string `json:"cipher"`
 				ShadowTLSVersion int    `json:"shadowtls_version"`
 				Strict           bool   `json:"strict"`
+				UoTVersion       int    `json:"uot_version"`
 			} `json:"restricted_transport"`
 		} `json:"limits"`
 	}
@@ -217,7 +227,8 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 		componentManifest.Components.Mihomo.SHA256 != RestrictedProviderSHA256 ||
 		componentManifest.Limits.PublicNetwork.RestrictedTCP != RestrictedTCPPort || componentManifest.Limits.PublicNetwork.RestrictedUDPOpen ||
 		componentManifest.Limits.Restricted.Cipher != RestrictedCipher ||
-		componentManifest.Limits.Restricted.ShadowTLSVersion != RestrictedShadowTLSVersion || !componentManifest.Limits.Restricted.Strict {
+		componentManifest.Limits.Restricted.ShadowTLSVersion != RestrictedShadowTLSVersion || !componentManifest.Limits.Restricted.Strict ||
+		componentManifest.Limits.Restricted.UoTVersion != RestrictedUDPOverTCPVersion {
 		t.Fatalf("production restricted constants drifted from component manifest: %+v", componentManifest)
 	}
 
@@ -233,6 +244,8 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 			Cipher            string `json:"cipher"`
 			ShadowTLSVersion  int    `json:"shadow_tls_version"`
 			StrictMode        bool   `json:"strict_mode"`
+			UDPOverTCP        bool   `json:"udp_over_tcp"`
+			UDPOverTCPVersion int    `json:"udp_over_tcp_version"`
 			NativeUDPListener bool   `json:"native_udp_listener"`
 		} `json:"transport"`
 	}
@@ -240,7 +253,8 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 	if spikeManifest.Mihomo.Version != RestrictedProviderVersion || spikeManifest.Mihomo.Asset != RestrictedProviderAsset ||
 		spikeManifest.Mihomo.SHA256 != RestrictedProviderSHA256 || spikeManifest.Transport.Port != RestrictedTCPPort ||
 		spikeManifest.Transport.Protocol != "tcp" || spikeManifest.Transport.Cipher != RestrictedCipher ||
-		spikeManifest.Transport.ShadowTLSVersion != RestrictedShadowTLSVersion || !spikeManifest.Transport.StrictMode || spikeManifest.Transport.NativeUDPListener {
+		spikeManifest.Transport.ShadowTLSVersion != RestrictedShadowTLSVersion || !spikeManifest.Transport.StrictMode ||
+		!spikeManifest.Transport.UDPOverTCP || spikeManifest.Transport.UDPOverTCPVersion != RestrictedUDPOverTCPVersion || spikeManifest.Transport.NativeUDPListener {
 		t.Fatalf("production restricted constants drifted from spike manifest: %+v", spikeManifest)
 	}
 }

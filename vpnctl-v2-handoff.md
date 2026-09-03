@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 8.3 выполнено `69/156`
+и проходят strict validation. После завершения task 8.4 выполнено `70/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
@@ -27,8 +27,11 @@ overlay bootstrap route и passive health реализованы и прошли
 с пятью clients и двумя nodes. Restricted provider закрепляет Mihomo `v1.19.30`,
 Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и node
 артефакты прошли native validation, реальный listener/socket gate подтвердил
-один TCP listener и отсутствие UDP listener. Следующая задача — 8.4
-(fail-closed UoT и обязательная readiness). Фактический Clash Mi
+один TCP listener и отсутствие UDP listener. Selected restricted UDP теперь
+обязан идти через UoT v2; activatable candidate выдаётся только после
+обязательных TCP+UDP readiness probes, а broken-UoT control сохраняет TCP,
+блокирует UDP и не создаёт native/direct утечек. Следующая задача — 8.5
+(signed versioned handshake-host bundles и manual-only lifecycle). Фактический Clash Mi
 остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
 8.10.
 
@@ -799,6 +802,19 @@ vpnctl dns reset
   проваливает `transport test restricted` и не позволяет переключить его в
   active state. Ни native UDP к gateway, ни direct fallback при этом не
   разрешаются.
+- Production node artifact закрепляет UoT v2 и отдельную UDP select-group с
+  единственными вариантами `VPNCTL-RESTRICTED` и `REJECT-DROP`; вариант
+  restricted всегда первый, а прямого выхода в provider rules нет. Readiness
+  проверяет controlled TCP и UDP echo через временный loopback-only SOCKS
+  listener и привязывает результат к owner, credential generation и config
+  hash candidate. Повторы ограничены отдельным deadline каждого probe и общим
+  caller context и используют только тот же candidate — другой transport,
+  native UDP и direct path не рассматриваются.
+- Automated task-8.4 gate на двух pinned 1-vCPU/512-MiB/10-GiB Lima fixtures
+  подтвердил рабочий TCP+UoT и negative broken-UoT: TCP остался рабочим,
+  activation была запрещена, а финальный outer capture увидел `43` TCP packets на 8443 и
+  ноль native UDP, direct TCP и direct UDP. Это development qualification, а
+  не замена обязательного deployed Clash Mi release-gate 16.11.
 
 ```text
 selected TCP ───────────────┐

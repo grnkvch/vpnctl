@@ -29,6 +29,7 @@ const (
 	RestrictedProviderSHA256        = "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
 	RestrictedCipher                = "2022-blake3-aes-256-gcm"
 	RestrictedShadowTLSVersion      = 3
+	RestrictedUDPOverTCPVersion     = 2
 	RestrictedTCPPort               = 8443
 	RestrictedConfigFileName        = "restricted.yaml"
 	RestrictedBinaryRelativePath    = "usr/local/libexec/vpnctl/mihomo"
@@ -36,6 +37,8 @@ const (
 	RestrictedGatewayCredentialGen  = uint64(1)
 	RestrictedGatewayListenerName   = "vpnctl-restricted-in"
 	RestrictedNodeProxyName         = "VPNCTL-RESTRICTED"
+	RestrictedNodeUDPGroupName      = "VPNCTL-RESTRICTED-UDP"
+	RestrictedRejectProxyName       = "REJECT-DROP"
 	RestrictedBootstrapUserName     = "vpnctl-bootstrap"
 	restrictedSecretSchemaVersion   = 1
 	maximumRestrictedConfigBytes    = 1 << 20
@@ -351,9 +354,9 @@ type NodeRestrictedRenderRequest struct {
 	Component         model.ComponentPin
 }
 
-// RenderNodeRestrictedConfig renders a validation-ready strict TCP outbound.
-// It intentionally has no listener/TUN/DNS policy and keeps UDP/UoT disabled;
-// routing composition and mandatory UoT readiness belong to tasks 10.2 and 8.4.
+// RenderNodeRestrictedConfig renders a strict UoT-capable outbound and an
+// explicit selected-UDP reject alternative. It intentionally has no
+// listener/TUN/DNS policy; routing composition belongs to task 10.2.
 func RenderNodeRestrictedConfig(request NodeRestrictedRenderRequest) (RestrictedNodeCandidate, error) {
 	if err := request.Node.Validate(); err != nil {
 		return RestrictedNodeCandidate{}, fmt.Errorf("validate restricted node: %w", err)
@@ -497,8 +500,9 @@ func renderNodeRestrictedYAML(request NodeRestrictedRenderRequest, identityPassw
 	fmt.Fprintf(&config, "    cipher: %s\n", RestrictedCipher)
 	fmt.Fprintf(&config, "    password: %s\n", strconv.Quote(request.ServerPassword))
 	config.WriteString("    ip-version: ipv4\n")
-	config.WriteString("    udp: false\n")
-	config.WriteString("    udp-over-tcp: false\n")
+	config.WriteString("    udp: true\n")
+	config.WriteString("    udp-over-tcp: true\n")
+	fmt.Fprintf(&config, "    udp-over-tcp-version: %d\n", RestrictedUDPOverTCPVersion)
 	config.WriteString("    plugin: shadow-tls\n")
 	config.WriteString("    client-fingerprint: chrome\n")
 	config.WriteString("    plugin-opts:\n")
@@ -506,8 +510,15 @@ func renderNodeRestrictedYAML(request NodeRestrictedRenderRequest, identityPassw
 	fmt.Fprintf(&config, "      password: %s\n", strconv.Quote(identityPassword))
 	fmt.Fprintf(&config, "      version: %d\n", RestrictedShadowTLSVersion)
 	config.WriteString("      strict-mode: true\n")
+	config.WriteString("\nproxy-groups:\n")
+	fmt.Fprintf(&config, "  - name: %s\n", RestrictedNodeUDPGroupName)
+	config.WriteString("    type: select\n")
+	config.WriteString("    proxies:\n")
+	fmt.Fprintf(&config, "      - %s\n", RestrictedNodeProxyName)
+	fmt.Fprintf(&config, "      - %s\n", RestrictedRejectProxyName)
 	config.WriteString("\nrules:\n")
-	config.WriteString("  - MATCH,DIRECT\n")
+	fmt.Fprintf(&config, "  - NETWORK,UDP,%s\n", RestrictedNodeUDPGroupName)
+	fmt.Fprintf(&config, "  - MATCH,%s\n", RestrictedNodeProxyName)
 	return []byte(config.String())
 }
 
@@ -582,13 +593,14 @@ type restrictedHandshake struct {
 }
 
 type restrictedNodeDocument struct {
-	Mode          string                `yaml:"mode"`
-	LogLevel      string                `yaml:"log-level"`
-	IPv6          *bool                 `yaml:"ipv6"`
-	GeodataLoader string                `yaml:"geodata-loader"`
-	GeoAutoUpdate *bool                 `yaml:"geo-auto-update"`
-	Proxies       []restrictedNodeProxy `yaml:"proxies"`
-	Rules         []string              `yaml:"rules"`
+	Mode          string                 `yaml:"mode"`
+	LogLevel      string                 `yaml:"log-level"`
+	IPv6          *bool                  `yaml:"ipv6"`
+	GeodataLoader string                 `yaml:"geodata-loader"`
+	GeoAutoUpdate *bool                  `yaml:"geo-auto-update"`
+	Proxies       []restrictedNodeProxy  `yaml:"proxies"`
+	ProxyGroups   []restrictedProxyGroup `yaml:"proxy-groups"`
+	Rules         []string               `yaml:"rules"`
 }
 
 type restrictedNodeProxy struct {
@@ -601,9 +613,16 @@ type restrictedNodeProxy struct {
 	IPVersion         string                      `yaml:"ip-version"`
 	UDP               *bool                       `yaml:"udp"`
 	UDPOverTCP        *bool                       `yaml:"udp-over-tcp"`
+	UDPOverTCPVersion *int                        `yaml:"udp-over-tcp-version"`
 	Plugin            string                      `yaml:"plugin"`
 	ClientFingerprint string                      `yaml:"client-fingerprint"`
 	PluginOptions     restrictedNodePluginOptions `yaml:"plugin-opts"`
+}
+
+type restrictedProxyGroup struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"`
+	Proxies []string `yaml:"proxies"`
 }
 
 type restrictedNodePluginOptions struct {
@@ -664,8 +683,9 @@ func ValidateGatewayRestrictedConfig(content []byte) error {
 	return nil
 }
 
-// ValidateNodeRestrictedConfig enforces strict ShadowTLS and proves that the
-// task-8.3 node artifact cannot open a local/public listener or carry UDP.
+// ValidateNodeRestrictedConfig enforces strict ShadowTLS, UoT v2, an explicit
+// UDP reject alternative, and no direct fallback for traffic handed to this
+// provider. The artifact cannot open a local/public listener by itself.
 func ValidateNodeRestrictedConfig(content []byte) error {
 	if len(content) == 0 || len(content) > maximumRestrictedConfigBytes {
 		return fmt.Errorf("restricted node config has invalid size")
@@ -676,16 +696,18 @@ func ValidateNodeRestrictedConfig(content []byte) error {
 	}
 	if document.Mode != "rule" || document.LogLevel != "silent" || !isFalse(document.IPv6) ||
 		document.GeodataLoader != "memconservative" || !isFalse(document.GeoAutoUpdate) ||
-		len(document.Proxies) != 1 || len(document.Rules) != 1 || document.Rules[0] != "MATCH,DIRECT" {
+		len(document.Proxies) != 1 || len(document.ProxyGroups) != 1 || len(document.Rules) != 2 ||
+		document.Rules[0] != "NETWORK,UDP,"+RestrictedNodeUDPGroupName || document.Rules[1] != "MATCH,"+RestrictedNodeProxyName {
 		return fmt.Errorf("restricted node config has unsupported global behavior")
 	}
 	proxy := document.Proxies[0]
 	address, err := netip.ParseAddr(proxy.Server)
 	if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.String() != proxy.Server ||
 		proxy.Name != RestrictedNodeProxyName || proxy.Type != "ss" || proxy.Port == nil || *proxy.Port != RestrictedTCPPort ||
-		proxy.Cipher != RestrictedCipher || proxy.IPVersion != "ipv4" || !isFalse(proxy.UDP) || !isFalse(proxy.UDPOverTCP) ||
+		proxy.Cipher != RestrictedCipher || proxy.IPVersion != "ipv4" || !isTrue(proxy.UDP) || !isTrue(proxy.UDPOverTCP) ||
+		proxy.UDPOverTCPVersion == nil || *proxy.UDPOverTCPVersion != RestrictedUDPOverTCPVersion ||
 		proxy.Plugin != "shadow-tls" || proxy.ClientFingerprint != "chrome" {
-		return fmt.Errorf("restricted node outbound does not match the pinned TCP-only contract")
+		return fmt.Errorf("restricted node outbound does not match the pinned UoT contract")
 	}
 	if err := validateRestrictedServerPassword(proxy.Password); err != nil {
 		return err
@@ -694,7 +716,20 @@ func ValidateNodeRestrictedConfig(content []byte) error {
 	if !validRestrictedHostname(options.Host) || options.Version == nil || *options.Version != RestrictedShadowTLSVersion || !isTrue(options.StrictMode) {
 		return fmt.Errorf("restricted node outbound does not enforce strict ShadowTLS v3")
 	}
-	return validateRestrictedIdentityPassword(options.Password)
+	if err := validateRestrictedIdentityPassword(options.Password); err != nil {
+		return err
+	}
+	group := document.ProxyGroups[0]
+	if group.Name != RestrictedNodeUDPGroupName || group.Type != "select" ||
+		len(group.Proxies) != 2 || group.Proxies[0] != RestrictedNodeProxyName || group.Proxies[1] != RestrictedRejectProxyName {
+		return fmt.Errorf("restricted node UDP guard must select only UoT or explicit reject")
+	}
+	for _, rule := range document.Rules {
+		if strings.Contains(rule, "DIRECT") {
+			return fmt.Errorf("restricted node provider rules must not contain direct fallback")
+		}
+	}
+	return nil
 }
 
 func decodeRestrictedYAML(content []byte, destination any) error {
