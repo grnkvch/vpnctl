@@ -426,6 +426,18 @@ verify() {
   fi
 
   limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
+    gateway-outage "$runtime_root/gateway-outage.json"
+  limactl shell --tty=false "$node_instance" -- sudo cat "$runtime_root/gateway-outage.json" > "$evidence_dir/gateway-outage.json"
+  jq -e '.status == "passed" and .fault == "gateway" and .selected_tcp_blocked and .selected_udp_blocked and .unrelated_tcp_direct and .unrelated_udp_direct and .routing_engine_ready and .active_transport_preserved and (.automatic_fallback | not) and .recovered_without_engine_restart' \
+    "$evidence_dir/gateway-outage.json" >/dev/null
+
+  limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
+    transport-outage "$runtime_root/transport-outage.json"
+  limactl shell --tty=false "$node_instance" -- sudo cat "$runtime_root/transport-outage.json" > "$evidence_dir/transport-outage.json"
+  jq -e '.status == "passed" and .fault == "transport" and .selected_tcp_blocked and .selected_udp_blocked and .unrelated_tcp_direct and .unrelated_udp_direct and .routing_engine_ready and .active_transport_preserved and (.automatic_fallback | not) and .recovered_without_engine_restart' \
+    "$evidence_dir/transport-outage.json" >/dev/null
+
+  limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
     crash "$runtime_root/crash.json"
   limactl shell --tty=false "$node_instance" -- sudo cat "$runtime_root/crash.json" > "$evidence_dir/crash.json"
   limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
@@ -473,6 +485,8 @@ verify() {
     --arg ingress_mark "$(manifest_value '.marks.ingress_response')" \
     --argjson selected_table "$(manifest_value '.routing.selected_table')" \
     --argjson gateway_table "$(manifest_value '.routing.gateway_table')" \
+    --slurpfile gateway_outage "$evidence_dir/gateway-outage.json" \
+    --slurpfile transport_outage "$evidence_dir/transport-outage.json" \
     '{
       schema_version: 1,
       status: $status,
@@ -481,6 +495,7 @@ verify() {
       hooks: {prerouting_priority: -150, output_route_priority: -150, after_conntrack: true},
       boot: {guard_before_tun: true, new_application_blocked: true, recovery_allowed: true},
       ready: {selected_tcp_gateway: true, selected_udp_gateway: true, unmatched_ipv4_direct: true, unmatched_ipv6_direct: true, selected_ipv6_blocked: true},
+      outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]},
       conntrack: {established_direct_retained_after_crash: true, selected_never_failed_direct: true},
       ingress: {response_symmetry_gateway: true},
       lifecycle: {injected_activation_rolled_back: true, crash_fail_closed: true, restart_fail_closed: true, policy_uninstall_restored_networking: true},

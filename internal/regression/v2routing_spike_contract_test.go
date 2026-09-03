@@ -136,6 +136,10 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"systemctl kill --kill-who=main --signal=KILL", "established_direct_retained",
 		"--protocol tcp --host 203.0.113.10", "--protocol udp --host 203.0.113.10",
 		"--protocol udp --host 2001:db8:1::10", "forbidden == 0",
+		"systemctl stop \"$gateway_unit\"", "table inet $transport_outage_table",
+		"oifname \"v2gateway0\" drop", "assert_selected_path_failure",
+		"request tcp 203.0.113.20 18080 direct-unmatched", "request udp 203.0.113.20 18080 direct-unmatched",
+		"active_transport_preserved: true", "automatic_fallback: false", "recovered_without_engine_restart: true",
 	} {
 		if !strings.Contains(fault, required) {
 			t.Errorf("routing fault fixture is missing %q", required)
@@ -147,6 +151,7 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"assert_lab_instance", "assert_other_spikes_inactive", "assert_owned_or_absent",
 		"refusing to overwrite unowned routing spike path", "node_policy guard after-nft",
 		"node_policy assert-clean", "root_network_snapshot", "foreign_snapshot",
+		"gateway-outage", "transport-outage", "outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]}",
 		"trap 'clean_runtime_best_effort' EXIT", "uninstall_internal true", "owner-checked routing spike resources removed",
 	} {
 		if !strings.Contains(orchestrator, required) {

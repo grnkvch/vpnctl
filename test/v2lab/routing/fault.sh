@@ -3,7 +3,10 @@ set -euo pipefail
 
 node_ns=vpnctl-v2-rnode
 engine_unit=vpnctl-v2-spike-routing-engine.service
+gateway_unit=vpnctl-v2-spike-routing-gateway.service
 runtime_root=/run/vpnctl-v2-spike-routing
+config_path=/etc/vpnctl-v2-spike/routing/config.yaml
+transport_outage_table=vpnctl_v2_spike_transport_outage
 probe=/usr/local/libexec/vpnctl-v2-spike-routing/probe
 policy=/usr/local/libexec/vpnctl-v2-spike-routing/policy
 
@@ -38,6 +41,122 @@ blocked() {
 
 request() {
   node_exec "$probe" request --protocol "$1" --host "$2" --port "$3" --expect "$4" --timeout 1 >/dev/null
+}
+
+wait_unit_active() {
+  local unit=$1 attempt
+  for attempt in $(seq 1 80); do
+    systemctl is-active --quiet "$unit" && return
+    sleep 0.1
+  done
+  echo "timed out waiting for active unit $unit" >&2
+  exit 1
+}
+
+wait_selected() {
+  local protocol=$1 attempt
+  for attempt in $(seq 1 80); do
+    if request "$protocol" 203.0.113.10 18080 gateway-selected 2>/dev/null; then
+      return
+    fi
+    sleep 0.1
+  done
+  request "$protocol" 203.0.113.10 18080 gateway-selected
+}
+
+assert_selected_path_failure() {
+  blocked tcp 203.0.113.10
+  blocked udp 203.0.113.10
+  request tcp 203.0.113.20 18080 direct-unmatched
+  request udp 203.0.113.20 18080 direct-unmatched
+  wait_readiness ready
+}
+
+routing_identity() {
+  sha256sum "$config_path" | awk '{print $1}'
+  systemctl show "$engine_unit" -p MainPID --value
+}
+
+write_outage_evidence() {
+  local output=$1 fault=$2 before_hash=$3 before_pid=$4 after_hash=$5 after_pid=$6
+  if [ "$before_hash" != "$after_hash" ] || [ "$before_pid" != "$after_pid" ] || [ "$after_pid" -le 0 ]; then
+    echo "routing engine identity changed during $fault outage" >&2
+    exit 1
+  fi
+  jq -n \
+    --arg fault "$fault" \
+    --arg config_hash "$after_hash" \
+    --argjson engine_pid "$after_pid" \
+    '{schema_version: 1, status: "passed", fault: $fault, selected_tcp_blocked: true, selected_udp_blocked: true, unrelated_tcp_direct: true, unrelated_udp_direct: true, routing_engine_ready: true, active_transport_preserved: true, automatic_fallback: false, recovered_without_engine_restart: true, routing_config_hash: $config_hash, routing_engine_pid: $engine_pid}' \
+    > "$output"
+}
+
+gateway_outage_cleanup() {
+  systemctl start "$gateway_unit" >/dev/null 2>&1 || true
+}
+
+gateway_outage_case() {
+  local output=$1 before after before_hash before_pid after_hash after_pid
+  before=$(routing_identity)
+  before_hash=$(printf '%s\n' "$before" | sed -n '1p')
+  before_pid=$(printf '%s\n' "$before" | sed -n '2p')
+
+  trap gateway_outage_cleanup EXIT
+  systemctl stop "$gateway_unit"
+  if systemctl is-active --quiet "$gateway_unit"; then
+    echo "gateway fixture remained active during outage" >&2
+    exit 1
+  fi
+  assert_selected_path_failure
+
+  systemctl start "$gateway_unit"
+  wait_unit_active "$gateway_unit"
+  trap - EXIT
+  wait_selected tcp
+  wait_selected udp
+  after=$(routing_identity)
+  after_hash=$(printf '%s\n' "$after" | sed -n '1p')
+  after_pid=$(printf '%s\n' "$after" | sed -n '2p')
+  write_outage_evidence "$output" gateway "$before_hash" "$before_pid" "$after_hash" "$after_pid"
+}
+
+transport_outage_cleanup() {
+  node_exec nft delete table inet "$transport_outage_table" >/dev/null 2>&1 || true
+}
+
+transport_outage_case() {
+  local output=$1 before after before_hash before_pid after_hash after_pid
+  if node_exec nft list table inet "$transport_outage_table" >/dev/null 2>&1; then
+    echo "transport outage table already exists" >&2
+    exit 1
+  fi
+  before=$(routing_identity)
+  before_hash=$(printf '%s\n' "$before" | sed -n '1p')
+  before_pid=$(printf '%s\n' "$before" | sed -n '2p')
+
+  trap transport_outage_cleanup EXIT
+  node_exec nft -f - <<EOF
+table inet $transport_outage_table {
+  chain output {
+    type filter hook output priority filter; policy accept;
+    oifname "v2gateway0" drop
+  }
+}
+EOF
+  assert_selected_path_failure
+
+  node_exec nft delete table inet "$transport_outage_table"
+  trap - EXIT
+  if node_exec nft list table inet "$transport_outage_table" >/dev/null 2>&1; then
+    echo "transport outage table remained after recovery" >&2
+    exit 1
+  fi
+  wait_selected tcp
+  wait_selected udp
+  after=$(routing_identity)
+  after_hash=$(printf '%s\n' "$after" | sed -n '1p')
+  after_pid=$(printf '%s\n' "$after" | sed -n '2p')
+  write_outage_evidence "$output" transport "$before_hash" "$before_pid" "$after_hash" "$after_pid"
 }
 
 crash_case() {
@@ -114,6 +233,14 @@ restart_case() {
 }
 
 case "${1:-}" in
+  gateway-outage)
+    [ -n "${2:-}" ] || { echo "missing gateway-outage evidence path" >&2; exit 2; }
+    gateway_outage_case "$2"
+    ;;
+  transport-outage)
+    [ -n "${2:-}" ] || { echo "missing transport-outage evidence path" >&2; exit 2; }
+    transport_outage_case "$2"
+    ;;
   crash)
     [ -n "${2:-}" ] || { echo "missing crash evidence path" >&2; exit 2; }
     crash_case "$2"
@@ -122,5 +249,5 @@ case "${1:-}" in
     [ -n "${2:-}" ] || { echo "missing restart evidence path" >&2; exit 2; }
     restart_case "$2"
     ;;
-  *) echo "usage: fault.sh <crash|restart> <evidence-path>" >&2; exit 2 ;;
+  *) echo "usage: fault.sh <gateway-outage|transport-outage|crash|restart> <evidence-path>" >&2; exit 2 ;;
 esac

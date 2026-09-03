@@ -111,6 +111,16 @@ reverse-tunnel connection all use that same group. User-selected rules follow
 in canonical order. Unmatched host packets never enter the selected routing
 table/TUN, and the defensive terminal rule remains `MATCH,DIRECT`.
 
+If the active provider or gateway fails while the routing engine remains
+ready, that group remains selected and new selected TCP and UDP flows fail in
+place. The failure does not close the global readiness gate, change the active
+transport, try standby, or reinterpret selected traffic as direct. Unmatched
+new flows retain their independent `DIRECT` decision and ordinary uplink.
+Once the same active path recovers, new selected flows resume without an
+automatic switch or routing-engine restart. An engine failure is deliberately
+different: the independent not-ready guard blocks every new application flow
+until the engine is ready again.
+
 The bundle composer overwrites the guard matcher, active kind, and public and
 overlay gateway addresses from the same validated routing input. This removes
 an API path for binding the userspace engine and kernel guard to different
@@ -145,3 +155,11 @@ ShadowTLS packets and zero steady-state direct `17000/TCP` packets after the
 manual restricted switch, with logical identity preserved. These are Linux
 gateway/node development gates; actual supported Clash Mi remains the task
 16.11 deployed-service gate.
+
+Task-10.5 fault acceptance keeps that routing process and config generation
+unchanged while first stopping the isolated gateway backend and then dropping
+only the simulated gateway interface. In both cases fresh selected TCP and UDP
+are blocked, the duplicate selected destination on the direct link is never
+reached, and fresh unrelated TCP and UDP continue over direct. Restoring the
+same failed component recovers both selected protocols without restarting the
+routing engine or selecting another transport.

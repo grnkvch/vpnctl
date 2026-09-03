@@ -116,7 +116,7 @@
 - [x] 10.2 Implement node routing/TUN rendering and service readiness around the selected Mihomo DNS/routing mode; verify all host processes are covered and no process/user/container scope flag exists.
 - [x] 10.3 Implement nftables marks, conntrack retention, policy routes, pre-engine fail-closed guard, and minimal gateway recovery allowlist from spike values; verify boot and routing-process crash block new application egress before readiness.
 - [x] 10.4 Implement standard/restricted active-outbound binding so selected TCP/UDP, control, and tunnel share one transport while unmatched flows remain direct; verify packet captures for both active modes.
-- [ ] 10.5 Implement selected-path failure handling with no fail-direct and continued unrelated direct traffic; verify gateway and transport outage tests for new TCP and UDP flows.
+- [x] 10.5 Implement selected-path failure handling with no fail-direct and continued unrelated direct traffic; verify gateway and transport outage tests for new TCP and UDP flows.
 - [ ] 10.6 Implement IPv6 selected-traffic leak prevention and diagnostics while retaining IPv4 as the only full data plane; verify selected AAAA/IP traffic cannot escape direct and unrelated host behavior follows documented limits.
 - [ ] 10.7 Implement node systemd-resolved integration, classic port-53 capture, original DNS snapshot, and uninstall restore; verify resolved and direct-socket application DNS tests plus exact restoration.
 - [ ] 10.8 Implement one shared gateway internal DNS forwarder and independent gateway/direct IPv4 upstream state with defaults; verify multiple nodes share it without cross-node policy leakage.
