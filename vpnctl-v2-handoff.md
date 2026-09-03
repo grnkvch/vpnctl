@@ -12,14 +12,15 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 7.10 выполнено `64/156`
+и проходят strict validation. После завершения task 7.11 выполнено `65/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
-детерминированного WireGuard/Clash rendering и безопасной атомарной публикации
-client exports включительно. Следующая задача — 7.11 (export staleness,
-credential rotation, revoke/delete lifecycle и удаление artifacts). Фактический
-Clash Mi остаётся release-gate 16.11, а restricted alternative в Clash export —
-задача 8.10.
+детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
+client exports и полного lifecycle standard-client credentials включительно.
+Следующая задача — 7.12 (gateway firewall isolation для clients/nodes).
+Фактический Clash Mi остаётся release-gate 16.11, real WireGuard peer
+publication — задачей 8.2, а restricted alternative в Clash export — задачей
+8.10.
 
 ### 1. Product contract
 
@@ -245,14 +246,19 @@ vpnctl client export <name-or-id> <clash|wireguard>
   credential. `client list/show` не имеют secret-store read dependency и не
   возвращают private/public keys, refs или profile content.
 - `client show` возвращает non-secret address/assignment, credential и policy
-  generation numbers, lifecycle, active transport health и export state.
-  До появления artifact metadata это явное `not-exported`; `current/stale`
-  подключаются в задачах export lifecycle. State-level acceptance пяти clients
-  проверяет разные identity/address/credential owners; packet-level lateral
-  isolation остаётся отдельной задачей 7.12.
-- `rotate` сохраняет identity name и overlay IP, но требует нового export и
-  ручной замены профиля. Export format является positional argument, поэтому
-  отдельный `--type` отсутствует.
+  generation numbers, lifecycle, active transport health и вычисляемый export
+  state `not-exported|current|stale`. Проверяются sidecar, bytes/mode и только
+  прямые dependencies: credential для обоих форматов, policy только для Clash.
+  State-level acceptance немедленно отвергает старый/revoked/disabled public
+  key; task 8.2 использует этот контракт при публикации реальных gateway peers,
+  а packet-level lateral isolation остаётся отдельной задачей 7.12.
+- `rotate` сохраняет identity name, immutable ID, overlay IP и policy, атомарно
+  активирует новое standard credential generation, удаляет старый private key,
+  помечает предыдущие exports stale и требует нового export/ручной замены.
+  Известный pre-commit failure оставляет старое поколение; uncertain write
+  reconciles authoritative state и не удаляет активный key. Restricted rotation
+  расширяется вместе с multi-transport integration в 8.10. Export format
+  является positional argument, поэтому отдельный `--type` отсутствует.
 - `clash` export может содержать standard и restricted alternatives с ручным
   выбором пользователя внутри клиента. `wireguard` export создаёт standard
   full-tunnel profile.
@@ -283,7 +289,7 @@ vpnctl client export <client> <clash|wireguard> [--output <path>] [--force]
   и готовую `scp` command; JSON содержит только metadata/path. Export записывает
   root-only sidecar с content hash, state provenance, Clash policy generation и
   credential generation для stale detection; WireGuard не получает ложную
-  policy dependency. Task 7.11 подключает metadata к client show/lifecycle.
+  policy dependency. Policy change возвращает явный `re_export_client` action.
 - QR, stdout piping, URL и subscription delivery отсутствуют. Revoked artifact
   может оставаться до `client delete`, но его credentials gateway уже не
   принимает.

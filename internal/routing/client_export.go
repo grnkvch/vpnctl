@@ -305,11 +305,7 @@ func validateClientExportRequest(request ClientExportRequest) error {
 }
 
 func (exporter *ClientExporter) outputPath(request ClientExportRequest, clientName string) (string, bool, error) {
-	extension := ".clash.yaml"
-	if request.Format == ClientExportWireGuard {
-		extension = ".wireguard.conf"
-	}
-	managedPath := filepath.Join(exporter.paths.ClientExportsDir, clientName+extension)
+	managedPath := managedClientExportPath(exporter.paths, clientName, request.Format)
 	if request.OutputPath == "" {
 		return managedPath, true, nil
 	}
@@ -379,7 +375,7 @@ func exportPathWithin(parent, candidate string) bool {
 }
 
 func (exporter *ClientExporter) metadataPath(clientID string, format ClientExportFormat) string {
-	return filepath.Join(exporter.paths.ClientExportsDir, clientExportMetadataDir, clientID+"."+string(format)+".json")
+	return clientExportMetadataPath(exporter.paths, clientID, format)
 }
 
 func buildClientExportManifest(outputPath string, profile renderedClientExport) (render.ArtifactManifest, error) {

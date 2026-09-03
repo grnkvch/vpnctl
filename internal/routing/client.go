@@ -265,7 +265,7 @@ func (manager *ClientManager) CommitAdd(ctx context.Context, plan ClientAddPlan)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
-	reference, err := model.NewSecretRef(clientStandardCredentialKind, plan.ClientID+clientStandardCredentialSuffix)
+	reference, err := clientStandardCredentialReference(plan.ClientID, 1)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
@@ -273,7 +273,7 @@ func (manager *ClientManager) CommitAdd(ctx context.Context, plan ClientAddPlan)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
-	view, err := clientView(candidate, candidate.Clients[len(candidate.Clients)-1])
+	view, err := clientView(candidate, candidate.Clients[len(candidate.Clients)-1], ClientExportNotCreated)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
@@ -318,7 +318,7 @@ func (manager *ClientManager) List() (ClientList, error) {
 		if client.Lifecycle == model.LifecycleDeleted {
 			continue
 		}
-		view, viewErr := clientView(state, client)
+		view, viewErr := clientView(state, client, inspectClientExportState(manager.paths, state, client))
 		if viewErr != nil {
 			return ClientList{}, viewErr
 		}
@@ -346,7 +346,7 @@ func (manager *ClientManager) Show(reference string) (ClientShow, error) {
 	if err != nil {
 		return ClientShow{}, err
 	}
-	view, err := clientView(state, client)
+	view, err := clientView(state, client, inspectClientExportState(manager.paths, state, client))
 	if err != nil {
 		return ClientShow{}, err
 	}
@@ -413,7 +413,7 @@ func buildClientCandidate(state model.State, plan ClientAddPlan, publicKey strin
 		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: plan.ClientID,
 		Kind: model.TransportStandard, State: model.TransportActive, Provider: "wireguard", Protocol: model.ProtocolUDP, Port: 51820,
 		CredentialGeneration: 1, CredentialRef: credentialRef, PublicKey: publicKey,
-		ConfigHash: clientTransportHash(plan.ClientID, publicKey, credentialRef),
+		ConfigHash: clientTransportHash(plan.ClientID, 1, publicKey, credentialRef),
 	}
 	candidate := state
 	candidate.Generation = plan.NextStateGeneration
@@ -476,9 +476,16 @@ func clientAddPlanHash(plan ClientAddPlan) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func clientTransportHash(clientID, publicKey string, reference model.SecretRef) string {
+func clientStandardCredentialReference(clientID string, generation uint64) (model.SecretRef, error) {
+	if generation == 0 {
+		return "", fmt.Errorf("client credential generation must be positive")
+	}
+	return model.NewSecretRef(clientStandardCredentialKind, fmt.Sprintf("%s-standard-g%d", clientID, generation))
+}
+
+func clientTransportHash(clientID string, generation uint64, publicKey string, reference model.SecretRef) string {
 	hash := sha256.New()
-	for _, value := range []string{clientID, "standard", "wireguard", "udp", "51820", "1", publicKey, string(reference)} {
+	for _, value := range []string{clientID, "standard", "wireguard", "udp", "51820", fmt.Sprintf("%d", generation), publicKey, string(reference)} {
 		writePresetHashField(hash, value)
 	}
 	return hex.EncodeToString(hash.Sum(nil))
@@ -545,7 +552,7 @@ func resolveVisibleClient(clients []model.Client, reference string) (model.Clien
 	return matches[0], nil
 }
 
-func clientView(state model.State, client model.Client) (ClientView, error) {
+func clientView(state model.State, client model.Client, exportState ClientExportState) (ClientView, error) {
 	policyGeneration := uint64(0)
 	if policy, found := findTargetPolicy(state.Policies, model.TargetClient, client.ID); found {
 		policyGeneration = policy.Generation
@@ -573,7 +580,7 @@ func clientView(state model.State, client model.Client) (ClientView, error) {
 		ID: client.ID, Name: client.Name, Platform: client.Platform, Lifecycle: client.Lifecycle, OverlayIPv4: client.OverlayIPv4,
 		AssignedPresets: append([]string{}, client.AssignedPresets...), CredentialGeneration: client.CredentialGeneration,
 		PolicyGeneration: policyGeneration, ActiveTransport: client.ActiveTransport, TransportState: transportState,
-		ExportState: ClientExportNotCreated, Health: health, CreatedAt: client.CreatedAt, RevokedAt: client.RevokedAt,
+		ExportState: exportState, Health: health, CreatedAt: client.CreatedAt, RevokedAt: client.RevokedAt,
 	}
 	if client.RevokedAt != nil {
 		copy := *client.RevokedAt

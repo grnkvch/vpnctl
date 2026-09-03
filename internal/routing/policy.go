@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -62,11 +63,39 @@ type PolicyReplacementPlan struct {
 }
 
 type PolicyCommitResult struct {
+	Command                PolicyCommand
 	Changed                bool
 	Pending                bool
 	StateGeneration        uint64
 	RequiresClientReExport bool
 	Desired                DesiredPolicy
+}
+
+func (result PolicyCommitResult) OutputResult() output.Result {
+	status := output.StatusOK
+	if result.Pending {
+		status = output.StatusPending
+	}
+	public := output.NewResult("policy."+string(result.Command), status, output.CategorySuccess, output.SafeObject{
+		"changed":    result.Changed,
+		"generation": result.StateGeneration,
+	})
+	resourceKey := "node_id"
+	if result.Desired.TargetKind == model.TargetClient {
+		resourceKey = "client_id"
+	}
+	public.ResourceIDs = map[string]string{resourceKey: result.Desired.TargetID}
+	if result.RequiresClientReExport {
+		public.RequiresAction = append(public.RequiresAction, output.Action{
+			Code:    "re_export_client",
+			Message: "Export a fresh Clash profile and replace the client device profile manually.",
+			Command: "vpnctl client export " + result.Desired.TargetID + " clash",
+			ResourceIDs: map[string]string{
+				"client_id": result.Desired.TargetID,
+			},
+		})
+	}
+	return public
 }
 
 type PolicyManager struct {
@@ -202,7 +231,7 @@ func policyCommitResult(plan PolicyReplacementPlan, generation uint64) PolicyCom
 	desired := cloneDesiredPolicy(plan.Desired)
 	desired.GatewayStateGeneration = generation
 	return PolicyCommitResult{
-		Changed: plan.Changed, Pending: plan.Changed && plan.TargetKind == model.TargetNode && plan.Deferred,
+		Command: plan.Command, Changed: plan.Changed, Pending: plan.Changed && plan.TargetKind == model.TargetNode && plan.Deferred,
 		StateGeneration: generation, RequiresClientReExport: plan.RequiresClientReExport, Desired: desired,
 	}
 }

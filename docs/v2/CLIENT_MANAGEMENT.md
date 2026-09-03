@@ -44,9 +44,12 @@ The public view contains identity, platform, lifecycle, overlay address,
 assigned presets, credential and policy generation numbers, active transport
 kind/state, derived health, export state, and lifecycle timestamps. It contains
 no private/public key, credential reference, profile content, or secret-store
-path. Export publication now records durable, content-free artifact metadata;
-task 7.11 consumes it to extend the initial `not-exported` view to
-`current`/`stale` without broadening the view to secret material.
+path. The export state is derived read-only from durable, content-free metadata
+and the current artifact bytes/mode: no known artifacts are `not-exported`, all
+tracked formats matching their direct generations are `current`, and any
+missing, malformed, modified, revoked, or generation-mismatched artifact makes
+the aggregate state `stale`. The inspector never guesses that an untracked
+managed file is current.
 
 ## WireGuard profile rendering
 
@@ -155,8 +158,10 @@ source generations. Both formats depend on the client credential generation;
 only Clash depends on client policy generation. Global state generation is
 provenance rather than a blanket invalidation trigger, so a preset-only edit
 marks Clash stale while the full-tunnel WireGuard artifact remains current.
-Task 7.11 connects this comparison to `client show`, rotation, revoke, and
-delete lifecycle behavior.
+`client show` performs this comparison without reading client secrets. A
+changed client-policy result also returns a `re_export_client` action and a
+copy-ready Clash export command; it never rewrites a profile already copied to
+a device.
 
 The profile and sidecar are separate files, so a process/power failure between
 their two atomic renames can leave a detectable hash/generation mismatch rather
@@ -169,3 +174,47 @@ generation, immutable client ID, and a copy-ready
 `scp root@<public-ip>:<path> .` action. Human and JSON renderers never receive
 the profile, content hash, private metadata path, QR payload, hosted URL, or
 subscription data.
+
+## Credential and artifact lifecycle
+
+`client rotate`, `client revoke`, and `client delete` use reviewed plan/commit
+boundaries and the frozen CLI contract requires confirmation for each. None
+supports deferred application.
+
+Rotation is allowed only for an active client. It stages a new generation-owned
+private key, atomically advances the authoritative client and standard
+transport to the new generation, and then removes the obsolete private key.
+Name, immutable ID, overlay IPv4, platform, and policy assignment do not
+change. The gateway acceptance predicate immediately stops matching the old
+public key and accepts only the new active key; both Clash and WireGuard
+artifacts become stale without their bytes being changed. The result requires
+a fresh export and manual replacement on the device. A proven state-write
+failure removes the staged key and leaves the old generation active; an
+indeterminate durability result keeps whichever key is referenced by the
+reconciled authoritative state. Restricted-client credential rotation remains
+part of the multi-transport provider integration rather than pretending that a
+partial standard-only rotation is complete.
+
+Revoke publishes the security decision before best-effort key cleanup: it marks
+the client revoked and disables every owned transport in one state generation.
+Consequently an old profile is rejected even if removing its stored private key
+fails. Artifact drift never delays this operation, no profile file is modified,
+and repeating revoke is an idempotent cleanup retry. Revoked clients remain
+visible with disabled health and stale exports.
+
+Delete is accepted only after revoke. Its review strictly snapshots vpnctl's
+managed files and the latest tracked custom artifact; a modified custom file
+blocks deletion before state mutation. Commit removes the client from the
+active registry by retaining only its hidden deleted tombstone, removes its
+policy and transports, then deletes obsolete credentials, tracked profiles,
+and private sidecars. Every file is compared with its reviewed mode and hash
+immediately before removal. Post-commit cleanup failures are explicit and
+repairable; public output may identify a retained profile but never exposes a
+private metadata path. The result always warns that vpnctl cannot delete copies
+already stored on external devices.
+
+The current gateway-provider acceptance check is a fail-closed state contract:
+only an active client with an enabled standard transport and the exact current
+public key is accepted. Task 8.2 consumes this predicate when publishing the
+real WireGuard peer set; deployed handshake/packet validation remains in the
+credential lifecycle E2E gate.

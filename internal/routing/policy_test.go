@@ -35,6 +35,14 @@ func TestPolicyManagerAtomicallyReplacesAndClearsExplicitClientPolicy(t *testing
 	if !result.Changed || !result.RequiresClientReExport || result.Pending || result.StateGeneration != 2 {
 		t.Fatalf("Commit(set) = %#v", result)
 	}
+	public := result.OutputResult()
+	if err := public.Validate(); err != nil {
+		t.Fatalf("Commit(set).OutputResult().Validate() error = %v", err)
+	}
+	if len(public.RequiresAction) != 1 || public.RequiresAction[0].Code != "re_export_client" ||
+		public.RequiresAction[0].Command != "vpnctl client export "+catalogClientID+" clash" {
+		t.Fatalf("Commit(set).OutputResult().RequiresAction = %#v", public.RequiresAction)
+	}
 	state := loadPolicyState(t, stateStore)
 	assertTargetPolicy(t, state, model.TargetClient, catalogClientID, []string{"openai"}, 2)
 	if !reflect.DeepEqual(state.Clients[0].AssignedPresets, []string{"openai"}) {
@@ -50,6 +58,8 @@ func TestPolicyManagerAtomicallyReplacesAndClearsExplicitClientPolicy(t *testing
 	}
 	if noOpResult, err := manager.Commit(noOp); err != nil || noOpResult.Changed || noOpResult.StateGeneration != 2 {
 		t.Fatalf("Commit(no-op) = %#v, %v", noOpResult, err)
+	} else if public := noOpResult.OutputResult(); public.Validate() != nil || len(public.RequiresAction) != 0 {
+		t.Fatalf("Commit(no-op).OutputResult() = %#v", public)
 	}
 
 	clear, err := manager.PlanClientClear("phone")
