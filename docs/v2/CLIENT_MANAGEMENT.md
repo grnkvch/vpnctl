@@ -44,9 +44,9 @@ The public view contains identity, platform, lifecycle, overlay address,
 assigned presets, credential and policy generation numbers, active transport
 kind/state, derived health, export state, and lifecycle timestamps. It contains
 no private/public key, credential reference, profile content, or secret-store
-path. Before the export lifecycle exists, export state is explicitly
-`not-exported`; tasks 7.10-7.11 extend that field to `current`/`stale` from
-durable artifact metadata without broadening the view to secret material.
+path. Export publication now records durable, content-free artifact metadata;
+task 7.11 consumes it to extend the initial `not-exported` view to
+`current`/`stale` without broadening the view to secret material.
 
 ## WireGuard profile rendering
 
@@ -65,11 +65,10 @@ and `PersistentKeepalive = 25`, so this export is standard full-tunnel and does
 not consume policy names, selectors, or policy generation.
 
 The rendered content is deliberately a private field with only a defensive
-`Bytes()` copy for the later file writer. JSON serialization of profile metadata
-cannot expose the private key or full profile. Task 7.10 owns `0600` artifact
-publication and stdout/scp behavior; this step performs no filesystem export.
-A preset-only policy replacement advances authoritative state metadata but
-leaves the WireGuard bytes and credential generation identical.
+`Bytes()` copy for the file writer. JSON serialization of profile metadata
+cannot expose the private key or full profile. A preset-only policy replacement
+advances authoritative state metadata but leaves the WireGuard bytes and
+credential generation identical.
 
 ## Clash/Mihomo profile rendering
 
@@ -107,7 +106,7 @@ answers and background geodata updates, keeps logging silent, and contains no
 remote health test or auto-switch rule. IPv6 CIDR selectors still compile to
 the gateway group, so unsupported selected IPv6 cannot become a direct
 fallback. As with WireGuard export, secret-bearing YAML is private and exposed
-only as a defensive byte copy; task 7.10 owns durable file publication.
+only as a defensive byte copy to the durable file publisher.
 
 Automated semantic tests cover local exclusions, cross-preset reselection,
 fully shadowed CIDRs, all-direct clients, both DNS modes, metadata redaction,
@@ -115,3 +114,58 @@ and deterministic output. The rendered profile also passed the exact pinned
 Mihomo `v1.19.30` Linux/amd64 `-t` validator. Actual import and runtime DNS,
 TCP, UDP-over-TCP, fail-closed, and reconnect behavior in supported Clash Mi
 remain the deployed-service release gate in task 16.11.
+
+## Artifact publication and delivery
+
+`client export <name-or-id> <clash|wireguard>` has a read-only plan boundary for
+`--dry-run`: it validates and renders the complete proposed artifact in memory
+but creates no directory, profile, sidecar, state, or pending operation. Commit
+re-plans immediately before publication. Any generation, client identity, or
+lifecycle change after review refuses the export; profile bytes from the stale
+read are never activated.
+
+Without `--output`, publication uses these managed names:
+
+```text
+/var/lib/vpnctl/exports/clients/<name>.clash.yaml
+/var/lib/vpnctl/exports/clients/<name>.wireguard.conf
+```
+
+Managed export directories, including the private `.metadata` directory, are
+created or repaired to `0700`. Profiles and sidecars are staged as `0600`,
+fsynced, atomically renamed into place, and followed by a directory fsync. An
+explicit re-export to the managed path replaces the previous artifact. A
+custom path is made absolute; an absent parent is created as `0700`, while the
+mode of an existing operator-owned parent is preserved. An existing custom
+file is left byte- and mode-identical unless `--force` is present. Final
+symlink/non-regular targets and symlink/non-directory parents are rejected.
+Custom output also cannot point directly or through a symlink alias into
+vpnctl's reserved config, state, or runtime namespaces; specifying the exact
+format's normal managed path retains managed re-export semantics.
+
+The latest artifact metadata for each immutable client ID and format is stored
+below:
+
+```text
+/var/lib/vpnctl/exports/clients/.metadata/<client-id>.<format>.json
+```
+
+The sidecar contains only the output path, required mode, content SHA-256, and
+source generations. Both formats depend on the client credential generation;
+only Clash depends on client policy generation. Global state generation is
+provenance rather than a blanket invalidation trigger, so a preset-only edit
+marks Clash stale while the full-tunnel WireGuard artifact remains current.
+Task 7.11 connects this comparison to `client show`, rotation, revoke, and
+delete lifecycle behavior.
+
+The profile and sidecar are separate files, so a process/power failure between
+their two atomic renames can leave a detectable hash/generation mismatch rather
+than silently declaring an artifact current. Ordinary activation failures roll
+the profile back to its exact prior bytes and mode; an indeterminate durability
+result is returned explicitly and is safe to reconcile by repeating export.
+
+Successful public output contains only the absolute path, `0600`, source state
+generation, immutable client ID, and a copy-ready
+`scp root@<public-ip>:<path> .` action. Human and JSON renderers never receive
+the profile, content hash, private metadata path, QR payload, hosted URL, or
+subscription data.

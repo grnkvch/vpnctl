@@ -12,13 +12,14 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 7.9 выполнено `63/156`
+и проходят strict validation. После завершения task 7.10 выполнено `64/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
-детерминированного WireGuard и Clash/Mihomo rendering включительно. Следующая
-задача — 7.10 (атомарная файловая публикация exports, permissions, overwrite,
-scp hints и generation metadata). Фактический Clash Mi остаётся release-gate
-16.11, а restricted alternative в Clash export — задача 8.10.
+детерминированного WireGuard/Clash rendering и безопасной атомарной публикации
+client exports включительно. Следующая задача — 7.11 (export staleness,
+credential rotation, revoke/delete lifecycle и удаление artifacts). Фактический
+Clash Mi остаётся release-gate 16.11, а restricted alternative в Clash export —
+задача 8.10.
 
 ### 1. Product contract
 
@@ -262,8 +263,9 @@ vpnctl client export <name-or-id> <clash|wireguard>
   Default DNS — `1.1.1.1, 8.8.8.8`, `AllowedIPs = 0.0.0.0/0`, keepalive `25`.
   Preset names/selectors/policy generation не являются input WireGuard export.
 - Secret-bearing rendered bytes являются private полем с defensive-copy API и
-  не сериализуются в JSON metadata. Запись artifact/stdout boundary остаётся в
-  7.10; renderer сам не создаёт файлов.
+  не сериализуются в JSON metadata. Exporter имеет read-only plan для
+  `--dry-run`, повторно планирует перед commit и передаёт bytes только закрытой
+  атомарной file-publication границе.
 - Client export file contract:
 
 ```text
@@ -275,10 +277,13 @@ vpnctl client export <client> <clash|wireguard> [--output <path>] [--force]
 
 - Export directories имеют mode `0700`, artifacts — `0600`. Managed default
   path атомарно перезаписывается при explicit re-export; custom output
-  отказывается перезаписывать существующий файл без `--force`.
+  отказывается перезаписывать существующий файл без `--force`. Custom paths не
+  могут указывать прямо или через symlink alias внутрь vpnctl config/state/run.
 - Profile content никогда не печатается в stdout. Human result показывает path
   и готовую `scp` command; JSON содержит только metadata/path. Export записывает
-  policy и credential generations для stale detection.
+  root-only sidecar с content hash, state provenance, Clash policy generation и
+  credential generation для stale detection; WireGuard не получает ложную
+  policy dependency. Task 7.11 подключает metadata к client show/lifecycle.
 - QR, stdout piping, URL и subscription delivery отсутствуют. Revoked artifact
   может оставаться до `client delete`, но его credentials gateway уже не
   принимает.
