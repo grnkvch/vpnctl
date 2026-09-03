@@ -1,6 +1,6 @@
 # Restricted transport
 
-Tasks 8.3-8.9 implement the restricted-provider foundation, mandatory
+Tasks 8.3-8.10 implement the restricted-provider foundation, mandatory
 UDP-over-TCP readiness, pinned handshake-host selection and replacement,
 independent gateway listener supervision, explicit testing/switching, and
 node-local SSH recovery. It remains a development-gated path: testing against
@@ -43,8 +43,8 @@ machine. A faster later candidate cannot displace an earlier passing one.
 The persisted record is the only source used by restricted gateway rendering,
 node delivery, and the client-export delivery boundary. Restricted transport
 records must carry the same hostname. Repeating init does not load or probe the
-candidate list again. The node-enrollment and restricted Clash consumers will
-use this versioned delivery record in tasks 9.4 and 8.10 respectively.
+candidate list again. Node enrollment will use this versioned delivery record
+in task 9.4; restricted Clash exports consume it now.
 
 Runtime observation is deliberately passive. Given an observation of the exact
 pinned candidate, health reports `handshake-host-healthy` or
@@ -75,8 +75,10 @@ Commit retains one exact previous-host snapshot for 24 hours. It reports every
 affected node configuration and Clash client export as stale, with explicit
 `apply`/re-export actions; WireGuard exports are independent. Clash sidecars
 carry a non-secret `{candidate_id, list_version}` source dependency, so the
-staleness remains detectable even if the currently rendered profile bytes are
-unchanged. Legacy sidecars without that optional dependency remain readable
+staleness remains detectable independently of the rendered-content hash. The
+dual-transport profile also embeds the host, so re-rendering changes the
+restricted alternative while leaving the WireGuard export unchanged. Legacy
+sidecars without that optional dependency remain readable
 but are stale for a client with an enabled restricted transport.
 
 `transport host rollback` also requires confirmation. Before expiry it stages
@@ -107,6 +109,15 @@ selection or runtime state.
 The gateway owns one create-once, 256-bit Shadowsocks server key. The protocol requires that key to be shared by the listener and its node outbounds. Each enabled restricted client or node has a separate 256-bit ShadowTLS v3 password, which is the per-identity authorization and revocation boundary. An undistributed bootstrap ShadowTLS user keeps an empty gateway configuration structurally valid; it is never an export credential.
 
 The model and public results hold only opaque secret references and generations. Renderers read secret payloads into private memory, reject malformed or reused credentials, and never expose passwords through descriptors, hashes, service failures, or CLI output.
+
+Personal client creation provisions both transports together: standard is
+active in authoritative gateway state and restricted is standby. The Clash
+artifact includes both credentials, but one manual `type: select` group leaves
+the device user in control; standard is listed first for compatibility. No
+health test, remote controller, automatic fallback, or gateway state mutation
+can change the selection stored by the client. Client credential rotation
+replaces the WireGuard and ShadowTLS identity generations atomically; revoke
+disables both before best-effort deletion of both secret payloads.
 
 ## Rendered artifacts
 

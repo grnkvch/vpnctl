@@ -18,6 +18,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/render"
+	restrictedcodec "github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -78,7 +79,10 @@ func TestClientExporterPublishesManagedClashProfileAndSafeOutput(t *testing.T) {
 		if !strings.Contains(rendered, wantPath) || !strings.Contains(rendered, "scp root@203.0.113.10:") {
 			t.Fatalf("%s output omitted path/copy action: %s", name, rendered)
 		}
-		for _, forbidden := range []string{fixture.privateKey, "private-key", "wireguard:", "proxies:", record.ContentSHA256, result.metadataPath} {
+		for _, forbidden := range []string{
+			fixture.privateKey, fixture.restrictedPassword, fixture.serverPassword,
+			"private-key", "wireguard:", "proxies:", record.ContentSHA256, result.metadataPath,
+		} {
 			if strings.Contains(rendered, forbidden) {
 				t.Fatalf("%s output exposed %q: %s", name, forbidden, rendered)
 			}
@@ -115,7 +119,10 @@ func TestClientExporterPlanIsReadOnlySecretFreeAndRejectsTampering(t *testing.T)
 	if err != nil {
 		t.Fatalf("Marshal(plan) error = %v", err)
 	}
-	for _, forbidden := range []string{fixture.privateKey, "private-key", "proxies:", v1CompatibleServerPublicKey, ".metadata"} {
+	for _, forbidden := range []string{
+		fixture.privateKey, fixture.restrictedPassword, fixture.serverPassword,
+		"private-key", "proxies:", v1CompatibleServerPublicKey, ".metadata",
+	} {
 		if bytes.Contains(encoded, []byte(forbidden)) {
 			t.Fatalf("plan JSON exposed %q: %s", forbidden, encoded)
 		}
@@ -382,20 +389,6 @@ func TestHandshakeHostReplacementStalesOnlyAffectedClashExport(t *testing.T) {
 
 	fixture := newClientExporterFixture(t)
 	state := loadPolicyState(t, fixture.stateStore)
-	restrictedCredential, err := model.NewSecretRef("client-restricted", fixture.clientID)
-	if err != nil {
-		t.Fatalf("NewSecretRef(restricted) error = %v", err)
-	}
-	state.Generation++
-	state.Transports = append(append([]model.Transport(nil), state.Transports...), model.Transport{
-		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: fixture.clientID,
-		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
-		Port: 8443, CredentialGeneration: 1, CredentialRef: restrictedCredential,
-		HandshakeHost: state.HandshakeHost.Hostname, ConfigHash: strings.Repeat("e", 64),
-	})
-	if err := fixture.stateStore.Save(state.Generation-1, state); err != nil {
-		t.Fatalf("Save(restricted client transport) error = %v", err)
-	}
 
 	clash, err := fixture.exporter.Export(ClientExportRequest{
 		ClientReference: fixture.clientID, Format: ClientExportClash, GatewayPublicKey: v1CompatibleServerPublicKey,
@@ -455,8 +448,9 @@ func TestHandshakeHostReplacementStalesOnlyAffectedClashExport(t *testing.T) {
 	currentWireGuard := renderClientExportForTest(t, fixture.exporter, ClientExportRequest{
 		ClientReference: fixture.clientID, Format: ClientExportWireGuard, GatewayPublicKey: v1CompatibleServerPublicKey,
 	})
-	if !bytes.Equal(currentClash.content, clashBytes) || !bytes.Equal(currentWireGuard.content, wireGuardBytes) {
-		t.Fatal("handshake-host metadata change unexpectedly changed exported profile bytes")
+	if bytes.Equal(currentClash.content, clashBytes) || !bytes.Contains(currentClash.content, []byte(`host: "www.apple.com"`)) ||
+		bytes.Contains(currentClash.content, []byte(`host: "www.microsoft.com"`)) || !bytes.Equal(currentWireGuard.content, wireGuardBytes) {
+		t.Fatal("handshake-host replacement did not update only the restricted Clash alternative")
 	}
 	desiredClash, err := buildClientExportManifest(clash.OutputPath, currentClash)
 	if err != nil {
@@ -481,20 +475,6 @@ func TestLegacyClashManifestWithoutHandshakeHostDependencyIsReadableButStale(t *
 
 	fixture := newClientExporterFixture(t)
 	state := loadPolicyState(t, fixture.stateStore)
-	restrictedCredential, err := model.NewSecretRef("client-restricted", fixture.clientID)
-	if err != nil {
-		t.Fatalf("NewSecretRef(restricted) error = %v", err)
-	}
-	state.Generation++
-	state.Transports = append(append([]model.Transport(nil), state.Transports...), model.Transport{
-		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: fixture.clientID,
-		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
-		Port: 8443, CredentialGeneration: 1, CredentialRef: restrictedCredential,
-		HandshakeHost: state.HandshakeHost.Hostname, ConfigHash: strings.Repeat("e", 64),
-	})
-	if err := fixture.stateStore.Save(state.Generation-1, state); err != nil {
-		t.Fatalf("Save(restricted client transport) error = %v", err)
-	}
 	result, err := fixture.exporter.Export(ClientExportRequest{
 		ClientReference: fixture.clientID, Format: ClientExportClash, GatewayPublicKey: v1CompatibleServerPublicKey,
 	})
@@ -612,11 +592,13 @@ func TestClientExporterRejectsInvalidRequestsWithoutPublishing(t *testing.T) {
 }
 
 type clientExporterFixture struct {
-	exporter   *ClientExporter
-	paths      store.Paths
-	stateStore *store.StateStore
-	clientID   string
-	privateKey string
+	exporter           *ClientExporter
+	paths              store.Paths
+	stateStore         *store.StateStore
+	clientID           string
+	privateKey         string
+	restrictedPassword string
+	serverPassword     string
 }
 
 func newClientExporterFixture(t *testing.T) clientExporterFixture {
@@ -634,9 +616,22 @@ func newClientExporterFixture(t *testing.T) clientExporterFixture {
 	if err != nil {
 		t.Fatalf("NewClientExporter() error = %v", err)
 	}
+	restrictedSecret, err := restrictedcodec.DecodeIdentitySecret(credentials.generatedRestricted[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayContent, err := secretStore.Get(restrictedcodec.GatewayCredentialRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySecret, err := restrictedcodec.DecodeGatewaySecret(gatewayContent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return clientExporterFixture{
 		exporter: exporter, paths: paths, stateStore: stateStore,
 		clientID: created.Client.ID, privateKey: credentials.generated[0].PrivateKey,
+		restrictedPassword: restrictedSecret.ShadowTLSPassword, serverPassword: gatewaySecret.ShadowsocksPassword,
 	}
 }
 

@@ -5,7 +5,7 @@ vpnctl remains one Go module and one binary. The v2 packages are layered inward-
 | Tier | Packages | Responsibility |
 | --- | --- | --- |
 | 0 | `internal/model` | Versioned domain objects and invariants; standard library only |
-| 1 | `internal/store`, `internal/platform/linux`, `internal/render`, `internal/output` | Persistence, host primitives, deterministic artifacts, and result rendering |
+| 1 | `internal/store`, `internal/platform/linux`, `internal/render`, `internal/output`, `internal/restricted` | Persistence, host primitives, deterministic artifacts, result rendering, and the restricted wire/credential contract shared by transport and client export |
 | 2 | `internal/control`, `internal/transport`, `internal/routing`, `internal/ingress`, `internal/tunnel` | Protocol and data-plane capability boundaries |
 | 3 | `internal/enrollment`, `internal/operations`, `internal/lifecycle` | Cross-capability workflows and sagas |
 | 4 | `internal/controller` | Authoritative gateway mutation serialization and reconciliation |

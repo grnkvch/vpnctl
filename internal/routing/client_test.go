@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	restrictedcodec "github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
@@ -56,7 +57,7 @@ func TestClientManagerCreatesFiveStableIsolatedIdentitiesAndSecretFreeViews(t *t
 	}
 
 	state := loadPolicyState(t, stateStore)
-	if state.Generation != 6 || len(state.Clients) != 5 || len(state.Transports) != 5 || len(state.Policies) != 1 {
+	if state.Generation != 6 || len(state.Clients) != 5 || len(state.Transports) != 10 || len(state.Policies) != 1 {
 		t.Fatalf("five-client state = generation %d, clients %d, transports %d, policies %d", state.Generation, len(state.Clients), len(state.Transports), len(state.Policies))
 	}
 	addresses := map[string]string{}
@@ -95,6 +96,24 @@ func TestClientManagerCreatesFiveStableIsolatedIdentitiesAndSecretFreeViews(t *t
 		info, err := os.Stat(paths.SecretsDir + "/" + kind + "/" + id)
 		if err != nil || info.Mode().Perm() != store.SecretFileMode {
 			t.Fatalf("secret mode for %s = %v, %v", client.Name, info, err)
+		}
+		restrictedTransport, found := findClientRestrictedTransport(state.Transports, client.ID)
+		if !found || restrictedTransport.State != model.TransportStandby || restrictedTransport.CredentialGeneration != 1 ||
+			restrictedTransport.HandshakeHost != state.HandshakeHost.Hostname {
+			t.Fatalf("restricted transport for %s = %#v", client.Name, restrictedTransport)
+		}
+		if prior, duplicate := credentialRefs[restrictedTransport.CredentialRef]; duplicate {
+			t.Fatalf("clients %s and %s share a restricted credential reference", prior, client.Name)
+		}
+		credentialRefs[restrictedTransport.CredentialRef] = client.Name
+		stored, err = secretStore.Get(restrictedTransport.CredentialRef)
+		if err != nil || !bytes.Equal(stored, credentials.generatedRestricted[index]) {
+			t.Fatalf("restricted credential for %s = %q, %v", client.Name, stored, err)
+		}
+		kind, id, _ = restrictedTransport.CredentialRef.Parts()
+		info, err = os.Stat(paths.SecretsDir + "/" + kind + "/" + id)
+		if err != nil || info.Mode().Perm() != store.SecretFileMode {
+			t.Fatalf("restricted secret mode for %s = %v, %v", client.Name, info, err)
 		}
 	}
 	assertTargetPolicy(t, state, model.TargetClient, created[0].Client.ID, []string{"anthropic", "openai", "telegram"}, 1)
@@ -138,6 +157,15 @@ func TestClientManagerCreatesFiveStableIsolatedIdentitiesAndSecretFreeViews(t *t
 	for _, pair := range credentials.generated {
 		if strings.Contains(text, pair.PrivateKey) || strings.Contains(text, pair.PublicKey) {
 			t.Fatalf("client view leaked key material: %s", text)
+		}
+	}
+	for _, secret := range credentials.generatedRestricted {
+		material, err := restrictedcodec.DecodeIdentitySecret(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, secret) || strings.Contains(text, material.ShadowTLSPassword) {
+			t.Fatalf("client view leaked restricted credential material: %s", text)
 		}
 	}
 	for _, forbidden := range []string{"credential_ref", "private_key", "public_key", "profile"} {
@@ -247,8 +275,12 @@ func TestClientManagerCleansSecretOnKnownStateFailureAndRetainsItOnCommittedUnce
 		if _, err := secretStore.Get(reference); !errors.Is(err, store.ErrSecretNotFound) {
 			t.Fatalf("Get(staged credential) error = %v, want removed secret", err)
 		}
-		if credentials.calls != 1 {
-			t.Fatalf("credential generation calls = %d, want 1", credentials.calls)
+		restrictedReference, _ := clientRestrictedCredentialReference(plan.ClientID, 1)
+		if _, err := secretStore.Get(restrictedReference); !errors.Is(err, store.ErrSecretNotFound) {
+			t.Fatalf("Get(staged restricted credential) error = %v, want removed secret", err)
+		}
+		if credentials.calls != 1 || credentials.restrictedCalls != 1 {
+			t.Fatalf("credential generation calls = standard %d restricted %d, want 1 each", credentials.calls, credentials.restrictedCalls)
 		}
 	})
 
@@ -270,7 +302,42 @@ func TestClientManagerCleansSecretOnKnownStateFailureAndRetainsItOnCommittedUnce
 		if _, err := secretStore.Get(reference); err != nil {
 			t.Fatalf("committed uncertain credential was removed: %v", err)
 		}
+		restrictedReference, _ := clientRestrictedCredentialReference(plan.ClientID, 1)
+		if _, err := secretStore.Get(restrictedReference); err != nil {
+			t.Fatalf("committed uncertain restricted credential was removed: %v", err)
+		}
 	})
+}
+
+func TestClientManagerRollsBackStandardSecretWhenRestrictedStagingFails(t *testing.T) {
+	t.Parallel()
+
+	_, paths, stateStore, secretStore, credentials, uuid := newClientManagerFixture(t, nil)
+	manager, err := NewClientManager(paths, stateStore, &clientRestrictedPutFailure{base: secretStore}, ClientManagerRuntime{
+		Now:     func() time.Time { return time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC) },
+		NewUUID: uuid.New, Credentials: credentials,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := manager.PlanAdd(ClientAddRequest{Name: "iphone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CommitAdd(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "stage client restricted credential") {
+		t.Fatalf("CommitAdd(restricted staging failure) error = %v", err)
+	}
+	state := loadPolicyState(t, stateStore)
+	if state.Generation != 1 || len(state.Clients) != 0 || len(state.Transports) != 0 {
+		t.Fatalf("restricted staging failure changed state: %#v", state)
+	}
+	standardReference, _ := clientStandardCredentialReference(plan.ClientID, 1)
+	restrictedReference, _ := clientRestrictedCredentialReference(plan.ClientID, 1)
+	for _, reference := range []model.SecretRef{standardReference, restrictedReference} {
+		if _, err := secretStore.Get(reference); !errors.Is(err, store.ErrSecretNotFound) {
+			t.Fatalf("restricted staging failure retained %s: %v", reference, err)
+		}
+	}
 }
 
 var errAfterClientCommit = errors.New("simulated post-commit durability failure")
@@ -278,6 +345,22 @@ var errAfterClientCommit = errors.New("simulated post-commit durability failure"
 type clientFixtureStateStore struct {
 	base    *store.StateStore
 	saveErr error
+}
+
+type clientRestrictedPutFailure struct {
+	base *store.SecretStore
+}
+
+func (failure *clientRestrictedPutFailure) PutIfAbsent(reference model.SecretRef, secret []byte) error {
+	kind, _, err := reference.Parts()
+	if err == nil && kind == clientRestrictedCredentialKind {
+		return errors.New("simulated restricted credential write failure")
+	}
+	return failure.base.PutIfAbsent(reference, secret)
+}
+
+func (failure *clientRestrictedPutFailure) Delete(reference model.SecretRef) (bool, error) {
+	return failure.base.Delete(reference)
 }
 
 func (fixture clientFixtureStateStore) Load() (model.State, error) {
@@ -297,8 +380,10 @@ func (fixture clientFixtureStateStore) Save(expected uint64, candidate model.Sta
 }
 
 type deterministicClientCredentials struct {
-	calls     int
-	generated []wireguard.KeyPair
+	calls               int
+	restrictedCalls     int
+	generated           []wireguard.KeyPair
+	generatedRestricted [][]byte
 }
 
 func (generator *deterministicClientCredentials) GenerateClientCredential(context.Context) (wireguard.KeyPair, error) {
@@ -309,6 +394,16 @@ func (generator *deterministicClientCredentials) GenerateClientCredential(contex
 	}
 	generator.generated = append(generator.generated, pair)
 	return pair, nil
+}
+
+func (generator *deterministicClientCredentials) GenerateRestrictedClientCredential(context.Context) ([]byte, error) {
+	generator.restrictedCalls++
+	credential, err := restrictedcodec.GenerateIdentitySecret(bytes.NewReader(bytes.Repeat([]byte{byte(generator.restrictedCalls + 0x40)}, 32)))
+	if err != nil {
+		return nil, err
+	}
+	generator.generatedRestricted = append(generator.generatedRestricted, append([]byte(nil), credential...))
+	return credential, nil
 }
 
 type countingUUIDGenerator struct {
@@ -337,6 +432,7 @@ func newClientManagerFixture(t *testing.T, saveErr error) (*ClientManager, store
 	if err != nil {
 		t.Fatalf("NewSecretStore() error = %v", err)
 	}
+	putGatewayRestrictedTestSecret(t, secretStore)
 	uuid := &countingUUIDGenerator{}
 	credentials := &deterministicClientCredentials{}
 	manager, err := NewClientManager(paths, clientFixtureStateStore{base: stateStore, saveErr: saveErr}, secretStore, ClientManagerRuntime{
@@ -347,6 +443,38 @@ func newClientManagerFixture(t *testing.T, saveErr error) (*ClientManager, store
 		t.Fatalf("NewClientManager() error = %v", err)
 	}
 	return manager, paths, stateStore, secretStore, credentials, uuid
+}
+
+func putGatewayRestrictedTestSecret(t *testing.T, secrets *store.SecretStore) restrictedcodec.GatewaySecret {
+	t.Helper()
+	material, err := restrictedcodec.NewGatewaySecret(bytes.NewReader(bytes.Repeat([]byte{0x31}, restrictedcodec.SymmetricKeyByteCount*2)))
+	if err != nil {
+		t.Fatalf("NewGatewaySecret() error = %v", err)
+	}
+	encoded, err := restrictedcodec.EncodeSecret(material)
+	if err != nil {
+		t.Fatalf("EncodeSecret(gateway) error = %v", err)
+	}
+	if err := secrets.PutIfAbsent(restrictedcodec.GatewayCredentialRef, encoded); err != nil {
+		t.Fatalf("PutIfAbsent(gateway restricted credential) error = %v", err)
+	}
+	return material
+}
+
+func putRestrictedIdentityTestSecret(t *testing.T, secrets *store.SecretStore, reference model.SecretRef, value byte) restrictedcodec.IdentitySecret {
+	t.Helper()
+	encoded, err := restrictedcodec.GenerateIdentitySecret(bytes.NewReader(bytes.Repeat([]byte{value}, restrictedcodec.SymmetricKeyByteCount)))
+	if err != nil {
+		t.Fatalf("GenerateIdentitySecret() error = %v", err)
+	}
+	if err := secrets.PutIfAbsent(reference, encoded); err != nil {
+		t.Fatalf("PutIfAbsent(restricted identity credential) error = %v", err)
+	}
+	material, err := restrictedcodec.DecodeIdentitySecret(encoded)
+	if err != nil {
+		t.Fatalf("DecodeIdentitySecret() error = %v", err)
+	}
+	return material
 }
 
 func findClientByID(t *testing.T, clients []model.Client, id string) model.Client {

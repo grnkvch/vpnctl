@@ -5,9 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,19 +16,20 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"go.yaml.in/yaml/v3"
 )
 
 const (
-	RestrictedProviderName          = "mihomo"
+	RestrictedProviderName          = restricted.ProviderName
 	RestrictedProviderVersion       = "v1.19.30"
 	RestrictedProviderAsset         = "mihomo-linux-amd64-v1.19.30.gz"
 	RestrictedProviderSHA256        = "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
-	RestrictedCipher                = "2022-blake3-aes-256-gcm"
-	RestrictedShadowTLSVersion      = 3
-	RestrictedUDPOverTCPVersion     = 2
-	RestrictedTCPPort               = 8443
+	RestrictedCipher                = restricted.Cipher
+	RestrictedShadowTLSVersion      = restricted.ShadowTLSVersion
+	RestrictedUDPOverTCPVersion     = restricted.UDPOverTCPVersion
+	RestrictedTCPPort               = restricted.TCPPort
 	RestrictedConfigFileName        = "restricted.yaml"
 	RestrictedBinaryRelativePath    = "usr/local/libexec/vpnctl/mihomo"
 	RestrictedStateRelativePath     = "restricted"
@@ -40,12 +39,11 @@ const (
 	RestrictedNodeUDPGroupName      = "VPNCTL-RESTRICTED-UDP"
 	RestrictedRejectProxyName       = "REJECT-DROP"
 	RestrictedBootstrapUserName     = "vpnctl-bootstrap"
-	restrictedSecretSchemaVersion   = 1
+	restrictedSecretSchemaVersion   = restricted.SecretSchemaVersion
 	maximumRestrictedConfigBytes    = 1 << 20
-	restrictedSymmetricKeyByteCount = 32
+	restrictedSymmetricKeyByteCount = restricted.SymmetricKeyByteCount
+	GatewayRestrictedCredentialRef  = restricted.GatewayCredentialRef
 )
-
-var GatewayRestrictedCredentialRef = model.SecretRef("restricted-server:gateway-g1")
 
 type RestrictedCredentialStore interface {
 	Get(model.SecretRef) ([]byte, error)
@@ -60,16 +58,9 @@ type GatewayRestrictedCredential struct {
 	Generation uint64
 }
 
-type restrictedGatewaySecret struct {
-	SchemaVersion              int    `json:"schema_version"`
-	ShadowsocksPassword        string `json:"shadowsocks_password"`
-	BootstrapShadowTLSPassword string `json:"bootstrap_shadowtls_password"`
-}
+type restrictedGatewaySecret = restricted.GatewaySecret
 
-type restrictedIdentitySecret struct {
-	SchemaVersion     int    `json:"schema_version"`
-	ShadowTLSPassword string `json:"shadowtls_password"`
-}
+type restrictedIdentitySecret = restricted.IdentitySecret
 
 // EnsureGatewayRestrictedCredential creates the server-wide material once.
 // Concurrent initialization adopts only a fully decoded and validated winner.
@@ -129,105 +120,31 @@ func GenerateRestrictedIdentitySecret(random io.Reader) ([]byte, error) {
 	if random == nil {
 		random = rand.Reader
 	}
-	password, err := randomHex256(random)
-	if err != nil {
-		return nil, fmt.Errorf("generate restricted identity credential: %w", err)
-	}
-	return encodeRestrictedSecret(restrictedIdentitySecret{
-		SchemaVersion: restrictedSecretSchemaVersion, ShadowTLSPassword: password,
-	})
+	return restricted.GenerateIdentitySecret(random)
 }
 
 func newRestrictedGatewaySecret(random io.Reader) (restrictedGatewaySecret, error) {
-	serverKey := make([]byte, restrictedSymmetricKeyByteCount)
-	if _, err := io.ReadFull(random, serverKey); err != nil {
-		return restrictedGatewaySecret{}, fmt.Errorf("generate restricted server credential: %w", err)
-	}
-	bootstrap, err := randomHex256(random)
-	if err != nil {
-		return restrictedGatewaySecret{}, fmt.Errorf("generate restricted bootstrap credential: %w", err)
-	}
-	return restrictedGatewaySecret{
-		SchemaVersion:              restrictedSecretSchemaVersion,
-		ShadowsocksPassword:        base64.StdEncoding.EncodeToString(serverKey),
-		BootstrapShadowTLSPassword: bootstrap,
-	}, nil
-}
-
-func randomHex256(random io.Reader) (string, error) {
-	key := make([]byte, restrictedSymmetricKeyByteCount)
-	if _, err := io.ReadFull(random, key); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(key), nil
+	return restricted.NewGatewaySecret(random)
 }
 
 func encodeRestrictedSecret(value any) ([]byte, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode restricted credential: %w", err)
-	}
-	return append(encoded, '\n'), nil
+	return restricted.EncodeSecret(value)
 }
 
 func decodeRestrictedGatewaySecret(content []byte) (restrictedGatewaySecret, error) {
-	var secret restrictedGatewaySecret
-	if err := decodeRestrictedSecret(content, &secret); err != nil {
-		return restrictedGatewaySecret{}, err
-	}
-	if secret.SchemaVersion != restrictedSecretSchemaVersion {
-		return restrictedGatewaySecret{}, fmt.Errorf("unsupported restricted credential schema")
-	}
-	if err := validateRestrictedServerPassword(secret.ShadowsocksPassword); err != nil {
-		return restrictedGatewaySecret{}, err
-	}
-	if err := validateRestrictedIdentityPassword(secret.BootstrapShadowTLSPassword); err != nil {
-		return restrictedGatewaySecret{}, err
-	}
-	return secret, nil
+	return restricted.DecodeGatewaySecret(content)
 }
 
 func decodeRestrictedIdentitySecret(content []byte) (restrictedIdentitySecret, error) {
-	var secret restrictedIdentitySecret
-	if err := decodeRestrictedSecret(content, &secret); err != nil {
-		return restrictedIdentitySecret{}, err
-	}
-	if secret.SchemaVersion != restrictedSecretSchemaVersion {
-		return restrictedIdentitySecret{}, fmt.Errorf("unsupported restricted identity credential schema")
-	}
-	if err := validateRestrictedIdentityPassword(secret.ShadowTLSPassword); err != nil {
-		return restrictedIdentitySecret{}, err
-	}
-	return secret, nil
-}
-
-func decodeRestrictedSecret(content []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(content))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return fmt.Errorf("decode restricted credential: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("decode restricted credential: trailing data")
-	}
-	return nil
+	return restricted.DecodeIdentitySecret(content)
 }
 
 func validateRestrictedServerPassword(password string) error {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(password)
-	if err != nil || len(decoded) != restrictedSymmetricKeyByteCount || base64.StdEncoding.EncodeToString(decoded) != password {
-		return fmt.Errorf("restricted Shadowsocks credential must be canonical base64 for 256 bits")
-	}
-	return nil
+	return restricted.ValidateServerPassword(password)
 }
 
 func validateRestrictedIdentityPassword(password string) error {
-	decoded, err := hex.DecodeString(password)
-	if err != nil || len(decoded) != restrictedSymmetricKeyByteCount || hex.EncodeToString(decoded) != password {
-		return fmt.Errorf("restricted ShadowTLS credential must be 256-bit lower-case hexadecimal")
-	}
-	return nil
+	return restricted.ValidateIdentityPassword(password)
 }
 
 type RestrictedUserDescriptor struct {

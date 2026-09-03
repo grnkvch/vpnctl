@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
@@ -15,8 +16,9 @@ const (
 	ClashDNSPolicy ClashDNSMode = "policy"
 	ClashDNSDirect ClashDNSMode = "direct"
 
-	clashStandardProxyName = "VPNCTL-STANDARD"
-	clashGatewayGroupName  = "VPNCTL-GATEWAY"
+	clashStandardProxyName   = "VPNCTL-STANDARD"
+	clashRestrictedProxyName = "VPNCTL-RESTRICTED"
+	clashGatewayGroupName    = "VPNCTL-GATEWAY"
 )
 
 var defaultClashDirectDNS = []string{"1.1.1.1", "8.8.8.8"}
@@ -113,17 +115,40 @@ func (renderer *ClashProfileRenderer) Render(request ClashProfileRequest) (Clash
 	}
 	handshakeHostID := ""
 	handshakeHostVersion := 0
-	if clientHasRestrictedTransport(state.Transports, client.ID) {
+	var restrictedInput *clashRestrictedRenderInput
+	if restrictedTransport, found := findClientRestrictedTransport(state.Transports, client.ID); found && restrictedTransport.State != model.TransportDisabled {
 		if state.HandshakeHost == nil {
 			return ClashProfile{}, fmt.Errorf("client %s restricted transport has no authoritative handshake host", client.Name)
 		}
+		identityContent, err := renderer.credentials.Get(restrictedTransport.CredentialRef)
+		if err != nil {
+			return ClashProfile{}, fmt.Errorf("read client restricted credential: %w", err)
+		}
+		identitySecret, err := restricted.DecodeIdentitySecret(identityContent)
+		if err != nil {
+			return ClashProfile{}, fmt.Errorf("client restricted credential is invalid: %w", err)
+		}
+		gatewayContent, err := renderer.credentials.Get(restricted.GatewayCredentialRef)
+		if err != nil {
+			return ClashProfile{}, fmt.Errorf("read gateway restricted credential: %w", err)
+		}
+		gatewaySecret, err := restricted.DecodeGatewaySecret(gatewayContent)
+		if err != nil {
+			return ClashProfile{}, fmt.Errorf("gateway restricted credential is invalid: %w", err)
+		}
 		handshakeHostID = state.HandshakeHost.CandidateID
 		handshakeHostVersion = state.HandshakeHost.ListVersion
+		restrictedInput = &clashRestrictedRenderInput{
+			ServerPassword:   gatewaySecret.ShadowsocksPassword,
+			IdentityPassword: identitySecret.ShadowTLSPassword,
+			HandshakeHost:    restrictedTransport.HandshakeHost,
+		}
 	}
 	content, err := renderClashProfile(clashRenderInput{
 		Server: state.Host.PublicIPv4, ClientIP: client.OverlayIPv4,
 		PrivateKey: privateKey, GatewayPublicKey: gatewayPublicKey,
-		DNSMode: dnsMode, DirectDNS: directDNS, GatewayDNS: gatewayDNS, Rules: rules,
+		Restricted: restrictedInput,
+		DNSMode:    dnsMode, DirectDNS: directDNS, GatewayDNS: gatewayDNS, Rules: rules,
 	})
 	if err != nil {
 		return ClashProfile{}, err
@@ -137,13 +162,18 @@ func (renderer *ClashProfileRenderer) Render(request ClashProfileRequest) (Clash
 }
 
 func clientHasRestrictedTransport(transports []model.Transport, clientID string) bool {
+	transport, found := findClientRestrictedTransport(transports, clientID)
+	return found && transport.State != model.TransportDisabled
+}
+
+func findClientRestrictedTransport(transports []model.Transport, clientID string) (model.Transport, bool) {
 	for _, transport := range transports {
 		if transport.OwnerKind == model.TargetClient && transport.OwnerID == clientID &&
-			transport.Kind == model.TransportRestricted && transport.State != model.TransportDisabled {
-			return true
+			transport.Kind == model.TransportRestricted {
+			return transport, true
 		}
 	}
-	return false
+	return model.Transport{}, false
 }
 
 func normalizeClashDNS(mode ClashDNSMode, requested []string) (ClashDNSMode, []string, error) {
@@ -416,10 +446,17 @@ type clashRenderInput struct {
 	ClientIP         string
 	PrivateKey       string
 	GatewayPublicKey string
+	Restricted       *clashRestrictedRenderInput
 	DNSMode          ClashDNSMode
 	DirectDNS        []string
 	GatewayDNS       string
 	Rules            []clashRule
+}
+
+type clashRestrictedRenderInput struct {
+	ServerPassword   string
+	IdentityPassword string
+	HandshakeHost    string
 }
 
 func renderClashProfile(input clashRenderInput) ([]byte, error) {
@@ -492,11 +529,40 @@ func renderClashProfile(input clashRenderInput) ([]byte, error) {
 	profile.WriteString("    udp: true\n")
 	profile.WriteString("    allowed-ips:\n")
 	profile.WriteString("      - 0.0.0.0/0\n")
+	if input.Restricted != nil {
+		if err := restricted.ValidateServerPassword(input.Restricted.ServerPassword); err != nil {
+			return nil, err
+		}
+		if err := restricted.ValidateIdentityPassword(input.Restricted.IdentityPassword); err != nil {
+			return nil, err
+		}
+		profile.WriteString("\n")
+		fmt.Fprintf(&profile, "  - name: %s\n", clashRestrictedProxyName)
+		profile.WriteString("    type: ss\n")
+		fmt.Fprintf(&profile, "    server: %s\n", input.Server)
+		fmt.Fprintf(&profile, "    port: %d\n", restricted.TCPPort)
+		fmt.Fprintf(&profile, "    cipher: %s\n", restricted.Cipher)
+		fmt.Fprintf(&profile, "    password: %s\n", strconv.Quote(input.Restricted.ServerPassword))
+		profile.WriteString("    ip-version: ipv4\n")
+		profile.WriteString("    udp: true\n")
+		profile.WriteString("    udp-over-tcp: true\n")
+		fmt.Fprintf(&profile, "    udp-over-tcp-version: %d\n", restricted.UDPOverTCPVersion)
+		profile.WriteString("    plugin: shadow-tls\n")
+		profile.WriteString("    client-fingerprint: chrome\n")
+		profile.WriteString("    plugin-opts:\n")
+		fmt.Fprintf(&profile, "      host: %s\n", strconv.Quote(input.Restricted.HandshakeHost))
+		fmt.Fprintf(&profile, "      password: %s\n", strconv.Quote(input.Restricted.IdentityPassword))
+		fmt.Fprintf(&profile, "      version: %d\n", restricted.ShadowTLSVersion)
+		profile.WriteString("      strict-mode: true\n")
+	}
 	profile.WriteString("\nproxy-groups:\n")
 	fmt.Fprintf(&profile, "  - name: %s\n", clashGatewayGroupName)
 	profile.WriteString("    type: select\n")
 	profile.WriteString("    proxies:\n")
 	fmt.Fprintf(&profile, "      - %s\n", clashStandardProxyName)
+	if input.Restricted != nil {
+		fmt.Fprintf(&profile, "      - %s\n", clashRestrictedProxyName)
+	}
 	profile.WriteString("\nrules:\n")
 	for _, rule := range input.Rules {
 		target := "DIRECT"

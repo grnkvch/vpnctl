@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/netip"
 	"os"
@@ -12,10 +13,11 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	restrictedcodec "github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
-func TestClashProfileRendererCompilesPolicySplitDNSAndFailClosedGroup(t *testing.T) {
+func TestClashProfileRendererCompilesPolicySplitDNSAndManualTransportAlternatives(t *testing.T) {
 	t.Parallel()
 
 	renderer, _, _, _ := newClashProfileRendererFixture(t)
@@ -44,6 +46,20 @@ func TestClashProfileRendererCompilesPolicySplitDNSAndFailClosedGroup(t *testing
 		"    private-key: \"" + v1CompatibleClientPrivateKey + "\"\n",
 		"    public-key: \"" + v1CompatibleServerPublicKey + "\"\n",
 		"    udp: true\n",
+		"  - name: VPNCTL-RESTRICTED\n",
+		"    type: ss\n",
+		"    port: 8443\n",
+		"    cipher: 2022-blake3-aes-256-gcm\n",
+		"    password: \"" + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)) + "\"\n",
+		"    ip-version: ipv4\n",
+		"    udp-over-tcp: true\n",
+		"    udp-over-tcp-version: 2\n",
+		"    plugin: shadow-tls\n",
+		"    client-fingerprint: chrome\n",
+		"      host: \"www.microsoft.com\"\n",
+		"      password: \"" + strings.Repeat("52", 32) + "\"\n",
+		"      version: 3\n",
+		"      strict-mode: true\n",
 		"  - DOMAIN,api.private.example.com,VPNCTL-GATEWAY\n",
 		"  - DOMAIN,example.com,DIRECT\n",
 		"  - DOMAIN-SUFFIX,private.example.com,DIRECT\n",
@@ -66,11 +82,18 @@ func TestClashProfileRendererCompilesPolicySplitDNSAndFailClosedGroup(t *testing
 		t.Fatalf("profile group/rules layout is invalid:\n%s", content)
 	}
 	group := content[groupStart:rulesStart]
-	if strings.Contains(group, "DIRECT") || strings.Contains(group, "fallback") || strings.Contains(group, "url-test") {
+	if strings.Contains(group, "DIRECT") || strings.Contains(group, "fallback") || strings.Contains(group, "url-test") ||
+		strings.Contains(group, "interval:") || strings.Contains(group, "tolerance:") {
 		t.Fatalf("selected gateway group can fail direct or switch automatically:\n%s", group)
 	}
 	if got := strings.Count(group, "      - VPNCTL-STANDARD\n"); got != 1 {
-		t.Fatalf("standard-only task 7.9 group contains %d standard alternatives:\n%s", got, group)
+		t.Fatalf("manual gateway group contains %d standard alternatives:\n%s", got, group)
+	}
+	if got := strings.Count(group, "      - VPNCTL-RESTRICTED\n"); got != 1 {
+		t.Fatalf("manual gateway group contains %d restricted alternatives:\n%s", got, group)
+	}
+	if strings.Index(group, "      - VPNCTL-STANDARD\n") > strings.Index(group, "      - VPNCTL-RESTRICTED\n") {
+		t.Fatalf("manual gateway group changed the compatibility default away from standard:\n%s", group)
 	}
 	if profile.ClientID != v1CompatibleClientID || profile.ClientName != "iphone" ||
 		profile.SourceStateGeneration != 2 || profile.PolicyGeneration != 1 ||
@@ -78,7 +101,10 @@ func TestClashProfileRendererCompilesPolicySplitDNSAndFailClosedGroup(t *testing
 		t.Fatalf("profile metadata = %#v", profile)
 	}
 	metadataJSON, err := json.Marshal(profile)
-	if err != nil || strings.Contains(string(metadataJSON), v1CompatibleClientPrivateKey) || strings.Contains(string(metadataJSON), "content") {
+	metadata := string(metadataJSON)
+	if err != nil || strings.Contains(metadata, v1CompatibleClientPrivateKey) ||
+		strings.Contains(metadata, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32))) ||
+		strings.Contains(metadata, strings.Repeat("52", 32)) || strings.Contains(metadata, "content") {
 		t.Fatalf("Clash profile metadata JSON exposed content: %s, %v", metadataJSON, err)
 	}
 	defensive := profile.Bytes()
@@ -128,6 +154,79 @@ func TestClashProfileRendererSupportsDirectCompatibilityModeAndAllDirectPolicy(t
 	rules := content[strings.Index(content, "rules:\n"):]
 	if rules != "rules:\n  - MATCH,DIRECT\n" || strings.Contains(content, "nameserver-policy:") || allDirect.PolicyGeneration != 0 {
 		t.Fatalf("empty explicit assignment was not all-direct:\n%s", content)
+	}
+}
+
+func TestClashProfileRendererNeverChangesManualChoiceFromTransportHealth(t *testing.T) {
+	t.Parallel()
+
+	renderer, stateStore, secretStore, _ := newClashProfileRendererFixture(t)
+	request := ClashProfileRequest{ClientReference: "iphone", GatewayPublicKey: v1CompatibleServerPublicKey}
+	baseline, err := renderer.Render(request)
+	if err != nil {
+		t.Fatalf("Render(baseline) error = %v", err)
+	}
+	state := loadPolicyState(t, stateStore)
+	state.Generation++
+	state.Transports = append([]model.Transport(nil), state.Transports...)
+	for index := range state.Transports {
+		if state.Transports[index].OwnerKind == model.TargetClient && state.Transports[index].Kind == model.TransportStandard {
+			state.Transports[index].State = model.TransportDegraded
+		}
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate(degraded active transport) error = %v", err)
+	}
+	degraded, err := NewClashProfileRenderer(&clientExportStaticStateStore{state: state}, secretStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := degraded.Render(request)
+	if err != nil {
+		t.Fatalf("Render(degraded active transport) error = %v", err)
+	}
+	if !bytes.Equal(profile.Bytes(), baseline.Bytes()) {
+		t.Fatalf("passive health changed the user's manual transport choices:\nbaseline:\n%s\ndegraded:\n%s", baseline.Bytes(), profile.Bytes())
+	}
+	content := string(profile.Bytes())
+	for _, forbidden := range []string{"fallback", "url-test", "load-balance", "health-check", "external-controller", "proxy-providers:"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("manual-only profile contains %q:\n%s", forbidden, content)
+		}
+	}
+}
+
+func TestClashProfileRendererRequiresValidRestrictedMaterial(t *testing.T) {
+	t.Parallel()
+
+	for name, mutate := range map[string]func(*store.SecretStore, model.State) error{
+		"missing identity": func(secrets *store.SecretStore, state model.State) error {
+			transport, _ := findClientRestrictedTransport(state.Transports, v1CompatibleClientID)
+			_, err := secrets.Delete(transport.CredentialRef)
+			return err
+		},
+		"missing gateway": func(secrets *store.SecretStore, _ model.State) error {
+			_, err := secrets.Delete(restrictedcodec.GatewayCredentialRef)
+			return err
+		},
+		"malformed identity": func(secrets *store.SecretStore, state model.State) error {
+			transport, _ := findClientRestrictedTransport(state.Transports, v1CompatibleClientID)
+			if _, err := secrets.Delete(transport.CredentialRef); err != nil {
+				return err
+			}
+			return secrets.PutIfAbsent(transport.CredentialRef, []byte("{}\n"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			renderer, stateStore, secrets, _ := newClashProfileRendererFixture(t)
+			state := loadPolicyState(t, stateStore)
+			if err := mutate(secrets, state); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := renderer.Render(ClashProfileRequest{ClientReference: "iphone", GatewayPublicKey: v1CompatibleServerPublicKey}); err == nil {
+				t.Fatalf("Render(%s) succeeded", name)
+			}
+		})
 	}
 }
 
@@ -224,8 +323,9 @@ func TestClashProfileRendererRejectsWeakOrInconsistentInputs(t *testing.T) {
 }
 
 // This test is opt-in because the exact pinned binary is a Linux/amd64 release
-// artifact. The task-7.9 acceptance run cross-compiles this package's test
-// binary for the disposable Ubuntu fixture and supplies VPNCTL_PINNED_MIHOMO.
+// artifact. The task-7.9 and task-8.10 acceptance runs cross-compile this
+// package's test binary for the disposable Ubuntu fixture and supply
+// VPNCTL_PINNED_MIHOMO.
 func TestClashProfileParsesWithPinnedMihomo(t *testing.T) {
 	binary := os.Getenv("VPNCTL_PINNED_MIHOMO")
 	if binary == "" {
@@ -284,6 +384,19 @@ func newClashProfileRendererFixture(t *testing.T) (*ClashProfileRenderer, *store
 		SchemaVersion: model.ResourceSchemaVersion, TargetKind: model.TargetClient, TargetID: v1CompatibleClientID,
 		PresetNames: names, Selectors: selectors, EffectiveHash: effectiveHash, Generation: 1,
 	}}
+	restrictedReference, err := clientRestrictedCredentialReference(v1CompatibleClientID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Transports = append(append([]model.Transport(nil), state.Transports...), model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: v1CompatibleClientID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
+		Port: 8443, CredentialGeneration: 1, CredentialRef: restrictedReference,
+		HandshakeHost: candidate.HandshakeHost.Hostname,
+		ConfigHash:    clientRestrictedTransportHash(v1CompatibleClientID, 1, restrictedReference),
+	})
+	putGatewayRestrictedTestSecret(t, secretStore)
+	putRestrictedIdentityTestSecret(t, secretStore, restrictedReference, 0x52)
 	if err := stateStore.Save(state.Generation, candidate); err != nil {
 		t.Fatalf("Save(Clash fixture state) error = %v", err)
 	}

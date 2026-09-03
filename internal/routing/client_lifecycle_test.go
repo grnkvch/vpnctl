@@ -80,12 +80,17 @@ func TestClientRotationPreservesIdentityRejectsOldCredentialAndRequiresExport(t 
 	stateBefore := loadPolicyState(t, fixture.stateStore)
 	clientBefore := findClientByID(t, stateBefore.Clients, fixture.clientID)
 	transportBefore := findClientTransport(t, stateBefore.Transports, fixture.clientID)
+	restrictedBefore, found := findClientRestrictedTransport(stateBefore.Transports, fixture.clientID)
+	if !found {
+		t.Fatal("client has no restricted transport before rotation")
+	}
 	accepted, err := ClientStandardCredentialAccepted(stateBefore, fixture.clientID, transportBefore.PublicKey)
 	if err != nil || !accepted {
 		t.Fatalf("old credential was not initially accepted: %t, %v", accepted, err)
 	}
 	stateBytesBefore := readPolicyStateBytes(t, fixture.paths)
 	credentialCallsBefore := fixture.credentials.calls
+	restrictedCallsBefore := fixture.credentials.restrictedCalls
 
 	plan, err := fixture.manager.PlanRotate("IPHONE")
 	if err != nil {
@@ -95,12 +100,17 @@ func TestClientRotationPreservesIdentityRejectsOldCredentialAndRequiresExport(t 
 		plan.CredentialGeneration != 1 || plan.NextCredentialGeneration != 2 || plan.ExportState != ClientExportCurrent || len(plan.ArtifactPaths) != 2 {
 		t.Fatalf("PlanRotate() = %#v", plan)
 	}
-	if fixture.credentials.calls != credentialCallsBefore || !bytes.Equal(readPolicyStateBytes(t, fixture.paths), stateBytesBefore) {
+	if fixture.credentials.calls != credentialCallsBefore || fixture.credentials.restrictedCalls != restrictedCallsBefore ||
+		!bytes.Equal(readPolicyStateBytes(t, fixture.paths), stateBytesBefore) {
 		t.Fatal("PlanRotate() generated credentials or changed state")
 	}
 	newReference, _ := clientStandardCredentialReference(fixture.clientID, 2)
+	newRestrictedReference, _ := clientRestrictedCredentialReference(fixture.clientID, 2)
 	if _, err := fixture.secretStore.Get(newReference); !errors.Is(err, store.ErrSecretNotFound) {
 		t.Fatalf("PlanRotate() created next secret: %v", err)
+	}
+	if _, err := fixture.secretStore.Get(newRestrictedReference); !errors.Is(err, store.ErrSecretNotFound) {
+		t.Fatalf("PlanRotate() created next restricted secret: %v", err)
 	}
 	if formatted := fmt.Sprintf("%s %v %q %#v %+v", plan, plan, plan, plan, plan); strings.Count(formatted, clientLifecyclePlanMarker) != 5 {
 		t.Fatalf("lifecycle plan formatting is not redacted: %s", formatted)
@@ -120,9 +130,12 @@ func TestClientRotationPreservesIdentityRejectsOldCredentialAndRequiresExport(t 
 	stateAfter := loadPolicyState(t, fixture.stateStore)
 	clientAfter := findClientByID(t, stateAfter.Clients, fixture.clientID)
 	transportAfter := findClientTransport(t, stateAfter.Transports, fixture.clientID)
+	restrictedAfter, found := findClientRestrictedTransport(stateAfter.Transports, fixture.clientID)
 	if clientAfter.ID != clientBefore.ID || clientAfter.Name != clientBefore.Name || clientAfter.OverlayIPv4 != clientBefore.OverlayIPv4 ||
 		!reflect.DeepEqual(clientAfter.AssignedPresets, clientBefore.AssignedPresets) || clientAfter.CredentialGeneration != 2 ||
-		transportAfter.CredentialGeneration != 2 || transportAfter.PublicKey == transportBefore.PublicKey || transportAfter.CredentialRef != newReference {
+		transportAfter.CredentialGeneration != 2 || transportAfter.PublicKey == transportBefore.PublicKey || transportAfter.CredentialRef != newReference ||
+		!found || restrictedAfter.CredentialGeneration != 2 || restrictedAfter.CredentialRef != newRestrictedReference ||
+		restrictedAfter.HandshakeHost != restrictedBefore.HandshakeHost || restrictedAfter.ConfigHash == restrictedBefore.ConfigHash {
 		t.Fatalf("rotation changed identity/policy or failed to replace credential:\nbefore=%#v/%#v\nafter=%#v/%#v", clientBefore, transportBefore, clientAfter, transportAfter)
 	}
 	oldAccepted, err := ClientStandardCredentialAccepted(stateAfter, fixture.clientID, transportBefore.PublicKey)
@@ -136,9 +149,16 @@ func TestClientRotationPreservesIdentityRejectsOldCredentialAndRequiresExport(t 
 	if _, err := fixture.secretStore.Get(transportBefore.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
 		t.Fatalf("old private key retained after rotation: %v", err)
 	}
+	if _, err := fixture.secretStore.Get(restrictedBefore.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
+		t.Fatalf("old restricted credential retained after rotation: %v", err)
+	}
 	newPrivate, err := fixture.secretStore.Get(newReference)
 	if err != nil || string(newPrivate) != fixture.credentials.generated[1].PrivateKey {
 		t.Fatalf("new private key = %q, %v", newPrivate, err)
+	}
+	newRestricted, err := fixture.secretStore.Get(newRestrictedReference)
+	if err != nil || !bytes.Equal(newRestricted, fixture.credentials.generatedRestricted[1]) {
+		t.Fatalf("new restricted credential = %q, %v", newRestricted, err)
 	}
 	if !bytes.Equal(readExportFile(t, clash.OutputPath, clientExportFileMode), clashBefore) ||
 		!bytes.Equal(readExportFile(t, wireGuard.OutputPath, clientExportFileMode), wireGuardBefore) {
@@ -154,7 +174,12 @@ func TestClientRevokeImmediatelyDisablesAcceptanceAndRetainsArtifacts(t *testing
 
 	fixture := newClientLifecycleFixture(t)
 	clash := exportLifecycleProfile(t, fixture, ClientExportClash, "")
-	transport := findClientTransport(t, loadPolicyState(t, fixture.stateStore).Transports, fixture.clientID)
+	before := loadPolicyState(t, fixture.stateStore)
+	transport := findClientTransport(t, before.Transports, fixture.clientID)
+	restrictedTransport, found := findClientRestrictedTransport(before.Transports, fixture.clientID)
+	if !found {
+		t.Fatal("client has no restricted transport before revoke")
+	}
 	plan, err := fixture.manager.PlanRevoke("iphone")
 	if err != nil {
 		t.Fatalf("PlanRevoke() error = %v", err)
@@ -176,7 +201,9 @@ func TestClientRevokeImmediatelyDisablesAcceptanceAndRetainsArtifacts(t *testing
 	state := loadPolicyState(t, fixture.stateStore)
 	client := findClientByID(t, state.Clients, fixture.clientID)
 	disabled := findClientTransport(t, state.Transports, fixture.clientID)
-	if client.Lifecycle != model.LifecycleRevoked || client.RevokedAt == nil || disabled.State != model.TransportDisabled {
+	disabledRestricted, found := findClientRestrictedTransport(state.Transports, fixture.clientID)
+	if client.Lifecycle != model.LifecycleRevoked || client.RevokedAt == nil || disabled.State != model.TransportDisabled ||
+		!found || disabledRestricted.State != model.TransportDisabled {
 		t.Fatalf("revoked state = %#v / %#v", client, disabled)
 	}
 	accepted, err := ClientStandardCredentialAccepted(state, fixture.clientID, transport.PublicKey)
@@ -185,6 +212,9 @@ func TestClientRevokeImmediatelyDisablesAcceptanceAndRetainsArtifacts(t *testing
 	}
 	if _, err := fixture.secretStore.Get(transport.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
 		t.Fatalf("revoked client private key retained: %v", err)
+	}
+	if _, err := fixture.secretStore.Get(restrictedTransport.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
+		t.Fatalf("revoked client restricted credential retained: %v", err)
 	}
 	if got := readExportFile(t, clash.OutputPath, clientExportFileMode); !bytes.Equal(got, modifiedArtifact) {
 		t.Fatalf("revoke changed stored export: %q", got)
@@ -291,7 +321,9 @@ func TestClientLifecycleKnownAndUncertainStateFailuresKeepSafeCredentialSet(t *t
 
 	t.Run("known rotation failure", func(t *testing.T) {
 		fixture := newClientLifecycleFixture(t)
-		old := findClientTransport(t, loadPolicyState(t, fixture.stateStore).Transports, fixture.clientID)
+		before := loadPolicyState(t, fixture.stateStore)
+		old := findClientTransport(t, before.Transports, fixture.clientID)
+		oldRestricted, _ := findClientRestrictedTransport(before.Transports, fixture.clientID)
 		manager, credentials := lifecycleManagerWithStateFailure(t, fixture, errors.New("state write failed"))
 		plan, err := manager.PlanRotate("iphone")
 		if err != nil {
@@ -302,21 +334,32 @@ func TestClientLifecycleKnownAndUncertainStateFailuresKeepSafeCredentialSet(t *t
 		}
 		state := loadPolicyState(t, fixture.stateStore)
 		current := findClientTransport(t, state.Transports, fixture.clientID)
-		if state.Generation != 2 || current.PublicKey != old.PublicKey || credentials.calls != 2 {
+		currentRestricted, _ := findClientRestrictedTransport(state.Transports, fixture.clientID)
+		if state.Generation != 2 || current.PublicKey != old.PublicKey || currentRestricted.CredentialRef != oldRestricted.CredentialRef ||
+			credentials.calls != 2 || credentials.restrictedCalls != 2 {
 			t.Fatalf("known failure state/credentials = generation %d, transport %#v, calls %d", state.Generation, current, credentials.calls)
 		}
 		if _, err := fixture.secretStore.Get(old.CredentialRef); err != nil {
 			t.Fatalf("known failure removed active old secret: %v", err)
 		}
+		if _, err := fixture.secretStore.Get(oldRestricted.CredentialRef); err != nil {
+			t.Fatalf("known failure removed active old restricted secret: %v", err)
+		}
 		newReference, _ := clientStandardCredentialReference(fixture.clientID, 2)
+		newRestrictedReference, _ := clientRestrictedCredentialReference(fixture.clientID, 2)
 		if _, err := fixture.secretStore.Get(newReference); !errors.Is(err, store.ErrSecretNotFound) {
 			t.Fatalf("known failure retained staged new secret: %v", err)
+		}
+		if _, err := fixture.secretStore.Get(newRestrictedReference); !errors.Is(err, store.ErrSecretNotFound) {
+			t.Fatalf("known failure retained staged new restricted secret: %v", err)
 		}
 	})
 
 	t.Run("committed uncertain rotation", func(t *testing.T) {
 		fixture := newClientLifecycleFixture(t)
-		old := findClientTransport(t, loadPolicyState(t, fixture.stateStore).Transports, fixture.clientID)
+		before := loadPolicyState(t, fixture.stateStore)
+		old := findClientTransport(t, before.Transports, fixture.clientID)
+		oldRestricted, _ := findClientRestrictedTransport(before.Transports, fixture.clientID)
 		manager, _ := lifecycleManagerWithStateFailure(t, fixture, errAfterClientCommit)
 		plan, err := manager.PlanRotate("iphone")
 		if err != nil {
@@ -328,14 +371,22 @@ func TestClientLifecycleKnownAndUncertainStateFailuresKeepSafeCredentialSet(t *t
 		}
 		state := loadPolicyState(t, fixture.stateStore)
 		current := findClientTransport(t, state.Transports, fixture.clientID)
-		if state.Generation != 3 || current.CredentialGeneration != 2 || current.PublicKey == old.PublicKey {
+		currentRestricted, found := findClientRestrictedTransport(state.Transports, fixture.clientID)
+		if state.Generation != 3 || current.CredentialGeneration != 2 || current.PublicKey == old.PublicKey || !found ||
+			currentRestricted.CredentialGeneration != 2 || currentRestricted.CredentialRef == oldRestricted.CredentialRef {
 			t.Fatalf("committed uncertain state = %#v", state)
 		}
 		if _, err := fixture.secretStore.Get(old.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
 			t.Fatalf("committed uncertain retained obsolete old secret: %v", err)
 		}
+		if _, err := fixture.secretStore.Get(oldRestricted.CredentialRef); !errors.Is(err, store.ErrSecretNotFound) {
+			t.Fatalf("committed uncertain retained obsolete old restricted secret: %v", err)
+		}
 		if _, err := fixture.secretStore.Get(current.CredentialRef); err != nil {
 			t.Fatalf("committed uncertain lost active new secret: %v", err)
+		}
+		if _, err := fixture.secretStore.Get(currentRestricted.CredentialRef); err != nil {
+			t.Fatalf("committed uncertain lost active new restricted secret: %v", err)
 		}
 	})
 }
@@ -353,6 +404,7 @@ func TestClientRotationRejectsStateAdvanceBetweenReplanAndCredentialGeneration(t
 	}
 	before := readPolicyStateBytes(t, fixture.paths)
 	credentialCalls := fixture.credentials.calls
+	restrictedCalls := fixture.credentials.restrictedCalls
 	plan, err := manager.PlanRotate("iphone")
 	if err != nil {
 		t.Fatalf("PlanRotate() error = %v", err)
@@ -360,12 +412,17 @@ func TestClientRotationRejectsStateAdvanceBetweenReplanAndCredentialGeneration(t
 	if _, err := manager.CommitRotate(context.Background(), plan); !errors.Is(err, ErrClientLifecycleStale) {
 		t.Fatalf("CommitRotate(concurrent advance) error = %v, want ErrClientLifecycleStale", err)
 	}
-	if advancing.saveCalls != 0 || fixture.credentials.calls != credentialCalls || !bytes.Equal(readPolicyStateBytes(t, fixture.paths), before) {
+	if advancing.saveCalls != 0 || fixture.credentials.calls != credentialCalls || fixture.credentials.restrictedCalls != restrictedCalls ||
+		!bytes.Equal(readPolicyStateBytes(t, fixture.paths), before) {
 		t.Fatal("stale lifecycle commit generated credentials or mutated state")
 	}
 	newReference, _ := clientStandardCredentialReference(fixture.clientID, 2)
+	newRestrictedReference, _ := clientRestrictedCredentialReference(fixture.clientID, 2)
 	if _, err := fixture.secretStore.Get(newReference); !errors.Is(err, store.ErrSecretNotFound) {
 		t.Fatalf("stale lifecycle commit created a secret: %v", err)
+	}
+	if _, err := fixture.secretStore.Get(newRestrictedReference); !errors.Is(err, store.ErrSecretNotFound) {
+		t.Fatalf("stale lifecycle commit created a restricted secret: %v", err)
 	}
 }
 
@@ -373,7 +430,9 @@ func TestClientRevokeStateFirstLeavesAcceptanceDisabledWhenSecretCleanupFails(t 
 	t.Parallel()
 
 	fixture := newClientLifecycleFixture(t)
-	old := findClientTransport(t, loadPolicyState(t, fixture.stateStore).Transports, fixture.clientID)
+	before := loadPolicyState(t, fixture.stateStore)
+	old := findClientTransport(t, before.Transports, fixture.clientID)
+	oldRestricted, _ := findClientRestrictedTransport(before.Transports, fixture.clientID)
 	failingSecrets := &clientSecretFailure{base: fixture.secretStore, deleteErr: errors.New("delete failed")}
 	manager, err := NewClientManager(fixture.paths, fixture.stateStore, failingSecrets, ClientManagerRuntime{
 		Now: fixture.now, NewUUID: fixture.uuid.New, Credentials: fixture.credentials,
@@ -396,6 +455,9 @@ func TestClientRevokeStateFirstLeavesAcceptanceDisabledWhenSecretCleanupFails(t 
 	}
 	if _, err := fixture.secretStore.Get(old.CredentialRef); err != nil {
 		t.Fatalf("cleanup failure fixture unexpectedly removed secret: %v", err)
+	}
+	if _, err := fixture.secretStore.Get(oldRestricted.CredentialRef); err != nil {
+		t.Fatalf("cleanup failure fixture unexpectedly removed restricted secret: %v", err)
 	}
 	if public := result.OutputResult(); public.Validate() != nil || public.Status != "pending" || len(public.RequiresAction) != 1 || public.RequiresAction[0].Code != "repair_client_credentials" {
 		t.Fatalf("cleanup-pending output = %#v", public)
@@ -476,7 +538,7 @@ func replaceLifecyclePolicy(t *testing.T, fixture clientLifecycleFixture, preset
 
 func lifecycleManagerWithStateFailure(t *testing.T, fixture clientLifecycleFixture, saveErr error) (*ClientManager, *deterministicClientCredentials) {
 	t.Helper()
-	credentials := &deterministicClientCredentials{calls: 1}
+	credentials := &deterministicClientCredentials{calls: 1, restrictedCalls: 1}
 	manager, err := NewClientManager(fixture.paths, clientFixtureStateStore{base: fixture.stateStore, saveErr: saveErr}, fixture.secretStore, ClientManagerRuntime{
 		Now: fixture.now, NewUUID: fixture.uuid.New, Credentials: credentials,
 	})

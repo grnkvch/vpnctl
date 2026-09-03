@@ -20,6 +20,7 @@ func TestV2PackageDependencyDirection(t *testing.T) {
 		module + "/internal/platform/linux": 1,
 		module + "/internal/render":         1,
 		module + "/internal/output":         1,
+		module + "/internal/restricted":     1,
 		module + "/internal/control":        2,
 		module + "/internal/transport":      2,
 		module + "/internal/routing":        2,

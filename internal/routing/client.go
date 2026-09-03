@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
@@ -21,6 +23,7 @@ const (
 	clientCredentialAttempts       = 4
 	clientStandardCredentialKind   = "wireguard-key"
 	clientStandardCredentialSuffix = "-standard-g1"
+	clientRestrictedCredentialKind = "restricted-user"
 )
 
 var (
@@ -43,6 +46,7 @@ type ClientSecretStore interface {
 
 type ClientCredentialGenerator interface {
 	GenerateClientCredential(ctx context.Context) (wireguard.KeyPair, error)
+	GenerateRestrictedClientCredential(ctx context.Context) ([]byte, error)
 }
 
 type ExecClientCredentialGenerator struct {
@@ -51,6 +55,20 @@ type ExecClientCredentialGenerator struct {
 
 func (generator ExecClientCredentialGenerator) GenerateClientCredential(ctx context.Context) (wireguard.KeyPair, error) {
 	return wireguard.GenerateKeyPair(ctx, generator.Runner)
+}
+
+func (generator ExecClientCredentialGenerator) GenerateRestrictedClientCredential(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	credential, err := restricted.GenerateIdentitySecret(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return credential, nil
 }
 
 type ClientManagerRuntime struct {
@@ -166,6 +184,9 @@ func (manager *ClientManager) PlanAdd(request ClientAddRequest) (ClientAddPlan, 
 	if err != nil {
 		return ClientAddPlan{}, err
 	}
+	if state.HandshakeHost == nil {
+		return ClientAddPlan{}, fmt.Errorf("client restricted transport requires an authoritative handshake host")
+	}
 	if clientNameExists(state.Clients, request.Name) {
 		return ClientAddPlan{}, fmt.Errorf("%w: %s", ErrClientNameConflict, request.Name)
 	}
@@ -265,11 +286,19 @@ func (manager *ClientManager) CommitAdd(ctx context.Context, plan ClientAddPlan)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
-	reference, err := clientStandardCredentialReference(plan.ClientID, 1)
+	restrictedCredential, err := manager.generateRestrictedCredential(ctx)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
-	candidate, err := buildClientCandidate(state, plan, credential.PublicKey, reference)
+	standardReference, err := clientStandardCredentialReference(plan.ClientID, 1)
+	if err != nil {
+		return ClientAddResult{}, err
+	}
+	restrictedReference, err := clientRestrictedCredentialReference(plan.ClientID, 1)
+	if err != nil {
+		return ClientAddResult{}, err
+	}
+	candidate, err := buildClientCandidate(state, plan, credential.PublicKey, standardReference, restrictedReference)
 	if err != nil {
 		return ClientAddResult{}, err
 	}
@@ -279,16 +308,22 @@ func (manager *ClientManager) CommitAdd(ctx context.Context, plan ClientAddPlan)
 	}
 	result := ClientAddResult{Changed: true, StateGeneration: candidate.Generation, Client: view}
 	privateKey := []byte(strings.TrimSpace(credential.PrivateKey))
-	if err := manager.secrets.PutIfAbsent(reference, privateKey); err != nil {
-		return ClientAddResult{}, fmt.Errorf("stage client credential: %w", err)
-	}
+	staged := make([]model.SecretRef, 0, 2)
 	cleanup := func(cause error) error {
-		_, cleanupErr := manager.secrets.Delete(reference)
+		cleanupErr := deleteClientCredentialRefs(manager.secrets, staged)
 		if cleanupErr != nil {
-			cleanupErr = fmt.Errorf("delete staged client credential %s: %w", reference, cleanupErr)
+			cleanupErr = fmt.Errorf("delete staged client credentials: %w", cleanupErr)
 		}
 		return errors.Join(cause, cleanupErr)
 	}
+	if err := manager.secrets.PutIfAbsent(standardReference, privateKey); err != nil {
+		return ClientAddResult{}, fmt.Errorf("stage client standard credential: %w", err)
+	}
+	staged = append(staged, standardReference)
+	if err := manager.secrets.PutIfAbsent(restrictedReference, restrictedCredential); err != nil {
+		return ClientAddResult{}, cleanup(fmt.Errorf("stage client restricted credential: %w", err))
+	}
+	staged = append(staged, restrictedReference)
 	if err := ctx.Err(); err != nil {
 		return ClientAddResult{}, cleanup(err)
 	}
@@ -395,7 +430,21 @@ func (manager *ClientManager) generateUniqueCredential(ctx context.Context, stat
 	return wireguard.KeyPair{}, ErrClientCredentialCollision
 }
 
-func buildClientCandidate(state model.State, plan ClientAddPlan, publicKey string, credentialRef model.SecretRef) (model.State, error) {
+func (manager *ClientManager) generateRestrictedCredential(ctx context.Context) ([]byte, error) {
+	credential, err := manager.runtime.Credentials.GenerateRestrictedClientCredential(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("generate client restricted credential: %w", err)
+	}
+	if _, err := restricted.DecodeIdentitySecret(credential); err != nil {
+		return nil, fmt.Errorf("generated client restricted credential is invalid: %w", err)
+	}
+	return append([]byte(nil), credential...), nil
+}
+
+func buildClientCandidate(state model.State, plan ClientAddPlan, publicKey string, standardCredentialRef, restrictedCredentialRef model.SecretRef) (model.State, error) {
+	if state.HandshakeHost == nil {
+		return model.State{}, fmt.Errorf("client restricted transport requires an authoritative handshake host")
+	}
 	presetMap := make(map[string]model.Preset, len(state.Presets))
 	for _, preset := range state.Presets {
 		presetMap[strings.ToLower(preset.Name)] = preset
@@ -409,11 +458,18 @@ func buildClientCandidate(state model.State, plan ClientAddPlan, publicKey strin
 		Lifecycle: model.LifecycleActive, OverlayIPv4: plan.OverlayIPv4, CredentialGeneration: 1,
 		AssignedPresets: append([]string{}, plan.PresetNames...), ActiveTransport: model.TransportStandard, CreatedAt: plan.CreatedAt,
 	}
-	transport := model.Transport{
+	standardTransport := model.Transport{
 		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: plan.ClientID,
 		Kind: model.TransportStandard, State: model.TransportActive, Provider: "wireguard", Protocol: model.ProtocolUDP, Port: 51820,
-		CredentialGeneration: 1, CredentialRef: credentialRef, PublicKey: publicKey,
-		ConfigHash: clientTransportHash(plan.ClientID, 1, publicKey, credentialRef),
+		CredentialGeneration: 1, CredentialRef: standardCredentialRef, PublicKey: publicKey,
+		ConfigHash: clientTransportHash(plan.ClientID, 1, publicKey, standardCredentialRef),
+	}
+	restrictedTransport := model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: plan.ClientID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: restricted.ProviderName,
+		Protocol: model.ProtocolTCP, Port: restricted.TCPPort, CredentialGeneration: 1, CredentialRef: restrictedCredentialRef,
+		HandshakeHost: state.HandshakeHost.Hostname,
+		ConfigHash:    clientRestrictedTransportHash(plan.ClientID, 1, restrictedCredentialRef),
 	}
 	candidate := state
 	candidate.Generation = plan.NextStateGeneration
@@ -426,7 +482,7 @@ func buildClientCandidate(state model.State, plan ClientAddPlan, publicKey strin
 			EffectiveHash: effectiveHash, Generation: 1,
 		})
 	}
-	candidate.Transports = append(append([]model.Transport{}, state.Transports...), transport)
+	candidate.Transports = append(append([]model.Transport{}, state.Transports...), standardTransport, restrictedTransport)
 	if err := model.ValidateTransition(state, candidate); err != nil {
 		return model.State{}, fmt.Errorf("validate client creation transition: %w", err)
 	}
@@ -483,9 +539,27 @@ func clientStandardCredentialReference(clientID string, generation uint64) (mode
 	return model.NewSecretRef(clientStandardCredentialKind, fmt.Sprintf("%s-standard-g%d", clientID, generation))
 }
 
+func clientRestrictedCredentialReference(clientID string, generation uint64) (model.SecretRef, error) {
+	if generation == 0 {
+		return "", fmt.Errorf("client credential generation must be positive")
+	}
+	return model.NewSecretRef(clientRestrictedCredentialKind, fmt.Sprintf("%s-g%d", clientID, generation))
+}
+
 func clientTransportHash(clientID string, generation uint64, publicKey string, reference model.SecretRef) string {
 	hash := sha256.New()
 	for _, value := range []string{clientID, "standard", "wireguard", "udp", "51820", fmt.Sprintf("%d", generation), publicKey, string(reference)} {
+		writePresetHashField(hash, value)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func clientRestrictedTransportHash(clientID string, generation uint64, reference model.SecretRef) string {
+	hash := sha256.New()
+	for _, value := range []string{
+		clientID, string(model.TransportRestricted), restricted.ProviderName, string(model.ProtocolTCP),
+		fmt.Sprintf("%d", restricted.TCPPort), fmt.Sprintf("%d", generation), string(reference),
+	} {
 		writePresetHashField(hash, value)
 	}
 	return hex.EncodeToString(hash.Sum(nil))

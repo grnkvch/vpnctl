@@ -12,25 +12,28 @@ gateway state generation and, when presets are present, the complete preset
 source-set hash. It does not generate or write a credential. A changed state,
 address allocation, or preset source makes commit return stale.
 
-Commit generates a unique WireGuard key pair and publishes the private key under
-an owner-specific opaque reference with `0700` directories and a `0600` file.
-One authoritative state transition then creates the client, its active standard
-transport, and—only when preset arguments were supplied—its generation-1 policy.
+Commit generates a unique WireGuard key pair and an independent 256-bit
+ShadowTLS identity credential, publishing both under owner- and
+generation-specific opaque references with `0700` directories and `0600`
+files. One authoritative state transition then creates the client, its active
+standard transport, its restricted standby transport, and—only when preset
+arguments were supplied—its generation-1 policy.
 The assignment is the canonical full set, not an incremental update. No preset
 arguments creates a present empty assignment and no policy resource; there is no
 implicit built-in/default selection.
 
-If state persistence is proven not to have committed, the staged secret is
+If state persistence is proven not to have committed, both staged secrets are
 deleted. If a write may already be active, vpnctl retains the exact referenced
-secret and returns a typed uncertain result instead of risking a credential-less
-live identity. Reconciliation can therefore inspect the immutable client ID and
-state generation safely.
+set and returns a typed uncertain result instead of risking a
+credential-incomplete live identity. Reconciliation can therefore inspect the
+immutable client ID and state generation safely.
 
 The address allocator restores every non-deleted node/client reservation before
 choosing the lowest free client-pool address. An active or revoked client's
 address is stable; a concurrent creation invalidates an older plan rather than
 silently moving it. Five-client acceptance covers independent UUIDs, addresses,
-public keys, private-key references, and target-owned policy/transport records.
+WireGuard keys, restricted identity credentials, secret references, and
+target-owned policy/transport records.
 The gateway firewall compiler consumes validated authoritative state and puts
 only active client/node overlay IPv4 addresses into role-specific allow sets.
 Revoked, deleted, unallocated, cross-pool, gateway, network, and broadcast
@@ -88,9 +91,10 @@ credential generation identical.
 
 ## Clash/Mihomo profile rendering
 
-The v2 Clash adapter resolves the same active client and standard WireGuard
-credential, then compiles the client's authoritative policy from the exact
-active preset generations. Before rendering, it verifies that the stored
+The v2 Clash adapter resolves the same active client, its standard WireGuard
+credential, its restricted ShadowTLS credential, and the gateway's shared
+Shadowsocks server key, then compiles the client's authoritative policy from
+the exact active preset generations. Before rendering, it verifies that the stored
 policy names, normalized selectors, and effective hash still match those
 generations. It reconstructs preset boundaries rather than flattening away
 exclusions: each preset remains `include - exclude`, followed by cross-preset
@@ -99,13 +103,14 @@ exception from the first.
 
 Rules are deterministic and most-specific-first. Exact domains precede domain
 suffixes; narrower IPv4/IPv6 CIDRs precede their parents. Both selected TCP and
-UDP rules target the `VPNCTL-GATEWAY` manual-select group. In task 7.9 that group
-contains only `VPNCTL-STANDARD`; it deliberately contains neither `DIRECT` nor
-an automatic `fallback`/`url-test`. A failed selected path therefore cannot
-change to direct. Explicit policy exclusions compile to `DIRECT`, and the sole
-terminal catch-all is `MATCH,DIRECT` for unmatched traffic. Task 8.10 adds the
-already-specified restricted choice to this same manual group without changing
-the rule actions or adding automatic selection.
+UDP rules target one `VPNCTL-GATEWAY` `type: select` group containing
+`VPNCTL-STANDARD` followed by `VPNCTL-RESTRICTED`. Standard remains the initial
+compatibility choice, while subsequent switching belongs only to the device
+user. The group contains neither `DIRECT` nor an automatic
+`fallback`/`url-test`, health-check, remote controller, or provider group. A
+failed selected path therefore blocks rather than selecting direct or another
+transport. Explicit policy exclusions compile to `DIRECT`, and the sole
+terminal catch-all is `MATCH,DIRECT` for unmatched traffic.
 
 Clash DNS defaults to `policy` mode with Mihomo `redir-host`. Unmatched and
 explicitly excluded domain queries use the configured direct IPv4 resolvers;
@@ -117,17 +122,22 @@ explicit `direct` compatibility mode omits `nameserver-policy` and sends all DNS
 queries through the direct resolver list while retaining selective traffic
 rules, matching the accepted v1 behavior boundary.
 
-The profile fixes public standard transport at `51820/UDP`, disables IPv6 DNS
-answers and background geodata updates, keeps logging silent, and contains no
-remote health test or auto-switch rule. IPv6 CIDR selectors still compile to
-the gateway group, so unsupported selected IPv6 cannot become a direct
-fallback. As with WireGuard export, secret-bearing YAML is private and exposed
-only as a defensive byte copy to the durable file publisher.
+The profile fixes public standard transport at `51820/UDP`. Its restricted
+alternative uses the same gateway IPv4 on `8443/TCP`, Shadowsocks 2022,
+ShadowTLS v3 strict mode, the authoritative pinned handshake host, and UoT v2
+for selected UDP. A passive transport-health state change does not alter the
+rendered group, reorder its members, or select a transport. The profile also
+disables IPv6 DNS answers and background geodata updates and keeps logging
+silent. IPv6 CIDR selectors still compile to the gateway group, so unsupported
+selected IPv6 cannot become a direct fallback. As with WireGuard export,
+secret-bearing YAML is private and exposed only as a defensive byte copy to the
+durable file publisher.
 
 Automated semantic tests cover local exclusions, cross-preset reselection,
-fully shadowed CIDRs, all-direct clients, both DNS modes, metadata redaction,
-and deterministic output. The rendered profile also passed the exact pinned
-Mihomo `v1.19.30` Linux/amd64 `-t` validator. Actual import and runtime DNS,
+fully shadowed CIDRs, all-direct clients, both DNS modes, strict restricted
+credential loading, health-independent manual choice, metadata redaction, and
+deterministic output. The rendered dual-transport profile also passes the exact
+pinned Mihomo `v1.19.30` Linux/amd64 `-t` validator. Actual import and runtime DNS,
 TCP, UDP-over-TCP, fail-closed, and reconnect behavior in supported Clash Mi
 remain the deployed-service release gate in task 16.11.
 
@@ -200,18 +210,19 @@ boundaries and the frozen CLI contract requires confirmation for each. None
 supports deferred application.
 
 Rotation is allowed only for an active client. It stages a new generation-owned
-private key, atomically advances the authoritative client and standard
-transport to the new generation, and then removes the obsolete private key.
+WireGuard private key and restricted identity secret, atomically advances the
+authoritative client and both transports to the new generation, and then
+removes both obsolete credentials.
 Name, immutable ID, overlay IPv4, platform, and policy assignment do not
 change. The gateway acceptance predicate immediately stops matching the old
 public key and accepts only the new active key; both Clash and WireGuard
 artifacts become stale without their bytes being changed. The result requires
 a fresh export and manual replacement on the device. A proven state-write
-failure removes the staged key and leaves the old generation active; an
-indeterminate durability result keeps whichever key is referenced by the
-reconciled authoritative state. Restricted-client credential rotation remains
-part of the multi-transport provider integration rather than pretending that a
-partial standard-only rotation is complete.
+failure removes the staged set and leaves the old generation active; an
+indeterminate durability result keeps the complete set referenced by the
+reconciled authoritative state. A legacy standard-only client remains
+rotatable, but vpnctl never performs a partial rotation for a client that owns
+both transports.
 
 Revoke publishes the security decision before best-effort key cleanup: it marks
 the client revoked and disables every owned transport in one state generation.

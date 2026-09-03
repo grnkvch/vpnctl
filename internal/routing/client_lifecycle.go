@@ -175,7 +175,7 @@ func (manager *ClientManager) planLifecycle(reference string, command ClientLife
 		if client.Lifecycle != model.LifecycleActive {
 			return ClientLifecyclePlan{}, fmt.Errorf("%w: %s", ErrClientNotActive, client.Name)
 		}
-		if !supportsStandardOnlyClientRotation(transports) {
+		if !supportsClientRotation(transports) {
 			return ClientLifecyclePlan{}, fmt.Errorf("%w: %s", ErrClientUnsupportedTransport, client.Name)
 		}
 		plan.NextCredentialGeneration, err = model.NextGeneration(client.CredentialGeneration)
@@ -252,27 +252,52 @@ func (manager *ClientManager) CommitRotate(ctx context.Context, plan ClientLifec
 	if err != nil {
 		return ClientLifecycleResult{}, err
 	}
-	newReference, err := clientStandardCredentialReference(fresh.ClientID, fresh.NextCredentialGeneration)
+	standardReference, err := clientStandardCredentialReference(fresh.ClientID, fresh.NextCredentialGeneration)
 	if err != nil {
 		return ClientLifecycleResult{}, err
 	}
-	candidate, err := buildClientRotationCandidate(state, fresh.ClientID, fresh.NextCredentialGeneration, credential.PublicKey, newReference)
+	restrictedReference := model.SecretRef("")
+	restrictedCredential := []byte(nil)
+	if clientHasTransportKind(state.Transports, fresh.ClientID, model.TransportRestricted) {
+		restrictedCredential, err = manager.generateRestrictedCredential(ctx)
+		if err != nil {
+			return ClientLifecycleResult{}, err
+		}
+		restrictedReference, err = clientRestrictedCredentialReference(fresh.ClientID, fresh.NextCredentialGeneration)
+		if err != nil {
+			return ClientLifecycleResult{}, err
+		}
+	}
+	candidate, err := buildClientRotationCandidate(
+		state, fresh.ClientID, fresh.NextCredentialGeneration, credential.PublicKey, standardReference, restrictedReference,
+	)
 	if err != nil {
 		return ClientLifecycleResult{}, err
 	}
 	result := lifecycleResult(fresh, candidate.Generation)
 	result.CredentialGeneration = fresh.NextCredentialGeneration
 	result.RequiresClientReExport = true
-	if err := manager.secrets.PutIfAbsent(newReference, []byte(strings.TrimSpace(credential.PrivateKey))); err != nil {
+	staged := make([]model.SecretRef, 0, 2)
+	cleanupStaged := func(cause error) error {
+		return errors.Join(cause, deleteClientCredentialRefs(manager.secrets, staged))
+	}
+	if err := manager.secrets.PutIfAbsent(standardReference, []byte(strings.TrimSpace(credential.PrivateKey))); err != nil {
 		return ClientLifecycleResult{}, fmt.Errorf("stage rotated client credential: %w", err)
 	}
+	staged = append(staged, standardReference)
+	if restrictedReference != "" {
+		if err := manager.secrets.PutIfAbsent(restrictedReference, restrictedCredential); err != nil {
+			return ClientLifecycleResult{}, cleanupStaged(fmt.Errorf("stage rotated client restricted credential: %w", err))
+		}
+		staged = append(staged, restrictedReference)
+	}
 	if err := ctx.Err(); err != nil {
-		return ClientLifecycleResult{}, errors.Join(err, deleteClientCredentialRefs(manager.secrets, []model.SecretRef{newReference}))
+		return ClientLifecycleResult{}, cleanupStaged(err)
 	}
 	committed, known, saveErr := manager.saveLifecycleState(state, candidate)
 	if !committed {
 		if known {
-			return ClientLifecycleResult{}, errors.Join(saveErr, deleteClientCredentialRefs(manager.secrets, []model.SecretRef{newReference}))
+			return ClientLifecycleResult{}, cleanupStaged(saveErr)
 		}
 		return result, fmt.Errorf("%w: %v", ErrClientLifecycleUncertain, saveErr)
 	}
@@ -444,11 +469,31 @@ func clientCredentialInputs(state model.State, clientID string) ([]model.SecretR
 	return references, transports, nil
 }
 
-func supportsStandardOnlyClientRotation(transports []model.Transport) bool {
-	return len(transports) == 1 && transports[0].Kind == model.TransportStandard
+func supportsClientRotation(transports []model.Transport) bool {
+	if len(transports) < 1 || len(transports) > 2 {
+		return false
+	}
+	seen := make(map[model.TransportKind]struct{}, len(transports))
+	for _, transport := range transports {
+		if transport.Kind != model.TransportStandard && transport.Kind != model.TransportRestricted {
+			return false
+		}
+		seen[transport.Kind] = struct{}{}
+	}
+	_, standard := seen[model.TransportStandard]
+	return standard && len(seen) == len(transports)
 }
 
-func buildClientRotationCandidate(state model.State, clientID string, generation uint64, publicKey string, reference model.SecretRef) (model.State, error) {
+func clientHasTransportKind(transports []model.Transport, clientID string, kind model.TransportKind) bool {
+	for _, transport := range transports {
+		if transport.OwnerKind == model.TargetClient && transport.OwnerID == clientID && transport.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func buildClientRotationCandidate(state model.State, clientID string, generation uint64, publicKey string, standardReference, restrictedReference model.SecretRef) (model.State, error) {
 	candidate := state
 	nextStateGeneration, err := model.NextGeneration(state.Generation)
 	if err != nil {
@@ -469,22 +514,30 @@ func buildClientRotationCandidate(state model.State, clientID string, generation
 		candidate.Clients[index] = advanced
 		foundClient = true
 	}
-	foundTransport := false
+	foundStandard := false
 	for index := range candidate.Transports {
 		transport := &candidate.Transports[index]
 		if transport.OwnerKind != model.TargetClient || transport.OwnerID != clientID {
 			continue
 		}
-		if transport.Kind != model.TransportStandard {
+		transport.CredentialGeneration = generation
+		switch transport.Kind {
+		case model.TransportStandard:
+			transport.CredentialRef = standardReference
+			transport.PublicKey = strings.TrimSpace(publicKey)
+			transport.ConfigHash = clientTransportHash(clientID, generation, transport.PublicKey, standardReference)
+			foundStandard = true
+		case model.TransportRestricted:
+			if restrictedReference == "" {
+				return model.State{}, ErrClientUnsupportedTransport
+			}
+			transport.CredentialRef = restrictedReference
+			transport.ConfigHash = clientRestrictedTransportHash(clientID, generation, restrictedReference)
+		default:
 			return model.State{}, ErrClientUnsupportedTransport
 		}
-		transport.CredentialGeneration = generation
-		transport.CredentialRef = reference
-		transport.PublicKey = strings.TrimSpace(publicKey)
-		transport.ConfigHash = clientTransportHash(clientID, generation, transport.PublicKey, reference)
-		foundTransport = true
 	}
-	if !foundClient || !foundTransport {
+	if !foundClient || !foundStandard {
 		return model.State{}, ErrClientNotFound
 	}
 	if err := model.ValidateTransition(state, candidate); err != nil {
