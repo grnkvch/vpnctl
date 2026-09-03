@@ -2,9 +2,9 @@
 
 Task 8.1 fixes the provider-neutral boundary used by both `standard` and
 `restricted`; task 8.7 adds the read-only-state, non-mutating transport-test
-orchestration on that boundary. Concrete WireGuard and Mihomo/ShadowTLS
-providers are documented separately. The confirmed switch saga remains task
-8.8.
+orchestration on that boundary; task 8.8 adds the confirmed make-before-break
+switch workflow. Concrete WireGuard and Mihomo/ShadowTLS providers are
+documented separately.
 
 ## Provider contract
 
@@ -61,10 +61,51 @@ After cleanup the workflow reloads and byte-compares canonical authoritative
 state. It reports a concurrent-state conflict rather than claim a stable test
 if active intent, pending state, configuration, or any generation changed. Its
 dependency surface contains no state writer and it never calls `Activate`,
-`Drain`, or `Health`. The only component allowed to create a new selection is
-the confirmed make-before-break saga in task 8.8, which must persist the
-authoritative state transition after successful target activation and bounded
-old-path drain.
+`Drain`, or `Health`.
+
+## Confirmed manual switch
+
+The switch planner resolves the joined local node, its exact active/standby
+pair, and a complete next-generation state without touching either provider.
+Apply reloads and byte-compares the canonical precondition after operator
+confirmation; any generation, pending-operation, configuration, or other state
+change makes the reviewed plan stale before a provider is called.
+
+Switching to the already active target is health-only and idempotent: it calls
+only that provider with a bounded context, neither probes nor activates standby,
+and performs no state write. A degraded/unavailable observation remains the
+manual active selection and is returned as a degraded result with an explicit
+diagnostic action.
+
+A real change is ordered as one make-before-break transaction:
+
+1. render the old candidate for compensation and render/prepare/native-validate
+   only the explicitly requested target;
+2. require the target's authenticated control, reverse-tunnel, selected-TCP,
+   and selected-UDP probes to all pass;
+3. call the target provider's single `Activate` boundary, which represents
+   control, tunnel, and selected egress together, then require active/healthy
+   observation of that same identity and credential generation;
+4. drain/deactivate the previous provider within ten seconds;
+5. persist exactly one next-generation state with target `active` and previous
+   `standby`.
+
+The total operation is bounded to 90 seconds, individual stages to 30 seconds,
+and compensation to an independent ten-second context. Failures before target
+activation roll back only its staged candidate. Failures after an activation
+attempt first reactivate the old rendered candidate and only then remove the
+target; target cleanup is intentionally retained if old-path restoration cannot
+be proven. A state-write error is reloaded: a proven old generation is
+compensated, a proven candidate generation is reported as commit-uncertain
+without a blind rollback, and any other state is left for explicit
+reconciliation.
+
+The CLI adapter uses the common availability-impact confirmation boundary.
+`--defer` sends the exact non-secret current/target/generation plan to the
+reachable authoritative gateway writer and never calls local `Apply`; active
+connections remain unchanged until a later explicit node-local apply. Durable
+cross-host phase reconciliation is composed around this local transaction by
+the general saga coordinator in task 13.3.
 
 Both public gateway listeners are provisioned and supervised independently of
 that per-node selection. Gateway init publishes the standard and restricted

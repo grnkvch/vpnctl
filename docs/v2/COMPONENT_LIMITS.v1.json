@@ -188,6 +188,14 @@
       "automatic_fallback": false,
       "writes_authoritative_state": false
     },
+    "transport_switch": {
+      "total_timeout_seconds": 90,
+      "step_timeout_seconds": 30,
+      "drain_timeout_seconds": 10,
+      "rollback_timeout_seconds": 10,
+      "requires_confirmation": true,
+      "automatic_fallback": false
+    },
     "routing": {
       "mark_mask": "0xff000000",
       "direct_mark": "0x01000000",
