@@ -31,6 +31,9 @@ var (
 	runNodeRoutingGuardService = func(ctx context.Context, paths store.Paths, action string) error {
 		return routing.RunNodeRoutingGuardService(ctx, paths, linuxplatform.OSProbeRunner{}, action)
 	}
+	runNodeDNSIntegrationService = func(ctx context.Context, paths store.Paths, action string) error {
+		return routing.RunNodeDNSIntegrationService(ctx, paths, linuxplatform.OSProbeRunner{}, action)
+	}
 	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	}
@@ -71,6 +74,12 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	case "node-routing-wait-ready":
 		serviceName = "node routing guard wait-ready"
 		err = runNodeRoutingGuardService(ctx, paths, routing.NodeRoutingGuardWaitReadyAction)
+	case "node-dns-install":
+		serviceName = "node DNS integration install"
+		err = runNodeDNSIntegrationService(ctx, paths, routing.NodeDNSIntegrationInstallAction)
+	case "node-dns-restore":
+		serviceName = "node DNS integration restore"
+		err = runNodeDNSIntegrationService(ctx, paths, routing.NodeDNSIntegrationRestoreAction)
 	default:
 		fmt.Fprintln(stderr, "unsupported internal service mode")
 		return ExitValidation

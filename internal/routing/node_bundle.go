@@ -73,11 +73,14 @@ func ResolveNodeRoutingActiveOutbound(state model.State, credentials NodeRouting
 type NodeRoutingBundleCandidate struct {
 	routing NodeRoutingCandidate
 	guard   NodeRoutingGuardCandidate
+	dns     NodeDNSIntegrationCandidate
 }
 
 func (candidate NodeRoutingBundleCandidate) Routing() NodeRoutingCandidate { return candidate.routing }
 
 func (candidate NodeRoutingBundleCandidate) Guard() NodeRoutingGuardCandidate { return candidate.guard }
+
+func (candidate NodeRoutingBundleCandidate) DNS() NodeDNSIntegrationCandidate { return candidate.dns }
 
 // RenderNodeRoutingBundle derives every guard-owned binding field from the
 // one explicit active outbound. Direct underlay details and the bounded
@@ -102,5 +105,9 @@ func RenderNodeRoutingBundle(routingRequest NodeRoutingRenderRequest, guardConfi
 	if descriptor := routingCandidate.Descriptor(); descriptor.ActiveTransport != guardCandidate.Config().ActiveTransport {
 		return NodeRoutingBundleCandidate{}, fmt.Errorf("node routing engine and guard active transports differ")
 	}
-	return NodeRoutingBundleCandidate{routing: routingCandidate, guard: guardCandidate}, nil
+	dnsCandidate, err := RenderNodeDNSIntegrationConfig(guardConfig.DirectRoute.Interface)
+	if err != nil {
+		return NodeRoutingBundleCandidate{}, err
+	}
+	return NodeRoutingBundleCandidate{routing: routingCandidate, guard: guardCandidate, dns: dnsCandidate}, nil
 }

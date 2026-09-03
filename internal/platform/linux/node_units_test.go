@@ -1,6 +1,9 @@
 package linux
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -30,7 +33,13 @@ func TestRenderNodeRoleInstallationStagesOnlyNodeUnits(t *testing.T) {
 			t.Fatalf("unit %s does not have the long-running restart contract", unit.Name)
 		}
 		if name := unit.Name; name == "vpnctl-routing-guard.service" {
-			for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Before=vpnctl-routing.service", "CAP_NET_ADMIN", "__service node-routing-guard"} {
+			for _, required := range []string{
+				"Type=oneshot", "RemainAfterExit=yes", "Before=vpnctl-routing.service", "After=network-online.target vpnctl-standard.service",
+				"Wants=network-online.target systemd-resolved.service", "CAP_NET_ADMIN", "__service node-routing-guard",
+				"ExecStartPost=" + DefaultVPNCTLBinaryPath + " __service node-dns-install",
+				"ExecStopPost=" + DefaultVPNCTLBinaryPath + " __service node-dns-restore",
+				"ReadWritePaths=/var/lib/vpnctl /run/systemd /run/vpnctl /proc/sys/net/ipv4/conf",
+			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("guard unit lacks %q:\n%s", required, content)
 				}
@@ -60,6 +69,31 @@ func TestRenderNodeRoleInstallationRejectsUnsafeBinaryPath(t *testing.T) {
 		if _, err := RenderNodeRoleInstallation(path); err == nil {
 			t.Fatalf("RenderNodeRoleInstallation(%q) succeeded", path)
 		}
+	}
+}
+
+func TestNodeRoleSystemdUnitsParseWithNativeSystemdAnalyze(t *testing.T) {
+	binary := os.Getenv("VPNCTL_SYSTEMD_ANALYZE")
+	if binary == "" {
+		t.Skip("set VPNCTL_SYSTEMD_ANALYZE to a Linux systemd-analyze binary")
+	}
+	request, err := RenderNodeRoleInstallation("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	paths := make([]string, 0, len(request.Units))
+	for _, unit := range request.Units {
+		path := filepath.Join(directory, unit.Name)
+		if err := os.WriteFile(path, unit.Content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	command := exec.Command(binary, append([]string{"verify"}, paths...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("systemd-analyze rejected node units: %v:\n%s", err, output)
 	}
 }
 

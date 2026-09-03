@@ -46,6 +46,15 @@ func TestRenderNodeRoutingBundleDerivesOneStandardOrRestrictedBinding(t *testing
 			if !strings.Contains(guardNFT, "ip daddr 10.67.0.1 meta mark set") {
 				t.Fatalf("%s guard does not select internal gateway:\n%s", test.name, guardNFT)
 			}
+			dns := bundle.DNS()
+			if dns.Config().LinkName != config.DirectRoute.Interface || !strings.Contains(string(dns.NFTablesDefinition()), "redirect to :1053") {
+				t.Fatalf("%s DNS integration is not derived from the guard underlay: %+v", test.name, dns.Config())
+			}
+			dnsBytes := dns.Bytes()
+			dnsBytes[0] = 'X'
+			if string(dns.Bytes()[0]) == "X" {
+				t.Fatal("node DNS bundle candidate exposed mutable bytes")
+			}
 		})
 	}
 }

@@ -31,6 +31,7 @@ const (
 	NodeRoutingDNSListener        = "127.0.0.1:1053"
 	NodeRoutingGatewayGroup       = "VPNCTL-GATEWAY"
 	NodeRoutingUnboundTarget      = "REJECT-DROP"
+	NodeRoutingDirectDNSProxy     = "VPNCTL-DIRECT-DNS"
 	NodeRoutingStandardProxy      = "VPNCTL-STANDARD"
 	NodeRoutingRestrictedProxy    = "VPNCTL-RESTRICTED"
 	NodeRoutingStandardInterface  = "vpnctl-wg"
@@ -112,10 +113,11 @@ func (candidate NodeRoutingCandidate) Descriptor() NodeRoutingDescriptor {
 	return candidate.descriptor
 }
 
-// RenderNodeRoutingConfig emits the task-10.2 routing-engine base. The only
-// gateway group member is REJECT-DROP until task 10.4 binds the manually active
-// transport; selected traffic therefore cannot become direct in an unbound
-// intermediate generation.
+// RenderNodeRoutingConfig emits the host-wide routing-engine configuration.
+// VPNCTL-DIRECT-DNS is a non-selectable provider outbound whose socket mark
+// prevents resolver recursion. The only gateway group member is REJECT-DROP
+// until a manually active transport is bound, so selected traffic cannot
+// become direct in an unbound intermediate generation.
 func RenderNodeRoutingConfig(request NodeRoutingRenderRequest) (NodeRoutingCandidate, error) {
 	if err := request.Matcher.Validate(); err != nil {
 		return NodeRoutingCandidate{}, fmt.Errorf("validate node routing matcher: %w", err)
@@ -368,8 +370,9 @@ func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, di
 			}
 		}
 	}
+	config.WriteString("\nproxies:\n")
+	renderNodeRoutingDirectDNSProxy(&config)
 	if active.Kind != "" {
-		config.WriteString("\nproxies:\n")
 		renderNodeRoutingActiveProxy(&config, active)
 	}
 	config.WriteString("\nproxy-groups:\n")
@@ -407,6 +410,13 @@ func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, di
 	}
 	config.WriteString("  - MATCH,DIRECT\n")
 	return []byte(config.String())
+}
+
+func renderNodeRoutingDirectDNSProxy(config *strings.Builder) {
+	fmt.Fprintf(config, "  - name: %s\n", NodeRoutingDirectDNSProxy)
+	config.WriteString("    type: direct\n")
+	config.WriteString("    udp: true\n")
+	fmt.Fprintf(config, "    routing-mark: %d\n", linuxplatform.VPNCTLDirectMark)
 }
 
 func renderNodeRoutingActiveProxy(config *strings.Builder, active NodeRoutingActiveOutbound) {
@@ -448,7 +458,7 @@ func appendMatcherPrograms(program matcherDecisionProgram) []MatcherDecisionRule
 }
 
 func nodeDirectDNSURI(server string) string {
-	return "udp://" + server + ":53#DIRECT"
+	return "udp://" + server + ":53#" + NodeRoutingDirectDNSProxy
 }
 
 func nodeGatewayDNSURI(server string) string {
@@ -579,18 +589,18 @@ func validateNodeRoutingConfig(content []byte, mode RoutingDNSMode, active NodeR
 }
 
 func inferNodeRoutingActiveOutbound(document nodeRoutingDocument) (NodeRoutingActiveOutbound, error) {
-	if len(document.Proxies) == 0 {
+	if len(document.Proxies) == 1 && document.Proxies[0].Name == NodeRoutingDirectDNSProxy {
 		return NodeRoutingActiveOutbound{}, nil
 	}
-	if len(document.Proxies) != 1 || len(document.Rules) == 0 {
-		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing config must contain at most one active outbound")
+	if len(document.Proxies) != 2 || document.Proxies[0].Name != NodeRoutingDirectDNSProxy || len(document.Rules) == 0 {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing config must contain direct DNS and at most one active outbound")
 	}
 	parts := strings.Split(document.Rules[0], ",")
 	if len(parts) != 4 || parts[0] != "IP-CIDR" || parts[2] != NodeRoutingGatewayGroup || parts[3] != "no-resolve" || !strings.HasSuffix(parts[1], "/32") {
 		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing active outbound lacks its internal gateway rule")
 	}
 	overlay := strings.TrimSuffix(parts[1], "/32")
-	proxy := document.Proxies[0]
+	proxy := document.Proxies[1]
 	if proxy.Name == NodeRoutingStandardProxy && proxy.Type == "direct" {
 		return NodeRoutingActiveOutbound{Kind: model.TransportStandard, GatewayOverlayIPv4: overlay}, nil
 	}
@@ -613,16 +623,19 @@ func validateNodeRoutingActiveProxy(proxies []nodeRoutingProxy, groups []nodeRou
 	if len(groups) != 1 || groups[0].Name != NodeRoutingGatewayGroup || groups[0].Type != "select" || len(groups[0].Proxies) != 1 {
 		return fmt.Errorf("node routing gateway group must contain exactly one explicit target")
 	}
+	if len(proxies) == 0 || !validNodeRoutingDirectDNSProxy(proxies[0]) {
+		return fmt.Errorf("node routing direct DNS outbound does not enforce the bypass mark")
+	}
 	if active.Kind == "" {
-		if proxies != nil || groups[0].Proxies[0] != NodeRoutingUnboundTarget {
+		if len(proxies) != 1 || groups[0].Proxies[0] != NodeRoutingUnboundTarget {
 			return fmt.Errorf("node routing gateway group is not fail-closed while unbound")
 		}
 		return nil
 	}
-	if len(proxies) != 1 || groups[0].Proxies[0] == "DIRECT" || groups[0].Proxies[0] == NodeRoutingUnboundTarget {
+	if len(proxies) != 2 || groups[0].Proxies[0] == "DIRECT" || groups[0].Proxies[0] == NodeRoutingUnboundTarget {
 		return fmt.Errorf("bound node routing gateway group must select exactly one active provider")
 	}
-	proxy := proxies[0]
+	proxy := proxies[1]
 	if active.Kind == model.TransportStandard {
 		if groups[0].Proxies[0] != NodeRoutingStandardProxy || proxy.Name != NodeRoutingStandardProxy || proxy.Type != "direct" ||
 			!routingTrue(proxy.UDP) || proxy.InterfaceName != NodeRoutingStandardInterface || proxy.RoutingMark == nil || *proxy.RoutingMark != linuxplatform.VPNCTLRecoveryMark ||
@@ -649,6 +662,14 @@ func validateNodeRoutingActiveProxy(proxies []nodeRoutingProxy, groups []nodeRou
 		return fmt.Errorf("restricted node routing outbound does not enforce strict ShadowTLS v3")
 	}
 	return nil
+}
+
+func validNodeRoutingDirectDNSProxy(proxy nodeRoutingProxy) bool {
+	return proxy.Name == NodeRoutingDirectDNSProxy && proxy.Type == "direct" && routingTrue(proxy.UDP) &&
+		proxy.RoutingMark != nil && *proxy.RoutingMark == linuxplatform.VPNCTLDirectMark &&
+		proxy.Server == "" && proxy.Port == nil && proxy.Cipher == "" && proxy.Password == "" && proxy.IPVersion == "" &&
+		proxy.UDPOverTCP == nil && proxy.UDPOverTCPVersion == nil && proxy.InterfaceName == "" && proxy.Plugin == "" &&
+		proxy.ClientFingerprint == "" && proxy.PluginOptions == (nodeRoutingRestrictedPluginOpts{})
 }
 
 func validateNodeRoutingDNS(document nodeRoutingDNSDocument, mode RoutingDNSMode) ([]string, error) {

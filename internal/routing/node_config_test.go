@@ -32,9 +32,10 @@ func TestRenderNodeRoutingConfigUsesHostWideTUNPolicyDNSAndFailClosedUnboundTarg
 		"listen: 127.0.0.1:1053\n",
 		"enhanced-mode: redir-host\n",
 		"\"api.private.example.com\":\n      - \"udp://10.67.0.1:53#VPNCTL-GATEWAY\"\n",
-		"\"example.com\":\n      - \"udp://192.0.2.53:53#DIRECT\"\n      - \"udp://198.51.100.53:53#DIRECT\"\n",
-		"\"+.private.example.com\":\n      - \"udp://192.0.2.53:53#DIRECT\"\n",
+		"\"example.com\":\n      - \"udp://192.0.2.53:53#VPNCTL-DIRECT-DNS\"\n      - \"udp://198.51.100.53:53#VPNCTL-DIRECT-DNS\"\n",
+		"\"+.private.example.com\":\n      - \"udp://192.0.2.53:53#VPNCTL-DIRECT-DNS\"\n",
 		"\"+.example.com\":\n      - \"udp://10.67.0.1:53#VPNCTL-GATEWAY\"\n",
+		"proxies:\n  - name: VPNCTL-DIRECT-DNS\n    type: direct\n    udp: true\n    routing-mark: 16777216\n",
 		"  - name: VPNCTL-GATEWAY\n    type: select\n    proxies:\n      - REJECT-DROP\n",
 		"  - DOMAIN,api.private.example.com,VPNCTL-GATEWAY\n",
 		"  - DOMAIN,example.com,DIRECT\n",
@@ -128,7 +129,7 @@ func TestRenderNodeRoutingConfigBindsEverySelectedAndInternalPathToOneStandardOu
 	}
 	content := string(candidate.Bytes())
 	for _, required := range []string{
-		"proxies:\n  - name: VPNCTL-STANDARD\n    type: direct\n    udp: true\n    interface-name: vpnctl-wg\n    routing-mark: 50331648\n",
+		"  - name: VPNCTL-STANDARD\n    type: direct\n    udp: true\n    interface-name: vpnctl-wg\n    routing-mark: 50331648\n",
 		"  - name: VPNCTL-GATEWAY\n    type: select\n    proxies:\n      - VPNCTL-STANDARD\n",
 		"  - IP-CIDR,10.67.0.1/32,VPNCTL-GATEWAY,no-resolve\n",
 		"  - DOMAIN,api.private.example.com,VPNCTL-GATEWAY\n",
@@ -162,7 +163,7 @@ func TestRenderNodeRoutingConfigBindsSelectedUDPControlAndTunnelToOneRestrictedO
 	}
 	content := string(candidate.Bytes())
 	for _, required := range []string{
-		"proxies:\n  - name: VPNCTL-RESTRICTED\n    type: ss\n    server: 203.0.113.44\n    port: 8443\n",
+		"  - name: VPNCTL-RESTRICTED\n    type: ss\n    server: 203.0.113.44\n    port: 8443\n",
 		"    udp: true\n    udp-over-tcp: true\n    udp-over-tcp-version: 2\n    routing-mark: 50331648\n",
 		"    plugin: shadow-tls\n    client-fingerprint: chrome\n",
 		"      host: \"www.cloudflare.com\"\n",
@@ -221,8 +222,11 @@ func TestNodeRoutingConfigRejectsScopedFallbackAndSemanticTampering(t *testing.T
 			base, "DOMAIN,api.private.example.com,VPNCTL-GATEWAY", "DOMAIN,api.private.example.com,DIRECT", 1,
 		),
 		"gateway DNS fallback": strings.Replace(
-			base, "      - \"udp://10.67.0.1:53#VPNCTL-GATEWAY\"", "      - \"udp://192.0.2.53:53#DIRECT\"", 1,
+			base, "      - \"udp://10.67.0.1:53#VPNCTL-GATEWAY\"", "      - \"udp://192.0.2.53:53#VPNCTL-DIRECT-DNS\"", 1,
 		),
+		"direct DNS raw direct": strings.Replace(base, "#VPNCTL-DIRECT-DNS", "#DIRECT", 1),
+		"direct DNS mark":       strings.Replace(base, "routing-mark: 16777216", "routing-mark: 0", 1),
+		"direct DNS selectable": strings.Replace(base, "      - REJECT-DROP", "      - VPNCTL-DIRECT-DNS", 1),
 		"rule reorder": strings.Replace(
 			base,
 			"  - IP-CIDR,10.1.2.0/24,VPNCTL-GATEWAY\n  - IP-CIDR,10.1.0.0/16,DIRECT\n",

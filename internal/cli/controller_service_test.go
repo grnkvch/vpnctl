@@ -216,3 +216,39 @@ func TestInternalNodeRoutingGuardServicesDispatchActionsAndSanitizeFailure(t *te
 		})
 	}
 }
+
+func TestInternalNodeDNSIntegrationServicesDispatchActionsAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runNodeDNSIntegrationService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runNodeDNSIntegrationService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	for mode, action := range map[string]string{"node-dns-install": "install", "node-dns-restore": "restore"} {
+		mode, action := mode, action
+		t.Run(mode, func(t *testing.T) {
+			called := false
+			runNodeDNSIntegrationService = func(_ context.Context, received store.Paths, receivedAction string) error {
+				called = true
+				if received != paths || receivedAction != action {
+					t.Fatalf("DNS integration service arguments = %+v/%q", received, receivedAction)
+				}
+				return errors.New("dns-policy-canary")
+			}
+			var stderr bytes.Buffer
+			if code := Execute([]string{"__service", mode}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+				t.Fatalf("DNS integration service code = %d", code)
+			}
+			if !called || strings.Contains(stderr.String(), "canary") || !strings.Contains(stderr.String(), "service failed") {
+				t.Fatalf("DNS integration dispatch called=%t stderr=%q", called, stderr.String())
+			}
+		})
+	}
+}

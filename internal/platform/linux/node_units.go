@@ -40,7 +40,7 @@ func RenderNodeRoleInstallation(binaryPath string) (RoleInstallationRequest, err
 			content := fmt.Sprintf(`[Unit]
 Description=vpnctl node routing fail-closed guard
 After=network-online.target vpnctl-standard.service
-Wants=network-online.target
+Wants=network-online.target systemd-resolved.service
 Before=vpnctl-routing.service
 ConditionPathExists=/etc/vpnctl/generated/node/node-routing-guard.ready
 StartLimitIntervalSec=0
@@ -48,6 +48,8 @@ StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 ExecStart=%s __service node-routing-guard
+ExecStartPost=%s __service node-dns-install
+ExecStopPost=%s __service node-dns-restore
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=2s
@@ -62,13 +64,13 @@ PrivateTmp=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 ReadOnlyPaths=/etc/vpnctl
-ReadWritePaths=/run/vpnctl /proc/sys/net/ipv4/conf
+ReadWritePaths=/var/lib/vpnctl /run/systemd /run/vpnctl /proc/sys/net/ipv4/conf
 MemoryMax=32M
 TasksMax=32
 
 [Install]
 WantedBy=multi-user.target
-`, binaryPath)
+`, binaryPath, binaryPath, binaryPath)
 			units = append(units, RoleUnitFile{Name: name, Content: []byte(content)})
 			continue
 		}

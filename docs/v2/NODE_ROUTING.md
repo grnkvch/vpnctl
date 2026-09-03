@@ -33,6 +33,40 @@ uses the node-direct resolver list for every lookup, without changing traffic
 routing rules. Fake IP remains disabled in both modes. An empty policy renders
 an explicit empty policy map in policy mode and a single final `MATCH,DIRECT`.
 
+Every node config contains a non-selectable `VPNCTL-DIRECT-DNS` provider
+outbound. Direct upstream queries use this outbound and its fixed direct socket
+mark; gateway upstream queries use the active standard/restricted outbound and
+its recovery mark. Neither outbound is a fallback member of the other path.
+The marks let the provider's own upstream sockets bypass classic port-53
+capture without introducing a process, UID, or cgroup routing scope.
+
+## systemd-resolved and classic port 53
+
+The node keeps `/etc/resolv.conf` on
+`/run/systemd/resolve/stub-resolv.conf`. While the routing guard is active, an
+owned runtime drop-in at
+`/run/systemd/resolved.conf.d/50-vpnctl-node.conf` selects
+`127.0.0.1:1053`, global route domain `~.`, no fallback resolver, and
+`Cache=no`. The ordinary underlay's route domains are temporarily replaced by
+the inert `~vpnctl-underlay.invalid`, so its DNS server cannot race the managed
+global route.
+
+Before the first nftables, resolved, or link mutation, vpnctl durably records
+the exact underlay DNS list, domain list, default-route bit, and resolv.conf
+target in root-only `/var/lib/vpnctl/routing/resolved-original.json`. A failed
+activation and the guard stop/uninstall path remove only the owned runtime
+drop-in and `table inet vpnctl_dns`, restart resolved, restore those exact link
+values, and remove the snapshot last. Missing snapshots, changed symlink
+targets, foreign tables, and drifted owned files cause refusal instead of
+destructive replacement.
+
+`table inet vpnctl_dns` has an output NAT hook at priority `-151`, immediately
+before the routing guard at `-150`. It preserves traffic to the loopback resolved stub,
+bypasses only the direct/recovery provider socket marks, and redirects all
+other local UDP and TCP destination-port-53 traffic to `1053`. This covers
+applications that open classic DNS sockets directly. DoH, DoT, and embedded
+IP literals remain outside this capture boundary.
+
 ## Kernel fail-closed guard
 
 The node guard owns only `table inet vpnctl`, route tables `20001`/`20002`,
@@ -54,7 +88,7 @@ TCP/UDP ports. There is no CIDR, hostname, arbitrary destination, or raw nft
 input. Optional exact ingress interface/protocol/port tuples attach the
 ingress-response mark, so response routing is symmetric. Static IP/CIDR
 decisions come from the same matcher IR as Mihomo; selected resolver answers
-have dedicated IPv4/IPv6 sets for the managed DNS integration in task 10.7.
+have dedicated IPv4/IPv6 sets for the managed DNS integration.
 
 The selected table always contains `unreachable default metric 42760`. For an
 active binding, the gateway table always contains one exact public-gateway
@@ -107,7 +141,7 @@ set, or repair policy.
 Unmatched IPv6 is not globally disabled. vpnctl leaves it to the host's
 existing IPv6 addresses, routes, and upstream availability, so
 `preserve-system` is not a promise that the host has working IPv6. The managed
-resolver integration that supplies selected AAAA entries is task 10.7; DoH,
+resolver integration supplies selected AAAA entries; DoH,
 DoT, and hardcoded-address classification limits remain explicit task-10.10
 diagnostics rather than a claim of universal interception.
 
