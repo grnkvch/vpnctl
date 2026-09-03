@@ -3,7 +3,6 @@ package routing
 import (
 	"fmt"
 	"net/netip"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -266,179 +265,15 @@ type clashRule struct {
 }
 
 func compileClashRules(composition PresetComposition) ([]clashRule, error) {
-	if err := composition.Validate(); err != nil {
+	ir, err := CompileMatcherIR(composition)
+	if err != nil {
 		return nil, err
 	}
-	domains := make(map[string]struct{})
-	suffixes := make(map[string]struct{})
-	prefixSet := make(map[string]netip.Prefix)
-	for _, preset := range composition.Presets {
-		for _, selector := range append(append([]model.Selector{}, preset.Includes...), preset.Excludes...) {
-			switch selector.Kind {
-			case model.SelectorDomain:
-				domains[selector.Value] = struct{}{}
-			case model.SelectorDomainSuffix:
-				suffixes[selector.Value] = struct{}{}
-			case model.SelectorIPCIDR:
-				prefix := netip.MustParsePrefix(selector.Value)
-				prefixSet[prefix.String()] = prefix
-			}
-		}
+	matcher, err := CompileClashMatchers(ir)
+	if err != nil {
+		return nil, err
 	}
-
-	exactValues := sortedStringKeys(domains)
-	suffixValues := sortedStringKeys(suffixes)
-	sort.Slice(suffixValues, func(left, right int) bool {
-		leftLabels := strings.Count(suffixValues[left], ".")
-		rightLabels := strings.Count(suffixValues[right], ".")
-		if leftLabels != rightLabels {
-			return leftLabels > rightLabels
-		}
-		if len(suffixValues[left]) != len(suffixValues[right]) {
-			return len(suffixValues[left]) > len(suffixValues[right])
-		}
-		return suffixValues[left] < suffixValues[right]
-	})
-
-	rules := make([]clashRule, 0, len(domains)+len(suffixes)+len(prefixSet))
-	for _, domain := range exactValues {
-		selected, err := composition.SelectsDomain(domain)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, clashRule{Kind: model.SelectorDomain, Value: domain, Selected: selected})
-	}
-	for _, suffix := range suffixValues {
-		probe, found := uncoveredDomainForSuffix(suffix, domains, suffixes)
-		if !found {
-			continue
-		}
-		selected, err := composition.SelectsDomain(probe)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, clashRule{Kind: model.SelectorDomainSuffix, Value: suffix, Selected: selected})
-	}
-
-	prefixes := make([]netip.Prefix, 0, len(prefixSet))
-	for _, prefix := range prefixSet {
-		prefixes = append(prefixes, prefix)
-	}
-	sort.Slice(prefixes, func(left, right int) bool {
-		if prefixes[left].Addr().BitLen() != prefixes[right].Addr().BitLen() {
-			return prefixes[left].Addr().BitLen() < prefixes[right].Addr().BitLen()
-		}
-		if prefixes[left].Bits() != prefixes[right].Bits() {
-			return prefixes[left].Bits() > prefixes[right].Bits()
-		}
-		return prefixes[left].Addr().Compare(prefixes[right].Addr()) < 0
-	})
-	for _, prefix := range prefixes {
-		covered := make([]netip.Prefix, 0)
-		for _, candidate := range prefixes {
-			if candidate.Addr().BitLen() == prefix.Addr().BitLen() && candidate.Bits() > prefix.Bits() && prefix.Contains(candidate.Addr()) {
-				covered = append(covered, candidate)
-			}
-		}
-		probe, found := uncoveredAddress(prefix, covered)
-		if !found {
-			continue
-		}
-		selected, err := composition.SelectsIP(probe)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, clashRule{Kind: model.SelectorIPCIDR, Value: prefix.String(), Selected: selected})
-	}
-	return rules, nil
-}
-
-func sortedStringKeys(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func uncoveredDomainForSuffix(suffix string, exact, suffixes map[string]struct{}) (string, bool) {
-	if _, covered := exact[suffix]; !covered {
-		return suffix, true
-	}
-	labels := make([]string, 0, len(exact)+len(suffixes)+36)
-	for character := 'a'; character <= 'z'; character++ {
-		labels = append(labels, string(character))
-	}
-	for character := '0'; character <= '9'; character++ {
-		labels = append(labels, string(character))
-	}
-	for index := 0; index <= len(exact)+len(suffixes); index++ {
-		labels = append(labels, "v"+strconv.Itoa(index))
-	}
-	for _, label := range labels {
-		candidate := label + "." + suffix
-		if err := (model.Selector{Kind: model.SelectorDomain, Value: candidate}).Validate(); err != nil {
-			continue
-		}
-		if _, covered := exact[candidate]; covered {
-			continue
-		}
-		covered := false
-		for descendant := range suffixes {
-			if descendant != suffix && (candidate == descendant || strings.HasSuffix(candidate, "."+descendant)) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-func uncoveredAddress(prefix netip.Prefix, covered []netip.Prefix) (netip.Addr, bool) {
-	if len(covered) == 0 {
-		return prefix.Addr(), true
-	}
-	if prefix.Bits() == prefix.Addr().BitLen() {
-		return netip.Addr{}, false
-	}
-	left, right := splitPrefix(prefix)
-	for _, half := range []netip.Prefix{left, right} {
-		descendants := make([]netip.Prefix, 0, len(covered))
-		fullyCovered := false
-		for _, candidate := range covered {
-			if candidate == half {
-				fullyCovered = true
-				break
-			}
-			if candidate.Bits() > half.Bits() && half.Contains(candidate.Addr()) {
-				descendants = append(descendants, candidate)
-			}
-		}
-		if fullyCovered {
-			continue
-		}
-		if address, found := uncoveredAddress(half, descendants); found {
-			return address, true
-		}
-	}
-	return netip.Addr{}, false
-}
-
-func splitPrefix(prefix netip.Prefix) (netip.Prefix, netip.Prefix) {
-	bits := prefix.Bits() + 1
-	address := prefix.Addr()
-	if address.Is4() {
-		raw := address.As4()
-		raw[(bits-1)/8] |= byte(1 << (7 - ((bits - 1) % 8)))
-		return netip.PrefixFrom(address, bits).Masked(), netip.PrefixFrom(netip.AddrFrom4(raw), bits).Masked()
-	}
-	raw := address.As16()
-	raw[(bits-1)/8] |= byte(1 << (7 - ((bits - 1) % 8)))
-	return netip.PrefixFrom(address, bits).Masked(), netip.PrefixFrom(netip.AddrFrom16(raw), bits).Masked()
+	return matcher.clashRules(), nil
 }
 
 type clashRenderInput struct {
