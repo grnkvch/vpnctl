@@ -266,6 +266,32 @@ control, standard, restricted, tunnel, and leaf-certificate files. Drain or
 cleanup failures return explicit repair actions while the complete new set
 stays active.
 
+### Node certificate warning and expiry boundary
+
+Node control leaves use one shared lifecycle calculation on both gateway and
+private-node state. Before `not_after - 180 days` the certificate is
+`healthy`. At the exact 180-day boundary it becomes `expiring`; `status` and
+the control-certificate part of `doctor` emit `node_certificate_expiring` plus
+the required `sudo vpnctl node rotate` action. The certificate remains usable,
+the doctor check still passes, and an otherwise healthy command retains the
+success exit category. There is no automatic node-certificate renewal.
+
+At `now >= not_after` the condition is `expired`, doctor reports a failed
+control-certificate check, and the focused status result is degraded. Ordinary
+rotation is then unavailable because its authenticated mTLS prerequisite can
+no longer be assumed. The node-side rotation plan, the pre-apply boundary, and
+gateway request preparation all enforce the same exact cutoff. A plan made
+before expiry but confirmed at or after expiry creates no operation, key, state
+generation, or runtime candidate.
+
+Recovery preserves the existing immutable identity and is deliberately a
+two-host action: first run `sudo vpnctl node recover <node-id>` on the gateway
+to issue the one-time token, then run `sudo vpnctl node recover` on the original
+private node and enter that token through hidden input. The status/doctor
+projection exposes only node/certificate identifiers, fingerprint, generation,
+expiry and warning metadata; it has no credential-reference, token, private-key,
+or public enrollment path.
+
 ## Signed response and atomic consumption
 
 The gateway creates an independent non-zero 128-bit nonce for each accepted

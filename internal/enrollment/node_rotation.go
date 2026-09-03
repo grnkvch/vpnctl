@@ -251,7 +251,11 @@ func (manager *GatewayNodeRotationManager) Prepare(
 	if err != nil {
 		return nil, err
 	}
-	if _, findErr := node.FindIdempotencyResult(request.RequestID, canonicalTime(manager.options.Now())); findErr == nil {
+	preparedAt := canonicalTime(manager.options.Now())
+	if err := refuseExpiredNodeRotation(state, node, preparedAt); err != nil {
+		return nil, err
+	}
+	if _, findErr := node.FindIdempotencyResult(request.RequestID, preparedAt); findErr == nil {
 		return nil, ErrNodeRotationReplay
 	} else if !errors.Is(findErr, model.ErrIdempotencyRecordEvicted) {
 		return nil, findErr
@@ -261,7 +265,6 @@ func (manager *GatewayNodeRotationManager) Prepare(
 		return nil, err
 	}
 	defer authority.destroy()
-	preparedAt := canonicalTime(manager.options.Now())
 	issued, err := control.IssueNodeControlCertificate(
 		manager.options.Entropy, authority.caCertificatePEM, authority.caPrivateKeyPEM,
 		[]byte(request.PublicExchange.ControlCSRPEM), request.NodeID, preparedAt,
@@ -768,6 +771,9 @@ func (workflow *NodeRotationWorkflow) Plan() (NodeRotationPlan, error) {
 	} else if pending {
 		return NodeRotationPlan{}, model.ErrPendingRequest
 	}
+	if err := refuseExpiredNodeRotation(state, node, workflow.options.Now()); err != nil {
+		return NodeRotationPlan{}, err
+	}
 	next, err := model.NextGeneration(node.CredentialGeneration)
 	if err != nil {
 		return NodeRotationPlan{}, err
@@ -861,10 +867,13 @@ func (workflow *NodeRotationWorkflow) Apply(ctx context.Context, plan NodeRotati
 	if !sameNodeRotationPlan(plan, current, node, currentRaw) {
 		return NodeRotationResult{}, ErrNodeRotationStale
 	}
+	startedAt := canonicalTime(workflow.options.Now())
+	if err := refuseExpiredNodeRotation(current, node, startedAt); err != nil {
+		return NodeRotationResult{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return NodeRotationResult{}, err
 	}
-	startedAt := canonicalTime(workflow.options.Now())
 	started, operation, resumed, err := current.BeginNodeOperation(model.OperationIntent{
 		Type: model.OperationRotate, TargetKind: string(model.TargetNode), TargetID: node.ID,
 		StepNames: []string{"generate", "gateway_stage", "node_stage", "activate", "commit", "drain"},

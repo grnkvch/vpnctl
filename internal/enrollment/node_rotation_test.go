@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,74 @@ func TestNodeRotationRejectsTamperedPlanWithoutOperationOrCredentials(t *testing
 		t.Fatalf("tampered plan mutated state/runtime: generation=%d operations=%d stage=%d",
 			nodeState.Generation, len(nodeState.Operations), fixture.gatewayRuntime.stageCalls)
 	}
+}
+
+func TestNodeRotationTimeTravelRefusesExpiryBeforeAnyApplyEffectAndDirectsRecovery(t *testing.T) {
+	fixture := newNodeRotationFixture(t, "", false)
+	defer fixture.destroy()
+	before, err := fixture.nodeState.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := currentNodeControlCertificate(before, before.Nodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := certificate.NotAfter.Add(-time.Second)
+	fixture.rotation.options.Now = func() time.Time { return now }
+	plan, err := fixture.rotation.Plan()
+	if err != nil {
+		t.Fatalf("Plan(before expiry) error = %v", err)
+	}
+
+	now = certificate.NotAfter
+	if _, err := fixture.rotation.Apply(context.Background(), plan); !errors.Is(err, ErrNodeCertificateExpired) {
+		t.Fatalf("Apply(at expiry) error = %v", err)
+	} else {
+		var expiry *NodeCertificateExpiredError
+		if !errors.As(err, &expiry) || expiry.NodeID != joinTestNodeID || !expiry.NotAfter.Equal(certificate.NotAfter) ||
+			!strings.Contains(err.Error(), "sudo vpnctl node recover "+joinTestNodeID) ||
+			!strings.Contains(err.Error(), "sudo vpnctl node recover\"") {
+			t.Fatalf("expiry recovery direction = %T %v", err, err)
+		}
+	}
+	after, _ := fixture.nodeState.Load()
+	if !reflect.DeepEqual(before, after) || fixture.gatewayRuntime.stageCalls != 0 || fixture.nodeRuntime.checkCalls != 0 {
+		t.Fatalf("expired Apply changed state/runtime: before=%d after=%d gateway_stage=%d node_checks=%d",
+			before.Generation, after.Generation, fixture.gatewayRuntime.stageCalls, fixture.nodeRuntime.checkCalls)
+	}
+	assertRotationGenerationSecrets(t, fixture.nodeSecrets, joinTestNodeID, 2, false)
+
+	if _, err := fixture.rotation.Plan(); !errors.Is(err, ErrNodeCertificateExpired) {
+		t.Fatalf("Plan(at expiry) error = %v", err)
+	}
+}
+
+func TestGatewayRefusesRotationIfCertificateExpiresBeforeRequestPreparation(t *testing.T) {
+	fixture := newNodeRotationFixture(t, "", false)
+	defer fixture.destroy()
+	nodeState, _ := fixture.nodeState.Load()
+	certificate, err := currentNodeControlCertificate(nodeState, nodeState.Nodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.rotation.options.Now = func() time.Time { return certificate.NotAfter.Add(-time.Second) }
+	gateway, ok := fixture.rotation.gateway.(*GatewayNodeRotationManager)
+	if !ok {
+		t.Fatalf("gateway rotation service = %T", fixture.rotation.gateway)
+	}
+	gateway.options.Now = func() time.Time { return certificate.NotAfter }
+	plan, err := fixture.rotation.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.rotation.Apply(context.Background(), plan); !errors.Is(err, ErrNodeCertificateExpired) {
+		t.Fatalf("Apply(gateway at expiry) error = %v", err)
+	}
+	if fixture.gatewayRuntime.stageCalls != 0 {
+		t.Fatalf("expired gateway staged runtime %d times", fixture.gatewayRuntime.stageCalls)
+	}
+	assertOldNodeRotationGeneration(t, fixture)
 }
 
 func TestNodeRotationReadinessRequiresEveryCredentialMember(t *testing.T) {
