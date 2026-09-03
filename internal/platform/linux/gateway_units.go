@@ -72,9 +72,24 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 `
 		}
+		if mode == "gateway-tunnel-server" {
+			serviceIsolation = `UMask=0077
+TimeoutStopSec=15s
+RestrictAddressFamilies=AF_INET AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+LimitNOFILE=512
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+`
+		}
 		dependencies := "After=network-online.target\nWants=network-online.target"
 		if mode == "gateway-dns" {
 			dependencies += "\nAfter=vpnctl-standard.service\nRequires=vpnctl-standard.service"
+		}
+		if mode == "gateway-tunnel-server" {
+			dependencies += " vpnctl-standard.service vpnctl-controller.service\nAfter=vpnctl-standard.service vpnctl-controller.service"
 		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s

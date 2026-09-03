@@ -53,6 +53,21 @@ func TestRenderNodeRoleInstallationStagesOnlyNodeUnits(t *testing.T) {
 		if strings.Contains(content, "gateway-") {
 			t.Fatalf("unit %s contains a gateway service mode", unit.Name)
 		}
+		if unit.Name == "vpnctl-tunnel-client.service" {
+			for _, required := range []string{
+				"ExecStart=" + DefaultVPNCTLBinaryPath + " __service node-tunnel-client",
+				"Wants=vpnctl-routing.service", "After=vpnctl-routing.service",
+				"UMask=0077", "RestrictAddressFamilies=AF_INET AF_UNIX", "LimitNOFILE=512",
+				"LockPersonality=true", "SystemCallArchitectures=native",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("node tunnel unit lacks %q:\n%s", required, content)
+				}
+			}
+			if strings.Contains(content, "Requires=vpnctl-routing.service") {
+				t.Fatal("node tunnel lifetime is coupled to routing restart")
+			}
+		}
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unit names = %v, want %v", got, want)

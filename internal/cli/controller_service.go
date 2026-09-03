@@ -14,6 +14,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 var (
@@ -34,6 +35,12 @@ var (
 	}
 	runNodeDNSIntegrationService = func(ctx context.Context, paths store.Paths, action string) error {
 		return routing.RunNodeDNSIntegrationService(ctx, paths, linuxplatform.OSProbeRunner{}, action)
+	}
+	runFRPServerService = func(ctx context.Context, paths store.Paths) error {
+		return tunnel.RunFRPServerService(ctx, paths, linuxplatform.OSProbeRunner{}, tunnel.OSFRPProcessRunner{})
+	}
+	runFRPClientService = func(ctx context.Context, paths store.Paths) error {
+		return tunnel.RunFRPClientService(ctx, paths, linuxplatform.OSProbeRunner{}, tunnel.OSFRPProcessRunner{})
 	}
 	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -63,12 +70,18 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	case "gateway-dns":
 		serviceName = "gateway DNS"
 		err = runGatewayDNSService(ctx, paths)
+	case "gateway-tunnel-server":
+		serviceName = "gateway tunnel server"
+		err = runFRPServerService(ctx, paths)
 	case "node-standard":
 		serviceName = "node standard transport"
 		err = runStandardTransportService(ctx, paths, model.RoleNode)
 	case "node-routing":
 		serviceName = "node routing"
 		err = runNodeRoutingService(ctx, paths)
+	case "node-tunnel-client":
+		serviceName = "node tunnel client"
+		err = runFRPClientService(ctx, paths)
 	case "node-routing-guard":
 		serviceName = "node routing guard"
 		err = runNodeRoutingGuardService(ctx, paths, routing.NodeRoutingGuardInstallAction)

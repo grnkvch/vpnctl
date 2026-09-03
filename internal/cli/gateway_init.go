@@ -18,6 +18,7 @@ import (
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 type gatewayInitializerAPI interface {
@@ -330,6 +331,10 @@ func developmentComponentManifest() model.ComponentManifest {
 			Name: transport.RestrictedProviderName, Version: transport.RestrictedProviderVersion, Source: "vpnctl-release-bundle", Bundled: true,
 			SHA256:       transport.RestrictedProviderSHA256,
 			Capabilities: []string{"tun-routing", "redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "uot-v2"},
+		}, {
+			Name: tunnel.FRPProviderName, Version: tunnel.FRPProviderVersion, Source: "vpnctl-release-bundle", Bundled: true,
+			SHA256:       tunnel.FRPProviderSHA256,
+			Capabilities: []string{"dynamic-reload", "http-plugin-authorization", "tcp-mux", "tls-server-verification"},
 		}},
 	}
 }

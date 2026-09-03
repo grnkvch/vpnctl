@@ -38,11 +38,14 @@ type Candidate interface {
 }
 
 type CandidateDescriptor struct {
-	Provider   string
-	HostRole   model.Role
-	HostID     string
-	Generation uint64
-	ConfigHash string
+	Provider             string
+	HostRole             model.Role
+	HostID               string
+	Generation           uint64
+	NodeID               string
+	CredentialGeneration uint64
+	ActiveTransport      model.TransportKind
+	ConfigHash           string
 }
 
 func (descriptor CandidateDescriptor) Validate() error {
@@ -57,6 +60,21 @@ func (descriptor CandidateDescriptor) Validate() error {
 	}
 	if descriptor.Generation == 0 {
 		return fmt.Errorf("tunnel candidate generation must be positive")
+	}
+	if descriptor.HostRole == model.RoleGateway {
+		if descriptor.NodeID != "" || descriptor.CredentialGeneration != 0 || descriptor.ActiveTransport != "" {
+			return fmt.Errorf("gateway tunnel candidate contains node-only identity fields")
+		}
+	} else {
+		if err := validateUUID("tunnel candidate node ID", descriptor.NodeID); err != nil {
+			return err
+		}
+		if descriptor.CredentialGeneration == 0 {
+			return fmt.Errorf("tunnel candidate credential generation must be positive")
+		}
+		if descriptor.ActiveTransport != model.TransportStandard && descriptor.ActiveTransport != model.TransportRestricted {
+			return fmt.Errorf("tunnel candidate has unsupported active transport %q", descriptor.ActiveTransport)
+		}
 	}
 	if !configHashPattern.MatchString(descriptor.ConfigHash) {
 		return fmt.Errorf("tunnel config hash must be a SHA-256 hex digest")
@@ -79,10 +97,11 @@ func (request RenderRequest) Validate() error {
 // inside NodeSession so adding an expose cannot imply a second daemon or
 // persistent connection.
 type Plan struct {
-	HostRole   model.Role
-	HostID     string
-	Generation uint64
-	Nodes      []NodeSession
+	HostRole       model.Role
+	HostID         string
+	Generation     uint64
+	ServerEndpoint netip.AddrPort
+	Nodes          []NodeSession
 }
 
 func (plan Plan) Validate() error {
@@ -94,6 +113,9 @@ func (plan Plan) Validate() error {
 	}
 	if plan.Generation == 0 {
 		return fmt.Errorf("tunnel plan generation must be positive")
+	}
+	if !plan.ServerEndpoint.IsValid() || !plan.ServerEndpoint.Addr().Is4() || !plan.ServerEndpoint.Addr().IsPrivate() || plan.ServerEndpoint.Port() == 0 {
+		return fmt.Errorf("tunnel server endpoint must be a private IPv4 address and port")
 	}
 	if plan.Nodes == nil {
 		return fmt.Errorf("tunnel node sessions must be present")
@@ -124,10 +146,11 @@ func (plan Plan) Validate() error {
 }
 
 type NodeSession struct {
-	NodeID          string
-	Generation      uint64
-	ActiveTransport model.TransportKind
-	Mappings        []Mapping
+	NodeID               string
+	Generation           uint64
+	CredentialGeneration uint64
+	ActiveTransport      model.TransportKind
+	Mappings             []Mapping
 }
 
 func (session NodeSession) Validate() error {
@@ -136,6 +159,9 @@ func (session NodeSession) Validate() error {
 	}
 	if session.Generation == 0 {
 		return fmt.Errorf("tunnel node generation must be positive")
+	}
+	if session.CredentialGeneration == 0 {
+		return fmt.Errorf("tunnel credential generation must be positive")
 	}
 	if session.ActiveTransport != model.TransportStandard && session.ActiveTransport != model.TransportRestricted {
 		return fmt.Errorf("unsupported active tunnel transport %q", session.ActiveTransport)
@@ -261,7 +287,10 @@ func NewNodeSession(node model.Node, exposes []model.Expose, generation uint64) 
 		mappings = append(mappings, mapping)
 	}
 	sort.Slice(mappings, func(left, right int) bool { return mappings[left].Name < mappings[right].Name })
-	session := NodeSession{NodeID: node.ID, Generation: generation, ActiveTransport: node.ActiveTransport, Mappings: mappings}
+	session := NodeSession{
+		NodeID: node.ID, Generation: generation, CredentialGeneration: node.CredentialGeneration,
+		ActiveTransport: node.ActiveTransport, Mappings: mappings,
+	}
 	if err := session.Validate(); err != nil {
 		return NodeSession{}, err
 	}

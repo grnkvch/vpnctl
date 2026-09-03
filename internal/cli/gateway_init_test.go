@@ -16,6 +16,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 func TestExecuteGatewayInitUsesV2WorkflowAndEmitsConfirmAction(t *testing.T) {
@@ -60,6 +61,26 @@ func TestExecuteGatewayInitUsesV2WorkflowAndEmitsConfirmAction(t *testing.T) {
 	if len(result.RequiresAction) != 1 || result.RequiresAction[0].Command != "vpnctl confirm fw-ABC123" {
 		t.Fatalf("requires_action = %+v", result.RequiresAction)
 	}
+}
+
+func TestDevelopmentComponentManifestIncludesPinnedFRP(t *testing.T) {
+	t.Parallel()
+
+	manifest := developmentComponentManifest()
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("developmentComponentManifest().Validate() error = %v", err)
+	}
+	for _, component := range manifest.Components {
+		if component.Name != tunnel.FRPProviderName {
+			continue
+		}
+		if component.Version != tunnel.FRPProviderVersion || component.SHA256 != tunnel.FRPProviderSHA256 ||
+			component.Source != "vpnctl-release-bundle" || !component.Bundled {
+			t.Fatalf("frp component = %+v", component)
+		}
+		return
+	}
+	t.Fatal("development component manifest does not contain frp")
 }
 
 func TestGatewayInitOutputWithUnknownSwapCapacityIsValid(t *testing.T) {

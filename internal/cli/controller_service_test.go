@@ -279,3 +279,47 @@ func TestInternalNodeDNSIntegrationServicesDispatchActionsAndSanitizeFailure(t *
 		})
 	}
 }
+
+func TestInternalFRPServicesDispatchAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousServer := runFRPServerService
+	previousClient := runFRPClientService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runFRPServerService = previousServer
+		runFRPClientService = previousClient
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	called := []string{}
+	runFRPServerService = func(_ context.Context, received store.Paths) error {
+		if received != paths {
+			t.Fatalf("frp server paths = %+v", received)
+		}
+		called = append(called, "server")
+		return nil
+	}
+	runFRPClientService = func(_ context.Context, received store.Paths) error {
+		if received != paths {
+			t.Fatalf("frp client paths = %+v", received)
+		}
+		called = append(called, "client")
+		return errors.New("tunnel-token-canary")
+	}
+	var stderr bytes.Buffer
+	if code := Execute([]string{"__service", "gateway-tunnel-server"}, &bytes.Buffer{}, &stderr); code != ExitSuccess {
+		t.Fatalf("gateway tunnel service code = %d, stderr = %q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Execute([]string{"__service", "node-tunnel-client"}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+		t.Fatalf("node tunnel service code = %d", code)
+	}
+	if fmt.Sprint(called) != "[server client]" || stderr.String() != "node tunnel client service failed\n" || strings.Contains(stderr.String(), "canary") {
+		t.Fatalf("frp dispatch called=%v stderr=%q", called, stderr.String())
+	}
+}

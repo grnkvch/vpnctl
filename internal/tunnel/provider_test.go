@@ -66,7 +66,7 @@ func TestNodeSessionMultiplexesAllMappingsInOneRender(t *testing.T) {
 	provider := &recordingProvider{}
 	request := RenderRequest{Plan: Plan{
 		HostRole: model.RoleNode, HostID: "30000000-0000-4000-8000-000000000001", Generation: 7,
-		Nodes: []NodeSession{session},
+		ServerEndpoint: netip.MustParseAddrPort("10.67.0.1:17000"), Nodes: []NodeSession{session},
 	}}
 	candidate, err := provider.Render(context.Background(), request)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestPlanRejectsCrossNodeMappingAndGlobalPortCollision(t *testing.T) {
 	}
 	plan := Plan{
 		HostRole: model.RoleGateway, HostID: "30000000-0000-4000-8000-000000000001", Generation: 3,
-		Nodes: []NodeSession{first, second},
+		ServerEndpoint: netip.MustParseAddrPort("10.67.0.1:17000"), Nodes: []NodeSession{first, second},
 	}
 	if err := plan.Validate(); err == nil || !strings.Contains(err.Error(), "shared by exposes") {
 		t.Fatalf("duplicate global loopback port error = %v", err)
@@ -182,7 +182,10 @@ func (provider *recordingProvider) Render(_ context.Context, request RenderReque
 	}
 	return recordingCandidate{descriptor: CandidateDescriptor{
 		Provider: provider.Name(), HostRole: request.Plan.HostRole, HostID: request.Plan.HostID,
-		Generation: request.Plan.Generation, ConfigHash: strings.Repeat("a", 64),
+		Generation: request.Plan.Generation, NodeID: request.Plan.Nodes[0].NodeID,
+		CredentialGeneration: request.Plan.Nodes[0].CredentialGeneration,
+		ActiveTransport:      request.Plan.Nodes[0].ActiveTransport,
+		ConfigHash:           strings.Repeat("a", 64),
 	}}, nil
 }
 

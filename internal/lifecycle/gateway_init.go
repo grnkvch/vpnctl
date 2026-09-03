@@ -13,6 +13,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 var (
@@ -247,7 +248,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	}
 	firewall, err := RenderGatewayIdentityFirewall(desired, GatewayIdentityFirewallServices{
 		ClientTCPPorts: []int{routing.GatewayDNSPort}, ClientUDPPorts: []int{routing.GatewayDNSPort},
-		NodeTCPPorts: []int{routing.GatewayDNSPort, control.RPCControlTCPPort}, NodeUDPPorts: []int{routing.GatewayDNSPort},
+		NodeTCPPorts: []int{routing.GatewayDNSPort, control.RPCControlTCPPort, tunnel.FRPServerPort}, NodeUDPPorts: []int{routing.GatewayDNSPort},
 	})
 	if err != nil {
 		return GatewayInitPlan{}, err

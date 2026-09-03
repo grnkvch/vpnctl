@@ -17,9 +17,10 @@ authoritative state do not depend on frp terminology or configuration shapes.
   authoritative internal-port allocation until the expose is removed.
 
 The `internal/tunnel.Provider` interface receives this complete desired
-topology and returns an opaque candidate. Only provider name, host identity,
-role, generation, and configuration hash cross the abstraction. Atomic file
-activation, process supervision, credentials, authorization, and readiness are
+topology and returns an opaque candidate. Its secret-free descriptor carries
+provider, host and node identities, state and credential generations, the
+manually active transport, and a configuration hash. Provider configuration
+bytes remain opaque. Atomic file activation, authorization, and readiness are
 implemented by the later reverse-tunnel tasks rather than leaking into the
 public expose model.
 
@@ -66,10 +67,41 @@ them only after all three validate. Therefore a public route can never observe
 the old port after the tunnel has moved, or the new port before the matching
 tunnel mapping exists.
 
+## Pinned frp provider
+
+Task 11.2 pins the official Linux/amd64 frp `0.69.0` archive at SHA-256
+`6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e`.
+The release bundle places only `frps` and `frpc` under
+`/usr/local/libexec/vpnctl/`; service entrypoints reject another version and
+run native `verify` after vpnctl's strict canonical validation.
+
+The gateway renders one `frps` configuration bound to its private node-overlay
+address on TCP `17000`. Proxy endpoints bind only to `127.0.0.1`, are limited
+to TCP `20000-29999`, and require the controller authorization hook on
+`127.0.0.1:19091`. No dashboard, HTTP/HTTPS vhost, public proxy bind, KCP, QUIC,
+UDP proxy type, or shared provider token is enabled.
+
+Each node renders one complete `frpc` configuration containing every enabled
+mapping. It uses TCP wire protocol v1, `tcpMux`, declared pool zero, TLS trust
+from the enrolled gateway certificate, server name
+`vpnctl-tunnel-gateway`, and loopback-only administration on TCP `17400`.
+The server address is always the internal gateway overlay endpoint; no public
+address, `proxyURL`, or standby transport appears in frp configuration. The
+node routing layer sends that endpoint through the one manually active
+standard or restricted transport and blocks it when that transport is down.
+
+Both service units discard output by default, use `Restart=on-failure`, and
+are ordered after their standard/controller or active-routing dependencies
+without coupling their lifetime to controller restarts. Gateway firewall input admits TCP `17000` only from active node
+overlay identities; it is not a public fixed listener. The accepted runtime
+gate reconfirmed one persistent connection for two exposes and 12 concurrent
+streams per expose, TLS refusal before credential disclosure, dynamic mapping,
+8-second reconnect, 2-second revoke, and a restricted steady state with no
+direct TCP `17000` packets.
+
 ## Deferred provider work
 
-Tasks 11.2-11.9 supply the pinned provider renderer, independent 256-bit node
-credentials, local-only connection and mapping authorization, atomic dynamic
-reload, readiness/reconnect behavior, revoke handling, and the release resource
-gate. Those additions must preserve this topology, identity, and allocation
-contract.
+Tasks 11.3-11.9 supply integrated independent 256-bit node credential storage,
+local-only connection and mapping authorization, atomic dynamic reload,
+readiness/reconnect behavior, revoke handling, and the release resource gate.
+Those additions must preserve this topology, identity, and allocation contract.

@@ -80,6 +80,10 @@ WantedBy=multi-user.target
 			extraUnit = "Requires=vpnctl-routing-guard.service\nAfter=vpnctl-routing-guard.service\n"
 			extraService = fmt.Sprintf("ExecStartPre=%s __service node-routing-not-ready\nExecStartPost=%s __service node-routing-wait-ready\nExecStopPost=%s __service node-routing-not-ready\nTimeoutStartSec=20s\nTimeoutStopSec=10s\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW\nDevicePolicy=closed\nDeviceAllow=/dev/net/tun rw\n", binaryPath, binaryPath, binaryPath)
 		}
+		if name == "vpnctl-tunnel-client.service" {
+			extraUnit = "Wants=vpnctl-routing.service\nAfter=vpnctl-routing.service\n"
+			extraService = "UMask=0077\nTimeoutStopSec=15s\nRestrictAddressFamilies=AF_INET AF_UNIX\nLockPersonality=true\nSystemCallArchitectures=native\nLimitNOFILE=512\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\n"
+		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s
 After=network-online.target

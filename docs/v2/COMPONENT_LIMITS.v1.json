@@ -120,6 +120,12 @@
       "version": "0.69.0",
       "asset": "frp_0.69.0_linux_amd64.tar.gz",
       "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e",
+      "capabilities": [
+        "dynamic-reload",
+        "http-plugin-authorization",
+        "tcp-mux",
+        "tls-server-verification"
+      ],
       "pool_login_normalization": "declared-0-arrives-as-1-and-is-authoritatively-rewritten-to-0",
       "upgrade_policy": "pin exact asset and rerun task 2.7 plus tunnel E2E before activation"
     },
@@ -261,9 +267,14 @@
     },
     "reverse_tunnel": {
       "internal_server_tcp": 17000,
+      "client_admin_tcp": 17400,
+      "authorization_plugin_tcp": 19091,
       "loopback_port_first": 20000,
       "loopback_port_last": 29999,
       "loopback_port_capacity": 10000,
+      "wire_protocol": "v1",
+      "tls_server_name": "vpnctl-tunnel-gateway",
+      "maximum_ports_per_node": 10000,
       "tcp_mux": true,
       "effective_pool_count": 0,
       "frpc_per_node": 1,

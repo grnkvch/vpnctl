@@ -68,6 +68,22 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 				}
 			}
 		}
+		if unit.Name == "vpnctl-tunnel-server.service" {
+			for _, required := range []string{
+				"ExecStart=/usr/local/bin/vpnctl __service gateway-tunnel-server",
+				"After=vpnctl-standard.service vpnctl-controller.service",
+				"Wants=network-online.target vpnctl-standard.service vpnctl-controller.service",
+				"UMask=0077", "RestrictAddressFamilies=AF_INET AF_UNIX", "LimitNOFILE=512",
+				"LockPersonality=true", "SystemCallArchitectures=native",
+			} {
+				if !strings.Contains(content, required) {
+					t.Errorf("gateway tunnel unit missing %q", required)
+				}
+			}
+			if strings.Contains(content, "Requires=vpnctl-controller.service") {
+				t.Error("gateway tunnel lifetime is coupled to controller restart")
+			}
+		}
 	}
 	if want := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(names, want) {
 		t.Fatalf("gateway rendered units = %v, want %v", names, want)

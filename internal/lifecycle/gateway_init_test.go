@@ -49,10 +49,11 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 		t.Fatalf("gateway DNS config file = %q", plan.DNSConfigFile)
 	}
 	firewall := string(plan.firewall.Definition())
-	if !strings.Contains(firewall, "elements = { 53, 9443 }") ||
+	if !strings.Contains(firewall, "elements = { 53, 9443, 17000 }") ||
 		!strings.Contains(firewall, "set client_tcp_ports") || !strings.Contains(firewall, "set client_udp_ports") ||
 		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @active_node_v4 tcp dport @node_tcp_ports accept`) ||
-		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 9443 accept") {
+		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 9443 accept") ||
+		strings.Contains(firewall, "ip saddr 0.0.0.0/0 tcp dport 17000 accept") {
 		t.Fatalf("control RPC firewall scope is not node-overlay-only:\n%s", firewall)
 	}
 	if _, err := os.Lstat(harness.paths.ConfigDir); !errors.Is(err, os.ErrNotExist) {
