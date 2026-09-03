@@ -64,6 +64,14 @@ type NodeJoinResult struct {
 	ReplayHash             string
 }
 
+type NodeJoinPlan struct {
+	Transport              model.TransportKind
+	Presets                []string
+	CurrentStateGeneration uint64
+}
+
+var ErrNodeAlreadyJoined = errors.New("node host is already joined")
+
 func NewNodeJoinWorkflow(
 	state NodeJoinStateStore,
 	secrets NodeCredentialSecretStore,
@@ -101,6 +109,9 @@ func (workflow *NodeJoinWorkflow) Join(
 ) (NodeJoinResult, error) {
 	if workflow == nil || ctx == nil || tokenSecret == nil {
 		return NodeJoinResult{}, fmt.Errorf("node join input is incomplete")
+	}
+	if err := ValidateNodeJoinIntent(transportKind, presets); err != nil {
+		return NodeJoinResult{}, err
 	}
 	state, err := workflow.state.Load()
 	if err != nil {
@@ -207,6 +218,27 @@ func (workflow *NodeJoinWorkflow) Join(
 		return NodeJoinResult{}, errors.Join(ErrJoinUncertain, err)
 	}
 	return result, nil
+}
+
+// PlanJoin is read-only and rejects a repeated join before confirmation,
+// hidden-token consumption, key generation, or a gateway request.
+func (workflow *NodeJoinWorkflow) PlanJoin(transportKind model.TransportKind, presets []string) (NodeJoinPlan, error) {
+	if workflow == nil || workflow.state == nil {
+		return NodeJoinPlan{}, fmt.Errorf("node join workflow is incomplete")
+	}
+	if err := ValidateNodeJoinIntent(transportKind, presets); err != nil {
+		return NodeJoinPlan{}, err
+	}
+	state, err := workflow.state.Load()
+	if err != nil {
+		return NodeJoinPlan{}, fmt.Errorf("load node state: %w", err)
+	}
+	if err := validateFreshNodeJoinState(state); err != nil {
+		return NodeJoinPlan{}, err
+	}
+	return NodeJoinPlan{
+		Transport: transportKind, Presets: append([]string{}, presets...), CurrentStateGeneration: state.Generation,
+	}, nil
 }
 
 func (workflow *NodeJoinWorkflow) newNonce() ([EnrollmentNonceBytes]byte, error) {
@@ -418,6 +450,9 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 func validateFreshNodeJoinState(state model.State) error {
 	if err := state.Validate(); err != nil {
 		return err
+	}
+	if state.Host.Role == model.RoleNode && len(state.Nodes) == 1 {
+		return fmt.Errorf("%w as %s; use `vpnctl transport switch <standard|restricted>` to change transport", ErrNodeAlreadyJoined, state.Nodes[0].ID)
 	}
 	if state.Host.Role != model.RoleNode || len(state.Nodes) != 0 || len(state.Transports) != 0 ||
 		len(state.Policies) != 0 || len(state.Certificates) != 0 {

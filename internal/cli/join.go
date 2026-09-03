@@ -10,6 +10,7 @@ import (
 )
 
 type NodeJoiner interface {
+	PlanJoin(model.TransportKind, []string) (enrollment.NodeJoinPlan, error)
 	Join(context.Context, *output.Secret, model.TransportKind, []string) (enrollment.NodeJoinResult, error)
 }
 
@@ -44,11 +45,15 @@ func (workflow *NodeJoinMutationWorkflow) Plan(_ context.Context, inputs *Intera
 	if len(token) == 0 {
 		return MutationPlan{}, fmt.Errorf("join requires a hidden invite token")
 	}
+	joinPlan, err := workflow.joiner.PlanJoin(workflow.transport, workflow.presets)
+	if err != nil {
+		return MutationPlan{}, err
+	}
 	workflow.planned = true
 	return MutationPlan{
 		Impact: ImpactAvailability,
 		Result: output.NewResult("join", output.StatusOK, output.CategorySuccess, output.SafeObject{
-			"changed": true, "generation": uint64(0),
+			"changed": true, "generation": joinPlan.CurrentStateGeneration + 1,
 		}),
 	}, nil
 }

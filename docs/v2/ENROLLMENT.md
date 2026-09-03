@@ -2,8 +2,8 @@
 
 This document fixes the task-9.1 invite lifecycle, task-9.2 public protocol
 boundary, task-9.3 node-owned credential boundary, and task-9.4 initial join
-saga. Joined-node replay/reconciliation follows in task 9.5; the recovery-token
-lifecycle follows in task 9.9.
+saga. It also fixes task-9.5 joined-node idempotency and gateway inspection;
+the recovery-token lifecycle follows in task 9.9.
 
 ## Issuance and persistence
 
@@ -167,9 +167,39 @@ private keys never have a gateway storage path.
 This is a reconcilable saga, not distributed consensus. Once the gateway has
 committed, a lost, malformed, or locally unpersistable response is explicitly
 `uncertain`: node credentials are retained and no local authoritative node is
-invented. Task 9.5 supplies repeated-join/idempotency reconciliation for that
-case. Pre-commit validation and readiness failures are definitive and roll
-back the fresh node credentials immediately.
+invented. The ordinary already-joined no-op does not claim to resolve that
+ambiguous first-join outcome; retained material remains available to an
+explicit repair/recovery workflow instead of being destructively deleted.
+Pre-commit validation and readiness failures are definitive and roll back the
+fresh node credentials immediately.
+
+## Joined-node behavior and gateway inspection
+
+Both join planning and apply first validate the local authoritative role and
+identity. If the node is already joined, they return the typed
+`ErrNodeAlreadyJoined` result with an explicit direction to
+`vpnctl transport switch <standard|restricted>`. The check occurs before key
+generation or any public gateway request. It neither consumes the supplied
+invite input nor changes local/gateway generation, credential bytes, active
+transport, or policy. A repeated join is therefore a safe rejection, not a
+second enrollment attempt and never an implicit transport switch.
+
+On a gateway, `node list` and `node show <name-or-id>` load and validate one
+authoritative snapshot. Show accepts an exact immutable ID or a
+case-insensitive name; list is stable by case-folded name and then ID. Deleted
+records are not visible. The public node projection contains lifecycle,
+overlay address, assigned presets and policy generation, manual active
+transport plus safe transport protocol/port/state metadata, and current
+control-certificate fingerprint/expiry. It deliberately excludes secret and
+certificate references, config hashes, WireGuard public keys, all private or
+shared credential bytes, tokens, and idempotency records.
+
+Multiple nodes append independent immutable IDs, node-pool addresses, control
+certificates, WireGuard peer keys, restricted identities, tunnel tokens,
+transport records, and optional policies. A node-local store contains exactly
+its own identity resources; the gateway retains only the public/as-required
+shared half for that node. No node may adopt another node's reference or
+credential during enrollment.
 
 ## Signed response and atomic consumption
 

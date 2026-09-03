@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,14 +260,198 @@ func TestConcurrentJoinReplayCreatesOneIdentityAndRollsBackLoser(t *testing.T) {
 	}
 }
 
+func TestRepeatedJoinOnJoinedNodeChangesNothingAndDirectsToTransportSwitch(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); err != nil {
+		t.Fatal(err)
+	}
+	gatewayBefore, _ := fixture.gatewayState.Load()
+	nodeBefore, _ := fixture.nodeState.Load()
+	gatewayBytesBefore, _ := model.EncodeState(gatewayBefore)
+	nodeBytesBefore, _ := model.EncodeState(nodeBefore)
+	callsBefore := fixture.exchanger.calls.Load()
+	references, err := NewNodeCredentialReferences(joinTestNodeID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretsBefore := make(map[model.SecretRef][]byte)
+	for _, reference := range references.Values() {
+		value, readErr := fixture.nodeSecrets.Get(reference)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		defer clear(value)
+		secretsBefore[reference] = value
+	}
+
+	if _, err := fixture.workflow.PlanJoin(model.TransportStandard, []string{}); !errors.Is(err, ErrNodeAlreadyJoined) ||
+		!strings.Contains(err.Error(), "transport switch") {
+		t.Fatalf("PlanJoin() error = %v", err)
+	}
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportStandard, []string{}); !errors.Is(err, ErrNodeAlreadyJoined) ||
+		!strings.Contains(err.Error(), "transport switch") {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if fixture.exchanger.calls.Load() != callsBefore {
+		t.Fatalf("repeated join reached gateway: calls %d -> %d", callsBefore, fixture.exchanger.calls.Load())
+	}
+	gatewayAfter, _ := fixture.gatewayState.Load()
+	nodeAfter, _ := fixture.nodeState.Load()
+	gatewayBytesAfter, _ := model.EncodeState(gatewayAfter)
+	nodeBytesAfter, _ := model.EncodeState(nodeAfter)
+	if !bytes.Equal(gatewayBytesBefore, gatewayBytesAfter) || !bytes.Equal(nodeBytesBefore, nodeBytesAfter) {
+		t.Fatalf("repeated join changed state: gateway generations %d/%d node generations %d/%d",
+			gatewayBefore.Generation, gatewayAfter.Generation, nodeBefore.Generation, nodeAfter.Generation)
+	}
+	for reference, before := range secretsBefore {
+		after, readErr := fixture.nodeSecrets.Get(reference)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(before, after) {
+			clear(after)
+			t.Fatalf("repeated join changed local credential %s", reference)
+		}
+		clear(after)
+	}
+}
+
+func TestMultipleJoinedNodesRetainIsolatedIdentitiesAndResources(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	first, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportStandard, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan, err := fixture.manager.PlanIssue("webhook-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInvite, err := fixture.manager.CommitIssue(context.Background(), secondPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondInvite.Token.Destroy()
+
+	secondID := "30000000-0000-4000-8000-000000000003"
+	secondNodeStateValue := joinInitialNodeState(fixture.now, func() model.ComponentManifest {
+		state, _ := fixture.gatewayState.Load()
+		return state.Components
+	}())
+	secondNodeStateValue.Host.ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	secondState := newInviteMemoryState(t, secondNodeStateValue)
+	secondSecrets := newJoinSecretStore(t)
+	secondRunner := &joinWireGuardRunner{
+		nodePrivate: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)),
+		nodePublic:  base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32)),
+	}
+	secondWorkflow, err := NewNodeJoinWorkflow(secondState, secondSecrets, fixture.exchanger, NodeJoinRuntime{
+		Entropy: rand.Reader, Now: func() time.Time { return fixture.now.Add(2 * time.Minute) },
+		NewNodeID: func() (string, error) { return secondID, nil }, WireGuardRunner: secondRunner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := secondWorkflow.Join(context.Background(), secondInvite.Token, model.TransportRestricted, []string{"telegram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.NodeID == second.NodeID || first.OverlayIPv4 != "10.67.0.2" || second.OverlayIPv4 != "10.67.0.3" ||
+		first.ActiveTransport != model.TransportStandard || second.ActiveTransport != model.TransportRestricted {
+		t.Fatalf("joined identities: first=%+v second=%+v", first, second)
+	}
+
+	gateway, _ := fixture.gatewayState.Load()
+	if gateway.Generation != 5 || len(gateway.Nodes) != 2 || len(gateway.Transports) != 4 || len(gateway.Certificates) != 3 {
+		t.Fatalf("multi-node gateway state: generation=%d nodes=%d transports=%d certs=%d",
+			gateway.Generation, len(gateway.Nodes), len(gateway.Transports), len(gateway.Certificates))
+	}
+	byID := make(map[string]model.Node, len(gateway.Nodes))
+	publicKeys := make(map[string]string)
+	certificateFingerprints := make(map[string]string)
+	credentialRefs := make(map[model.SecretRef]string)
+	for _, node := range gateway.Nodes {
+		byID[node.ID] = node
+	}
+	for _, record := range gateway.Transports {
+		if record.OwnerKind != model.TargetNode {
+			continue
+		}
+		if other, duplicate := credentialRefs[record.CredentialRef]; duplicate {
+			t.Fatalf("nodes %s and %s share transport credential ref %s", other, record.OwnerID, record.CredentialRef)
+		}
+		credentialRefs[record.CredentialRef] = record.OwnerID
+		if record.Kind == model.TransportStandard {
+			publicKeys[record.OwnerID] = record.PublicKey
+		}
+	}
+	for _, certificate := range gateway.Certificates {
+		if certificate.Kind == model.CertificateControlNode {
+			certificateFingerprints[certificate.OwnerID] = certificate.Fingerprint
+		}
+	}
+	if len(byID) != 2 || byID[first.NodeID].Name != "private-node" || byID[second.NodeID].Name != "webhook-node" ||
+		publicKeys[first.NodeID] == "" || publicKeys[second.NodeID] == "" || publicKeys[first.NodeID] == publicKeys[second.NodeID] ||
+		certificateFingerprints[first.NodeID] == "" || certificateFingerprints[second.NodeID] == "" ||
+		certificateFingerprints[first.NodeID] == certificateFingerprints[second.NodeID] {
+		t.Fatalf("multi-node identity/resource map: nodes=%+v publicKeys=%+v certificates=%+v", byID, publicKeys, certificateFingerprints)
+	}
+	catalog, err := NewNodeCatalog(fixture.gatewayState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := catalog.List()
+	if err != nil || len(listed.Items) != 2 || listed.Items[0].ID != first.NodeID || listed.Items[1].ID != second.NodeID {
+		t.Fatalf("multi-node catalog = %+v, %v", listed, err)
+	}
+	firstRefs, _ := NewNodeCredentialReferences(first.NodeID, 1)
+	secondRefs, _ := NewNodeCredentialReferences(second.NodeID, 1)
+	for _, pair := range [][2]model.SecretRef{
+		{firstRefs.RestrictedCredential, secondRefs.RestrictedCredential},
+		{firstRefs.TunnelCredential, secondRefs.TunnelCredential},
+	} {
+		firstValue, firstErr := fixture.gatewaySecrets.Get(pair[0])
+		secondValue, secondErr := fixture.gatewaySecrets.Get(pair[1])
+		if firstErr != nil || secondErr != nil || bytes.Equal(firstValue, secondValue) {
+			clear(firstValue)
+			clear(secondValue)
+			t.Fatalf("gateway shared material is not isolated for %s/%s: %v %v", pair[0], pair[1], firstErr, secondErr)
+		}
+		clear(firstValue)
+		clear(secondValue)
+	}
+	for _, boundary := range []struct {
+		store *store.SecretStore
+		other NodeCredentialReferences
+	}{
+		{store: fixture.nodeSecrets, other: secondRefs},
+		{store: secondSecrets, other: firstRefs},
+	} {
+		for _, reference := range boundary.other.Values() {
+			if _, readErr := boundary.store.Get(reference); !errors.Is(readErr, store.ErrSecretNotFound) {
+				t.Fatalf("node secret store contains another identity's %s: %v", reference, readErr)
+			}
+		}
+	}
+	secondLocal, _ := secondState.Load()
+	firstLocal, _ := fixture.nodeState.Load()
+	if len(firstLocal.Nodes) != 1 || firstLocal.Nodes[0].ID != first.NodeID || len(firstLocal.Transports) != 2 || len(firstLocal.Policies) != 0 ||
+		len(secondLocal.Nodes) != 1 || secondLocal.Nodes[0].ID != secondID || len(secondLocal.Transports) != 2 || len(secondLocal.Policies) != 1 {
+		t.Fatalf("isolated local states: first=%+v second=%+v", firstLocal, secondLocal)
+	}
+}
+
 type joinFixture struct {
 	token          *output.Secret
 	workflow       *NodeJoinWorkflow
+	manager        *InviteManager
 	gatewayState   *inviteMemoryState
 	nodeState      *inviteMemoryState
 	gatewaySecrets *store.SecretStore
 	nodeSecrets    *store.SecretStore
 	exchanger      *handlerJoinExchanger
+	now            time.Time
 }
 
 func newJoinFixture(t *testing.T, checker GatewayJoinReadinessChecker) *joinFixture {
@@ -276,7 +461,8 @@ func newJoinFixture(t *testing.T, checker GatewayJoinReadinessChecker) *joinFixt
 	nodeSecrets := newJoinSecretStore(t)
 	gatewayStateValue, identity := joinGatewayState(t, gatewaySecrets, now)
 	gatewayState := newInviteMemoryState(t, gatewayStateValue)
-	manager, err := NewInviteManager(gatewayState, bytes.NewReader(inviteEntropy(91)), func() time.Time { return now })
+	managerEntropy := append(inviteEntropy(91), inviteEntropy(141)...)
+	manager, err := NewInviteManager(gatewayState, bytes.NewReader(managerEntropy), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,8 +506,8 @@ func newJoinFixture(t *testing.T, checker GatewayJoinReadinessChecker) *joinFixt
 		t.Fatal(err)
 	}
 	return &joinFixture{
-		token: issuedInvite.Token, workflow: workflow, gatewayState: gatewayState, nodeState: nodeState,
-		gatewaySecrets: gatewaySecrets, nodeSecrets: nodeSecrets, exchanger: exchanger,
+		token: issuedInvite.Token, workflow: workflow, manager: manager, gatewayState: gatewayState, nodeState: nodeState,
+		gatewaySecrets: gatewaySecrets, nodeSecrets: nodeSecrets, exchanger: exchanger, now: now,
 	}
 }
 
@@ -424,14 +610,24 @@ func newJoinSecretStore(t *testing.T) *store.SecretStore {
 	return result
 }
 
-type joinWireGuardRunner struct{}
+type joinWireGuardRunner struct {
+	nodePrivate string
+	nodePublic  string
+}
 
 func (runner *joinWireGuardRunner) Run(_ context.Context, name string, arguments []string, stdin string) (string, error) {
+	nodePrivate, nodePublic := testNodeWireGuardPrivate(), testNodeWireGuardPublic()
+	if runner != nil && runner.nodePrivate != "" {
+		nodePrivate = runner.nodePrivate
+	}
+	if runner != nil && runner.nodePublic != "" {
+		nodePublic = runner.nodePublic
+	}
 	switch {
 	case name == "wg" && reflect.DeepEqual(arguments, []string{"genkey"}) && stdin == "":
-		return testNodeWireGuardPrivate() + "\n", nil
-	case name == "wg" && reflect.DeepEqual(arguments, []string{"pubkey"}) && stdin == testNodeWireGuardPrivate()+"\n":
-		return testNodeWireGuardPublic() + "\n", nil
+		return nodePrivate + "\n", nil
+	case name == "wg" && reflect.DeepEqual(arguments, []string{"pubkey"}) && stdin == nodePrivate+"\n":
+		return nodePublic + "\n", nil
 	case name == "wg" && reflect.DeepEqual(arguments, []string{"pubkey"}) && stdin == joinGatewayWireGuardPrivate()+"\n":
 		return joinGatewayWireGuardPublic() + "\n", nil
 	default:
@@ -449,6 +645,7 @@ func joinGatewayWireGuardPublic() string {
 
 type handlerJoinExchanger struct {
 	handler http.Handler
+	calls   atomic.Uint64
 }
 
 type tamperJoinExchanger struct {
@@ -481,6 +678,7 @@ func (exchanger tamperJoinExchanger) Exchange(ctx context.Context, endpoint stri
 }
 
 func (exchanger *handlerJoinExchanger) Exchange(_ context.Context, endpoint string, requestBody *output.Secret) (NodeJoinExchangeResult, error) {
+	exchanger.calls.Add(1)
 	var body []byte
 	if err := requestBody.Use(func(value []byte) error {
 		body = append([]byte(nil), value...)

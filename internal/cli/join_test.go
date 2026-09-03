@@ -19,8 +19,8 @@ func TestNodeJoinMutationUsesOnlyHiddenTokenAfterConfirmation(t *testing.T) {
 	inputs := &InteractionInputs{values: map[string][]byte{StepInviteToken: []byte("secret-token-canary")}}
 	defer inputs.Destroy()
 	plan, err := workflow.Plan(context.Background(), inputs)
-	if err != nil || plan.Impact != ImpactAvailability || joiner.calls != 0 {
-		t.Fatalf("Plan() = %+v, %v; calls=%d", plan, err, joiner.calls)
+	if err != nil || plan.Impact != ImpactAvailability || joiner.calls != 0 || joiner.planCalls != 1 {
+		t.Fatalf("Plan() = %+v, %v; calls=%d plans=%d", plan, err, joiner.calls, joiner.planCalls)
 	}
 	applied, err := workflow.Apply(context.Background(), plan, inputs)
 	if err != nil {
@@ -58,11 +58,38 @@ func TestNodeJoinMutationRejectsInvalidIntentAndMissingHiddenToken(t *testing.T)
 	}
 }
 
+func TestNodeJoinMutationRejectsAlreadyJoinedNodeDuringReadOnlyPlan(t *testing.T) {
+	joiner := &recordingNodeJoiner{planErr: enrollment.ErrNodeAlreadyJoined}
+	workflow, err := NewNodeJoinMutationWorkflow(joiner, model.TransportStandard, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := &InteractionInputs{values: map[string][]byte{StepInviteToken: []byte("secret-token-canary")}}
+	defer inputs.Destroy()
+	if _, err := workflow.Plan(context.Background(), inputs); !errors.Is(err, enrollment.ErrNodeAlreadyJoined) {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if joiner.planCalls != 1 || joiner.calls != 0 || string(inputs.Copy(StepInviteToken)) != "secret-token-canary" {
+		t.Fatalf("rejected plan changed inputs or applied join: plans=%d calls=%d token=%q",
+			joiner.planCalls, joiner.calls, inputs.Copy(StepInviteToken))
+	}
+}
+
 type recordingNodeJoiner struct {
+	planCalls int
+	planErr   error
 	calls     int
 	token     string
 	transport model.TransportKind
 	presets   []string
+}
+
+func (joiner *recordingNodeJoiner) PlanJoin(transportKind model.TransportKind, presets []string) (enrollment.NodeJoinPlan, error) {
+	joiner.planCalls++
+	if joiner.planErr != nil {
+		return enrollment.NodeJoinPlan{}, joiner.planErr
+	}
+	return enrollment.NodeJoinPlan{Transport: transportKind, Presets: append([]string{}, presets...), CurrentStateGeneration: 1}, nil
 }
 
 func (joiner *recordingNodeJoiner) Join(_ context.Context, token *output.Secret, transportKind model.TransportKind, presets []string) (enrollment.NodeJoinResult, error) {
