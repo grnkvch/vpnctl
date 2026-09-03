@@ -461,6 +461,11 @@ verify() {
   limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
     restart "$runtime_root/restart.json"
   limactl shell --tty=false "$node_instance" -- sudo cat "$runtime_root/restart.json" > "$evidence_dir/restart.json"
+  limactl shell --tty=false "$node_instance" -- sudo "$libexec_root/fault" \
+    component-update "$runtime_root/component-update.json"
+  limactl shell --tty=false "$node_instance" -- sudo cat "$runtime_root/component-update.json" > "$evidence_dir/component-update.json"
+  jq -e '.status == "passed" and .replacement == "atomic-same-version" and .checksum_preserved and .process_restarted and .selected_tcp_never_direct and .selected_udp_never_direct and .selected_ipv6_never_direct and .unrelated_direct_recovered' \
+    "$evidence_dir/component-update.json" >/dev/null
 
   limactl shell --tty=false "$node_instance" -- sudo systemctl stop "$engine_unit"
   wait_readiness not-ready
@@ -514,6 +519,7 @@ verify() {
     --argjson resolved_ipv6_entries "$resolved_ipv6_entries" \
     --slurpfile gateway_outage "$evidence_dir/gateway-outage.json" \
     --slurpfile transport_outage "$evidence_dir/transport-outage.json" \
+    --slurpfile component_update "$evidence_dir/component-update.json" \
     '{
       schema_version: 1,
       status: $status,
@@ -524,9 +530,10 @@ verify() {
       ready: {selected_tcp_gateway: true, selected_udp_gateway: true, unmatched_ipv4_direct: true, unmatched_ipv6_direct: true, selected_ipv6_blocked: true},
       ipv6: {mode: "selected-block-only", full_data_plane: false, unmatched_behavior: "preserve-system", static_tcp_udp_blocked: true, resolved_aaaa_tcp_udp_blocked: true, unrelated_tcp_udp_direct: true, selected_drop_packets: $ipv6_drop_packets, resolved_selected_entries: $resolved_ipv6_entries},
       outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]},
+      component_update: $component_update[0],
       conntrack: {established_direct_retained_after_crash: true, selected_never_failed_direct: true},
       ingress: {response_symmetry_gateway: true},
-      lifecycle: {injected_activation_rolled_back: true, crash_fail_closed: true, restart_fail_closed: true, policy_uninstall_restored_networking: true},
+      lifecycle: {injected_activation_rolled_back: true, crash_fail_closed: true, restart_fail_closed: true, component_update_fail_closed: true, policy_uninstall_restored_networking: true},
       coexistence: {foreign_nft_preserved: true, foreign_rule_preserved: true, root_namespace_preserved: true}
     }' > "$evidence_dir/summary.json"
 

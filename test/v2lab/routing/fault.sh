@@ -9,6 +9,7 @@ config_path=/etc/vpnctl-v2-spike/routing/config.yaml
 transport_outage_table=vpnctl_v2_spike_transport_outage
 probe=/usr/local/libexec/vpnctl-v2-spike-routing/probe
 policy=/usr/local/libexec/vpnctl-v2-spike-routing/policy
+engine=/usr/local/libexec/vpnctl-v2-spike-routing/mihomo
 
 node_exec() {
   ip netns exec "$node_ns" "$@"
@@ -232,6 +233,75 @@ restart_case() {
     > "$output"
 }
 
+component_update_case() {
+  local output=$1 tcp_pid udp_pid ipv6_pid
+  local before_hash before_inode after_hash after_inode before_pid after_pid
+  local tcp_storm="$runtime_root/update-tcp.json"
+  local udp_storm="$runtime_root/update-udp.json"
+  local ipv6_storm="$runtime_root/update-ipv6.json"
+  local candidate="$engine.next"
+  rm -f "$tcp_storm" "$udp_storm" "$ipv6_storm" "$candidate"
+
+  before_hash=$(sha256sum "$engine" | awk '{print $1}')
+  before_inode=$(stat -c '%i' "$engine")
+  before_pid=$(systemctl show "$engine_unit" -p MainPID --value)
+  install -m 0755 "$engine" "$candidate"
+  if [ "$(sha256sum "$candidate" | awk '{print $1}')" != "$before_hash" ]; then
+    echo "staged routing component differs from the pinned active bytes" >&2
+    exit 1
+  fi
+
+  node_exec "$probe" storm \
+    --protocol tcp --host 203.0.113.10 --port 18080 \
+    --expect gateway-selected --timeout 0.25 --duration 15 > "$tcp_storm" &
+  tcp_pid=$!
+  node_exec "$probe" storm \
+    --protocol udp --host 203.0.113.10 --port 18080 \
+    --expect gateway-selected --timeout 0.25 --duration 15 > "$udp_storm" &
+  udp_pid=$!
+  node_exec "$probe" storm \
+    --protocol udp --host 2001:db8:1::10 --port 18080 \
+    --expect never-direct --timeout 0.25 --duration 15 > "$ipv6_storm" &
+  ipv6_pid=$!
+  sleep 0.5
+
+  mv "$candidate" "$engine"
+  after_hash=$(sha256sum "$engine" | awk '{print $1}')
+  after_inode=$(stat -c '%i' "$engine")
+  if [ "$after_hash" != "$before_hash" ] || [ "$after_inode" = "$before_inode" ]; then
+    echo "routing component replacement was not an atomic same-version update" >&2
+    exit 1
+  fi
+  systemctl restart "$engine_unit"
+
+  wait "$tcp_pid"
+  wait "$udp_pid"
+  wait "$ipv6_pid"
+  wait_readiness ready
+  after_pid=$(systemctl show "$engine_unit" -p MainPID --value)
+  if [ "$after_pid" -le 0 ] || [ "$after_pid" = "$before_pid" ]; then
+    echo "routing engine process was not replaced after component update" >&2
+    exit 1
+  fi
+  jq -e '.status == "passed" and .forbidden == 0 and (.allowed + .blocked) > 0' \
+    "$tcp_storm" "$udp_storm" "$ipv6_storm" >/dev/null
+  request tcp 203.0.113.10 18080 gateway-selected
+  request udp 203.0.113.10 18080 gateway-selected
+  request tcp 203.0.113.20 18080 direct-unmatched
+  request udp 203.0.113.20 18080 direct-unmatched
+
+  jq -n \
+    --arg before_hash "$before_hash" \
+    --arg after_hash "$after_hash" \
+    --argjson before_pid "$before_pid" \
+    --argjson after_pid "$after_pid" \
+    --slurpfile tcp "$tcp_storm" \
+    --slurpfile udp "$udp_storm" \
+    --slurpfile ipv6 "$ipv6_storm" \
+    '{schema_version: 1, status: "passed", replacement: "atomic-same-version", checksum_preserved: ($before_hash == $after_hash), process_restarted: ($before_pid != $after_pid), selected_tcp_never_direct: ($tcp[0].forbidden == 0), selected_udp_never_direct: ($udp[0].forbidden == 0), selected_ipv6_never_direct: ($ipv6[0].forbidden == 0), unrelated_direct_recovered: true, tcp: $tcp[0], udp: $udp[0], ipv6: $ipv6[0]}' \
+    > "$output"
+}
+
 case "${1:-}" in
   gateway-outage)
     [ -n "${2:-}" ] || { echo "missing gateway-outage evidence path" >&2; exit 2; }
@@ -249,5 +319,9 @@ case "${1:-}" in
     [ -n "${2:-}" ] || { echo "missing restart evidence path" >&2; exit 2; }
     restart_case "$2"
     ;;
-  *) echo "usage: fault.sh <gateway-outage|transport-outage|crash|restart> <evidence-path>" >&2; exit 2 ;;
+  component-update)
+    [ -n "${2:-}" ] || { echo "missing component-update evidence path" >&2; exit 2; }
+    component_update_case "$2"
+    ;;
+  *) echo "usage: fault.sh <gateway-outage|transport-outage|crash|restart|component-update> <evidence-path>" >&2; exit 2 ;;
 esac

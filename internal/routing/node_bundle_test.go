@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -70,6 +71,81 @@ func TestRenderNodeRoutingBundleRejectsUnboundProductionCandidate(t *testing.T) 
 	if _, err := RenderNodeRoutingBundle(request, nodeRoutingGuardFixture(t).Config()); err == nil {
 		t.Fatal("unknown active transport bundle rendered")
 	}
+}
+
+func TestNodeRoutingBundleTransportSwitchRetainsFailClosedSelectedBoundary(t *testing.T) {
+	t.Parallel()
+	request := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+	guard := nodeRoutingGuardFixture(t).Config()
+	guard.Matcher = MatcherIR{SchemaVersion: MatcherIRSchemaVersion}
+	bindings := []NodeRoutingActiveOutbound{nodeRoutingStandardBinding(), nodeRoutingRestrictedBinding(t)}
+	var selectedRule string
+	for _, binding := range bindings {
+		request.ActiveOutbound = binding
+		bundle, err := RenderNodeRoutingBundle(request, guard)
+		if err != nil {
+			t.Fatalf("render %s switch candidate: %v", binding.Kind, err)
+		}
+		engine := string(bundle.Routing().Bytes())
+		gatewayGroup := yamlSection(engine, "proxy-groups:\n", "rules:\n")
+		if gatewayGroup == "" || strings.Contains(gatewayGroup, "      - DIRECT\n") ||
+			!strings.Contains(engine, "VPNCTL-GATEWAY") || !strings.Contains(engine, ",VPNCTL-GATEWAY") ||
+			!strings.Contains(engine, "  - MATCH,DIRECT") {
+			t.Fatalf("%s switch candidate permits selected fail-direct:\n%s", binding.Kind, engine)
+		}
+		nftables := string(bundle.Guard().NFTablesDefinition())
+		for _, required := range []string{
+			"ip daddr @selected_resolved_v4",
+			"counter name selected_ipv6_drop drop",
+			"chain not_ready {",
+			"ct state established,related meta mark & 0xff000000 == 0x01000000 return\n    drop",
+		} {
+			if !strings.Contains(nftables, required) {
+				t.Fatalf("%s switch candidate lost fail-closed boundary %q:\n%s", binding.Kind, required, nftables)
+			}
+		}
+		runner := newNodeRoutingGuardRunner()
+		manager, err := NewNodeRoutingGuardManager(runner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Install(context.Background(), bundle.Guard()); err != nil {
+			t.Fatalf("install %s switch guard candidate: %v", binding.Kind, err)
+		}
+		if calls := runner.joinedCalls(); !strings.Contains(calls, "ip -4 route replace unreachable default metric 42760 table 20001 proto static") {
+			t.Fatalf("%s switch candidate lost permanent selected-route fallback:\n%s", binding.Kind, calls)
+		}
+		currentRule := matcherRuleBlock(engine)
+		if selectedRule == "" {
+			selectedRule = currentRule
+		} else if currentRule != selectedRule {
+			t.Fatalf("transport switch changed matcher rules:\nold=%s\nnew=%s", selectedRule, currentRule)
+		}
+		if got := string(bundle.DNS().NFTablesDefinition()); !strings.Contains(got, "redirect to :1053") || strings.Contains(got, " dport 853") {
+			t.Fatalf("%s switch candidate changed managed DNS boundary:\n%s", binding.Kind, got)
+		}
+	}
+}
+
+func matcherRuleBlock(config string) string {
+	start := strings.Index(config, "rules:\n")
+	if start == -1 {
+		return ""
+	}
+	return config[start:]
+}
+
+func yamlSection(config, startMarker, endMarker string) string {
+	start := strings.Index(config, startMarker)
+	if start == -1 {
+		return ""
+	}
+	remainder := config[start:]
+	end := strings.Index(remainder, endMarker)
+	if end == -1 {
+		return remainder
+	}
+	return remainder[:end]
 }
 
 func TestResolveNodeRoutingActiveOutboundUsesOnlyAuthoritativeManualSelection(t *testing.T) {

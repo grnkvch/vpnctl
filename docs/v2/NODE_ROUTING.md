@@ -95,6 +95,10 @@ diagnostic output is documented in
 [CLASSIFICATION_BOUNDARY.md](CLASSIFICATION_BOUNDARY.md). In particular,
 vpnctl does not generate a global third-party DoH/DoT block.
 
+The repeatable crash, outage, update, switch, resolver, and uninstall
+acceptance matrix is recorded in
+[ROUTING_DNS_FAULTS.md](ROUTING_DNS_FAULTS.md).
+
 ## Kernel fail-closed guard
 
 The node guard owns only `table inet vpnctl`, route tables `20001`/`20002`,

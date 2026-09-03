@@ -625,6 +625,10 @@ verify() {
   local cache_name=cache.direct.test cache_first cache_second cache_third
   local classic_udp_name=classic-udp.selected.test
   local classic_tcp_name=classic-tcp.direct.test
+  local resolver_loss_selected=resolver-loss.selected.test
+  local resolver_loss_direct=resolver-loss.direct.test
+  local resolver_loss_selected_before resolver_loss_selected_after
+  local resolver_loss_direct_before resolver_loss_direct_after
   local direct_mode_name=compat.selected.test
   local direct_mode_count gateway_mode_count counter
   local suffix
@@ -760,6 +764,43 @@ verify() {
     '{schema_version: 1, selected_cached_within_ttl: true, selected_stale_while_revalidate: true, selected_stale_ttl: $stale_ttl, selected_fresh_failed_closed: true, selected_direct_fallback_queries: 0, direct_continued: true, recovered: true, cached_answer: $cached_answer, direct_cache_upstream_counts: {first: $direct_cache_first, within_ttl: $direct_cache_second, after_ttl: $direct_cache_after_ttl}}' \
     > "$evidence_dir/cache-and-outage.json"
 
+  verification_stage=resolver-loss-prepare
+  restart_upstreams
+  switch_mode policy-redir-host
+  resolver_loss_selected_before=$(backend_count gateway "$resolver_loss_selected")
+  resolver_loss_direct_before=$(backend_count direct "$resolver_loss_direct")
+  node_root systemctl stop "$resolver_unit"
+  if unit_active "$resolver_unit"; then
+    echo "local resolver remained active during injected resolver loss" >&2
+    exit 1
+  fi
+  verification_stage=resolver-loss-fail-closed
+  expect_dns_blocked 127.0.0.53 53 "$resolver_loss_selected"
+  expect_dns_blocked 127.0.0.53 53 "$resolver_loss_direct"
+  expect_dns_blocked 203.0.113.53 53 resolver-loss-classic.selected.test
+  expect_dns_blocked 203.0.113.53 53 resolver-loss-classic.direct.test tcp
+  resolver_loss_selected_after=$(backend_count gateway "$resolver_loss_selected")
+  resolver_loss_direct_after=$(backend_count direct "$resolver_loss_direct")
+  if [ "$resolver_loss_selected_after" -ne "$resolver_loss_selected_before" ] ||
+    [ "$resolver_loss_direct_after" -ne "$resolver_loss_direct_before" ]; then
+    echo "resolver outage bypassed the managed local DNS path" >&2
+    exit 1
+  fi
+  verification_stage=resolver-loss-recovery
+  node_root systemctl start "$resolver_unit"
+  wait_unit_active "$resolver_unit"
+  wait_local_dns_listener
+  sleep 1
+  expect_dns_answer 127.0.0.53 53 recovered-after-resolver-loss.selected.test 203.0.113.77
+  expect_dns_answer 127.0.0.53 53 recovered-after-resolver-loss.direct.test 192.0.2.77
+  jq -n \
+    --argjson selected_before "$resolver_loss_selected_before" \
+    --argjson selected_after "$resolver_loss_selected_after" \
+    --argjson direct_before "$resolver_loss_direct_before" \
+    --argjson direct_after "$resolver_loss_direct_after" \
+    '{schema_version: 1, status: "passed", resolver_stopped: true, selected_blocked: true, direct_blocked_while_classifier_unavailable: true, classic_udp_blocked: true, classic_tcp_blocked: true, upstream_bypass_queries: (($selected_after - $selected_before) + ($direct_after - $direct_before)), recovered_selected: true, recovered_direct: true}' \
+    > "$evidence_dir/resolver-loss.json"
+
   restart_upstreams
   verification_stage=direct-compatibility
   switch_mode direct-redir-host
@@ -789,7 +830,8 @@ verify() {
     --arg fake_ip_range "$(manifest_value '.policy.fake_ip_range')" \
     --arg rejected_default "$(manifest_value '.policy.rejected_default_fake_ip_range')" \
     --arg fake_answer "$fake_answer" \
-    '{schema_version: 1, status: $status, accepted_mode: $accepted_mode, fake_ip_range: $fake_ip_range, rejected_default_fake_ip_range: $rejected_default, candidates: {policy_redir_host: {query_separation: true, linux_clients: true, accepted: true}, policy_fake_ip: {linux_clients: true, selected_only_fake_ip: true, eager_gateway_lookup: false, rejected_reason: "fresh selected DNS can receive a synthetic answer without the gateway DNS path"}, direct_redir_host: {all_queries_direct: true}}, systemd_resolved: {dropin: true, stub_preserved: true, second_cache_disabled: true, original_link_state_restored: true}, classic_port_53: {udp_captured: true, tcp_captured: true, resolver_uid_bypass: true}, failure: {selected_fresh_fail_closed: true, selected_stale_while_revalidate: true, selected_direct_fallback_queries: 0, direct_continued: true}, profiles: {pinned_mihomo_validated: true, clash_mi_deferred_to_task_16_11: true}, coexistence: {foreign_nftables_preserved: true, root_network_restored: true}}' \
+    --slurpfile resolver_loss "$evidence_dir/resolver-loss.json" \
+    '{schema_version: 1, status: $status, accepted_mode: $accepted_mode, fake_ip_range: $fake_ip_range, rejected_default_fake_ip_range: $rejected_default, candidates: {policy_redir_host: {query_separation: true, linux_clients: true, accepted: true}, policy_fake_ip: {linux_clients: true, selected_only_fake_ip: true, eager_gateway_lookup: false, rejected_reason: "fresh selected DNS can receive a synthetic answer without the gateway DNS path"}, direct_redir_host: {all_queries_direct: true}}, systemd_resolved: {dropin: true, stub_preserved: true, second_cache_disabled: true, original_link_state_restored: true}, classic_port_53: {udp_captured: true, tcp_captured: true, resolver_uid_bypass: true}, failure: {selected_fresh_fail_closed: true, selected_stale_while_revalidate: true, selected_direct_fallback_queries: 0, direct_continued: true, resolver_loss: $resolver_loss[0]}, profiles: {pinned_mihomo_validated: true, clash_mi_deferred_to_task_16_11: true}, coexistence: {foreign_nftables_preserved: true, root_network_restored: true}}' \
     > "$evidence_dir/summary.json"
 
   verification_stage=full-uninstall

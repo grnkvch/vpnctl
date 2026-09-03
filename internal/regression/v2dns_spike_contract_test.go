@@ -146,7 +146,8 @@ func TestV2DNSSpikeContract(t *testing.T) {
 		"refusing to overwrite unowned DNS spike path", "root_network_snapshot", "node_policy apply",
 		"expect_dns_blocked", "classic_udp_captured", "switch_mode direct-redir-host",
 		"assert_fake_ip_candidate_behavior", "selected_stale_while_revalidate",
-		"selected_direct_fallback_queries", "task_16_11", "uninstall_internal true", "remove_dns_user",
+		"selected_direct_fallback_queries", "resolver-loss-fail-closed", "resolver-loss-recovery",
+		"upstream_bypass_queries", "task_16_11", "uninstall_internal true", "remove_dns_user",
 	} {
 		if !strings.Contains(orchestrator, required) {
 			t.Errorf("DNS spike orchestrator is missing %q", required)

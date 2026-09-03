@@ -157,6 +157,8 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"oifname \"v2gateway0\" drop", "assert_selected_path_failure",
 		"request tcp 203.0.113.20 18080 direct-unmatched", "request udp 203.0.113.20 18080 direct-unmatched",
 		"active_transport_preserved: true", "automatic_fallback: false", "recovered_without_engine_restart: true",
+		"component_update_case", "atomic-same-version", "checksum_preserved",
+		"selected_tcp_never_direct", "selected_udp_never_direct", "selected_ipv6_never_direct",
 	} {
 		if !strings.Contains(fault, required) {
 			t.Errorf("routing fault fixture is missing %q", required)
@@ -169,6 +171,7 @@ func TestV2RoutingSpikeContract(t *testing.T) {
 		"refusing to overwrite unowned routing spike path", "node_policy guard after-nft",
 		"node_policy assert-clean", "root_network_snapshot", "foreign_snapshot",
 		"gateway-outage", "transport-outage", "outages: {gateway: $gateway_outage[0], transport: $transport_outage[0]}",
+		"component-update", "component_update: $component_update[0]", "component_update_fail_closed: true",
 		"blocked_node tcp 2001:db8:1::11", "blocked_node udp 2001:db8:1::11",
 		"selected_drop_packets: $ipv6_drop_packets", "resolved_aaaa_tcp_udp_blocked: true", "unmatched_behavior: \"preserve-system\"",
 		"trap 'clean_runtime_best_effort' EXIT", "uninstall_internal true", "owner-checked routing spike resources removed",
