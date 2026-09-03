@@ -17,6 +17,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
 type gatewayInitializerAPI interface {
@@ -276,6 +277,7 @@ func gatewayInitOutput(plan lifecycle.GatewayInitPlan, applied lifecycle.Gateway
 		"changed": changed, "role": "gateway", "public_ipv4": plan.Network.PublicIPv4,
 		"client_cidr": plan.Network.ClientCIDR, "node_cidr": plan.Network.NodeCIDR,
 		"external_interface": plan.Network.ExternalInterface, "ssh_port": plan.SSH.Port,
+		"handshake_host":  output.SafeObject{"list_version": plan.HandshakeHost.ListVersion, "candidate_id": plan.HandshakeHost.CandidateID, "hostname": plan.HandshakeHost.Hostname},
 		"fixed_listeners": output.SafeList{"443/tcp", "8443/tcp", "51820/udp"},
 		"managed_swap": output.SafeObject{
 			"status": string(disposition), "offered": plan.ManagedSwap.Offered,
@@ -339,6 +341,8 @@ func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 		errors.Is(err, ErrPromptInput), errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags),
 		errors.Is(err, linuxplatform.ErrManagedSwapPlan):
 		return output.CategoryValidation, "init_validation", err.Error()
+	case errors.Is(err, transport.ErrNoHandshakeHostCandidate):
+		return output.CategoryUnavailable, "handshake_host_unavailable", "no signed handshake-host candidate passed reachability, TLS 1.3, certificate, and latency validation"
 	default:
 		return output.CategoryInternal, "init_internal_error", "vpnctl could not initialize the gateway"
 	}

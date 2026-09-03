@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
 type gatewayInitWatchdogAdapter struct {
@@ -70,6 +71,10 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway identity provisioner: %w", err)
 	}
+	handshakeHosts, err := transport.NewBundledHandshakeHostSelector()
+	if err != nil {
+		return nil, fmt.Errorf("create gateway handshake-host selector: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
@@ -78,5 +83,6 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 		Paths: paths, Snapshot: snapshot, Manifest: manifest, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
 		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
+		HandshakeHosts: handshakeHosts,
 	})
 }

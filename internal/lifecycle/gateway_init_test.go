@@ -74,6 +74,9 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 		t.Fatalf("watchdog scope = %+v", harness.watchdog.lastArm.NetworkScope)
 	}
 	assertInitialGatewayState(t, harness.state)
+	if harness.handshakeHosts.calls != 1 {
+		t.Fatalf("fresh init handshake-host selections = %d", harness.handshakeHosts.calls)
+	}
 	assertGatewayLayout(t, plan.layout)
 	assertGatewayRoleRequest(t, harness.roles.lastApplied)
 	presetFiles := gatewayPresetFilesByName(plan.layout)
@@ -111,6 +114,9 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	}
 	if !reflect.DeepEqual(harness.events.values, []string{"state-load"}) {
 		t.Fatalf("second apply events = %v", harness.events.values)
+	}
+	if harness.handshakeHosts.calls != 1 {
+		t.Fatalf("repeat init reselected handshake host: %d calls", harness.handshakeHosts.calls)
 	}
 	if content, err := os.ReadFile(presetFiles["telegram"].Path); err != nil || !reflect.DeepEqual(content, userTelegram) {
 		t.Fatalf("repeat init changed user-edited telegram source: %q, %v", content, err)
@@ -172,6 +178,20 @@ func TestGatewayInitPreflightConflictDoesNotAllocateIdentityOrMutate(t *testing.
 	assertNoGatewayInitMutation(t, harness)
 	if harness.idCalls != 0 {
 		t.Fatalf("conflicting plan allocated %d host identities", harness.idCalls)
+	}
+}
+
+func TestGatewayInitHandshakeHostFailureStopsBeforeIdentityAndMutation(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.handshakeHosts.err = errors.New("no signed candidate passed")
+	if _, err := harness.initializer.Plan(context.Background(), validGatewayInitInput()); err == nil || !strings.Contains(err.Error(), "no signed candidate passed") {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	assertNoGatewayInitMutation(t, harness)
+	if harness.idCalls != 0 || harness.handshakeHosts.calls != 1 {
+		t.Fatalf("failed selection allocated identity or retried: ids=%d selections=%d", harness.idCalls, harness.handshakeHosts.calls)
 	}
 }
 
@@ -372,8 +392,9 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: stateStore, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits,
 		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{}, Identity: identity,
-		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
-		NewHostID: func() (string, error) { return gatewayTestHostID, nil },
+		HandshakeHosts: &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
+		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
+		NewHostID:      func() (string, error) { return gatewayTestHostID, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -544,17 +565,18 @@ func TestBuiltinPresetCatalogLookupDoesNotRestoreDeletedUserSource(t *testing.T)
 const gatewayTestHostID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 type gatewayInitHarness struct {
-	initializer   *GatewayInitializer
-	paths         store.Paths
-	state         *recordingGatewayState
-	roles         *recordingGatewayRoles
-	watchdogUnits *recordingWatchdogUnits
-	watchdog      *recordingGatewayWatchdog
-	network       *recordingGatewayNetwork
-	swap          *recordingGatewaySwap
-	identity      *recordingGatewayIdentity
-	events        *gatewayInitEvents
-	idCalls       int
+	initializer    *GatewayInitializer
+	paths          store.Paths
+	state          *recordingGatewayState
+	roles          *recordingGatewayRoles
+	watchdogUnits  *recordingWatchdogUnits
+	watchdog       *recordingGatewayWatchdog
+	network        *recordingGatewayNetwork
+	swap           *recordingGatewaySwap
+	identity       *recordingGatewayIdentity
+	handshakeHosts *recordingGatewayHandshakeHosts
+	events         *gatewayInitEvents
+	idCalls        int
 }
 
 func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
@@ -580,12 +602,14 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	network := &recordingGatewayNetwork{events: events}
 	swap := &recordingGatewaySwap{events: events}
 	identity := newRecordingGatewayIdentity(events)
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, events: events}
+	handshakeHosts := &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, handshakeHosts: handshakeHosts, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
-		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
-		NewHostID: func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
+		HandshakeHosts: handshakeHosts,
+		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
+		NewHostID:      func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
 	initializer, err := NewGatewayInitializer(runtime)
 	if err != nil {
@@ -655,6 +679,13 @@ func gatewayTestManifest() model.ComponentManifest {
 	}
 }
 
+func gatewayTestHandshakeHost() model.HandshakeHost {
+	return model.HandshakeHost{
+		SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft",
+		Hostname: "www.microsoft.com", SelectedAt: time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC),
+	}
+}
+
 func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 	t.Helper()
 	state, err := stateStore.Load()
@@ -665,6 +696,9 @@ func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 		state.Host.PublicIPv4 != "8.8.8.8" || state.Host.ClientCIDR != model.DefaultClientCIDR || state.Host.NodeCIDR != model.DefaultNodeCIDR ||
 		state.Host.ExternalInterface != "eth0" || state.Host.SSHPort != 2222 {
 		t.Fatalf("initial gateway state = %+v", state)
+	}
+	if state.HandshakeHost == nil || *state.HandshakeHost != gatewayTestHandshakeHost() {
+		t.Fatalf("initial handshake-host state = %+v", state.HandshakeHost)
 	}
 	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 2 || state.EnrollmentIdentity == nil {
 		t.Fatalf("initial PKI state = presets:%v certificates:%v enrollment:%v", state.Presets, state.Certificates, state.EnrollmentIdentity)
@@ -872,6 +906,23 @@ type recordingGatewayIdentity struct {
 	rollbackCalls  int
 	lastRequest    control.GatewayIdentityRequest
 	err            error
+}
+
+type recordingGatewayHandshakeHosts struct {
+	selection model.HandshakeHost
+	calls     int
+	err       error
+}
+
+func (selector *recordingGatewayHandshakeHosts) Select(_ context.Context, listVersion int, selectedAt time.Time) (model.HandshakeHost, error) {
+	selector.calls++
+	if selector.err != nil {
+		return model.HandshakeHost{}, selector.err
+	}
+	selection := selector.selection
+	selection.ListVersion = listVersion
+	selection.SelectedAt = selectedAt
+	return selection, nil
 }
 
 func newRecordingGatewayIdentity(events *gatewayInitEvents) *recordingGatewayIdentity {

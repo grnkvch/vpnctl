@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -214,10 +215,17 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 				RestrictedUDPOpen bool `json:"restricted_udp_open"`
 			} `json:"public_network"`
 			Restricted struct {
-				Cipher           string `json:"cipher"`
-				ShadowTLSVersion int    `json:"shadowtls_version"`
-				Strict           bool   `json:"strict"`
-				UoTVersion       int    `json:"uot_version"`
+				Cipher                     string   `json:"cipher"`
+				ShadowTLSVersion           int      `json:"shadowtls_version"`
+				Strict                     bool     `json:"strict"`
+				UoTVersion                 int      `json:"uot_version"`
+				HandshakeListVersion       int      `json:"handshake_host_list_version"`
+				HandshakeSignature         string   `json:"handshake_host_signature_algorithm"`
+				HandshakeKeyID             string   `json:"handshake_host_key_id"`
+				HandshakeProbeTimeoutMS    int      `json:"handshake_host_probe_timeout_ms"`
+				HandshakeMaximumCandidates int      `json:"handshake_host_maximum_candidates"`
+				InitialCandidates          []string `json:"initial_candidates"`
+				AutomaticHostFallback      bool     `json:"automatic_host_fallback"`
 			} `json:"restricted_transport"`
 		} `json:"limits"`
 	}
@@ -228,7 +236,12 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 		componentManifest.Limits.PublicNetwork.RestrictedTCP != RestrictedTCPPort || componentManifest.Limits.PublicNetwork.RestrictedUDPOpen ||
 		componentManifest.Limits.Restricted.Cipher != RestrictedCipher ||
 		componentManifest.Limits.Restricted.ShadowTLSVersion != RestrictedShadowTLSVersion || !componentManifest.Limits.Restricted.Strict ||
-		componentManifest.Limits.Restricted.UoTVersion != RestrictedUDPOverTCPVersion {
+		componentManifest.Limits.Restricted.UoTVersion != RestrictedUDPOverTCPVersion || componentManifest.Limits.Restricted.HandshakeListVersion != 1 ||
+		componentManifest.Limits.Restricted.HandshakeSignature != HandshakeHostSignatureAlgorithm ||
+		componentManifest.Limits.Restricted.HandshakeKeyID != "sha256:9e061dd425ff7766f826911dec3502d6b8f1494705432da049ffed3c0fbe20bc" ||
+		componentManifest.Limits.Restricted.HandshakeProbeTimeoutMS != int(DefaultHandshakeHostProbeTimeout/time.Millisecond) ||
+		componentManifest.Limits.Restricted.HandshakeMaximumCandidates != maximumHandshakeHostCandidates || componentManifest.Limits.Restricted.AutomaticHostFallback ||
+		!reflect.DeepEqual(componentManifest.Limits.Restricted.InitialCandidates, []string{"www.microsoft.com", "www.apple.com", "www.cloudflare.com"}) {
 		t.Fatalf("production restricted constants drifted from component manifest: %+v", componentManifest)
 	}
 
@@ -262,6 +275,10 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 func restrictedGatewayFixture(t *testing.T) (model.State, restrictedMemoryCredentials) {
 	t.Helper()
 	state := standardGatewayState()
+	state.HandshakeHost = &model.HandshakeHost{
+		SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft",
+		Hostname: "www.microsoft.com", SelectedAt: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC),
+	}
 	state.Components.Components = append(state.Components.Components, restrictedComponentPin())
 	credentials := restrictedMemoryCredentials{
 		GatewayRestrictedCredentialRef: restrictedGatewaySecretBytes(t, 0x11, 0x12),

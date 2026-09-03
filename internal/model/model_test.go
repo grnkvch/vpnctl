@@ -79,6 +79,9 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "missing explicit public ip", mutate: func(state *State) { state.Host.PublicIPv4 = "" }, want: "public_ipv4"},
 		{name: "overlapping pools", mutate: func(state *State) { state.Host.NodeCIDR = state.Host.ClientCIDR }, want: "overlaps"},
 		{name: "missing root collection", mutate: func(state *State) { state.Logging = nil }, want: "collections"},
+		{name: "missing authoritative handshake host", mutate: func(state *State) { state.HandshakeHost = nil }, want: "requires an authoritative handshake-host selection"},
+		{name: "handshake list differs from manifest", mutate: func(state *State) { state.HandshakeHost.ListVersion++ }, want: "must match the installed component manifest"},
+		{name: "invalid handshake candidate id", mutate: func(state *State) { state.HandshakeHost.CandidateID = "Microsoft" }, want: "candidate_id"},
 		{name: "duplicate node id", mutate: func(state *State) {
 			duplicate := state.Nodes[0]
 			duplicate.Name = "another-node"
@@ -128,6 +131,9 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "wrong restricted port", mutate: func(state *State) {
 			state.Transports[1].Port = 443
 		}, want: "TCP/8443"},
+		{name: "restricted transport differs from authoritative handshake host", mutate: func(state *State) {
+			state.Transports[1].HandshakeHost = "www.apple.com"
+		}, want: "must match the authoritative handshake-host selection"},
 		{name: "non-numeric expose port", mutate: func(state *State) {
 			state.Exposes[0].Upstream = "127.0.0.1:http"
 		}, want: "invalid port"},
@@ -436,6 +442,10 @@ func gatewayState() State {
 			ClientCIDR:        "10.66.0.0/24",
 			NodeCIDR:          "10.67.0.0/24",
 			ManagedSwap:       &ManagedSwap{Path: "/var/lib/vpnctl/swapfile", SizeBytes: 1 << 30, Enabled: true},
+		},
+		HandshakeHost: &HandshakeHost{
+			SchemaVersion: ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft",
+			Hostname: "www.microsoft.com", SelectedAt: created,
 		},
 		EnrollmentIdentity: &EnrollmentIdentity{
 			SchemaVersion: ResourceSchemaVersion,

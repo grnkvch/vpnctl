@@ -20,6 +20,7 @@ var (
 	fingerprintPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	serialPattern      = regexp.MustCompile(`^[0-9a-f]{1,32}$`)
 	componentPattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
+	candidateIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	errorCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
 	protocolPattern    = regexp.MustCompile(`^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$`)
 )
@@ -42,6 +43,14 @@ func (state State) Validate() error {
 	}
 	if state.SchemaVersion < state.Components.StateSchemaMinimum || state.SchemaVersion > state.Components.StateSchemaMaximum {
 		return invalid("components", "state schema %d is outside supported range", state.SchemaVersion)
+	}
+	if state.HandshakeHost != nil {
+		if err := state.HandshakeHost.Validate(); err != nil {
+			return wrap("handshake_host", err)
+		}
+		if state.HandshakeHost.ListVersion != state.Components.HandshakeHostListVersion {
+			return invalid("handshake_host.list_version", "must match the installed component manifest")
+		}
 	}
 	if state.EnrollmentIdentity != nil {
 		if state.Host.Role != RoleGateway {
@@ -176,6 +185,14 @@ func (state State) Validate() error {
 		}
 		if !targetExists(transport.OwnerKind, transport.OwnerID, nodes, clients) {
 			return invalid(indexPath("transports", index)+".owner_id", "references an unknown %s", transport.OwnerKind)
+		}
+		if transport.Kind == TransportRestricted {
+			if state.HandshakeHost == nil {
+				return invalid(indexPath("transports", index)+".handshake_host", "requires an authoritative handshake-host selection")
+			}
+			if transport.HandshakeHost != state.HandshakeHost.Hostname {
+				return invalid(indexPath("transports", index)+".handshake_host", "must match the authoritative handshake-host selection")
+			}
 		}
 		credentialGeneration := uint64(0)
 		if transport.OwnerKind == TargetNode {
@@ -348,6 +365,22 @@ func (state State) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (host HandshakeHost) Validate() error {
+	if err := validateSchema("handshake host", host.SchemaVersion, ResourceSchemaVersion); err != nil {
+		return err
+	}
+	if host.ListVersion < 1 {
+		return invalid("list_version", "must be positive")
+	}
+	if !candidateIDPattern.MatchString(host.CandidateID) {
+		return invalid("candidate_id", "must match %s", candidateIDPattern)
+	}
+	if err := validateDomain("hostname", host.Hostname); err != nil {
+		return err
+	}
+	return validateTime("selected_at", host.SelectedAt)
 }
 
 func (host Host) Validate() error {

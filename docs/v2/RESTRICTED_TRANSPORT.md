@@ -1,6 +1,10 @@
 # Restricted transport
 
-Task 8.3 implements the restricted-provider foundation. It is development-gated, not yet an activatable end-to-end node path: fail-closed UDP-over-TCP and mandatory readiness belong to task 8.4, listener supervision and restoration to task 8.6, and testing against a deployed gateway/node plus real Clash Mi to release gate 16.11.
+Tasks 8.3-8.5 implement the restricted-provider foundation, mandatory
+UDP-over-TCP readiness, and the pinned handshake-host lifecycle. It remains a
+development-gated path: listener supervision and restoration belong to task
+8.6, explicit test/switch operations to tasks 8.7-8.8, and testing against a
+deployed gateway/node plus real Clash Mi to release gate 16.11.
 
 ## Pinned provider contract
 
@@ -11,7 +15,43 @@ Task 8.3 implements the restricted-provider foundation. It is development-gated,
 - Gateway socket: `8443/TCP` on the wildcard address. No `8443/UDP` listener is allowed.
 - Provider output uses `silent` logging; transport process stdout and stderr are discarded unless a later explicit, temporary logging workflow enables them.
 
-The gateway public IP remains an operator-supplied value. The handshake hostname is taken from the selected component bundle; task 8.3 requires every restricted identity to agree on it but does not select, rotate, or replace it. Signed bundles and manual host changes belong to tasks 8.5 and 8.9.
+The gateway public IP remains an operator-supplied value. The handshake
+hostname is selected from the signed list described below; every restricted
+identity must agree with that authoritative state. Manual replacement remains
+the separate staged task 8.9 flow.
+
+## Signed handshake-host selection
+
+The development release embeds list version 1 with the stable ordered
+candidates `microsoft`/`www.microsoft.com`, `apple`/`www.apple.com`, and
+`cloudflare`/`www.cloudflare.com`. The exact canonical JSON payload is wrapped
+in a domain-separated Ed25519 signature envelope. Verification pins key ID
+`sha256:9e061dd425ff7766f826911dec3502d6b8f1494705432da049ffed3c0fbe20bc`,
+rejects duplicate or unknown JSON fields, rejects non-canonical base64url or
+payload JSON, and requires the list version to match the installed component
+manifest. Task 14 moves these same verified artifacts into the self-contained
+release archive; it does not weaken this verification boundary.
+
+Fresh gateway init verifies the bundle before host mutation and probes
+candidates strictly in declared order. Each probe performs a bounded TCP/TLS
+handshake with normal certificate verification, requires TLS 1.3, and must
+complete within three seconds. Init persists the first passing candidate as
+`{list_version, candidate_id, hostname, selected_at}` in authoritative state.
+If none passes, init stops before allocating the host identity or modifying the
+machine. A faster later candidate cannot displace an earlier passing one.
+
+The persisted record is the only source used by restricted gateway rendering,
+node delivery, and the client-export delivery boundary. Restricted transport
+records must carry the same hostname. Repeating init does not load or probe the
+candidate list again. The node-enrollment and restricted Clash consumers will
+use this versioned delivery record in tasks 9.4 and 8.10 respectively.
+
+Runtime observation is deliberately passive. Given an observation of the exact
+pinned candidate, health reports `handshake-host-healthy` or
+`handshake-host-degraded` plus a required manual action. It cannot inspect the
+candidate bundle, probe another hostname, alter state, activate standby, or
+rotate/fail over. Explicit prepare/commit/rollback and SSH recovery are task
+8.9.
 
 ## Credential boundary
 
@@ -33,7 +73,13 @@ The hidden service mode is `vpnctl __service gateway-restricted`. It reads `/etc
 
 `vpnctl-restricted.service` is gateway-only, restarts on failure, emits no process logs by default, and receives a private state directory. Publication of the readiness marker and orchestration that starts both gateway listeners remain task 8.6.
 
-The task-8.3 health observer is intentionally passive. It reports healthy only when `vpnctl-restricted.service` is active, exactly one wildcard TCP/8443 socket is owned by Mihomo, and no UDP/8443 socket exists. It preserves the model's active/standby role and never probes, rotates a handshake host, activates standby, or switches transports.
+The restricted health observers are intentionally passive. Listener health
+reports healthy only when `vpnctl-restricted.service` is active, exactly one
+wildcard TCP/8443 socket is owned by Mihomo, and no UDP/8443 socket exists.
+Handshake-host health evaluates only a supplied observation of the pinned
+candidate. Both preserve the model's active/standby role and never probe a
+standby candidate, rotate a handshake host, activate standby, or switch
+transports.
 
 ## Reproducible verification
 

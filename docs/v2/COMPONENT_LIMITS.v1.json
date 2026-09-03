@@ -162,6 +162,10 @@
       "strict": true,
       "uot_version": 2,
       "handshake_host_list_version": 1,
+      "handshake_host_signature_algorithm": "Ed25519",
+      "handshake_host_key_id": "sha256:9e061dd425ff7766f826911dec3502d6b8f1494705432da049ffed3c0fbe20bc",
+      "handshake_host_probe_timeout_ms": 3000,
+      "handshake_host_maximum_candidates": 8,
       "initial_candidates": [
         "www.microsoft.com",
         "www.apple.com",

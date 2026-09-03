@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 8.4 выполнено `70/156`
+и проходят strict validation. После завершения task 8.5 выполнено `71/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
@@ -30,8 +30,13 @@ Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и 
 один TCP listener и отсутствие UDP listener. Selected restricted UDP теперь
 обязан идти через UoT v2; activatable candidate выдаётся только после
 обязательных TCP+UDP readiness probes, а broken-UoT control сохраняет TCP,
-блокирует UDP и не создаёт native/direct утечек. Следующая задача — 8.5
-(signed versioned handshake-host bundles и manual-only lifecycle). Фактический Clash Mi
+блокирует UDP и не создаёт native/direct утечек. Signed Ed25519 handshake-host
+bundle теперь проверяется до mutation: gateway init последовательно тестирует
+reachability, TLS 1.3, сертификат и трёхсекундную latency boundary, закрепляет
+первый успешный stable candidate в authoritative state и доставляет только это
+значение node/client consumers. Повторный init и passive health не перебирают
+список и не выполняют runtime rotation. Следующая задача — 8.6 (запуск и
+supervision обоих gateway listeners при неизменном node selection). Фактический Clash Mi
 остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
 8.10.
 

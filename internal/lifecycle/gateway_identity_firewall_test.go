@@ -77,7 +77,9 @@ func gatewayIdentityFirewallState(t *testing.T) model.State {
 	t.Helper()
 	now := time.Date(2026, time.September, 3, 15, 0, 0, 0, time.UTC)
 	revokedAt := now.Add(time.Hour)
-	state := initialGatewayState(identityFirewallID(100), now, gatewayNetworkPlanForIdentityFirewall(), 2222, gatewayTestManifest())
+	state := initialGatewayState(identityFirewallID(100), now, gatewayNetworkPlanForIdentityFirewall(), 2222, gatewayTestManifest(), model.HandshakeHost{
+		SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft", Hostname: "www.microsoft.com", SelectedAt: now,
+	})
 	for index := 0; index < 7; index++ {
 		lifecycle := model.LifecycleActive
 		var revoked *time.Time

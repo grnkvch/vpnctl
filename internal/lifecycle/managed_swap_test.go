@@ -30,6 +30,7 @@ func TestManagedSwapLifecycleUninstallPersistsDisabledOwnershipAndPurgeDoesNotRe
 		linuxplatform.GatewayNetworkPlan{PublicIPv4: "8.8.8.8", ExternalInterface: "eth0", ClientCIDR: model.DefaultClientCIDR, NodeCIDR: model.DefaultNodeCIDR},
 		2222,
 		gatewayTestManifest(),
+		gatewayTestHandshakeHost(),
 	)
 	state.Host.ManagedSwap = &model.ManagedSwap{
 		Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: int64(linuxplatform.ManagedSwapSizeBytes), Enabled: true,
@@ -99,6 +100,7 @@ func TestManagedSwapLifecycleWithoutOwnedResourceIsNoOp(t *testing.T) {
 		linuxplatform.GatewayNetworkPlan{PublicIPv4: "8.8.8.8", ExternalInterface: "eth0", ClientCIDR: model.DefaultClientCIDR, NodeCIDR: model.DefaultNodeCIDR},
 		2222,
 		gatewayTestManifest(),
+		gatewayTestHandshakeHost(),
 	)
 	if err := stateStore.Save(0, state); err != nil {
 		t.Fatal(err)

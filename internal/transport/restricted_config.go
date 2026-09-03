@@ -432,21 +432,17 @@ func sortedRestrictedTransports(state model.State) []model.Transport {
 }
 
 func authoritativeRestrictedHandshakeHost(state model.State) (string, error) {
-	host := ""
+	if state.HandshakeHost == nil {
+		return "", fmt.Errorf("gateway restricted config requires an authoritative handshake host")
+	}
+	host := state.HandshakeHost.Hostname
 	for _, value := range state.Transports {
 		if value.Kind != model.TransportRestricted || value.State == model.TransportDisabled {
-			continue
-		}
-		if host == "" {
-			host = value.HandshakeHost
 			continue
 		}
 		if value.HandshakeHost != host {
 			return "", fmt.Errorf("restricted transports disagree on the authoritative handshake host")
 		}
-	}
-	if host == "" {
-		return "", fmt.Errorf("gateway restricted config requires an authoritative handshake host")
 	}
 	return host, nil
 }

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
@@ -49,6 +50,10 @@ func TestExecuteGatewayInitUsesV2WorkflowAndEmitsConfirmAction(t *testing.T) {
 	if result.Command != "init.gateway" || result.Status != output.StatusOK || result.Data["changed"] != true || result.Data["role"] != "gateway" {
 		t.Fatalf("result = %+v", result)
 	}
+	handshakeHost, ok := result.Data["handshake_host"].(map[string]any)
+	if !ok || handshakeHost["list_version"] != float64(1) || handshakeHost["candidate_id"] != "microsoft" || handshakeHost["hostname"] != "www.microsoft.com" {
+		t.Fatalf("handshake-host output = %#v", result.Data["handshake_host"])
+	}
 	if result.ResourceIDs["host_id"] != gatewayCLIHostID || result.ResourceIDs["transaction_id"] != "fw-ABC123" {
 		t.Fatalf("resource IDs = %v", result.ResourceIDs)
 	}
@@ -65,7 +70,8 @@ func TestGatewayInitOutputWithUnknownSwapCapacityIsValid(t *testing.T) {
 			PublicIPv4: "8.8.8.8", ClientCIDR: model.DefaultClientCIDR,
 			NodeCIDR: model.DefaultNodeCIDR, ExternalInterface: "eth0",
 		},
-		SSH: linuxplatform.SSHPortPlan{Port: 2222},
+		SSH:           linuxplatform.SSHPortPlan{Port: 2222},
+		HandshakeHost: model.HandshakeHost{SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft", Hostname: "www.microsoft.com", SelectedAt: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)},
 	}, lifecycle.GatewayInitResult{}, false)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("gatewayInitOutput() validation error = %v; result=%+v", err, result)
@@ -283,7 +289,8 @@ func (initializer *recordingGatewayInitializer) Plan(_ context.Context, input li
 			PublicIPv4: input.PublicIPv4, ClientCIDR: defaultString(input.ClientCIDR, model.DefaultClientCIDR),
 			NodeCIDR: defaultString(input.NodeCIDR, model.DefaultNodeCIDR), ExternalInterface: defaultString(input.ExternalInterface, "eth0"),
 		},
-		SSH: linuxplatform.SSHPortPlan{Port: port, Source: linuxplatform.SSHPortFromConnection},
+		SSH:           linuxplatform.SSHPortPlan{Port: port, Source: linuxplatform.SSHPortFromConnection},
+		HandshakeHost: model.HandshakeHost{SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft", Hostname: "www.microsoft.com", SelectedAt: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)},
 	}
 	if initializer.offerManagedSwap {
 		plan.ManagedSwap = linuxplatform.ManagedSwapPlan{

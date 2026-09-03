@@ -42,6 +42,7 @@ type GatewayInitPlan struct {
 	WatchdogUnitFiles   []string
 	ManagedSwap         linuxplatform.ManagedSwapPlan
 	ManagedSwapSelected bool
+	HandshakeHost       model.HandshakeHost
 
 	desiredState     model.State
 	layout           GatewayLayoutPlan
@@ -105,21 +106,26 @@ type GatewayInitIdentityProvisioner interface {
 	Rollback(context.Context, control.GatewayIdentityInstallation) error
 }
 
+type GatewayInitHandshakeHostSelector interface {
+	Select(context.Context, int, time.Time) (model.HandshakeHost, error)
+}
+
 type GatewayInitRuntime struct {
-	Paths         store.Paths
-	Snapshot      linuxplatform.HostSnapshot
-	Manifest      model.ComponentManifest
-	BinaryPath    string
-	State         GatewayInitStateStore
-	Layout        *GatewayLayoutInstaller
-	Roles         GatewayInitRoleInstaller
-	WatchdogUnits GatewayInitWatchdogUnitInstaller
-	Watchdog      GatewayInitWatchdog
-	Network       GatewayInitNetworkActivator
-	Swap          GatewayInitSwapManager
-	Identity      GatewayInitIdentityProvisioner
-	Now           func() time.Time
-	NewHostID     model.UUIDGenerator
+	Paths          store.Paths
+	Snapshot       linuxplatform.HostSnapshot
+	Manifest       model.ComponentManifest
+	BinaryPath     string
+	State          GatewayInitStateStore
+	Layout         *GatewayLayoutInstaller
+	Roles          GatewayInitRoleInstaller
+	WatchdogUnits  GatewayInitWatchdogUnitInstaller
+	Watchdog       GatewayInitWatchdog
+	Network        GatewayInitNetworkActivator
+	Swap           GatewayInitSwapManager
+	Identity       GatewayInitIdentityProvisioner
+	HandshakeHosts GatewayInitHandshakeHostSelector
+	Now            func() time.Time
+	NewHostID      model.UUIDGenerator
 }
 
 type GatewayInitializer struct {
@@ -127,7 +133,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.HandshakeHosts == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -207,12 +213,16 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("plan managed swap: %w", err)
 	}
+	initializedAt := initializer.runtime.Now().UTC()
+	handshakeHost, err := initializer.runtime.HandshakeHosts.Select(ctx, initializer.runtime.Manifest.HandshakeHostListVersion, initializedAt)
+	if err != nil {
+		return GatewayInitPlan{}, fmt.Errorf("select restricted handshake host: %w", err)
+	}
 	hostID, err := model.AllocateUUID(nil, initializer.runtime.NewHostID)
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("allocate gateway host identity: %w", err)
 	}
-	initializedAt := initializer.runtime.Now().UTC()
-	desired := initialGatewayState(hostID, initializedAt, network, ssh.Port, initializer.runtime.Manifest)
+	desired := initialGatewayState(hostID, initializedAt, network, ssh.Port, initializer.runtime.Manifest, handshakeHost)
 	if err := desired.Validate(); err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("build initial gateway state: %w", err)
 	}
@@ -237,6 +247,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 		PKIPlaceholders: append([]string(nil), layout.PKIPlaceholders...), Units: append([]string(nil), rolePlan.UnitsToStart...),
 		WatchdogUnitFiles: append([]string(nil), watchdogUnits.UnitFiles...),
 		ManagedSwap:       managedSwap,
+		HandshakeHost:     handshakeHost,
 		desiredState:      desired, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
 		swapDecisionMade: !managedSwap.Offered,
 	}, nil
@@ -250,6 +261,9 @@ func (initializer *GatewayInitializer) planExisting(input GatewayInitInput, snap
 	if existing.Host.PublicIPv4 != network.PublicIPv4 || existing.Host.ClientCIDR != network.ClientCIDR ||
 		existing.Host.NodeCIDR != network.NodeCIDR || existing.Host.ExternalInterface != network.ExternalInterface || existing.Host.SSHPort != ssh.Port {
 		return GatewayInitPlan{}, fmt.Errorf("%w: use a planned migration instead of init", ErrGatewayInitConflict)
+	}
+	if existing.HandshakeHost == nil {
+		return GatewayInitPlan{}, fmt.Errorf("%w: existing state has no pinned handshake host", ErrGatewayInitConflict)
 	}
 	managedSwap := linuxplatform.ManagedSwapPlan{
 		Path: linuxplatform.ManagedSwapLogicalPath, SizeBytes: linuxplatform.ManagedSwapSizeBytes,
@@ -268,7 +282,8 @@ func (initializer *GatewayInitializer) planExisting(input GatewayInitInput, snap
 	return GatewayInitPlan{
 		AlreadyInitialized: true, HostID: existing.Host.ID, Network: network, SSH: ssh,
 		FixedListeners: []string{"443/tcp", "8443/tcp", "51820/udp"}, ManagedSwap: managedSwap,
-		desiredState: existing, swapDecisionMade: true,
+		HandshakeHost: *existing.HandshakeHost,
+		desiredState:  existing, swapDecisionMade: true,
 	}, nil
 }
 
@@ -413,7 +428,8 @@ func planGatewayInputs(input GatewayInitInput, snapshot linuxplatform.HostSnapsh
 	return network, ssh, nil
 }
 
-func initialGatewayState(hostID string, initializedAt time.Time, network linuxplatform.GatewayNetworkPlan, sshPort int, manifest model.ComponentManifest) model.State {
+func initialGatewayState(hostID string, initializedAt time.Time, network linuxplatform.GatewayNetworkPlan, sshPort int, manifest model.ComponentManifest, selected model.HandshakeHost) model.State {
+	selection := selected
 	return model.State{
 		SchemaVersion: model.StateSchemaVersion, Generation: 1,
 		Host: model.Host{
@@ -425,6 +441,7 @@ func initialGatewayState(hostID string, initializedAt time.Time, network linuxpl
 		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
 		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: manifest,
+		HandshakeHost: &selection,
 	}
 }
 

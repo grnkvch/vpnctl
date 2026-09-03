@@ -28,7 +28,9 @@ func TestNodeUpdatePreflightStopsUnavailableAndIncompatibleBeforeLocalMutation(t
 	gatewayState := initialGatewayState(nodeUpdateGatewayID, now, linuxplatform.GatewayNetworkPlan{
 		PublicIPv4: "203.0.113.10", ExternalInterface: "eth0",
 		ClientCIDR: model.DefaultClientCIDR, NodeCIDR: model.DefaultNodeCIDR,
-	}, 22, gatewayManifest)
+	}, 22, gatewayManifest, model.HandshakeHost{
+		SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft", Hostname: "www.microsoft.com", SelectedAt: now,
+	})
 	gatewayState.Generation = 9
 	if err := gatewayState.Validate(); err != nil {
 		t.Fatal(err)

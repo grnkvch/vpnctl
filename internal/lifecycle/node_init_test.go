@@ -88,6 +88,7 @@ func TestNodeInitRejectsGatewayRoleBeforeMutation(t *testing.T) {
 		linuxplatform.GatewayNetworkPlan{PublicIPv4: "8.8.8.8", ExternalInterface: "eth0", ClientCIDR: model.DefaultClientCIDR, NodeCIDR: model.DefaultNodeCIDR},
 		2222,
 		gatewayTestManifest(),
+		gatewayTestHandshakeHost(),
 	)
 	if _, err := harness.initializer.Plan(context.Background()); !errors.Is(err, ErrNodeRoleConflict) {
 		t.Fatalf("Plan() error = %v", err)

@@ -176,6 +176,7 @@ type State struct {
 	SchemaVersion      int                 `json:"schema_version"`
 	Generation         uint64              `json:"generation"`
 	Host               Host                `json:"host"`
+	HandshakeHost      *HandshakeHost      `json:"handshake_host,omitempty"`
 	EnrollmentIdentity *EnrollmentIdentity `json:"enrollment_signing_identity,omitempty"`
 	Nodes              []Node              `json:"nodes"`
 	Clients            []Client            `json:"clients"`
@@ -188,6 +189,18 @@ type State struct {
 	Logging            []LoggingSession    `json:"logging"`
 	Backups            []Backup            `json:"backups"`
 	Components         ComponentManifest   `json:"components"`
+}
+
+// HandshakeHost is the single restricted-transport TLS disguise selected from
+// a signed release list. CandidateID is stable across hostname-list revisions;
+// renderers use Hostname, while lifecycle operations use both values to avoid
+// silently adopting a different candidate.
+type HandshakeHost struct {
+	SchemaVersion int       `json:"schema_version"`
+	ListVersion   int       `json:"list_version"`
+	CandidateID   string    `json:"candidate_id"`
+	Hostname      string    `json:"hostname"`
+	SelectedAt    time.Time `json:"selected_at"`
 }
 
 type Host struct {

@@ -266,6 +266,10 @@ func catalogGatewayState(presets []model.Preset, assigned bool) model.State {
 			OS: "ubuntu", OSVersion: "24.04", Architecture: "amd64", InitializedAt: now,
 			PublicIPv4: "203.0.113.10", ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.44.0.0/24", NodeCIDR: "10.45.0.0/24",
 		},
+		HandshakeHost: &model.HandshakeHost{
+			SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft",
+			Hostname: "www.microsoft.com", SelectedAt: now,
+		},
 		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: append(make([]model.Preset, 0, len(presets)), presets...), Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{}, Operations: []model.Operation{},
 		Logging: []model.LoggingSession{}, Backups: []model.Backup{},

@@ -91,7 +91,7 @@
 - [x] 8.2 Implement pinned standard WireGuard gateway/node services on `51820/UDP`, overlay routes, per-identity credentials, and health observations; verify multiple clients/nodes reach permitted gateway services and internet without lateral access.
 - [x] 8.3 Implement the selected restricted provider from spike results on `8443/TCP` with strict DPI-resistant mode and no UDP listener; verify rendered configuration and socket tests match the pinned manifest.
 - [x] 8.4 Implement selected restricted UDP-over-TCP and mandatory readiness probes; verify broken UoT blocks activation and both TCP/UDP have no direct or native-UDP fallback.
-- [ ] 8.5 Implement signed versioned handshake-host bundles, init reachability/TLS1.3/latency selection, persistence, node/client delivery, and passive degradation; verify ordered selection and zero runtime auto-rotation.
+- [x] 8.5 Implement signed versioned handshake-host bundles, init reachability/TLS1.3/latency selection, persistence, node/client delivery, and passive degradation; verify ordered selection and zero runtime auto-rotation.
 - [ ] 8.6 Start and supervise both gateway transport listeners while keeping exactly one active per node; verify gateway restart restores listeners and a node outage does not activate standby.
 - [ ] 8.7 Implement non-mutating `transport test` with isolated control, tunnel, TCP, UDP, cleanup, and bounded deadlines; verify active routing/generation is unchanged on success and failure.
 - [ ] 8.8 Implement confirmed make-before-break `transport switch`, idempotent active-target health check, bounded drain, rollback, and `--defer`; verify target failure preserves old production paths and successful switch moves control/tunnel/selected egress together.
