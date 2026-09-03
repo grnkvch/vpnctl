@@ -175,3 +175,44 @@ func TestInternalNodeRoutingServiceDispatchAndSanitizeFailure(t *testing.T) {
 		t.Fatalf("node routing dispatch called=%t stderr=%q", called, stderr.String())
 	}
 }
+
+func TestInternalNodeRoutingGuardServicesDispatchActionsAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runNodeRoutingGuardService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runNodeRoutingGuardService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	want := map[string]string{
+		"node-routing-guard":      "install",
+		"node-routing-not-ready":  "not-ready",
+		"node-routing-wait-ready": "wait-ready",
+	}
+	for mode, action := range want {
+		mode, action := mode, action
+		t.Run(mode, func(t *testing.T) {
+			called := false
+			runNodeRoutingGuardService = func(_ context.Context, received store.Paths, receivedAction string) error {
+				called = true
+				if received != paths || receivedAction != action {
+					t.Fatalf("guard service arguments = %+v/%q", received, receivedAction)
+				}
+				return errors.New("routing-policy-canary")
+			}
+			var stderr bytes.Buffer
+			if code := Execute([]string{"__service", mode}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+				t.Fatalf("guard service code = %d", code)
+			}
+			if !called || strings.Contains(stderr.String(), "canary") || !strings.Contains(stderr.String(), "service failed") {
+				t.Fatalf("guard dispatch called=%t stderr=%q", called, stderr.String())
+			}
+		})
+	}
+}

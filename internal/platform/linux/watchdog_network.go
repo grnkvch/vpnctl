@@ -27,9 +27,9 @@ var (
 var ownedRouteTables = []string{VPNCTLSelectedRouteTable, VPNCTLGatewayRouteTable}
 
 var ownedPolicyRules = map[int]PolicyRule{
-	10000: {Family: "ipv4", Priority: 10000, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x03000000", FWMask: "0xff000000"},
-	10010: {Family: "ipv4", Priority: 10010, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x04000000", FWMask: "0xff000000"},
-	10020: {Family: "ipv4", Priority: 10020, From: "all", Table: VPNCTLSelectedRouteTable, FWMark: "0x02000000", FWMask: "0xff000000"},
+	VPNCTLRecoveryRulePriority: {Family: "ipv4", Priority: VPNCTLRecoveryRulePriority, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x03000000", FWMask: "0xff000000"},
+	VPNCTLIngressRulePriority:  {Family: "ipv4", Priority: VPNCTLIngressRulePriority, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x04000000", FWMask: "0xff000000"},
+	VPNCTLSelectedRulePriority: {Family: "ipv4", Priority: VPNCTLSelectedRulePriority, From: "all", Table: VPNCTLSelectedRouteTable, FWMark: "0x02000000", FWMask: "0xff000000"},
 }
 
 // OwnedNetworkScope lists the sysctls a lockout-risk operation intends to

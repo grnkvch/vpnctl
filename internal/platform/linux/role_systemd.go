@@ -30,6 +30,7 @@ var (
 		"vpnctl-restricted.service":    {model.RoleGateway: {}},
 		"vpnctl-dns.service":           {model.RoleGateway: {}},
 		"vpnctl-tunnel-server.service": {model.RoleGateway: {}},
+		"vpnctl-routing-guard.service": {model.RoleNode: {}},
 		"vpnctl-routing.service":       {model.RoleNode: {}},
 		"vpnctl-tunnel-client.service": {model.RoleNode: {}},
 	}
@@ -118,7 +119,7 @@ func (installer *RoleSystemdInstaller) Plan(request RoleInstallationRequest) (Ro
 		if unit.Start && !unit.Enable {
 			return RoleInstallationPlan{}, fmt.Errorf("%w: started unit %q must also be enabled", ErrInvalidRoleInstallation, unit.Name)
 		}
-		if err := validateRoleServiceUnit(unit.Content); err != nil {
+		if err := validateRoleServiceUnit(unit.Name, unit.Content); err != nil {
 			return RoleInstallationPlan{}, fmt.Errorf("%w: unit %s: %v", ErrInvalidRoleInstallation, unit.Name, err)
 		}
 		plan.UnitFiles = append(plan.UnitFiles, filepath.Join(installer.unitDir, unit.Name))
@@ -247,13 +248,14 @@ func RoleUnitNames(role model.Role) []string {
 	return result
 }
 
-func validateRoleServiceUnit(content []byte) error {
+func validateRoleServiceUnit(name string, content []byte) error {
 	if len(content) == 0 || len(content) > maximumRoleUnitBytes || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
 		return fmt.Errorf("content must be non-empty UTF-8 within %d bytes", maximumRoleUnitBytes)
 	}
 	section := ""
 	restarts := make([]string, 0, 1)
 	types := make([]string, 0, 1)
+	remainAfterExit := make([]string, 0, 1)
 	for _, raw := range strings.Split(string(content), "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -275,10 +277,18 @@ func validateRoleServiceUnit(content []byte) error {
 			restarts = append(restarts, strings.TrimSpace(value))
 		case "Type":
 			types = append(types, strings.TrimSpace(value))
+		case "RemainAfterExit":
+			remainAfterExit = append(remainAfterExit, strings.TrimSpace(value))
 		}
 	}
 	if len(restarts) != 1 || restarts[0] != "on-failure" {
 		return fmt.Errorf("[Service] must contain exactly Restart=on-failure")
+	}
+	if name == "vpnctl-routing-guard.service" {
+		if len(types) != 1 || types[0] != "oneshot" || len(remainAfterExit) != 1 || remainAfterExit[0] != "yes" {
+			return fmt.Errorf("node routing guard must be Type=oneshot with RemainAfterExit=yes")
+		}
+		return nil
 	}
 	if len(types) > 1 || (len(types) == 1 && types[0] == "oneshot") {
 		return fmt.Errorf("role data-plane unit must be long-running")

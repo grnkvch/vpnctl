@@ -26,7 +26,7 @@ func TestNodeInitAppliesUnjoinedRoleOnceAndSecondInitHasNoEffect(t *testing.T) {
 	if !plan.Changed || plan.AlreadyInitialized || plan.HostID != nodeTestHostID {
 		t.Fatalf("fresh plan = %+v", plan)
 	}
-	wantUnits := []string{"vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
+	wantUnits := []string{"vpnctl-routing-guard.service", "vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
 	if !reflect.DeepEqual(plan.Units, wantUnits) {
 		t.Fatalf("planned units = %v, want %v", plan.Units, wantUnits)
 	}

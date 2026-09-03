@@ -1,19 +1,19 @@
 # Node routing engine
 
-Task 10.2 turns the shared matcher IR into the production base configuration
-for the node's pinned Mihomo `v1.19.30` process. It does not yet install kernel
-marks, policy routes, the independent leak guard, or a concrete active
-transport binding; those boundaries belong to tasks 10.3 and 10.4.
+Tasks 10.2 and 10.3 turn the shared matcher IR into the production base for the
+node's pinned Mihomo `v1.19.30` process and an independent kernel fail-closed
+guard. A concrete active transport binding remains the task 10.4 boundary.
 
 ## Host-wide boundary
 
-The node runs one system `vpnctl-routing.service` process and one TUN named
-`vpnctl0`. The public render request has no process, UID, user, systemd-unit,
-container, cgroup, package, interface-inclusion, or network-namespace scope.
+The node runs one system `vpnctl-routing.service` process, one independent
+`vpnctl-routing-guard.service`, and one TUN named `vpnctl0`. The render requests
+have no process, UID, user, systemd-unit, container, cgroup, package,
+interface-inclusion, or network-namespace scope.
 The generated configuration likewise contains none of those matchers or
-filters. Mihomo uses the system TUN stack with `auto-route: false`; task 10.3
-owns the kernel policy route that sends all classified host traffic into this
-TUN and keeps the pre-engine guard closed until readiness is accepted.
+filters. Mihomo uses the system TUN stack with `auto-route: false`; the guard
+owns the kernel policy route that sends classified host traffic into this TUN
+and keeps the pre-engine boundary closed until readiness is accepted.
 
 The process opens no mixed, SOCKS, redir, TProxy, LAN, or controller listener.
 Its only listener is the managed resolver on `127.0.0.1:1053`, for both UDP and
@@ -33,7 +33,62 @@ uses the node-direct resolver list for every lookup, without changing traffic
 routing rules. Fake IP remains disabled in both modes. An empty policy renders
 an explicit empty policy map in policy mode and a single final `MATCH,DIRECT`.
 
-## Fail-closed staging and readiness
+## Kernel fail-closed guard
+
+The node guard owns only `table inet vpnctl`, route tables `20001`/`20002`,
+RPDB priorities `10000`/`10010`/`10020`, and the explicitly snapshotted
+`src_valid_mark`/`rp_filter` sysctls. It rejects a pre-existing table without
+the `vpnctl:v2:node-routing-guard` ownership marker and never flushes the global
+ruleset or another table.
+
+Only the high byte of packet and conntrack marks belongs to vpnctl. The fixed
+mask is `0xff000000`; `0x01000000` means retained direct,
+`0x02000000` selected, `0x03000000` recovery/active outbound, and
+`0x04000000` ingress response. Every assignment preserves `0x00ffffff`, and
+only those four exact high-byte values are restored from conntrack. Both the
+prerouting and route-output hooks use priority `-150`, after conntrack
+association.
+
+The recovery allowlist consists only of the configured gateway IPv4 plus exact
+TCP/UDP ports. There is no CIDR, hostname, arbitrary destination, or raw nft
+input. Optional exact ingress interface/protocol/port tuples attach the
+ingress-response mark, so response routing is symmetric. Static IP/CIDR
+decisions come from the same matcher IR as Mihomo; selected resolver answers
+have dedicated IPv4/IPv6 sets for the managed DNS integration in task 10.7.
+
+The selected table always contains `unreachable default metric 42760`. The
+gateway table contains only the configured ordinary underlay default route.
+The three high-byte marks select those tables at the fixed RPDB priorities.
+This means a selected route has a kernel block even if the TUN disappears.
+
+## Boot, readiness, and crash order
+
+`vpnctl-routing-guard.service` is a controller-independent oneshot unit that
+remains active after loading the not-ready policy. It is ordered before and
+required by `vpnctl-routing.service`. The routing unit runs these hidden,
+systemd-only phases:
+
+1. `node-routing-not-ready` closes the nftables readiness chain before process
+   start.
+2. Mihomo starts and opens `vpnctl0` plus both loopback DNS listeners.
+3. `node-routing-wait-ready` observes all three resources, installs
+   `default dev vpnctl0 metric 10 table 20001`, and only then atomically changes
+   the readiness jump to `ready`.
+4. `ExecStopPost` changes the jump back to `not_ready` before deleting the TUN
+   route, including after an unexpected process exit.
+
+While not ready, loopback and exact recovery traffic remain possible and only
+established/related flows with a retained direct decision may continue. Every
+other new application packet is dropped. In ready state, selected IPv4 is
+marked for the TUN, selected IPv6 is marked and dropped because v2 has no full
+IPv6 data plane, and unmatched traffic receives a retained direct mark.
+
+Guard installation snapshots the prior vpnctl-owned network scope first. Any
+failure while setting sysctls, routes, rules, or the atomic nftables batch
+restores that snapshot. Readiness activation follows the inverse-safe order:
+route before open; close before route removal.
+
+## Routing-engine staging and readiness
 
 Until task 10.4 supplies the manually active standard or restricted outbound,
 the only member of `VPNCTL-GATEWAY` is Mihomo's built-in `REJECT-DROP`. Selected
@@ -50,8 +105,9 @@ config SHA-256 and passively requires all of:
 - exactly loopback `127.0.0.1:1053` owned by Mihomo over UDP;
 - exactly loopback `127.0.0.1:1053` owned by Mihomo over TCP.
 
-Readiness performs no DNS request, application probe, service action, route
-change, or automatic transport choice. A missing member returns not-ready and
-cannot yield an activatable candidate. Task 10.3 uses this boundary when it
-orders TUN routes and the independent nftables guard; task 10.4 then proves the
-selected TCP/UDP path through each manually active transport.
+The candidate readiness gate performs no DNS request, application probe,
+service action, route change, or automatic transport choice. A missing member
+returns not-ready and cannot yield an activatable candidate. The systemd
+post-start phase uses the same TUN and listener shape before opening the kernel
+guard. Task 10.4 then proves the selected TCP/UDP path through each manually
+active transport.

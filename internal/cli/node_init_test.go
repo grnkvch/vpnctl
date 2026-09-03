@@ -164,7 +164,7 @@ func (initializer *recordingNodeInitializer) Plan(context.Context) (lifecycle.No
 	}
 	return lifecycle.NodeInitPlan{
 		Changed: true, HostID: nodeCLIHostID,
-		Units: []string{"vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"},
+		Units: []string{"vpnctl-routing-guard.service", "vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"},
 	}, nil
 }
 

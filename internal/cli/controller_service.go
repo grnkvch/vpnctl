@@ -28,6 +28,9 @@ var (
 	runNodeRoutingService = func(ctx context.Context, paths store.Paths) error {
 		return routing.RunNodeRoutingService(ctx, paths, linuxplatform.OSProbeRunner{}, routing.OSNodeRoutingProcessRunner{})
 	}
+	runNodeRoutingGuardService = func(ctx context.Context, paths store.Paths, action string) error {
+		return routing.RunNodeRoutingGuardService(ctx, paths, linuxplatform.OSProbeRunner{}, action)
+	}
 	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	}
@@ -59,6 +62,15 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	case "node-routing":
 		serviceName = "node routing"
 		err = runNodeRoutingService(ctx, paths)
+	case "node-routing-guard":
+		serviceName = "node routing guard"
+		err = runNodeRoutingGuardService(ctx, paths, routing.NodeRoutingGuardInstallAction)
+	case "node-routing-not-ready":
+		serviceName = "node routing guard not-ready"
+		err = runNodeRoutingGuardService(ctx, paths, routing.NodeRoutingGuardNotReadyAction)
+	case "node-routing-wait-ready":
+		serviceName = "node routing guard wait-ready"
+		err = runNodeRoutingGuardService(ctx, paths, routing.NodeRoutingGuardWaitReadyAction)
 	default:
 		fmt.Fprintln(stderr, "unsupported internal service mode")
 		return ExitValidation

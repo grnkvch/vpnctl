@@ -20,7 +20,7 @@ func TestRoleUnitCatalogMatchesGatewayAndNodeDesign(t *testing.T) {
 		"vpnctl-controller.service", "vpnctl-dns.service", "vpnctl-restricted.service",
 		"vpnctl-standard.service", "vpnctl-tunnel-server.service",
 	}
-	wantNode := []string{"vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
+	wantNode := []string{"vpnctl-routing-guard.service", "vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
 	if got := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(got, wantGateway) {
 		t.Fatalf("gateway units = %v, want %v", got, wantGateway)
 	}
@@ -252,6 +252,9 @@ func roleInstallRequest(role model.Role, start bool) RoleInstallationRequest {
 }
 
 func roleTestUnit(name string) []byte {
+	if name == "vpnctl-routing-guard.service" {
+		return []byte("[Unit]\nDescription=" + name + "\n[Service]\nType=oneshot\nExecStart=/bin/true\nRemainAfterExit=yes\nRestart=on-failure\nStandardOutput=null\nStandardError=null\n[Install]\nWantedBy=multi-user.target\n")
+	}
 	return []byte("[Unit]\nDescription=" + name + "\n[Service]\nExecStart=/bin/sleep infinity\nRestart=on-failure\nStandardOutput=null\nStandardError=null\n[Install]\nWantedBy=multi-user.target\n")
 }
 

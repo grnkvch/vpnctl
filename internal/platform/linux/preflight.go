@@ -10,9 +10,20 @@ import (
 )
 
 const (
-	VPNCTLSelectedRouteTable = "20001"
-	VPNCTLGatewayRouteTable  = "20002"
-	VPNCTLMarkMask           = uint64(0xff000000)
+	VPNCTLSelectedRouteTable     = "20001"
+	VPNCTLGatewayRouteTable      = "20002"
+	VPNCTLMarkMask               = uint64(0xff000000)
+	VPNCTLPreservedMarkMask      = uint64(0x00ffffff)
+	VPNCTLDirectMark             = uint64(0x01000000)
+	VPNCTLSelectedMark           = uint64(0x02000000)
+	VPNCTLRecoveryMark           = uint64(0x03000000)
+	VPNCTLIngressResponseMark    = uint64(0x04000000)
+	VPNCTLRecoveryRulePriority   = 10000
+	VPNCTLIngressRulePriority    = 10010
+	VPNCTLSelectedRulePriority   = 10020
+	VPNCTLUnreachableRouteMetric = 42760
+	VPNCTLReadyTUNRouteMetric    = 10
+	VPNCTLNFTablesManglePriority = -150
 )
 
 var (

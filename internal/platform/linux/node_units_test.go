@@ -18,7 +18,7 @@ func TestRenderNodeRoleInstallationStagesOnlyNodeUnits(t *testing.T) {
 	if request.Role != model.RoleNode {
 		t.Fatalf("role = %q", request.Role)
 	}
-	want := []string{"vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
+	want := []string{"vpnctl-routing-guard.service", "vpnctl-routing.service", "vpnctl-standard.service", "vpnctl-tunnel-client.service"}
 	got := make([]string, 0, len(request.Units))
 	for _, unit := range request.Units {
 		got = append(got, unit.Name)
@@ -26,8 +26,17 @@ func TestRenderNodeRoleInstallationStagesOnlyNodeUnits(t *testing.T) {
 		if unit.Enable || unit.Start {
 			t.Fatalf("unjoined unit %s is active: enable=%t start=%t", unit.Name, unit.Enable, unit.Start)
 		}
-		if !strings.Contains(content, "Restart=on-failure") || strings.Contains(content, "Type=oneshot") {
+		if !strings.Contains(content, "Restart=on-failure") {
 			t.Fatalf("unit %s does not have the long-running restart contract", unit.Name)
+		}
+		if name := unit.Name; name == "vpnctl-routing-guard.service" {
+			for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Before=vpnctl-routing.service", "CAP_NET_ADMIN", "__service node-routing-guard"} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("guard unit lacks %q:\n%s", required, content)
+				}
+			}
+		} else if strings.Contains(content, "Type=oneshot") {
+			t.Fatalf("unit %s unexpectedly uses oneshot", unit.Name)
 		}
 		if !strings.Contains(content, "ConditionPathExists=/etc/vpnctl/generated/node/") {
 			t.Fatalf("unit %s lacks its enrollment/readiness guard", unit.Name)
@@ -69,6 +78,16 @@ func TestNodeRoutingUnitHasNoUserProcessOrNamespaceScope(t *testing.T) {
 	}
 	if routing == "" || !strings.Contains(routing, "ExecStart="+DefaultVPNCTLBinaryPath+" __service node-routing\n") {
 		t.Fatalf("node routing unit is missing or has an unexpected entrypoint:\n%s", routing)
+	}
+	for _, required := range []string{
+		"Requires=vpnctl-routing-guard.service", "After=vpnctl-routing-guard.service",
+		"ExecStartPre=" + DefaultVPNCTLBinaryPath + " __service node-routing-not-ready",
+		"ExecStartPost=" + DefaultVPNCTLBinaryPath + " __service node-routing-wait-ready",
+		"ExecStopPost=" + DefaultVPNCTLBinaryPath + " __service node-routing-not-ready",
+	} {
+		if !strings.Contains(routing, required) {
+			t.Fatalf("node routing unit lacks crash/boot guard %q:\n%s", required, routing)
+		}
 	}
 	for _, forbidden := range []string{
 		"User=", "PrivateNetwork=true", "NetworkNamespacePath=", "JoinsNamespaceOf=", "RestrictNetworkInterfaces=",

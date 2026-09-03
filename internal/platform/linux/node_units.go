@@ -23,6 +23,7 @@ func RenderNodeRoleInstallation(binaryPath string) (RoleInstallationRequest, err
 		return RoleInstallationRequest{}, fmt.Errorf("node service binary path must be clean, absolute, and systemd-safe")
 	}
 	modes := map[string]string{
+		"vpnctl-routing-guard.service": "node-routing-guard",
 		"vpnctl-routing.service":       "node-routing",
 		"vpnctl-standard.service":      "node-standard",
 		"vpnctl-tunnel-client.service": "node-tunnel-client",
@@ -35,16 +36,58 @@ func RenderNodeRoleInstallation(binaryPath string) (RoleInstallationRequest, err
 	units := make([]RoleUnitFile, 0, len(names))
 	for _, name := range names {
 		mode := modes[name]
+		if name == "vpnctl-routing-guard.service" {
+			content := fmt.Sprintf(`[Unit]
+Description=vpnctl node routing fail-closed guard
+After=network-online.target
+Wants=network-online.target
+Before=vpnctl-routing.service
+ConditionPathExists=/etc/vpnctl/generated/node/node-routing-guard.ready
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=%s __service node-routing-guard
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadOnlyPaths=/etc/vpnctl
+ReadWritePaths=/run/vpnctl /proc/sys/net/ipv4/conf
+MemoryMax=32M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target
+`, binaryPath)
+			units = append(units, RoleUnitFile{Name: name, Content: []byte(content)})
+			continue
+		}
+		extraUnit := ""
+		extraService := ""
+		if name == "vpnctl-routing.service" {
+			extraUnit = "Requires=vpnctl-routing-guard.service\nAfter=vpnctl-routing-guard.service\n"
+			extraService = fmt.Sprintf("ExecStartPre=%s __service node-routing-not-ready\nExecStartPost=%s __service node-routing-wait-ready\nExecStopPost=%s __service node-routing-not-ready\nTimeoutStartSec=20s\nTimeoutStopSec=10s\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW\nDevicePolicy=closed\nDeviceAllow=/dev/net/tun rw\n", binaryPath, binaryPath, binaryPath)
+		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/etc/vpnctl/generated/node/%s.ready
+%sConditionPathExists=/etc/vpnctl/generated/node/%s.ready
 
 [Service]
 Type=simple
 ExecStart=%s __service %s
-Restart=on-failure
+%sRestart=on-failure
 RestartSec=2s
 StandardOutput=null
 StandardError=null
@@ -58,7 +101,7 @@ TasksMax=128
 
 [Install]
 WantedBy=multi-user.target
-`, mode, mode, binaryPath, mode)
+`, mode, extraUnit, mode, binaryPath, mode, extraService)
 		units = append(units, RoleUnitFile{Name: name, Content: []byte(content)})
 	}
 	return RoleInstallationRequest{
