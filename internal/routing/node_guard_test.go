@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -89,6 +90,16 @@ func TestNodeRoutingGuardRejectsBroadRecoveryAndMalformedConfig(t *testing.T) {
 		"invalid next hop":        func(value *NodeRoutingGuardConfig) { value.DirectRoute.GatewayIPv4 = "::1" },
 		"invalid ingress":         func(value *NodeRoutingGuardConfig) { value.IngressEndpoints[0].Interface = "*" },
 		"invalid matcher":         func(value *NodeRoutingGuardConfig) { value.Matcher.SchemaVersion++ },
+		"overlay without binding": func(value *NodeRoutingGuardConfig) { value.GatewayOverlayIPv4 = "10.67.0.1" },
+		"unknown active binding": func(value *NodeRoutingGuardConfig) {
+			value.ActiveTransport = "automatic"
+			value.GatewayOverlayIPv4 = "10.67.0.1"
+		},
+		"standard recursive underlay": func(value *NodeRoutingGuardConfig) {
+			value.ActiveTransport = model.TransportStandard
+			value.GatewayOverlayIPv4 = "10.67.0.1"
+			value.DirectRoute.Interface = NodeRoutingStandardInterface
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := base
@@ -109,6 +120,64 @@ func TestNodeRoutingGuardRejectsBroadRecoveryAndMalformedConfig(t *testing.T) {
 	trailing := append(nodeRoutingGuardFixture(t).Bytes(), []byte(`{"extra":true}`)...)
 	if _, err := decodeNodeRoutingGuardConfig(trailing); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("trailing JSON decode error = %v", err)
+	}
+}
+
+func TestNodeRoutingGuardBindsRecoveryAndInternalGatewayToStandardOrRestricted(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		kind       model.TransportKind
+		wantRoutes []string
+		forbidden  string
+	}{
+		{
+			name: "standard", kind: model.TransportStandard,
+			wantRoutes: []string{
+				"ip -4 route replace 203.0.113.44/32 via 192.0.2.1 dev eth0 table 20002 proto static",
+				"ip -4 route replace default dev vpnctl-wg table 20002 proto static",
+				"sysctl -q -w net.ipv4.conf.vpnctl-wg.rp_filter=1",
+			},
+			forbidden: "ip -4 route replace unreachable default metric 42760 table 20002",
+		},
+		{
+			name: "restricted", kind: model.TransportRestricted,
+			wantRoutes: []string{
+				"ip -4 route replace 203.0.113.44/32 via 192.0.2.1 dev eth0 table 20002 proto static",
+				"ip -4 route replace unreachable default metric 42760 table 20002 proto static",
+			},
+			forbidden: "ip -4 route replace default dev vpnctl-wg table 20002",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			config := nodeRoutingGuardFixture(t).Config()
+			config.ActiveTransport = test.kind
+			config.GatewayOverlayIPv4 = "10.67.0.1"
+			candidate, err := RenderNodeRoutingGuardConfig(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nft := string(candidate.NFTablesDefinition())
+			gatewayRule := "ip daddr 10.67.0.1 meta mark set (meta mark & 0x00ffffff) | 0x02000000 ct mark set meta mark return"
+			if !strings.Contains(nft, gatewayRule) {
+				t.Fatalf("active guard lacks internal-gateway selection:\n%s", nft)
+			}
+			runner := newNodeRoutingGuardRunner()
+			manager, _ := NewNodeRoutingGuardManager(runner)
+			if err := manager.Install(context.Background(), candidate); err != nil {
+				t.Fatal(err)
+			}
+			calls := runner.joinedCalls()
+			for _, required := range test.wantRoutes {
+				if !strings.Contains(calls, required) {
+					t.Errorf("%s guard lacks %q:\n%s", test.name, required, calls)
+				}
+			}
+			if strings.Contains(calls, test.forbidden) {
+				t.Errorf("%s guard contains forbidden route %q:\n%s", test.name, test.forbidden, calls)
+			}
+		})
 	}
 }
 

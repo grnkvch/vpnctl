@@ -39,7 +39,7 @@ func RenderNodeRoleInstallation(binaryPath string) (RoleInstallationRequest, err
 		if name == "vpnctl-routing-guard.service" {
 			content := fmt.Sprintf(`[Unit]
 Description=vpnctl node routing fail-closed guard
-After=network-online.target
+After=network-online.target vpnctl-standard.service
 Wants=network-online.target
 Before=vpnctl-routing.service
 ConditionPathExists=/etc/vpnctl/generated/node/node-routing-guard.ready

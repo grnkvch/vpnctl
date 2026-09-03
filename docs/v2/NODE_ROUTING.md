@@ -1,8 +1,8 @@
 # Node routing engine
 
-Tasks 10.2 and 10.3 turn the shared matcher IR into the production base for the
-node's pinned Mihomo `v1.19.30` process and an independent kernel fail-closed
-guard. A concrete active transport binding remains the task 10.4 boundary.
+Tasks 10.2 through 10.4 turn the shared matcher IR into the production node
+configuration for the pinned Mihomo `v1.19.30` process, its independent kernel
+fail-closed guard, and exactly one manually active transport binding.
 
 ## Host-wide boundary
 
@@ -56,10 +56,14 @@ ingress-response mark, so response routing is symmetric. Static IP/CIDR
 decisions come from the same matcher IR as Mihomo; selected resolver answers
 have dedicated IPv4/IPv6 sets for the managed DNS integration in task 10.7.
 
-The selected table always contains `unreachable default metric 42760`. The
-gateway table contains only the configured ordinary underlay default route.
-The three high-byte marks select those tables at the fixed RPDB priorities.
-This means a selected route has a kernel block even if the TUN disappears.
+The selected table always contains `unreachable default metric 42760`. For an
+active binding, the gateway table always contains one exact public-gateway
+`/32` recovery route over the ordinary underlay. Standard adds a default via
+`vpnctl-wg`; restricted adds an unreachable default because its only valid
+recovery-marked outer destination is that exact public gateway. The three
+high-byte marks select these tables at fixed RPDB priorities. This means a
+selected route has a kernel block if the TUN or active provider disappears,
+and a marked provider packet cannot silently use an arbitrary direct target.
 
 ## Boot, readiness, and crash order
 
@@ -88,13 +92,33 @@ failure while setting sysctls, routes, rules, or the atomic nftables batch
 restores that snapshot. Readiness activation follows the inverse-safe order:
 route before open; close before route removal.
 
-## Routing-engine staging and readiness
+## One active outbound
 
-Until task 10.4 supplies the manually active standard or restricted outbound,
-the only member of `VPNCTL-GATEWAY` is Mihomo's built-in `REJECT-DROP`. Selected
-rules can therefore block but cannot accidentally become direct while a
-generation is staged. Exact-domain and more-specific suffix/CIDR decisions
-remain ahead of their parent rules, and unmatched traffic ends in direct.
+An unbound staging artifact contains no proxy and gives `VPNCTL-GATEWAY` only
+Mihomo's built-in `REJECT-DROP`. A production bundle cannot be unbound. It
+derives both the engine and guard from the node's one authoritative manual
+active-transport record and credential generation:
+
+- `standard` gives `VPNCTL-GATEWAY` exactly one direct proxy, with UDP enabled,
+  interface fixed to `vpnctl-wg`, and recovery mark `0x03000000`;
+- `restricted` gives it exactly one Shadowsocks-2022 proxy using public
+  `8443/TCP`, ShadowTLS v3 strict mode, UoT v2, and the same recovery mark.
+
+The standby provider and `DIRECT` are never members of the active group; there
+is no fallback, health-test selector, or automatic choice. The exact gateway
+overlay `/32` is the first system rule, so selected DNS, control RPCs, and the
+reverse-tunnel connection all use that same group. User-selected rules follow
+in canonical order. Unmatched host packets never enter the selected routing
+table/TUN, and the defensive terminal rule remains `MATCH,DIRECT`.
+
+The bundle composer overwrites the guard matcher, active kind, and public and
+overlay gateway addresses from the same validated routing input. This removes
+an API path for binding the userspace engine and kernel guard to different
+transports. Restricted credentials are loaded only through the two exact
+authoritative secret references and are emitted solely into the root-only
+routing config.
+
+## Routing-engine staging and readiness
 
 The service validates the vpnctl schema, the exact bundled Mihomo version, and
 Mihomo's native parser before starting. Readiness is bound to the candidate
@@ -109,5 +133,15 @@ The candidate readiness gate performs no DNS request, application probe,
 service action, route change, or automatic transport choice. A missing member
 returns not-ready and cannot yield an activatable candidate. The systemd
 post-start phase uses the same TUN and listener shape before opening the kernel
-guard. Task 10.4 then proves the selected TCP/UDP path through each manually
-active transport.
+guard. When standard is scheduled at boot, the guard is ordered after its
+WireGuard unit so the active gateway-table default can be installed safely.
+
+Task-10.4 acceptance re-ran the disposable nftables capture gates. Standard
+selected TCP and UDP used only the gateway path while unrelated IPv4/IPv6
+remained direct. Restricted selected TCP and UDP produced `43` protected
+`8443/TCP` packets and zero native/direct UDP or direct TCP packets. The
+reverse tunnel recorded `53` standard `17000/TCP` packets, then `21`
+ShadowTLS packets and zero steady-state direct `17000/TCP` packets after the
+manual restricted switch, with logical identity preserved. These are Linux
+gateway/node development gates; actual supported Clash Mi remains the task
+16.11 deployed-service gate.

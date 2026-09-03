@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -63,6 +64,9 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 		"net.ipv4.conf.all.src_valid_mark",
 		"net.ipv4.conf." + config.DirectRoute.Interface + ".rp_filter",
 	}}
+	if config.ActiveTransport == model.TransportStandard && config.DirectRoute.Interface != NodeRoutingStandardInterface {
+		scope.Sysctls = append(scope.Sysctls, "net.ipv4.conf."+NodeRoutingStandardInterface+".rp_filter")
+	}
 	prior, err := manager.network.Snapshot(ctx, scope)
 	if err != nil {
 		return fmt.Errorf("snapshot node routing guard state: %w", err)
@@ -92,13 +96,10 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 	if err := manager.runChecked(ctx, linuxplatform.ProbeCommand{Name: "ip", Args: selectedRoute}); err != nil {
 		return fmt.Errorf("install selected unreachable route: %w", err)
 	}
-	gatewayRoute := []string{"-4", "route", "replace", "default"}
-	if config.DirectRoute.GatewayIPv4 != "" {
-		gatewayRoute = append(gatewayRoute, "via", config.DirectRoute.GatewayIPv4)
-	}
-	gatewayRoute = append(gatewayRoute, "dev", config.DirectRoute.Interface, "table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")
-	if err := manager.runChecked(ctx, linuxplatform.ProbeCommand{Name: "ip", Args: gatewayRoute}); err != nil {
-		return fmt.Errorf("install gateway recovery route: %w", err)
+	for _, route := range nodeRoutingGatewayRoutes(config) {
+		if err := manager.runChecked(ctx, linuxplatform.ProbeCommand{Name: "ip", Args: route}); err != nil {
+			return fmt.Errorf("install gateway recovery route: %w", err)
+		}
 	}
 	for _, rule := range nodeRoutingPolicyRules() {
 		if priorHasPolicyRule(prior, rule.priority) {
@@ -117,6 +118,31 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 		return fmt.Errorf("install node routing guard table: %w", err)
 	}
 	return nil
+}
+
+func nodeRoutingGatewayRoutes(config NodeRoutingGuardConfig) [][]string {
+	base := []string{"-4", "route", "replace"}
+	if config.ActiveTransport == "" {
+		route := append(append([]string(nil), base...), "default")
+		if config.DirectRoute.GatewayIPv4 != "" {
+			route = append(route, "via", config.DirectRoute.GatewayIPv4)
+		}
+		return [][]string{append(route, "dev", config.DirectRoute.Interface, "table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")}
+	}
+	recovery := append(append([]string(nil), base...), config.GatewayIPv4+"/32")
+	if config.DirectRoute.GatewayIPv4 != "" {
+		recovery = append(recovery, "via", config.DirectRoute.GatewayIPv4)
+	}
+	recovery = append(recovery, "dev", config.DirectRoute.Interface, "table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")
+	var fallback []string
+	if config.ActiveTransport == model.TransportStandard {
+		fallback = append(append([]string(nil), base...), "default", "dev", NodeRoutingStandardInterface,
+			"table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")
+	} else {
+		fallback = append(append([]string(nil), base...), "unreachable", "default", "metric",
+			strconv.Itoa(linuxplatform.VPNCTLUnreachableRouteMetric), "table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")
+	}
+	return [][]string{recovery, fallback}
 }
 
 // NotReady closes the classifier first and only then removes the low-metric

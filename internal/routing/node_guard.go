@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 )
 
@@ -58,12 +59,14 @@ type NodeRoutingIngressEndpoint struct {
 // the independent systemd guard. It contains no command fragments or raw nft
 // syntax.
 type NodeRoutingGuardConfig struct {
-	SchemaVersion    int                          `json:"schema_version"`
-	Matcher          MatcherIR                    `json:"matcher"`
-	GatewayIPv4      string                       `json:"gateway_ipv4"`
-	DirectRoute      NodeRoutingDirectRoute       `json:"direct_route"`
-	RecoveryPorts    []NodeRoutingRecoveryPort    `json:"recovery_ports"`
-	IngressEndpoints []NodeRoutingIngressEndpoint `json:"ingress_endpoints"`
+	SchemaVersion      int                          `json:"schema_version"`
+	Matcher            MatcherIR                    `json:"matcher"`
+	GatewayIPv4        string                       `json:"gateway_ipv4"`
+	GatewayOverlayIPv4 string                       `json:"gateway_overlay_ipv4,omitempty"`
+	ActiveTransport    model.TransportKind          `json:"active_transport,omitempty"`
+	DirectRoute        NodeRoutingDirectRoute       `json:"direct_route"`
+	RecoveryPorts      []NodeRoutingRecoveryPort    `json:"recovery_ports"`
+	IngressEndpoints   []NodeRoutingIngressEndpoint `json:"ingress_endpoints"`
 }
 
 type NodeRoutingGuardCandidate struct {
@@ -150,8 +153,24 @@ func (config NodeRoutingGuardConfig) Validate() error {
 	if err != nil || !gateway.Is4() || !gateway.IsGlobalUnicast() || gateway.IsLoopback() || gateway.String() != config.GatewayIPv4 {
 		issues = append(issues, "gateway_ipv4 must be a canonical non-loopback unicast IPv4 address")
 	}
+	if config.ActiveTransport == "" {
+		if config.GatewayOverlayIPv4 != "" {
+			issues = append(issues, "unbound guard cannot contain gateway_overlay_ipv4")
+		}
+	} else {
+		if config.ActiveTransport != model.TransportStandard && config.ActiveTransport != model.TransportRestricted {
+			issues = append(issues, "active_transport must be standard or restricted")
+		}
+		overlay, parseErr := netip.ParseAddr(config.GatewayOverlayIPv4)
+		if parseErr != nil || !overlay.Is4() || !overlay.IsGlobalUnicast() || overlay.IsLoopback() || overlay.String() != config.GatewayOverlayIPv4 || overlay == gateway {
+			issues = append(issues, "gateway_overlay_ipv4 must be a distinct canonical non-loopback unicast IPv4 address")
+		}
+	}
 	if !nodeRoutingInterfacePattern.MatchString(config.DirectRoute.Interface) {
 		issues = append(issues, "direct_route.interface must be a valid Linux interface name")
+	}
+	if config.ActiveTransport == model.TransportStandard && config.DirectRoute.Interface == NodeRoutingStandardInterface {
+		issues = append(issues, "standard direct_route.interface must be the underlay, not vpnctl-wg")
 	}
 	if config.DirectRoute.GatewayIPv4 != "" {
 		nextHop, parseErr := netip.ParseAddr(config.DirectRoute.GatewayIPv4)
@@ -275,6 +294,9 @@ func renderNodeRoutingGuardNFTables(config NodeRoutingGuardConfig, matchers NFTa
 	rules.WriteString("  chain ready {\n")
 	fmt.Fprintf(&rules, "    ct state established,related meta mark & %s == %s return\n", mask, selected)
 	fmt.Fprintf(&rules, "    ct state established,related meta mark & %s == %s return\n\n", mask, direct)
+	if config.ActiveTransport != "" {
+		fmt.Fprintf(&rules, "    ip daddr %s meta mark set (meta mark & %s) | %s ct mark set meta mark return\n", config.GatewayOverlayIPv4, preserved, selected)
+	}
 	fmt.Fprintf(&rules, "    ip6 daddr @selected_resolved_v6 meta mark set (meta mark & %s) | %s ct mark set meta mark drop\n", preserved, selected)
 	for _, decision := range matchers.program.ipv6 {
 		writeNodeRoutingIPv6Decision(&rules, decision, preserved, direct, selected)

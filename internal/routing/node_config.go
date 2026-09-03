@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -29,6 +31,9 @@ const (
 	NodeRoutingDNSListener        = "127.0.0.1:1053"
 	NodeRoutingGatewayGroup       = "VPNCTL-GATEWAY"
 	NodeRoutingUnboundTarget      = "REJECT-DROP"
+	NodeRoutingStandardProxy      = "VPNCTL-STANDARD"
+	NodeRoutingRestrictedProxy    = "VPNCTL-RESTRICTED"
+	NodeRoutingStandardInterface  = "vpnctl-wg"
 	NodeRoutingTUNMTU             = 1400
 
 	maximumNodeRoutingConfigBytes = 1 << 20
@@ -37,12 +42,27 @@ const (
 
 type RoutingDNSMode string
 
+// NodeRoutingActiveOutbound is the one production binding shared by selected
+// application traffic, gateway DNS, control, and the reverse tunnel. Empty is
+// a valid fail-closed staging state; a production binding is always exactly
+// one standard or restricted transport generation.
+type NodeRoutingActiveOutbound struct {
+	Kind                     model.TransportKind
+	CredentialGeneration     uint64
+	GatewayPublicIPv4        string
+	GatewayOverlayIPv4       string
+	RestrictedServerPassword string
+	RestrictedIdentitySecret []byte
+	RestrictedHandshakeHost  string
+}
+
 type NodeRoutingRenderRequest struct {
 	Matcher          MatcherIR
 	PolicyGeneration uint64
 	DNSMode          RoutingDNSMode
 	DirectDNSServers []string
 	GatewayDNSIPv4   string
+	ActiveOutbound   NodeRoutingActiveOutbound
 	Component        model.ComponentPin
 }
 
@@ -50,6 +70,8 @@ type NodeRoutingDescriptor struct {
 	MatcherSchemaVersion int
 	PolicyGeneration     uint64
 	DNSMode              RoutingDNSMode
+	ActiveTransport      model.TransportKind
+	CredentialGeneration uint64
 	ConfigHash           string
 }
 
@@ -59,6 +81,13 @@ func (descriptor NodeRoutingDescriptor) Validate() error {
 	}
 	if descriptor.DNSMode != NodeRoutingDNSPolicy && descriptor.DNSMode != NodeRoutingDNSDirect {
 		return fmt.Errorf("node routing descriptor has unsupported DNS mode")
+	}
+	if descriptor.ActiveTransport == "" {
+		if descriptor.CredentialGeneration != 0 {
+			return fmt.Errorf("unbound node routing descriptor has a credential generation")
+		}
+	} else if (descriptor.ActiveTransport != model.TransportStandard && descriptor.ActiveTransport != model.TransportRestricted) || descriptor.CredentialGeneration == 0 {
+		return fmt.Errorf("node routing descriptor has invalid active transport")
 	}
 	if len(descriptor.ConfigHash) != sha256.Size*2 {
 		return fmt.Errorf("node routing descriptor has invalid config hash")
@@ -108,6 +137,10 @@ func RenderNodeRoutingConfig(request NodeRoutingRenderRequest) (NodeRoutingCandi
 	if err != nil {
 		return NodeRoutingCandidate{}, err
 	}
+	active, err := normalizeNodeRoutingActiveOutbound(request.ActiveOutbound, request.GatewayDNSIPv4, request.Component)
+	if err != nil {
+		return NodeRoutingCandidate{}, err
+	}
 	if err := validateNodeRoutingComponent(request.Component); err != nil {
 		return NodeRoutingCandidate{}, err
 	}
@@ -115,11 +148,11 @@ func RenderNodeRoutingConfig(request NodeRoutingRenderRequest) (NodeRoutingCandi
 	if err != nil {
 		return NodeRoutingCandidate{}, err
 	}
-	content := renderNodeRoutingYAML(matchers, request.DNSMode, directDNS, gatewayDNS)
+	content := renderNodeRoutingYAML(matchers, request.DNSMode, directDNS, gatewayDNS, active)
 	if len(content) == 0 || len(content) > maximumNodeRoutingConfigBytes {
 		return NodeRoutingCandidate{}, fmt.Errorf("node routing config has invalid size")
 	}
-	if err := ValidateNodeRoutingConfig(content, request.DNSMode); err != nil {
+	if err := validateNodeRoutingConfig(content, request.DNSMode, active); err != nil {
 		return NodeRoutingCandidate{}, fmt.Errorf("validate rendered node routing config: %w", err)
 	}
 	digest := sha256.Sum256(content)
@@ -129,9 +162,97 @@ func RenderNodeRoutingConfig(request NodeRoutingRenderRequest) (NodeRoutingCandi
 			MatcherSchemaVersion: MatcherIRSchemaVersion,
 			PolicyGeneration:     request.PolicyGeneration,
 			DNSMode:              request.DNSMode,
+			ActiveTransport:      active.Kind,
+			CredentialGeneration: active.CredentialGeneration,
 			ConfigHash:           hex.EncodeToString(digest[:]),
 		},
 	}, nil
+}
+
+func normalizeNodeRoutingActiveOutbound(value NodeRoutingActiveOutbound, gatewayDNS string, component model.ComponentPin) (NodeRoutingActiveOutbound, error) {
+	value.RestrictedIdentitySecret = append([]byte(nil), value.RestrictedIdentitySecret...)
+	if value.Kind == "" {
+		if value.CredentialGeneration != 0 || value.GatewayPublicIPv4 != "" || value.GatewayOverlayIPv4 != "" ||
+			value.RestrictedServerPassword != "" || value.RestrictedIdentitySecret != nil || value.RestrictedHandshakeHost != "" {
+			return NodeRoutingActiveOutbound{}, fmt.Errorf("unbound node routing outbound contains transport data")
+		}
+		return value, nil
+	}
+	if value.Kind != model.TransportStandard && value.Kind != model.TransportRestricted {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("unsupported node routing active transport %q", value.Kind)
+	}
+	if value.CredentialGeneration == 0 {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing active transport generation must be positive")
+	}
+	public, err := parseNodeRoutingIPv4(value.GatewayPublicIPv4)
+	if err != nil || public.IsPrivate() || public.IsLoopback() {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing gateway public endpoint must be a canonical public IPv4 address")
+	}
+	overlay, err := parseNodeRoutingIPv4(value.GatewayOverlayIPv4)
+	if err != nil || overlay.IsLoopback() || value.GatewayOverlayIPv4 != gatewayDNS {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing gateway overlay must equal the gateway DNS IPv4 address")
+	}
+	if value.Kind == model.TransportStandard {
+		if value.RestrictedServerPassword != "" || value.RestrictedIdentitySecret != nil || value.RestrictedHandshakeHost != "" {
+			return NodeRoutingActiveOutbound{}, fmt.Errorf("standard node routing outbound contains restricted transport data")
+		}
+		return value, nil
+	}
+	if err := validateNodeRoutingRestrictedCapabilities(component); err != nil {
+		return NodeRoutingActiveOutbound{}, err
+	}
+	if err := restricted.ValidateServerPassword(value.RestrictedServerPassword); err != nil {
+		return NodeRoutingActiveOutbound{}, err
+	}
+	identity, err := restricted.DecodeIdentitySecret(value.RestrictedIdentitySecret)
+	if err != nil {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("validate node routing restricted identity: %w", err)
+	}
+	if !validNodeRoutingHostname(value.RestrictedHandshakeHost) {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing restricted handshake host is invalid")
+	}
+	encoded, err := restricted.EncodeSecret(identity)
+	if err != nil {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("normalize node routing restricted identity: %w", err)
+	}
+	value.RestrictedIdentitySecret = encoded
+	return value, nil
+}
+
+func validateNodeRoutingRestrictedCapabilities(component model.ComponentPin) error {
+	required := map[string]bool{
+		"shadowsocks-2022-blake3-aes-256-gcm": false,
+		"shadowtls-v3-strict":                 false,
+		"uot-v2":                              false,
+	}
+	for _, capability := range component.Capabilities {
+		if _, known := required[capability]; known {
+			required[capability] = true
+		}
+	}
+	for capability, present := range required {
+		if !present {
+			return fmt.Errorf("pinned Mihomo component lacks %s capability for restricted node routing", capability)
+		}
+	}
+	return nil
+}
+
+func validNodeRoutingHostname(value string) bool {
+	if value == "" || value != strings.ToLower(value) || len(value) > 253 || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func normalizeNodeDirectDNS(values []string) ([]string, error) {
@@ -192,7 +313,7 @@ func validateNodeRoutingComponent(component model.ComponentPin) error {
 	return nil
 }
 
-func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, directDNS []string, gatewayDNS string) []byte {
+func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, directDNS []string, gatewayDNS string, active NodeRoutingActiveOutbound) []byte {
 	var config strings.Builder
 	config.WriteString("allow-lan: false\n")
 	config.WriteString("bind-address: 127.0.0.1\n")
@@ -247,12 +368,25 @@ func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, di
 			}
 		}
 	}
+	if active.Kind != "" {
+		config.WriteString("\nproxies:\n")
+		renderNodeRoutingActiveProxy(&config, active)
+	}
 	config.WriteString("\nproxy-groups:\n")
 	fmt.Fprintf(&config, "  - name: %s\n", NodeRoutingGatewayGroup)
 	config.WriteString("    type: select\n")
 	config.WriteString("    proxies:\n")
-	fmt.Fprintf(&config, "      - %s\n", NodeRoutingUnboundTarget)
+	target := NodeRoutingUnboundTarget
+	if active.Kind == model.TransportStandard {
+		target = NodeRoutingStandardProxy
+	} else if active.Kind == model.TransportRestricted {
+		target = NodeRoutingRestrictedProxy
+	}
+	fmt.Fprintf(&config, "      - %s\n", target)
 	config.WriteString("\nrules:\n")
+	if active.Kind != "" {
+		fmt.Fprintf(&config, "  - IP-CIDR,%s/32,%s,no-resolve\n", active.GatewayOverlayIPv4, NodeRoutingGatewayGroup)
+	}
 	for _, rule := range appendMatcherPrograms(matchers.program) {
 		target := "DIRECT"
 		if rule.Selected {
@@ -273,6 +407,36 @@ func renderNodeRoutingYAML(matchers NodeRoutingMatchers, mode RoutingDNSMode, di
 	}
 	config.WriteString("  - MATCH,DIRECT\n")
 	return []byte(config.String())
+}
+
+func renderNodeRoutingActiveProxy(config *strings.Builder, active NodeRoutingActiveOutbound) {
+	if active.Kind == model.TransportStandard {
+		fmt.Fprintf(config, "  - name: %s\n", NodeRoutingStandardProxy)
+		config.WriteString("    type: direct\n")
+		config.WriteString("    udp: true\n")
+		fmt.Fprintf(config, "    interface-name: %s\n", NodeRoutingStandardInterface)
+		fmt.Fprintf(config, "    routing-mark: %d\n", linuxplatform.VPNCTLRecoveryMark)
+		return
+	}
+	identity, _ := restricted.DecodeIdentitySecret(active.RestrictedIdentitySecret)
+	fmt.Fprintf(config, "  - name: %s\n", NodeRoutingRestrictedProxy)
+	config.WriteString("    type: ss\n")
+	fmt.Fprintf(config, "    server: %s\n", active.GatewayPublicIPv4)
+	fmt.Fprintf(config, "    port: %d\n", restricted.TCPPort)
+	fmt.Fprintf(config, "    cipher: %s\n", restricted.Cipher)
+	fmt.Fprintf(config, "    password: %s\n", strconv.Quote(active.RestrictedServerPassword))
+	config.WriteString("    ip-version: ipv4\n")
+	config.WriteString("    udp: true\n")
+	config.WriteString("    udp-over-tcp: true\n")
+	fmt.Fprintf(config, "    udp-over-tcp-version: %d\n", restricted.UDPOverTCPVersion)
+	fmt.Fprintf(config, "    routing-mark: %d\n", linuxplatform.VPNCTLRecoveryMark)
+	config.WriteString("    plugin: shadow-tls\n")
+	config.WriteString("    client-fingerprint: chrome\n")
+	config.WriteString("    plugin-opts:\n")
+	fmt.Fprintf(config, "      host: %s\n", strconv.Quote(active.RestrictedHandshakeHost))
+	fmt.Fprintf(config, "      password: %s\n", strconv.Quote(identity.ShadowTLSPassword))
+	fmt.Fprintf(config, "      version: %d\n", restricted.ShadowTLSVersion)
+	config.WriteString("      strict-mode: true\n")
 }
 
 func appendMatcherPrograms(program matcherDecisionProgram) []MatcherDecisionRule {
@@ -301,8 +465,34 @@ type nodeRoutingDocument struct {
 	GeoAutoUpdate *bool                   `yaml:"geo-auto-update"`
 	TUN           nodeRoutingTUNDocument  `yaml:"tun"`
 	DNS           nodeRoutingDNSDocument  `yaml:"dns"`
+	Proxies       []nodeRoutingProxy      `yaml:"proxies"`
 	ProxyGroups   []nodeRoutingProxyGroup `yaml:"proxy-groups"`
 	Rules         []string                `yaml:"rules"`
+}
+
+type nodeRoutingProxy struct {
+	Name              string                          `yaml:"name"`
+	Type              string                          `yaml:"type"`
+	Server            string                          `yaml:"server"`
+	Port              *int                            `yaml:"port"`
+	Cipher            string                          `yaml:"cipher"`
+	Password          string                          `yaml:"password"`
+	IPVersion         string                          `yaml:"ip-version"`
+	UDP               *bool                           `yaml:"udp"`
+	UDPOverTCP        *bool                           `yaml:"udp-over-tcp"`
+	UDPOverTCPVersion *int                            `yaml:"udp-over-tcp-version"`
+	InterfaceName     string                          `yaml:"interface-name"`
+	RoutingMark       *uint64                         `yaml:"routing-mark"`
+	Plugin            string                          `yaml:"plugin"`
+	ClientFingerprint string                          `yaml:"client-fingerprint"`
+	PluginOptions     nodeRoutingRestrictedPluginOpts `yaml:"plugin-opts"`
+}
+
+type nodeRoutingRestrictedPluginOpts struct {
+	Host       string `yaml:"host"`
+	Password   string `yaml:"password"`
+	Version    *int   `yaml:"version"`
+	StrictMode *bool  `yaml:"strict-mode"`
 }
 
 type nodeRoutingTUNDocument struct {
@@ -336,6 +526,28 @@ type nodeRoutingProxyGroup struct {
 }
 
 func ValidateNodeRoutingConfig(content []byte, mode RoutingDNSMode) error {
+	var document nodeRoutingDocument
+	if err := decodeNodeRoutingYAML(content, &document); err != nil {
+		return err
+	}
+	active, err := inferNodeRoutingActiveOutbound(document)
+	if err != nil {
+		return err
+	}
+	return validateNodeRoutingConfig(content, mode, active)
+}
+
+// ValidateBoundNodeRoutingConfig additionally enforces the exact manually
+// active transport generation and all of its provider-specific safety fields.
+func ValidateBoundNodeRoutingConfig(content []byte, mode RoutingDNSMode, active NodeRoutingActiveOutbound, component model.ComponentPin, gatewayDNS string) error {
+	normalized, err := normalizeNodeRoutingActiveOutbound(active, gatewayDNS, component)
+	if err != nil {
+		return err
+	}
+	return validateNodeRoutingConfig(content, mode, normalized)
+}
+
+func validateNodeRoutingConfig(content []byte, mode RoutingDNSMode, active NodeRoutingActiveOutbound) error {
 	if len(content) == 0 || len(content) > maximumNodeRoutingConfigBytes {
 		return fmt.Errorf("node routing config has invalid size")
 	}
@@ -356,16 +568,87 @@ func ValidateNodeRoutingConfig(content []byte, mode RoutingDNSMode) error {
 		!routingFalse(tun.AutoDetectInterface) || tun.DNSHijack == nil || len(tun.DNSHijack) != 0 || tun.MTU == nil || *tun.MTU != NodeRoutingTUNMTU {
 		return fmt.Errorf("node routing TUN does not match the host-wide managed contract")
 	}
-	if len(document.ProxyGroups) != 1 || document.ProxyGroups[0].Name != NodeRoutingGatewayGroup ||
-		document.ProxyGroups[0].Type != "select" || len(document.ProxyGroups[0].Proxies) != 1 ||
-		document.ProxyGroups[0].Proxies[0] != NodeRoutingUnboundTarget {
-		return fmt.Errorf("node routing gateway group is not fail-closed while unbound")
+	if err := validateNodeRoutingActiveProxy(document.Proxies, document.ProxyGroups, active); err != nil {
+		return err
 	}
 	directDNS, err := validateNodeRoutingDNS(document.DNS, mode)
 	if err != nil {
 		return err
 	}
-	return validateNodeRoutingRules(document.Rules, document.DNS.NameserverPolicy, mode, directDNS)
+	return validateNodeRoutingRules(document.Rules, document.DNS.NameserverPolicy, mode, directDNS, active)
+}
+
+func inferNodeRoutingActiveOutbound(document nodeRoutingDocument) (NodeRoutingActiveOutbound, error) {
+	if len(document.Proxies) == 0 {
+		return NodeRoutingActiveOutbound{}, nil
+	}
+	if len(document.Proxies) != 1 || len(document.Rules) == 0 {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing config must contain at most one active outbound")
+	}
+	parts := strings.Split(document.Rules[0], ",")
+	if len(parts) != 4 || parts[0] != "IP-CIDR" || parts[2] != NodeRoutingGatewayGroup || parts[3] != "no-resolve" || !strings.HasSuffix(parts[1], "/32") {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing active outbound lacks its internal gateway rule")
+	}
+	overlay := strings.TrimSuffix(parts[1], "/32")
+	proxy := document.Proxies[0]
+	if proxy.Name == NodeRoutingStandardProxy && proxy.Type == "direct" {
+		return NodeRoutingActiveOutbound{Kind: model.TransportStandard, GatewayOverlayIPv4: overlay}, nil
+	}
+	if proxy.Name != NodeRoutingRestrictedProxy || proxy.Type != "ss" {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("node routing config contains an unsupported active outbound")
+	}
+	identity, err := restricted.EncodeSecret(restricted.IdentitySecret{
+		SchemaVersion: restricted.SecretSchemaVersion, ShadowTLSPassword: proxy.PluginOptions.Password,
+	})
+	if err != nil {
+		return NodeRoutingActiveOutbound{}, fmt.Errorf("decode node routing restricted identity: %w", err)
+	}
+	return NodeRoutingActiveOutbound{
+		Kind: model.TransportRestricted, GatewayPublicIPv4: proxy.Server, GatewayOverlayIPv4: overlay,
+		RestrictedServerPassword: proxy.Password, RestrictedIdentitySecret: identity, RestrictedHandshakeHost: proxy.PluginOptions.Host,
+	}, nil
+}
+
+func validateNodeRoutingActiveProxy(proxies []nodeRoutingProxy, groups []nodeRoutingProxyGroup, active NodeRoutingActiveOutbound) error {
+	if len(groups) != 1 || groups[0].Name != NodeRoutingGatewayGroup || groups[0].Type != "select" || len(groups[0].Proxies) != 1 {
+		return fmt.Errorf("node routing gateway group must contain exactly one explicit target")
+	}
+	if active.Kind == "" {
+		if proxies != nil || groups[0].Proxies[0] != NodeRoutingUnboundTarget {
+			return fmt.Errorf("node routing gateway group is not fail-closed while unbound")
+		}
+		return nil
+	}
+	if len(proxies) != 1 || groups[0].Proxies[0] == "DIRECT" || groups[0].Proxies[0] == NodeRoutingUnboundTarget {
+		return fmt.Errorf("bound node routing gateway group must select exactly one active provider")
+	}
+	proxy := proxies[0]
+	if active.Kind == model.TransportStandard {
+		if groups[0].Proxies[0] != NodeRoutingStandardProxy || proxy.Name != NodeRoutingStandardProxy || proxy.Type != "direct" ||
+			!routingTrue(proxy.UDP) || proxy.InterfaceName != NodeRoutingStandardInterface || proxy.RoutingMark == nil || *proxy.RoutingMark != linuxplatform.VPNCTLRecoveryMark ||
+			proxy.Server != "" || proxy.Port != nil || proxy.Cipher != "" || proxy.Password != "" || proxy.IPVersion != "" ||
+			proxy.UDPOverTCP != nil || proxy.UDPOverTCPVersion != nil || proxy.Plugin != "" || proxy.ClientFingerprint != "" || proxy.PluginOptions != (nodeRoutingRestrictedPluginOpts{}) {
+			return fmt.Errorf("standard node routing outbound does not match the pinned WireGuard binding")
+		}
+		return nil
+	}
+	if groups[0].Proxies[0] != NodeRoutingRestrictedProxy || proxy.Name != NodeRoutingRestrictedProxy || proxy.Type != "ss" ||
+		proxy.Server != active.GatewayPublicIPv4 || proxy.Port == nil || *proxy.Port != restricted.TCPPort || proxy.Cipher != restricted.Cipher ||
+		proxy.Password != active.RestrictedServerPassword || proxy.IPVersion != "ipv4" || !routingTrue(proxy.UDP) || !routingTrue(proxy.UDPOverTCP) ||
+		proxy.UDPOverTCPVersion == nil || *proxy.UDPOverTCPVersion != restricted.UDPOverTCPVersion || proxy.InterfaceName != "" ||
+		proxy.RoutingMark == nil || *proxy.RoutingMark != linuxplatform.VPNCTLRecoveryMark || proxy.Plugin != "shadow-tls" || proxy.ClientFingerprint != "chrome" {
+		return fmt.Errorf("restricted node routing outbound does not match the pinned UoT binding")
+	}
+	identity, err := restricted.DecodeIdentitySecret(active.RestrictedIdentitySecret)
+	if err != nil {
+		return err
+	}
+	options := proxy.PluginOptions
+	if options.Host != active.RestrictedHandshakeHost || options.Password != identity.ShadowTLSPassword ||
+		options.Version == nil || *options.Version != restricted.ShadowTLSVersion || !routingTrue(options.StrictMode) {
+		return fmt.Errorf("restricted node routing outbound does not enforce strict ShadowTLS v3")
+	}
+	return nil
 }
 
 func validateNodeRoutingDNS(document nodeRoutingDNSDocument, mode RoutingDNSMode) ([]string, error) {
@@ -395,13 +678,21 @@ func validateNodeRoutingDNS(document nodeRoutingDNSDocument, mode RoutingDNSMode
 	return directDNS, nil
 }
 
-func validateNodeRoutingRules(rules []string, policies map[string][]string, mode RoutingDNSMode, directDNS []string) error {
+func validateNodeRoutingRules(rules []string, policies map[string][]string, mode RoutingDNSMode, directDNS []string, active NodeRoutingActiveOutbound) error {
 	if len(rules) == 0 || rules[len(rules)-1] != "MATCH,DIRECT" {
 		return fmt.Errorf("node routing rules must end in direct for unmatched traffic")
 	}
+	start := 0
+	if active.Kind != "" {
+		want := "IP-CIDR," + active.GatewayOverlayIPv4 + "/32," + NodeRoutingGatewayGroup + ",no-resolve"
+		if rules[0] != want {
+			return fmt.Errorf("node routing internal gateway must be first and use the active outbound")
+		}
+		start = 1
+	}
 	wantPolicies := make(map[string][]string)
-	decisions := make([]MatcherDecisionRule, 0, len(rules)-1)
-	for index, value := range rules[:len(rules)-1] {
+	decisions := make([]MatcherDecisionRule, 0, len(rules)-1-start)
+	for index, value := range rules[start : len(rules)-1] {
 		parts := strings.Split(value, ",")
 		if len(parts) != 3 || parts[2] != "DIRECT" && parts[2] != NodeRoutingGatewayGroup {
 			return fmt.Errorf("node routing rule %d has unsupported action", index)

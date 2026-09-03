@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 )
 
 func TestRenderNodeRoutingConfigUsesHostWideTUNPolicyDNSAndFailClosedUnboundTarget(t *testing.T) {
@@ -116,6 +118,91 @@ func TestRenderNodeRoutingConfigSupportsExplicitDirectDNSAndAllDirectPolicy(t *t
 	}
 }
 
+func TestRenderNodeRoutingConfigBindsEverySelectedAndInternalPathToOneStandardOutbound(t *testing.T) {
+	t.Parallel()
+	request := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+	request.ActiveOutbound = nodeRoutingStandardBinding()
+	candidate, err := RenderNodeRoutingConfig(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(candidate.Bytes())
+	for _, required := range []string{
+		"proxies:\n  - name: VPNCTL-STANDARD\n    type: direct\n    udp: true\n    interface-name: vpnctl-wg\n    routing-mark: 50331648\n",
+		"  - name: VPNCTL-GATEWAY\n    type: select\n    proxies:\n      - VPNCTL-STANDARD\n",
+		"  - IP-CIDR,10.67.0.1/32,VPNCTL-GATEWAY,no-resolve\n",
+		"  - DOMAIN,api.private.example.com,VPNCTL-GATEWAY\n",
+		"  - MATCH,DIRECT\n",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("standard-bound node routing config lacks %q:\n%s", required, content)
+		}
+	}
+	for _, forbidden := range []string{"VPNCTL-RESTRICTED", "      - DIRECT\n", "fallback", "url-test"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("standard-bound node routing config contains %q:\n%s", forbidden, content)
+		}
+	}
+	if err := ValidateNodeRoutingConfig(candidate.Bytes(), NodeRoutingDNSPolicy); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := candidate.Descriptor()
+	if descriptor.ActiveTransport != model.TransportStandard || descriptor.CredentialGeneration != 7 {
+		t.Fatalf("standard descriptor = %+v", descriptor)
+	}
+}
+
+func TestRenderNodeRoutingConfigBindsSelectedUDPControlAndTunnelToOneRestrictedOutbound(t *testing.T) {
+	t.Parallel()
+	request := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+	request.ActiveOutbound = nodeRoutingRestrictedBinding(t)
+	candidate, err := RenderNodeRoutingConfig(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(candidate.Bytes())
+	for _, required := range []string{
+		"proxies:\n  - name: VPNCTL-RESTRICTED\n    type: ss\n    server: 203.0.113.44\n    port: 8443\n",
+		"    udp: true\n    udp-over-tcp: true\n    udp-over-tcp-version: 2\n    routing-mark: 50331648\n",
+		"    plugin: shadow-tls\n    client-fingerprint: chrome\n",
+		"      host: \"www.cloudflare.com\"\n",
+		"      version: 3\n      strict-mode: true\n",
+		"  - name: VPNCTL-GATEWAY\n    type: select\n    proxies:\n      - VPNCTL-RESTRICTED\n",
+		"  - IP-CIDR,10.67.0.1/32,VPNCTL-GATEWAY,no-resolve\n",
+		"  - MATCH,DIRECT\n",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("restricted-bound node routing config lacks %q:\n%s", required, content)
+		}
+	}
+	for _, forbidden := range []string{"VPNCTL-STANDARD", "VPNCTL-RESTRICTED-UDP", "      - REJECT-DROP\n", "      - DIRECT\n", "fallback", "url-test"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("restricted-bound node routing config contains %q:\n%s", forbidden, content)
+		}
+	}
+	if err := ValidateBoundNodeRoutingConfig(candidate.Bytes(), request.DNSMode, request.ActiveOutbound, request.Component, request.GatewayDNSIPv4); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := candidate.Descriptor()
+	if descriptor.ActiveTransport != model.TransportRestricted || descriptor.CredentialGeneration != 7 {
+		t.Fatalf("restricted descriptor = %+v", descriptor)
+	}
+
+	tampered := map[string]string{
+		"native UDP disabled": strings.Replace(content, "    udp-over-tcp: true", "    udp-over-tcp: false", 1),
+		"direct fallback":     strings.Replace(content, "      - VPNCTL-RESTRICTED", "      - DIRECT", 1),
+		"different internal path": strings.Replace(
+			content, "IP-CIDR,10.67.0.1/32,VPNCTL-GATEWAY,no-resolve", "IP-CIDR,10.67.0.1/32,DIRECT,no-resolve", 1,
+		),
+		"second transport": strings.Replace(content, "      - VPNCTL-RESTRICTED\n", "      - VPNCTL-RESTRICTED\n      - VPNCTL-STANDARD\n", 1),
+	}
+	for name, value := range tampered {
+		if err := ValidateNodeRoutingConfig([]byte(value), NodeRoutingDNSPolicy); err == nil {
+			t.Errorf("%s config passed validation", name)
+		}
+	}
+}
+
 func TestNodeRoutingConfigRejectsScopedFallbackAndSemanticTampering(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +244,7 @@ func TestRenderNodeRoutingConfigRejectsInvalidInputsAndHasNoScopeAPI(t *testing.
 	t.Parallel()
 
 	requestType := reflect.TypeOf(NodeRoutingRenderRequest{})
-	wantFields := []string{"Matcher", "PolicyGeneration", "DNSMode", "DirectDNSServers", "GatewayDNSIPv4", "Component"}
+	wantFields := []string{"Matcher", "PolicyGeneration", "DNSMode", "DirectDNSServers", "GatewayDNSIPv4", "ActiveOutbound", "Component"}
 	gotFields := make([]string, requestType.NumField())
 	for index := range gotFields {
 		gotFields[index] = requestType.Field(index).Name
@@ -196,6 +283,68 @@ func TestRenderNodeRoutingConfigRejectsInvalidInputsAndHasNoScopeAPI(t *testing.
 	}
 }
 
+func TestRenderNodeRoutingConfigRejectsAmbiguousOrWeakenedActiveBindings(t *testing.T) {
+	t.Parallel()
+	standard := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+	standard.ActiveOutbound = nodeRoutingStandardBinding()
+	restrictedRequest := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+	restrictedRequest.ActiveOutbound = nodeRoutingRestrictedBinding(t)
+	for name, request := range map[string]NodeRoutingRenderRequest{
+		"unbound with endpoint": func() NodeRoutingRenderRequest {
+			value := nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy)
+			value.ActiveOutbound.GatewayPublicIPv4 = "203.0.113.44"
+			return value
+		}(),
+		"unknown kind": func() NodeRoutingRenderRequest {
+			value := standard
+			value.ActiveOutbound.Kind = "automatic"
+			return value
+		}(),
+		"zero generation": func() NodeRoutingRenderRequest {
+			value := standard
+			value.ActiveOutbound.CredentialGeneration = 0
+			return value
+		}(),
+		"private public endpoint": func() NodeRoutingRenderRequest {
+			value := standard
+			value.ActiveOutbound.GatewayPublicIPv4 = "10.0.0.1"
+			return value
+		}(),
+		"different gateway DNS": func() NodeRoutingRenderRequest {
+			value := standard
+			value.ActiveOutbound.GatewayOverlayIPv4 = "10.67.0.2"
+			return value
+		}(),
+		"standard with restricted secret": func() NodeRoutingRenderRequest {
+			value := standard
+			value.ActiveOutbound.RestrictedIdentitySecret = []byte("secret")
+			return value
+		}(),
+		"restricted without UoT capability": func() NodeRoutingRenderRequest {
+			value := restrictedRequest
+			value.Component.Capabilities = []string{"tun-routing", "redir-host-split-dns", "shadowtls-v3-strict", "shadowsocks-2022-blake3-aes-256-gcm"}
+			return value
+		}(),
+		"restricted invalid identity": func() NodeRoutingRenderRequest {
+			value := restrictedRequest
+			value.ActiveOutbound.RestrictedIdentitySecret = []byte(`{"schema_version":1,"shadowtls_password":"short"}`)
+			return value
+		}(),
+		"restricted invalid host": func() NodeRoutingRenderRequest {
+			value := restrictedRequest
+			value.ActiveOutbound.RestrictedHandshakeHost = "EXAMPLE.COM"
+			return value
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := RenderNodeRoutingConfig(request); err == nil {
+				t.Fatal("unsafe active binding rendered")
+			}
+		})
+	}
+}
+
 func TestNodeRoutingConfigParsesWithPinnedMihomo(t *testing.T) {
 	binary := os.Getenv("VPNCTL_PINNED_MIHOMO")
 	if binary == "" {
@@ -206,9 +355,17 @@ func TestNodeRoutingConfigParsesWithPinnedMihomo(t *testing.T) {
 		t.Fatalf("pinned Mihomo version is unavailable: %v: %s", err, version)
 	}
 	requests := map[string]NodeRoutingRenderRequest{
-		"policy": nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy),
-		"direct": nodeRoutingRenderFixture(t, NodeRoutingDNSDirect),
+		"policy":            nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy),
+		"direct":            nodeRoutingRenderFixture(t, NodeRoutingDNSDirect),
+		"standard-active":   nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy),
+		"restricted-active": nodeRoutingRenderFixture(t, NodeRoutingDNSPolicy),
 	}
+	standard := requests["standard-active"]
+	standard.ActiveOutbound = nodeRoutingStandardBinding()
+	requests["standard-active"] = standard
+	restrictedActive := requests["restricted-active"]
+	restrictedActive.ActiveOutbound = nodeRoutingRestrictedBinding(t)
+	requests["restricted-active"] = restrictedActive
 	emptyComposition, err := NormalizePresetComposition([]PresetAST{})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +448,32 @@ func nodeRoutingRenderFixture(t *testing.T, mode RoutingDNSMode) NodeRoutingRend
 		DirectDNSServers: []string{"192.0.2.53", "198.51.100.53"}, GatewayDNSIPv4: "10.67.0.1",
 		Component: model.ComponentPin{
 			Name: NodeRoutingProviderName, Version: NodeRoutingProviderVersion, Source: "bundle", Bundled: true,
-			SHA256: NodeRoutingProviderSHA256, Capabilities: []string{"tun-routing", "redir-host-split-dns"},
+			SHA256: NodeRoutingProviderSHA256, Capabilities: []string{
+				"tun-routing", "redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "uot-v2",
+			},
 		},
+	}
+}
+
+func nodeRoutingStandardBinding() NodeRoutingActiveOutbound {
+	return NodeRoutingActiveOutbound{
+		Kind: model.TransportStandard, CredentialGeneration: 7,
+		GatewayPublicIPv4: "203.0.113.44", GatewayOverlayIPv4: "10.67.0.1",
+	}
+}
+
+func nodeRoutingRestrictedBinding(t *testing.T) NodeRoutingActiveOutbound {
+	t.Helper()
+	identity, err := restricted.EncodeSecret(restricted.IdentitySecret{
+		SchemaVersion: restricted.SecretSchemaVersion, ShadowTLSPassword: strings.Repeat("61", restricted.SymmetricKeyByteCount),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NodeRoutingActiveOutbound{
+		Kind: model.TransportRestricted, CredentialGeneration: 7,
+		GatewayPublicIPv4: "203.0.113.44", GatewayOverlayIPv4: "10.67.0.1",
+		RestrictedServerPassword: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x52}, restricted.SymmetricKeyByteCount)),
+		RestrictedIdentitySecret: identity, RestrictedHandshakeHost: "www.cloudflare.com",
 	}
 }

@@ -115,7 +115,7 @@
 - [x] 10.1 Implement matcher IR compilation for node routing, nftables leak guard, gateway DNS selection, and Clash export; verify one preset fixture produces equivalent selected sets across all targets.
 - [x] 10.2 Implement node routing/TUN rendering and service readiness around the selected Mihomo DNS/routing mode; verify all host processes are covered and no process/user/container scope flag exists.
 - [x] 10.3 Implement nftables marks, conntrack retention, policy routes, pre-engine fail-closed guard, and minimal gateway recovery allowlist from spike values; verify boot and routing-process crash block new application egress before readiness.
-- [ ] 10.4 Implement standard/restricted active-outbound binding so selected TCP/UDP, control, and tunnel share one transport while unmatched flows remain direct; verify packet captures for both active modes.
+- [x] 10.4 Implement standard/restricted active-outbound binding so selected TCP/UDP, control, and tunnel share one transport while unmatched flows remain direct; verify packet captures for both active modes.
 - [ ] 10.5 Implement selected-path failure handling with no fail-direct and continued unrelated direct traffic; verify gateway and transport outage tests for new TCP and UDP flows.
 - [ ] 10.6 Implement IPv6 selected-traffic leak prevention and diagnostics while retaining IPv4 as the only full data plane; verify selected AAAA/IP traffic cannot escape direct and unrelated host behavior follows documented limits.
 - [ ] 10.7 Implement node systemd-resolved integration, classic port-53 capture, original DNS snapshot, and uninstall restore; verify resolved and direct-socket application DNS tests plus exact restoration.

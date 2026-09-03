@@ -26,8 +26,9 @@ matches the public key in its authoritative transport record. Its config uses
 the manually supplied gateway IPv4 on UDP/51820, `AllowedIPs = 0.0.0.0/0`,
 and keepalive 25, while `Table = off` prevents an implicit main-table default
 route. The standard service installs only the node-pool gateway `.1/32`
-bootstrap route. Task 10.4 owns fail-closed selected/default routing and binds
-control, reverse tunnel, and selected traffic to the active provider.
+bootstrap route. The task-10.4 routing bundle binds control, reverse tunnel,
+gateway DNS, and selected traffic to one recovery-marked Mihomo direct outbound
+fixed to `vpnctl-wg`; unmatched host traffic retains the ordinary uplink.
 
 Generated role configs live at:
 

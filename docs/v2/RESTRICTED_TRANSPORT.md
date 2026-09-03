@@ -123,7 +123,7 @@ disables both before best-effort deletion of both secret payloads.
 
 The gateway artifact defines one Shadowsocks listener named `vpnctl-restricted-in`, bound to TCP port 8443 with `udp: false`. Its ShadowTLS v3 user list contains the bootstrap user and every active, non-disabled restricted identity in deterministic order. The terminal rule is `MATCH,DIRECT` because this process terminates the protected inbound on the public gateway and performs its internet egress there.
 
-The node artifact contains only the outbound `VPNCTL-RESTRICTED`. It uses the manually supplied gateway IPv4 address, port 8443, ShadowTLS v3, fingerprint `chrome`, and `strict-mode: true`. It has no listener, TUN device, DNS service, native UDP, or UDP-over-TCP in task 8.3. Shared node routing and the explicit selected-UDP reject/readiness path are added in task 8.4; treating `udp: false` alone as fail-closed is forbidden by the spike evidence.
+The provider candidate contains only the outbound `VPNCTL-RESTRICTED`. It uses the manually supplied gateway IPv4 address, port 8443, ShadowTLS v3, fingerprint `chrome`, and `strict-mode: true`. Task 8.4 added UoT v2 and explicit readiness rejection. The task-10.4 production routing bundle embeds the same validated outbound in the one host-wide Mihomo TUN/DNS process, marks its outer socket for the exact recovery route, and makes it the sole member of `VPNCTL-GATEWAY`; treating `udp: false` alone as fail-closed remains forbidden by the spike evidence.
 
 Both artifacts reject YAML aliases, anchors, merge keys, unknown fields, extra documents, an unpinned component, an invalid public IP, and inconsistent handshake hosts. They are also validated with the exact pinned Mihomo binary before use.
 
