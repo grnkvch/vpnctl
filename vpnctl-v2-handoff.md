@@ -7,14 +7,18 @@
 
 ## Актуальный snapshot решений
 
-Последнее обновление: **2026-09-01**.
+Последнее обновление: **2026-09-03**.
 
 Стадия: discovery завершён и формализован в OpenSpec change
-`openspec/changes/vpnctl-v2`. Proposal, десять capability specs, technical
-design и полный task graph готовы и проходят `openspec validate vpnctl-v2
---strict`; implementation/apply ещё не начинался. Обязательные technical
-spikes и окончательная фиксация численных defaults/низкочастотной CLI grammar
-являются первыми задачами change, а не сокращением release scope.
+`openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
+Proposal, десять capability specs, technical design и полный task graph готовы
+и проходят strict validation. После завершения task 7.9 выполнено `63/156`
+задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
+CLI/output/consent, host init, control plane и personal-client foundation до
+детерминированного WireGuard и Clash/Mihomo rendering включительно. Следующая
+задача — 7.10 (атомарная файловая публикация exports, permissions, overwrite,
+scp hints и generation metadata). Фактический Clash Mi остаётся release-gate
+16.11, а restricted alternative в Clash export — задача 8.10.
 
 ### 1. Product contract
 

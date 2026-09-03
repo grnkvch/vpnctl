@@ -70,3 +70,48 @@ cannot expose the private key or full profile. Task 7.10 owns `0600` artifact
 publication and stdout/scp behavior; this step performs no filesystem export.
 A preset-only policy replacement advances authoritative state metadata but
 leaves the WireGuard bytes and credential generation identical.
+
+## Clash/Mihomo profile rendering
+
+The v2 Clash adapter resolves the same active client and standard WireGuard
+credential, then compiles the client's authoritative policy from the exact
+active preset generations. Before rendering, it verifies that the stored
+policy names, normalized selectors, and effective hash still match those
+generations. It reconstructs preset boundaries rather than flattening away
+exclusions: each preset remains `include - exclude`, followed by cross-preset
+union, so an explicit selector in a second preset can reselect a more-specific
+exception from the first.
+
+Rules are deterministic and most-specific-first. Exact domains precede domain
+suffixes; narrower IPv4/IPv6 CIDRs precede their parents. Both selected TCP and
+UDP rules target the `VPNCTL-GATEWAY` manual-select group. In task 7.9 that group
+contains only `VPNCTL-STANDARD`; it deliberately contains neither `DIRECT` nor
+an automatic `fallback`/`url-test`. A failed selected path therefore cannot
+change to direct. Explicit policy exclusions compile to `DIRECT`, and the sole
+terminal catch-all is `MATCH,DIRECT` for unmatched traffic. Task 8.10 adds the
+already-specified restricted choice to this same manual group without changing
+the rule actions or adding automatic selection.
+
+Clash DNS defaults to `policy` mode with Mihomo `redir-host`. Unmatched and
+explicitly excluded domain queries use the configured direct IPv4 resolvers;
+selected domain queries use the stable gateway resolver at the first address of
+the client CIDR (normally `10.66.0.1`) and bind that request to
+`VPNCTL-GATEWAY`. There is no selected-to-direct DNS fallback. Changing the
+gateway resolver's upstreams therefore does not require client re-export. The
+explicit `direct` compatibility mode omits `nameserver-policy` and sends all DNS
+queries through the direct resolver list while retaining selective traffic
+rules, matching the accepted v1 behavior boundary.
+
+The profile fixes public standard transport at `51820/UDP`, disables IPv6 DNS
+answers and background geodata updates, keeps logging silent, and contains no
+remote health test or auto-switch rule. IPv6 CIDR selectors still compile to
+the gateway group, so unsupported selected IPv6 cannot become a direct
+fallback. As with WireGuard export, secret-bearing YAML is private and exposed
+only as a defensive byte copy; task 7.10 owns durable file publication.
+
+Automated semantic tests cover local exclusions, cross-preset reselection,
+fully shadowed CIDRs, all-direct clients, both DNS modes, metadata redaction,
+and deterministic output. The rendered profile also passed the exact pinned
+Mihomo `v1.19.30` Linux/amd64 `-t` validator. Actual import and runtime DNS,
+TCP, UDP-over-TCP, fail-closed, and reconnect behavior in supported Clash Mi
+remain the deployed-service release gate in task 16.11.
