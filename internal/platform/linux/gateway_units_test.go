@@ -40,6 +40,17 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 				}
 			}
 		}
+		if unit.Name == "vpnctl-restricted.service" {
+			for _, required := range []string{
+				"ExecStart=/usr/local/bin/vpnctl __service gateway-restricted",
+				"StateDirectory=vpnctl/restricted", "StateDirectoryMode=0700", "UMask=0077",
+				"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK", "TimeoutStopSec=15s",
+			} {
+				if !strings.Contains(content, required) {
+					t.Errorf("restricted unit missing %q", required)
+				}
+			}
+		}
 	}
 	if want := RoleUnitNames(model.RoleGateway); !reflect.DeepEqual(names, want) {
 		t.Fatalf("gateway rendered units = %v, want %v", names, want)

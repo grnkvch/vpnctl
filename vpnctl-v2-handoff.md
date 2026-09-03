@@ -12,19 +12,23 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 8.2 выполнено `68/156`
+и проходят strict validation. После завершения task 8.3 выполнено `69/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane и personal-client foundation до
 детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
 client exports, полного lifecycle standard-client credentials и state-derived
-gateway isolation и реального standard WireGuard transport включительно.
+gateway isolation, реального standard WireGuard transport и restricted
+Mihomo/ShadowTLS provider foundation включительно.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
 gateway/node config, per-identity peer credentials, UDP/51820 service wrapper,
 overlay bootstrap route и passive health реализованы и прошли real kernel lab
-с пятью clients и двумя nodes. Следующая задача — 8.3 (restricted provider на
-8443/TCP). Фактический Clash Mi
+с пятью clients и двумя nodes. Restricted provider закрепляет Mihomo `v1.19.30`,
+Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и node
+артефакты прошли native validation, реальный listener/socket gate подтвердил
+один TCP listener и отсутствие UDP listener. Следующая задача — 8.4
+(fail-closed UoT и обязательная readiness). Фактический Clash Mi
 остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
 8.10.
 

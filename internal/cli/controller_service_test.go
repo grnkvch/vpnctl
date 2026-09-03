@@ -113,3 +113,34 @@ func TestInternalStandardServicesDispatchRoleAndSanitizeFailure(t *testing.T) {
 		t.Fatalf("standard error was not sanitized: %q", stderr.String())
 	}
 }
+
+func TestInternalRestrictedServiceDispatchAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runRestrictedTransportService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runRestrictedTransportService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	called := false
+	runRestrictedTransportService = func(_ context.Context, received store.Paths) error {
+		called = true
+		if received != paths {
+			t.Fatalf("restricted service paths = %+v", received)
+		}
+		return errors.New("shadowtls-password-canary")
+	}
+	var stderr bytes.Buffer
+	if code := Execute([]string{"__service", "gateway-restricted"}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+		t.Fatalf("restricted service code = %d", code)
+	}
+	if !called || stderr.String() != "gateway restricted transport service failed\n" || strings.Contains(stderr.String(), "canary") {
+		t.Fatalf("restricted dispatch called=%t stderr=%q", called, stderr.String())
+	}
+}

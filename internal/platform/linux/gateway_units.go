@@ -50,6 +50,17 @@ UMask=0077
 TimeoutStopSec=30s
 `
 		}
+		if mode == "gateway-restricted" {
+			serviceIsolation = `StateDirectory=vpnctl/restricted
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStopSec=15s
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+`
+		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s
 After=network-online.target

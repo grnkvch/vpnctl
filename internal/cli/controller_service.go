@@ -21,6 +21,9 @@ var (
 	runStandardTransportService   = func(ctx context.Context, paths store.Paths, role model.Role) error {
 		return transport.RunStandardService(ctx, paths, role, linuxplatform.OSProbeRunner{})
 	}
+	runRestrictedTransportService = func(ctx context.Context, paths store.Paths) error {
+		return transport.RunRestrictedGatewayService(ctx, paths, linuxplatform.OSProbeRunner{}, transport.OSRestrictedProcessRunner{})
+	}
 	internalServiceContext = func() (context.Context, context.CancelFunc) {
 		return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	}
@@ -43,6 +46,9 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	case "gateway-standard":
 		serviceName = "gateway standard transport"
 		err = runStandardTransportService(ctx, paths, model.RoleGateway)
+	case "gateway-restricted":
+		serviceName = "gateway restricted transport"
+		err = runRestrictedTransportService(ctx, paths)
 	case "node-standard":
 		serviceName = "node standard transport"
 		err = runStandardTransportService(ctx, paths, model.RoleNode)
