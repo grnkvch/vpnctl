@@ -99,9 +99,39 @@ streams per expose, TLS refusal before credential disclosure, dynamic mapping,
 8-second reconnect, 2-second revoke, and a restricted steady state with no
 direct TCP `17000` packets.
 
+## Tunnel credentials
+
+Every node credential generation owns one independently generated 256-bit
+tunnel credential encoded as canonical unpadded base64url. Its single secret
+reference is `tunnel-token:<immutable-node-uuid>-g<generation>`. Both the node
+and gateway retain the required copy only through the root-owned secret store:
+directories are mode `0700`, files are mode `0600`, and production reads reject
+symlinks or non-owner permissions. A provider request must name the exact node
+and generation; there is no shared gateway token or fallback to an older
+generation.
+
+The raw value may cross hosts only inside the authenticated encrypted
+enrollment/rotation exchange and may enter only the root-only generated `frpc`
+candidate needed to authenticate that process. Public exchange and
+authoritative state retain a SHA-256 commitment bound to the immutable node ID
+and credential generation. Candidate descriptors, status and operation
+results expose only safe identity/generation/hash metadata; conservative output
+classification rejects any token or credential field. Credential-store and
+provider failures are sanitized, while tunnel units discard process output by
+default.
+
+Consequently current/previous state files, client exports, and any unencrypted
+copy of authoritative state contain neither the credential nor its secret
+reference. The later backup workflow may include the gateway's required secret
+copy only inside its authenticated encrypted archive; no plaintext backup form
+is allowed. Switching between standard and restricted transport rerenders the
+same logical tunnel configuration and credential. Full node rotation instead
+creates a new reference, value, and commitment as part of the next atomic
+credential generation.
+
 ## Deferred provider work
 
-Tasks 11.3-11.9 supply integrated independent 256-bit node credential storage,
-local-only connection and mapping authorization, atomic dynamic reload,
-readiness/reconnect behavior, revoke handling, and the release resource gate.
-Those additions must preserve this topology, identity, and allocation contract.
+Tasks 11.4-11.9 supply local-only connection and mapping authorization, atomic
+dynamic reload, readiness/reconnect behavior, revoke handling, and the release
+resource gate. Those additions must preserve this topology, identity,
+allocation, and credential contract.

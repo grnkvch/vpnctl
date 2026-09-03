@@ -30,6 +30,15 @@ const (
 func TestNodeRotationAtomicallyActivatesFullNewGenerationAndDrainsOld(t *testing.T) {
 	fixture := newNodeRotationFixture(t, "", false)
 	defer fixture.destroy()
+	oldReferences, err := NewNodeCredentialReferences(joinTestNodeID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTunnelCredential, err := fixture.nodeSecrets.Get(oldReferences.TunnelCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(oldTunnelCredential)
 	beforeGateway, _ := fixture.gatewayState.Load()
 	beforeNode, _ := fixture.nodeState.Load()
 	plan, err := fixture.rotation.Plan()
@@ -51,6 +60,18 @@ func TestNodeRotationAtomicallyActivatesFullNewGenerationAndDrainsOld(t *testing
 		result.GatewayStateGeneration != 5 || result.LocalStateGeneration != 5 ||
 		result.NodeRuntimeCleanupNeeded || result.GatewayCleanupNeeded || result.CredentialCleanupNeeded {
 		t.Fatalf("Apply() = %+v", result)
+	}
+	newReferences, err := NewNodeCredentialReferences(joinTestNodeID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTunnelCredential, err := fixture.nodeSecrets.Get(newReferences.TunnelCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(newTunnelCredential)
+	if bytes.Equal(oldTunnelCredential, newTunnelCredential) {
+		t.Fatal("full node rotation reused the previous tunnel credential")
 	}
 	assertSuccessfulNodeRotation(t, fixture, beforeGateway, beforeNode)
 }

@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	testNodeMaterialID = "20000000-0000-4000-8000-000000000001"
+	testNodeMaterialID  = "20000000-0000-4000-8000-000000000001"
+	testNodeMaterialID2 = "20000000-0000-4000-8000-000000000002"
 )
 
 func TestNodeCredentialProvisioningKeepsPrivateKeysLocal(t *testing.T) {
@@ -89,6 +90,19 @@ func TestNodeCredentialProvisioningKeepsPrivateKeysLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(paths.BackupsDir, store.SecretDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	plainStateCopies := []string{
+		paths.StateFile,
+		paths.PreviousStateFile,
+		filepath.Join(paths.BackupsDir, "unencrypted-state-copy.json"),
+	}
+	for _, path := range plainStateCopies {
+		if err := os.WriteFile(path, gatewayState, store.StateFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	privateNeedles := nodePrivateMaterialNeedles(t, controlPrivate, wireGuardPrivate, restrictedCredential, tunnelCredential)
 	defer func() {
 		for _, value := range privateNeedles {
@@ -101,6 +115,15 @@ func TestNodeCredentialProvisioningKeepsPrivateKeysLocal(t *testing.T) {
 		}
 		if bytes.Contains(gatewayState, privateValue) {
 			t.Fatalf("gateway state contains %s", name)
+		}
+		for _, path := range plainStateCopies {
+			plainCopy, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(plainCopy, privateValue) {
+				t.Fatalf("plain state copy %s contains %s", filepath.Base(path), name)
+			}
 		}
 	}
 	if _, err := json.Marshal(installation); !errors.Is(err, output.ErrSensitiveSerialization) {
@@ -118,6 +141,57 @@ func TestNodeCredentialProvisioningKeepsPrivateKeysLocal(t *testing.T) {
 		if _, err := secretStore.Get(reference); !errors.Is(err, store.ErrSecretNotFound) {
 			t.Fatalf("secret %s remains after rollback: %v", reference, err)
 		}
+	}
+}
+
+func TestNodeCredentialProvisioningCreatesUniqueTunnelCredentialPerNodeGeneration(t *testing.T) {
+	secretStore, _ := newNodeMaterialSecretStore(t)
+	entropy := make([]byte, 3*len(nodeMaterialEntropy()))
+	for index := range entropy {
+		entropy[index] = byte(index + 1)
+	}
+	provisioner, err := NewNodeCredentialProvisioner(secretStore, NodeCredentialRuntime{
+		Entropy: bytes.NewReader(entropy), WireGuardRunner: &nodeMaterialWireGuardRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := []struct {
+		nodeID     string
+		generation uint64
+	}{
+		{nodeID: testNodeMaterialID, generation: 1},
+		{nodeID: testNodeMaterialID, generation: 2},
+		{nodeID: testNodeMaterialID2, generation: 1},
+	}
+	credentials := make(map[string]struct{}, len(requests))
+	commitments := make(map[string]struct{}, len(requests))
+	references := make(map[model.SecretRef]struct{}, len(requests))
+	for _, request := range requests {
+		installation, err := provisioner.Provision(context.Background(), request.nodeID, request.generation)
+		if err != nil {
+			t.Fatalf("Provision(%s, %d) error = %v", request.nodeID, request.generation, err)
+		}
+		credential := readNodeMaterialSecret(t, secretStore, installation.References.TunnelCredential)
+		if err := validateNodeTunnelCredential(credential); err != nil {
+			clear(credential)
+			t.Fatalf("credential validation error = %v", err)
+		}
+		value := string(credential)
+		clear(credential)
+		commitment := installation.PublicExchange.MaterialHashes[NodeTunnelCredentialHashName]
+		if _, duplicate := credentials[value]; duplicate {
+			t.Fatal("two node generations received the same tunnel credential")
+		}
+		if _, duplicate := commitments[commitment]; duplicate {
+			t.Fatal("two node generations received the same tunnel credential commitment")
+		}
+		if _, duplicate := references[installation.References.TunnelCredential]; duplicate {
+			t.Fatal("two node generations received the same tunnel credential reference")
+		}
+		credentials[value] = struct{}{}
+		commitments[commitment] = struct{}{}
+		references[installation.References.TunnelCredential] = struct{}{}
 	}
 }
 

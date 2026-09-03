@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -105,7 +104,7 @@ func (provider *FRPProvider) Render(ctx context.Context, request RenderRequest) 
 			return nil, fmt.Errorf("read frp node credential")
 		}
 		defer clear(credential)
-		if err := validateFRPTunnelCredential(credential); err != nil {
+		if err := ValidateCredential(credential); err != nil {
 			return nil, err
 		}
 		content = renderFRPClientConfig(request.Plan.ServerEndpoint, session, string(credential), provider.nodeTrustedCertificatePath())
@@ -419,7 +418,7 @@ func parseFRPClientConfig(content []byte) (frpClientDocument, error) {
 	if err != nil {
 		return frpClientDocument{}, err
 	}
-	if err := validateFRPTunnelCredential([]byte(tunnelCredential)); err != nil {
+	if err := ValidateCredential([]byte(tunnelCredential)); err != nil {
 		return frpClientDocument{}, err
 	}
 	if adminPassword != frpAdminPassword(tunnelCredential) {
@@ -503,14 +502,6 @@ func parseFRPClientConfig(content []byte) (frpClientDocument, error) {
 		return frpClientDocument{}, fmt.Errorf("frp client config is not canonical")
 	}
 	return document, nil
-}
-
-func validateFRPTunnelCredential(value []byte) error {
-	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(value))
-	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != string(value) {
-		return fmt.Errorf("frp node tunnel credential must be canonical unpadded base64url for 256 bits")
-	}
-	return nil
 }
 
 func frpAdminPassword(tunnelCredential string) string {

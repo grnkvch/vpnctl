@@ -19,13 +19,14 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
 const (
 	NodePublicExchangeSchemaVersion = 1
 	NodeSharedExchangeSchemaVersion = 1
-	NodeTunnelCredentialBytes       = 32
+	NodeTunnelCredentialBytes       = tunnel.CredentialBytes
 	maximumNodePublicExchangeBytes  = 64 << 10
 
 	NodeControlCSRHashName           = "control_csr"
@@ -61,7 +62,7 @@ func NewNodeCredentialReferences(nodeID string, generation uint64) (NodeCredenti
 	if err != nil {
 		return NodeCredentialReferences{}, err
 	}
-	tunnelReference, err := model.NewSecretRef("tunnel-token", suffix)
+	tunnelReference, err := tunnel.CredentialReference(nodeID, generation)
 	if err != nil {
 		return NodeCredentialReferences{}, err
 	}
@@ -112,6 +113,12 @@ func (exchange NodePublicExchange) Validate() error {
 		if !present || !hashPattern.MatchString(value) {
 			return fmt.Errorf("node public exchange material hash %s is invalid", name)
 		}
+	}
+	if err := (tunnel.CredentialCommitment{
+		NodeID: exchange.NodeID, Generation: exchange.CredentialGeneration,
+		SHA256: exchange.MaterialHashes[NodeTunnelCredentialHashName],
+	}).Validate(); err != nil {
+		return fmt.Errorf("node tunnel credential commitment is invalid: %w", err)
 	}
 	if exchange.MaterialHashes[NodeControlCSRHashName] != sha256Hex(csr) ||
 		exchange.MaterialHashes[NodeWireGuardPublicKeyHashName] != sha256Hex(wireGuardRaw) {
@@ -223,8 +230,7 @@ func decodeNodeSharedCredentialExchange(encoded []byte, exchange NodePublicExcha
 		sha256Hex(restrictedCredential) != exchange.MaterialHashes[NodeRestrictedCredentialHashName] {
 		return nil, fmt.Errorf("node restricted credential does not match public commitment")
 	}
-	if validateNodeTunnelCredential(tunnelCredential) != nil ||
-		sha256Hex(tunnelCredential) != exchange.MaterialHashes[NodeTunnelCredentialHashName] {
+	if !tunnelCredentialMatchesExchange(exchange, tunnelCredential) {
 		return nil, fmt.Errorf("node tunnel credential does not match public commitment")
 	}
 	canonical, err := json.Marshal(wire)
@@ -318,6 +324,10 @@ func (provisioner *NodeCredentialProvisioner) Provision(ctx context.Context, nod
 		return NodeCredentialInstallation{}, err
 	}
 	defer clear(tunnelCredential)
+	tunnelCommitment, err := tunnel.NewCredentialCommitment(nodeID, generation, tunnelCredential)
+	if err != nil {
+		return NodeCredentialInstallation{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return NodeCredentialInstallation{}, err
 	}
@@ -333,7 +343,7 @@ func (provisioner *NodeCredentialProvisioner) Provision(ctx context.Context, nod
 			NodeControlCSRHashName:           sha256Hex(controlMaterial.CSRPEM),
 			NodeWireGuardPublicKeyHashName:   sha256Hex(wireGuardPublicRaw),
 			NodeRestrictedCredentialHashName: sha256Hex(restrictedCredential),
-			NodeTunnelCredentialHashName:     sha256Hex(tunnelCredential),
+			NodeTunnelCredentialHashName:     tunnelCommitment.SHA256,
 		},
 	}
 	if err := exchange.Validate(); err != nil {
@@ -432,8 +442,7 @@ func (provisioner *NodeCredentialProvisioner) SharedCredentialPayload(installati
 		return nil, fmt.Errorf("read node tunnel credential: %w", err)
 	}
 	defer clear(tunnelCredential)
-	if validateNodeTunnelCredential(tunnelCredential) != nil ||
-		sha256Hex(tunnelCredential) != installation.PublicExchange.MaterialHashes[NodeTunnelCredentialHashName] {
+	if !tunnelCredentialMatchesExchange(installation.PublicExchange, tunnelCredential) {
 		return nil, fmt.Errorf("node tunnel credential does not match public commitment")
 	}
 	encoded, err := json.Marshal(nodeSharedCredentialWire{
@@ -473,25 +482,19 @@ func decodeCanonicalWireGuardPublicKey(value string) ([]byte, error) {
 }
 
 func generateNodeTunnelCredential(entropy io.Reader) ([]byte, error) {
-	raw := make([]byte, NodeTunnelCredentialBytes)
-	if _, err := io.ReadFull(entropy, raw); err != nil {
-		clear(raw)
-		return nil, fmt.Errorf("generate node tunnel credential: %w", err)
-	}
-	encoded := []byte(base64.RawURLEncoding.EncodeToString(raw))
-	clear(raw)
-	return encoded, nil
+	return tunnel.GenerateCredential(entropy)
 }
 
 func validateNodeTunnelCredential(encoded []byte) error {
-	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(encoded))
-	if err != nil || len(decoded) != NodeTunnelCredentialBytes ||
-		base64.RawURLEncoding.EncodeToString(decoded) != string(encoded) {
-		clear(decoded)
-		return fmt.Errorf("node tunnel credential must be canonical unpadded base64url for 256 bits")
+	return tunnel.ValidateCredential(encoded)
+}
+
+func tunnelCredentialMatchesExchange(exchange NodePublicExchange, value []byte) bool {
+	commitment := tunnel.CredentialCommitment{
+		NodeID: exchange.NodeID, Generation: exchange.CredentialGeneration,
+		SHA256: exchange.MaterialHashes[NodeTunnelCredentialHashName],
 	}
-	clear(decoded)
-	return nil
+	return commitment.Matches(exchange.NodeID, exchange.CredentialGeneration, value)
 }
 
 func nodeMaterialHashNames() []string {

@@ -128,7 +128,7 @@
 
 - [x] 11.1 Implement the implementation-neutral tunnel provider interface, expose mapping model, deterministic names, and persisted collision/exhaustion-safe loopback allocator; verify allocation/restore/remap tests.
 - [x] 11.2 Package and render the selected pinned tunnel server/client with shared gateway service, one node process, multiplexing, TLS verification, no dashboard/public proxy types, and active-transport-only connectivity; verify sockets/processes/config against the manifest.
-- [ ] 11.3 Implement unique 256-bit per-node tunnel credentials, hashes/generations, root-only node storage, and redaction; verify credentials are absent from status/logs/exports/plain backups.
+- [x] 11.3 Implement unique 256-bit per-node tunnel credentials, hashes/generations, root-only node storage, and redaction; verify credentials are absent from status/logs/exports/plain backups.
 - [ ] 11.4 Implement local-only Login authorization against active immutable node/generation and deny-on-controller-error behavior; verify invalid, revoked, old-generation, and cross-node logins fail.
 - [ ] 11.5 Implement NewProxy authorization against exact authoritative expose owner/name/type/loopback port; verify malicious or stale announcements cannot bind arbitrary gateway endpoints.
 - [ ] 11.6 Implement atomic node tunnel configuration and loopback-only dynamic mapping reload; verify adding/removing multiple mappings does not create additional persistent connections or interrupt unrelated streams.
