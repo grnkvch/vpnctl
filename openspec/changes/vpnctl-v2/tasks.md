@@ -113,7 +113,7 @@
 ## 10. Host-Wide Routing and Split DNS
 
 - [x] 10.1 Implement matcher IR compilation for node routing, nftables leak guard, gateway DNS selection, and Clash export; verify one preset fixture produces equivalent selected sets across all targets.
-- [ ] 10.2 Implement node routing/TUN rendering and service readiness around the selected Mihomo DNS/routing mode; verify all host processes are covered and no process/user/container scope flag exists.
+- [x] 10.2 Implement node routing/TUN rendering and service readiness around the selected Mihomo DNS/routing mode; verify all host processes are covered and no process/user/container scope flag exists.
 - [ ] 10.3 Implement nftables marks, conntrack retention, policy routes, pre-engine fail-closed guard, and minimal gateway recovery allowlist from spike values; verify boot and routing-process crash block new application egress before readiness.
 - [ ] 10.4 Implement standard/restricted active-outbound binding so selected TCP/UDP, control, and tunnel share one transport while unmatched flows remain direct; verify packet captures for both active modes.
 - [ ] 10.5 Implement selected-path failure handling with no fail-direct and continued unrelated direct traffic; verify gateway and transport outage tests for new TCP and UDP flows.

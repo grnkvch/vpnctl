@@ -31,7 +31,8 @@ omitted. Empty compiled IR is a valid all-direct policy, while an uncompiled
 zero-value target is rejected instead of silently becoming all-direct.
 
 Task 10.1 does not install a TUN, nftables rule, resolver, route, or systemd
-unit. Tasks 10.2-10.9 render and activate these projections. The kernel cannot
+unit. Task 10.2 renders the node TUN/resolver base; tasks 10.3-10.9 complete and
+activate the remaining projections. The kernel cannot
 recover the original hostname from an ordinary IP packet; the managed resolver
 must feed addresses learned for selected domains into the leak guard. Static
 IP/CIDR matchers remain independently enforceable without DNS.

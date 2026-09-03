@@ -144,3 +144,34 @@ func TestInternalRestrictedServiceDispatchAndSanitizeFailure(t *testing.T) {
 		t.Fatalf("restricted dispatch called=%t stderr=%q", called, stderr.String())
 	}
 }
+
+func TestInternalNodeRoutingServiceDispatchAndSanitizeFailure(t *testing.T) {
+	previousPaths := gatewayControllerServicePaths
+	previousRun := runNodeRoutingService
+	previousContext := internalServiceContext
+	t.Cleanup(func() {
+		gatewayControllerServicePaths = previousPaths
+		runNodeRoutingService = previousRun
+		internalServiceContext = previousContext
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	gatewayControllerServicePaths = func() store.Paths { return paths }
+	internalServiceContext = func() (context.Context, context.CancelFunc) {
+		return context.Background(), func() {}
+	}
+	called := false
+	runNodeRoutingService = func(_ context.Context, received store.Paths) error {
+		called = true
+		if received != paths {
+			t.Fatalf("node routing service paths = %+v", received)
+		}
+		return errors.New("policy-secret-canary")
+	}
+	var stderr bytes.Buffer
+	if code := Execute([]string{"__service", "node-routing"}, &bytes.Buffer{}, &stderr); code != ExitInternal {
+		t.Fatalf("node routing service code = %d", code)
+	}
+	if !called || stderr.String() != "node routing service failed\n" || strings.Contains(stderr.String(), "canary") {
+		t.Fatalf("node routing dispatch called=%t stderr=%q", called, stderr.String())
+	}
+}

@@ -53,3 +53,29 @@ func TestRenderNodeRoleInstallationRejectsUnsafeBinaryPath(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeRoutingUnitHasNoUserProcessOrNamespaceScope(t *testing.T) {
+	t.Parallel()
+	request, err := RenderNodeRoleInstallation(DefaultVPNCTLBinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var routing string
+	for _, unit := range request.Units {
+		if unit.Name == "vpnctl-routing.service" {
+			routing = string(unit.Content)
+			break
+		}
+	}
+	if routing == "" || !strings.Contains(routing, "ExecStart="+DefaultVPNCTLBinaryPath+" __service node-routing\n") {
+		t.Fatalf("node routing unit is missing or has an unexpected entrypoint:\n%s", routing)
+	}
+	for _, forbidden := range []string{
+		"User=", "PrivateNetwork=true", "NetworkNamespacePath=", "JoinsNamespaceOf=", "RestrictNetworkInterfaces=",
+		"Slice=", "BindPaths=", "TemporaryFileSystem=", "IPAddressAllow=", "IPAddressDeny=",
+	} {
+		if strings.Contains(routing, forbidden) {
+			t.Fatalf("node routing unit contains host-scope restriction %q:\n%s", forbidden, routing)
+		}
+	}
+}
