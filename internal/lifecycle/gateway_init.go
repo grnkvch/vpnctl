@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
 var (
@@ -27,22 +29,23 @@ type GatewayInitInput struct {
 }
 
 type GatewayInitPlan struct {
-	Changed             bool
-	AlreadyInitialized  bool
-	HostID              string
-	Network             linuxplatform.GatewayNetworkPlan
-	SSH                 linuxplatform.SSHPortPlan
-	Preflight           linuxplatform.GatewayPreflightPlan
-	FixedListeners      []string
-	Directories         []string
-	PresetDirectory     string
-	PresetFiles         []string
-	PKIPlaceholders     []string
-	Units               []string
-	WatchdogUnitFiles   []string
-	ManagedSwap         linuxplatform.ManagedSwapPlan
-	ManagedSwapSelected bool
-	HandshakeHost       model.HandshakeHost
+	Changed              bool
+	AlreadyInitialized   bool
+	HostID               string
+	Network              linuxplatform.GatewayNetworkPlan
+	SSH                  linuxplatform.SSHPortPlan
+	Preflight            linuxplatform.GatewayPreflightPlan
+	FixedListeners       []string
+	Directories          []string
+	PresetDirectory      string
+	PresetFiles          []string
+	PKIPlaceholders      []string
+	Units                []string
+	TransportConfigFiles []string
+	WatchdogUnitFiles    []string
+	ManagedSwap          linuxplatform.ManagedSwapPlan
+	ManagedSwapSelected  bool
+	HandshakeHost        model.HandshakeHost
 
 	desiredState     model.State
 	layout           GatewayLayoutPlan
@@ -110,6 +113,11 @@ type GatewayInitHandshakeHostSelector interface {
 	Select(context.Context, int, time.Time) (model.HandshakeHost, error)
 }
 
+type GatewayInitTransportProvisioner interface {
+	Provision(context.Context, model.State) (transport.GatewayListenerInstallation, error)
+	Rollback(context.Context, transport.GatewayListenerInstallation) error
+}
+
 type GatewayInitRuntime struct {
 	Paths          store.Paths
 	Snapshot       linuxplatform.HostSnapshot
@@ -124,6 +132,7 @@ type GatewayInitRuntime struct {
 	Swap           GatewayInitSwapManager
 	Identity       GatewayInitIdentityProvisioner
 	HandshakeHosts GatewayInitHandshakeHostSelector
+	Transports     GatewayInitTransportProvisioner
 	Now            func() time.Time
 	NewHostID      model.UUIDGenerator
 }
@@ -133,7 +142,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.HandshakeHosts == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.HandshakeHosts == nil || runtime.Transports == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -240,15 +249,20 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	for index, preset := range layout.PresetFiles {
 		presetFiles[index] = preset.Path
 	}
+	transportConfigFiles := make([]string, 0, len(transport.GatewayListenerFileNames()))
+	for _, name := range transport.GatewayListenerFileNames() {
+		transportConfigFiles = append(transportConfigFiles, filepath.Join(initializer.runtime.Paths.ConfigDir, "generated", "gateway", name))
+	}
 	return GatewayInitPlan{
 		Changed: true, HostID: hostID, Network: network, SSH: ssh, Preflight: preflight,
 		FixedListeners: []string{"443/tcp", "8443/tcp", "51820/udp"},
 		Directories:    directories, PresetDirectory: layout.PresetDirectory, PresetFiles: presetFiles,
 		PKIPlaceholders: append([]string(nil), layout.PKIPlaceholders...), Units: append([]string(nil), rolePlan.UnitsToStart...),
-		WatchdogUnitFiles: append([]string(nil), watchdogUnits.UnitFiles...),
-		ManagedSwap:       managedSwap,
-		HandshakeHost:     handshakeHost,
-		desiredState:      desired, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
+		TransportConfigFiles: transportConfigFiles,
+		WatchdogUnitFiles:    append([]string(nil), watchdogUnits.UnitFiles...),
+		ManagedSwap:          managedSwap,
+		HandshakeHost:        handshakeHost,
+		desiredState:         desired, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
 		swapDecisionMade: !managedSwap.Offered,
 	}, nil
 }
@@ -370,18 +384,23 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 		return rollbackIdentity(fmt.Errorf("arm gateway lockout watchdog: %w", err))
 	}
 	var createdSwap *model.ManagedSwap
+	var transportInstallation *transport.GatewayListenerInstallation
 	statePersisted := false
 	fail := func(applyErr error) (GatewayInitResult, error) {
 		rollbackErr := initializer.runtime.Watchdog.RollbackNow(ctx, transaction.ID)
 		var swapErr error
+		var transportErr error
 		var identityErr error
+		if transportInstallation != nil && !statePersisted {
+			transportErr = initializer.runtime.Transports.Rollback(context.Background(), *transportInstallation)
+		}
 		if createdSwap != nil && !statePersisted {
 			swapErr = initializer.runtime.Swap.Deactivate(ctx, *createdSwap, true)
 		}
 		if !statePersisted {
 			identityErr = initializer.runtime.Identity.Rollback(context.Background(), identity)
 		}
-		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, swapErr, identityErr)
+		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, transportErr, swapErr, identityErr)
 	}
 	if plan.ManagedSwapSelected {
 		owned, err := initializer.runtime.Swap.Apply(ctx, plan.ManagedSwap)
@@ -394,11 +413,21 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 		}
 		createdSwap = &owned
 	}
+	listeners, err := initializer.runtime.Transports.Provision(ctx, candidate)
+	if err != nil {
+		return fail(fmt.Errorf("provision gateway transport listeners: %w", err))
+	}
+	transportInstallation = &listeners
+	roleRequest := plan.roleRequest
+	roleRequest.Configs = append([]linuxplatform.RoleConfigFile(nil), roleRequest.Configs...)
+	for _, file := range listeners.ConfigFiles() {
+		roleRequest.Configs = append(roleRequest.Configs, linuxplatform.RoleConfigFile{Name: file.Name, Content: file.Content})
+	}
 	if err := initializer.runtime.State.Save(0, candidate); err != nil {
 		return fail(fmt.Errorf("persist initial gateway state: %w", err))
 	}
 	statePersisted = true
-	if _, err := initializer.runtime.Roles.Apply(ctx, plan.roleRequest); err != nil {
+	if _, err := initializer.runtime.Roles.Apply(ctx, roleRequest); err != nil {
 		return fail(fmt.Errorf("install gateway services: %w", err))
 	}
 	if err := initializer.runtime.Network.ActivateGateway(ctx, plan.firewall); err != nil {

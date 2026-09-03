@@ -51,6 +51,14 @@ to create a new selection is the confirmed make-before-break saga in task 8.8,
 which must persist the authoritative state transition after successful target
 activation and bounded old-path drain.
 
+Both public gateway listeners are provisioned and supervised independently of
+that per-node selection. Gateway init publishes the standard and restricted
+provider configurations plus hash-bound readiness markers as one pre-start
+file set, then enables both role units. A listener process failure or gateway
+reboot restores the listeners through systemd; it does not inspect, rewrite,
+or repair a node's active/standby pair. An active node-path outage therefore
+remains unavailable/degraded until an operator explicitly tests and switches.
+
 The concrete standard renderer, service, credential ownership, passive health
 semantics, and packet-level acceptance contract are documented in
 [`STANDARD_TRANSPORT.md`](./STANDARD_TRANSPORT.md).

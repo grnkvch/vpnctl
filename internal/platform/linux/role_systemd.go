@@ -185,7 +185,7 @@ func (installer *RoleSystemdInstaller) Apply(ctx context.Context, request RoleIn
 		}
 	}
 	configs := append([]RoleConfigFile(nil), request.Configs...)
-	sort.Slice(configs, func(i, j int) bool { return configs[i].Name < configs[j].Name })
+	sort.Slice(configs, func(i, j int) bool { return roleConfigLess(configs[i].Name, configs[j].Name) })
 	for _, config := range configs {
 		path := filepath.Join(roleConfigDir, config.Name)
 		updated, err := installAtomicRoleFile(path, config.Content, 0o600)
@@ -210,6 +210,15 @@ func (installer *RoleSystemdInstaller) Apply(ctx context.Context, request RoleIn
 		}
 	}
 	return RoleInstallationResult{Plan: plan, ChangedFiles: changed}, nil
+}
+
+func roleConfigLess(left, right string) bool {
+	leftReady := strings.HasSuffix(left, ".ready")
+	rightReady := strings.HasSuffix(right, ".ready")
+	if leftReady != rightReady {
+		return !leftReady
+	}
+	return left < right
 }
 
 func (installer *RoleSystemdInstaller) systemctl(ctx context.Context, arguments ...string) error {

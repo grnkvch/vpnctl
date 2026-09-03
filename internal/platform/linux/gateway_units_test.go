@@ -24,6 +24,7 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 		content := string(unit.Content)
 		for _, required := range []string{
 			"ConditionPathExists=/etc/vpnctl/generated/gateway/", "Restart=on-failure",
+			"StartLimitIntervalSec=0", "RestartSec=2s", "WantedBy=multi-user.target",
 			"StandardOutput=null", "StandardError=null", "ExecStart=/usr/local/bin/vpnctl __service gateway-",
 		} {
 			if !strings.Contains(content, required) {

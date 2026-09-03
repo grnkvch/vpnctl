@@ -1,7 +1,9 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
 func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
@@ -38,6 +42,9 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !reflect.DeepEqual(plan.FixedListeners, []string{"443/tcp", "8443/tcp", "51820/udp"}) {
 		t.Fatalf("fixed listeners = %v", plan.FixedListeners)
 	}
+	if len(plan.TransportConfigFiles) != 4 {
+		t.Fatalf("gateway transport config files = %v", plan.TransportConfigFiles)
+	}
 	firewall := string(plan.firewall.Definition())
 	if !strings.Contains(firewall, "elements = { 9443 }") ||
 		!strings.Contains(firewall, `iifname "vpnctl-wg" ip saddr @active_node_v4 tcp dport @node_tcp_ports accept`) ||
@@ -59,7 +66,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !result.Changed || result.HostID != gatewayTestHostID || result.TransactionID != "fw-ABC123" {
 		t.Fatalf("Apply() result = %+v", result)
 	}
-	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
 	if !reflect.DeepEqual(harness.events.values, wantEvents) {
 		t.Fatalf("apply events = %v, want %v", harness.events.values, wantEvents)
 	}
@@ -100,7 +107,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if secondPlan.Changed || !secondPlan.AlreadyInitialized || secondPlan.HostID != gatewayTestHostID {
 		t.Fatalf("second plan = %+v", secondPlan)
 	}
-	beforeArm, beforeNetwork, beforeRoles, beforeWatchdogUnits := harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls
+	beforeArm, beforeNetwork, beforeRoles, beforeWatchdogUnits, beforeTransports := harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.transports.provisionCalls
 	harness.events.values = nil
 	secondResult, err := harness.initializer.Apply(context.Background(), secondPlan)
 	if err != nil {
@@ -109,7 +116,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if secondResult.Changed || secondResult.TransactionID != "" {
 		t.Fatalf("second result = %+v", secondResult)
 	}
-	if harness.watchdog.armCalls != beforeArm || harness.network.calls != beforeNetwork || harness.roles.applyCalls != beforeRoles || harness.watchdogUnits.applyCalls != beforeWatchdogUnits {
+	if harness.watchdog.armCalls != beforeArm || harness.network.calls != beforeNetwork || harness.roles.applyCalls != beforeRoles || harness.watchdogUnits.applyCalls != beforeWatchdogUnits || harness.transports.provisionCalls != beforeTransports {
 		t.Fatalf("second init invoked a mutating dependency")
 	}
 	if !reflect.DeepEqual(harness.events.values, []string{"state-load"}) {
@@ -208,7 +215,7 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic activation failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "state-save", "roles-apply", "network-activate", "watchdog-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
 	}
@@ -241,6 +248,28 @@ func TestGatewayInitIdentityFailureStopsBeforeWatchdogAndState(t *testing.T) {
 	}
 }
 
+func TestGatewayInitTransportProvisionFailureStopsBeforeStateAndServices(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.transports.err = errors.New("synthetic listener publication failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic listener publication failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "watchdog-rollback", "identity-rollback"}
+	if !reflect.DeepEqual(harness.events.values, want) {
+		t.Fatalf("transport failure events = %v, want %v", harness.events.values, want)
+	}
+	if harness.state.saveCalls != 0 || harness.roles.applyCalls != 0 || harness.network.calls != 0 {
+		t.Fatal("listener publication failure crossed the authoritative state/service boundary")
+	}
+}
+
 func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 	t.Parallel()
 
@@ -260,7 +289,7 @@ func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
-		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
 		if !reflect.DeepEqual(harness.events.values, want) {
 			t.Fatalf("accept events = %v, want %v", harness.events.values, want)
 		}
@@ -349,7 +378,7 @@ func TestGatewayInitStateFailurePurgesNewManagedSwap(t *testing.T) {
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic state failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "state-save", "watchdog-rollback", "swap-deactivate", "identity-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "watchdog-rollback", "transport-rollback", "swap-deactivate", "identity-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("rollback events = %v, want %v", harness.events.values, want)
 	}
@@ -375,6 +404,14 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	listenerProvisioner, err := transport.NewGatewayListenerProvisioner(
+		secretStore,
+		gatewayInitWireGuardRunner{privateKey: gatewayInitWireGuardKey(0x41), publicKey: gatewayInitWireGuardKey(0x42)},
+		bytes.NewReader(bytes.Repeat([]byte{0x43}, 64)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	layout, _ := NewGatewayLayoutInstaller(paths)
 	runner := &gatewayInitSystemdRunner{}
 	roles, err := linuxplatform.NewRoleSystemdInstaller(root, paths.ConfigDir, runner)
@@ -393,6 +430,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		State: stateStore, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits,
 		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{}, Identity: identity,
 		HandshakeHosts: &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
+		Transports:     listenerProvisioner,
 		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:      func() (string, error) { return gatewayTestHostID, nil },
 	})
@@ -425,6 +463,20 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "gateway", "gateway-controller.ready")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("gateway controller readiness marker = %v, %v", info, err)
+	}
+	for _, name := range transport.GatewayListenerFileNames() {
+		path := filepath.Join(paths.ConfigDir, "generated", "gateway", name)
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("gateway transport artifact %s = %v, %v", name, info, err)
+		}
+	}
+	standardConfig, err := os.ReadFile(filepath.Join(paths.ConfigDir, "generated", "gateway", transport.StandardConfigFileName))
+	if err != nil || !bytes.Contains(standardConfig, []byte("ListenPort = 51820")) {
+		t.Fatalf("gateway standard config = %q, %v", standardConfig, err)
+	}
+	restrictedConfig, err := os.ReadFile(filepath.Join(paths.ConfigDir, "generated", "gateway", transport.RestrictedConfigFileName))
+	if err != nil || !bytes.Contains(restrictedConfig, []byte("port: 8443")) || bytes.Contains(restrictedConfig, []byte("udp: true")) {
+		t.Fatalf("gateway restricted config = %q, %v", restrictedConfig, err)
 	}
 	for _, reference := range []model.SecretRef{
 		model.SecretRef(control.ControlCACertificateRef), control.ControlCAPrivateKeyRef,
@@ -575,6 +627,7 @@ type gatewayInitHarness struct {
 	swap           *recordingGatewaySwap
 	identity       *recordingGatewayIdentity
 	handshakeHosts *recordingGatewayHandshakeHosts
+	transports     *recordingGatewayTransports
 	events         *gatewayInitEvents
 	idCalls        int
 }
@@ -603,11 +656,13 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	swap := &recordingGatewaySwap{events: events}
 	identity := newRecordingGatewayIdentity(events)
 	handshakeHosts := &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, handshakeHosts: handshakeHosts, events: events}
+	transports := &recordingGatewayTransports{events: events}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, handshakeHosts: handshakeHosts, transports: transports, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
 		HandshakeHosts: handshakeHosts,
+		Transports:     transports,
 		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:      func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
@@ -675,6 +730,10 @@ func gatewayTestManifest() model.ComponentManifest {
 		Components: []model.ComponentPin{{
 			Name: "vpnctl", Version: "v2.0.0-dev", Source: "bundle:vpnctl", Bundled: true,
 			SHA256: strings.Repeat("a", 64), Capabilities: []string{"cli", "controller"},
+		}, {
+			Name: transport.RestrictedProviderName, Version: transport.RestrictedProviderVersion, Source: "vpnctl-release-bundle", Bundled: true,
+			SHA256:       transport.RestrictedProviderSHA256,
+			Capabilities: []string{"tun-routing", "redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "uot-v2"},
 		}},
 	}
 }
@@ -761,12 +820,30 @@ func assertGatewayRoleRequest(t *testing.T, request linuxplatform.RoleInstallati
 			t.Fatalf("gateway unit %s activation/content is invalid", unit.Name)
 		}
 	}
+	configNames := make([]string, len(request.Configs))
+	for index, config := range request.Configs {
+		configNames[index] = config.Name
+	}
+	for _, required := range transport.GatewayListenerFileNames() {
+		if !containsString(configNames, required) {
+			t.Fatalf("gateway init omitted transport artifact %s from %v", required, configNames)
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 	t.Helper()
-	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 {
-		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls)
+	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 || harness.transports.provisionCalls != 0 {
+		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d transports=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls, harness.transports.provisionCalls)
 	}
 	for _, path := range []string{harness.paths.ConfigDir, harness.paths.StateDir, harness.paths.RuntimeDir} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -778,6 +855,33 @@ func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 type gatewayInitEvents struct{ values []string }
 
 func (events *gatewayInitEvents) add(value string) { events.values = append(events.values, value) }
+
+type recordingGatewayTransports struct {
+	events         *gatewayInitEvents
+	provisionCalls int
+	rollbackCalls  int
+	err            error
+}
+
+func (value *recordingGatewayTransports) Provision(_ context.Context, _ model.State) (transport.GatewayListenerInstallation, error) {
+	value.events.add("transport-provision")
+	value.provisionCalls++
+	if value.err != nil {
+		return transport.GatewayListenerInstallation{}, value.err
+	}
+	return transport.NewGatewayListenerInstallation([]transport.GatewayListenerConfigFile{
+		{Name: transport.GatewayRestrictedReadyFileName, Content: []byte("schema_version=1\n")},
+		{Name: transport.GatewayStandardReadyFileName, Content: []byte("schema_version=1\n")},
+		{Name: transport.RestrictedConfigFileName, Content: []byte("restricted\n")},
+		{Name: transport.StandardConfigFileName, Content: []byte("standard\n")},
+	})
+}
+
+func (value *recordingGatewayTransports) Rollback(_ context.Context, _ transport.GatewayListenerInstallation) error {
+	value.events.add("transport-rollback")
+	value.rollbackCalls++
+	return nil
+}
 
 type recordingGatewayState struct {
 	store     *store.StateStore
@@ -1018,6 +1122,30 @@ func (runner *gatewayInitSystemdRunner) Run(_ context.Context, command linuxplat
 	runner.calls = append(runner.calls, command.Name+" "+strings.Join(command.Args, " "))
 	return linuxplatform.ProbeResult{}, nil
 }
+
+type gatewayInitWireGuardRunner struct {
+	privateKey string
+	publicKey  string
+}
+
+func (runner gatewayInitWireGuardRunner) Run(_ context.Context, name string, arguments []string, _ string) (string, error) {
+	if name != "wg" {
+		return "", errors.New("unexpected command")
+	}
+	if reflect.DeepEqual(arguments, []string{"genkey"}) {
+		return runner.privateKey + "\n", nil
+	}
+	if reflect.DeepEqual(arguments, []string{"pubkey"}) {
+		return runner.publicKey + "\n", nil
+	}
+	return "", errors.New("unexpected wg arguments")
+}
+
+func gatewayInitWireGuardKey(value byte) string {
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32))
+}
+
+var _ wireguard.Runner = gatewayInitWireGuardRunner{}
 
 func (network *recordingGatewayNetwork) ActivateGateway(_ context.Context, artifact linuxplatform.GatewayFirewallArtifact) error {
 	network.events.add("network-activate")

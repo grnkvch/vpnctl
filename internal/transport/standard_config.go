@@ -39,36 +39,43 @@ type GatewayStandardCredential struct {
 // WireGuard identity exactly once. A concurrent winner is adopted only after
 // its stored private key has been validated and its public key re-derived.
 func EnsureGatewayStandardCredential(ctx context.Context, secrets StandardCredentialStore, runner wireguard.Runner) (GatewayStandardCredential, error) {
+	credential, _, err := ensureGatewayStandardCredential(ctx, secrets, runner)
+	return credential, err
+}
+
+func ensureGatewayStandardCredential(ctx context.Context, secrets StandardCredentialStore, runner wireguard.Runner) (GatewayStandardCredential, bool, error) {
 	if ctx == nil {
-		return GatewayStandardCredential{}, fmt.Errorf("context is required")
+		return GatewayStandardCredential{}, false, fmt.Errorf("context is required")
 	}
 	if secrets == nil {
-		return GatewayStandardCredential{}, fmt.Errorf("standard credential store is required")
+		return GatewayStandardCredential{}, false, fmt.Errorf("standard credential store is required")
 	}
 	stored, err := secrets.Get(GatewayStandardCredentialRef)
 	if err == nil {
-		return gatewayStandardCredential(ctx, stored, runner)
+		credential, credentialErr := gatewayStandardCredential(ctx, stored, runner)
+		return credential, false, credentialErr
 	}
 	if !errors.Is(err, store.ErrSecretNotFound) && !errors.Is(err, fs.ErrNotExist) {
-		return GatewayStandardCredential{}, fmt.Errorf("read gateway standard credential: %w", err)
+		return GatewayStandardCredential{}, false, fmt.Errorf("read gateway standard credential: %w", err)
 	}
 	pair, err := wireguard.GenerateKeyPair(ctx, runner)
 	if err != nil {
-		return GatewayStandardCredential{}, err
+		return GatewayStandardCredential{}, false, err
 	}
 	if err := secrets.PutIfAbsent(GatewayStandardCredentialRef, []byte(pair.PrivateKey)); err != nil {
 		if !errors.Is(err, store.ErrSecretExists) {
-			return GatewayStandardCredential{}, fmt.Errorf("publish gateway standard credential: %w", err)
+			return GatewayStandardCredential{}, false, fmt.Errorf("publish gateway standard credential: %w", err)
 		}
 		stored, readErr := secrets.Get(GatewayStandardCredentialRef)
 		if readErr != nil {
-			return GatewayStandardCredential{}, fmt.Errorf("read concurrently published gateway standard credential: %w", readErr)
+			return GatewayStandardCredential{}, false, fmt.Errorf("read concurrently published gateway standard credential: %w", readErr)
 		}
-		return gatewayStandardCredential(ctx, stored, runner)
+		credential, credentialErr := gatewayStandardCredential(ctx, stored, runner)
+		return credential, false, credentialErr
 	}
 	return GatewayStandardCredential{
 		Reference: GatewayStandardCredentialRef, Generation: GatewayStandardCredentialGen, PublicKey: pair.PublicKey,
-	}, nil
+	}, true, nil
 }
 
 func gatewayStandardCredential(ctx context.Context, privateKey []byte, runner wireguard.Runner) (GatewayStandardCredential, error) {
@@ -92,6 +99,10 @@ type StandardConfigArtifact struct {
 	localAddresses   []string
 	peers            []StandardPeer
 	content          []byte
+}
+
+func (artifact StandardConfigArtifact) ConfigHash() string {
+	return standardConfigHash(artifact.content)
 }
 
 func (artifact StandardConfigArtifact) Bytes() []byte {

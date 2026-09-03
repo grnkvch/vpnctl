@@ -1,0 +1,20 @@
+[Unit]
+Description=vpnctl task 8.6 restricted-listener supervision gate
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@RUNTIME_ROOT@/listener --network tcp4 --address 0.0.0.0:8443
+Restart=on-failure
+RestartSec=2s
+StandardOutput=null
+StandardError=null
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

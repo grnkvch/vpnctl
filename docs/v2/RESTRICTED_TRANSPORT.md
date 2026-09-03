@@ -1,10 +1,10 @@
 # Restricted transport
 
-Tasks 8.3-8.5 implement the restricted-provider foundation, mandatory
-UDP-over-TCP readiness, and the pinned handshake-host lifecycle. It remains a
-development-gated path: listener supervision and restoration belong to task
-8.6, explicit test/switch operations to tasks 8.7-8.8, and testing against a
-deployed gateway/node plus real Clash Mi to release gate 16.11.
+Tasks 8.3-8.6 implement the restricted-provider foundation, mandatory
+UDP-over-TCP readiness, the pinned handshake-host lifecycle, and independent
+gateway listener supervision. It remains a development-gated path: explicit
+test/switch operations belong to tasks 8.7-8.8, and testing against a deployed
+gateway/node plus real Clash Mi to release gate 16.11.
 
 ## Pinned provider contract
 
@@ -71,7 +71,13 @@ Both artifacts reject YAML aliases, anchors, merge keys, unknown fields, extra d
 
 The hidden service mode is `vpnctl __service gateway-restricted`. It reads `/etc/vpnctl/generated/gateway/restricted.yaml`, uses `/var/lib/vpnctl/restricted`, and executes `/usr/local/libexec/vpnctl/mihomo`. Before starting it requires private regular config/state paths, validates vpnctl's strict schema, verifies the exact Mihomo version token, and runs Mihomo's native `-t` validation.
 
-`vpnctl-restricted.service` is gateway-only, restarts on failure, emits no process logs by default, and receives a private state directory. Publication of the readiness marker and orchestration that starts both gateway listeners remain task 8.6.
+`vpnctl-restricted.service` is gateway-only, restarts on failure, emits no
+process logs by default, and receives a private state directory. Gateway init
+atomically writes both listener configurations and their hash-bound readiness
+markers before starting either role unit. Standard and restricted gateway
+listeners are enabled and supervised independently across process failure and
+gateway reboot. Their simultaneous availability does not select restricted for
+any node and cannot trigger automatic fallback.
 
 The restricted health observers are intentionally passive. Listener health
 reports healthy only when `vpnctl-restricted.service` is active, exactly one

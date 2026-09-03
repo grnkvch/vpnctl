@@ -66,6 +66,7 @@ Description=vpnctl %s
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/vpnctl/generated/gateway/%s.ready
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

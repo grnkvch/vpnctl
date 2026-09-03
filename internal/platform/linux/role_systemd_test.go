@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -183,6 +184,25 @@ func TestRoleSystemdInstallerCanStageNodeWithoutEnableOrStart(t *testing.T) {
 	} {
 		if _, err := os.Lstat(filepath.Join(paths.root, "etc", "systemd", "system", gatewayOnly)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("staged node created gateway unit %s: %v", gatewayOnly, err)
+		}
+	}
+}
+
+func TestRoleConfigPublicationOrdersReadinessMarkersLast(t *testing.T) {
+	t.Parallel()
+
+	configs := []RoleConfigFile{
+		{Name: "gateway-standard.ready"},
+		{Name: "restricted.yaml"},
+		{Name: "gateway-restricted.ready"},
+		{Name: "vpnctl-wg.conf"},
+	}
+	sort.Slice(configs, func(i, j int) bool { return roleConfigLess(configs[i].Name, configs[j].Name) })
+
+	want := []string{"restricted.yaml", "vpnctl-wg.conf", "gateway-restricted.ready", "gateway-standard.ready"}
+	for index, config := range configs {
+		if config.Name != want[index] {
+			t.Fatalf("publication order[%d] = %q, want %q", index, config.Name, want[index])
 		}
 	}
 }

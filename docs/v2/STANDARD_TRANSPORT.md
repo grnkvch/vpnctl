@@ -38,8 +38,11 @@ They are root-only `0600` files. The hidden `gateway-standard` and
 `node-standard` service modes validate with `wg-quick strip`, reconcile a
 stale `vpnctl-wg` only after its public key proves ownership, start the kernel
 interface, verify the gateway listener, remain alive for systemd supervision,
-and remove the interface on shutdown. Task 8.6 owns readiness-marker
-publication and boot/restart activation of both gateway listeners.
+and remove the interface on shutdown. Gateway init publishes both the standard
+and restricted configuration plus hash-bound readiness markers before either
+listener starts. Both gateway units are enabled independently and use
+`Restart=on-failure`, so a process failure or gateway reboot restores both
+listeners without changing any node's active/standby selection.
 
 ## Health semantics
 

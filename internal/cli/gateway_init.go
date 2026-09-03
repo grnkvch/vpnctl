@@ -326,6 +326,10 @@ func developmentComponentManifest() model.ComponentManifest {
 		TargetOS: "ubuntu 24.04", TargetArchitecture: "amd64", HandshakeHostListVersion: 1, MigrationReversible: true,
 		Components: []model.ComponentPin{{
 			Name: "vpnctl", Version: version, Source: "installed:vpnctl", Bundled: false, Capabilities: []string{"cli", "controller"},
+		}, {
+			Name: transport.RestrictedProviderName, Version: transport.RestrictedProviderVersion, Source: "vpnctl-release-bundle", Bundled: true,
+			SHA256:       transport.RestrictedProviderSHA256,
+			Capabilities: []string{"tun-routing", "redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "uot-v2"},
 		}},
 	}
 }

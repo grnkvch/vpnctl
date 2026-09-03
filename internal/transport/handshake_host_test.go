@@ -167,7 +167,7 @@ func TestTLSHandshakeHostProberChecksReachabilityTLS13AndCertificate(t *testing.
 			if result.Reachable != test.reachable || result.TLS13 != test.tls13 || result.CertificateValid != test.certificate || result.Code != test.code || result.CandidateID != "probe" || result.Hostname != "probe.example" {
 				t.Fatalf("probe result = %+v", result)
 			}
-			if result.ObservedAt.IsZero() || result.Latency <= 0 {
+			if result.ObservedAt.IsZero() || result.Latency < 0 || (test.dialErr == nil && result.Latency <= 0) {
 				t.Fatalf("probe timing = %+v", result)
 			}
 		})

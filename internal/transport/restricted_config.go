@@ -74,11 +74,16 @@ type restrictedIdentitySecret struct {
 // EnsureGatewayRestrictedCredential creates the server-wide material once.
 // Concurrent initialization adopts only a fully decoded and validated winner.
 func EnsureGatewayRestrictedCredential(ctx context.Context, secrets RestrictedCredentialStore, random io.Reader) (GatewayRestrictedCredential, error) {
+	credential, _, err := ensureGatewayRestrictedCredential(ctx, secrets, random)
+	return credential, err
+}
+
+func ensureGatewayRestrictedCredential(ctx context.Context, secrets RestrictedCredentialStore, random io.Reader) (GatewayRestrictedCredential, bool, error) {
 	if ctx == nil {
-		return GatewayRestrictedCredential{}, fmt.Errorf("context is required")
+		return GatewayRestrictedCredential{}, false, fmt.Errorf("context is required")
 	}
 	if secrets == nil {
-		return GatewayRestrictedCredential{}, fmt.Errorf("restricted credential store is required")
+		return GatewayRestrictedCredential{}, false, fmt.Errorf("restricted credential store is required")
 	}
 	if random == nil {
 		random = rand.Reader
@@ -86,34 +91,35 @@ func EnsureGatewayRestrictedCredential(ctx context.Context, secrets RestrictedCr
 	stored, err := secrets.Get(GatewayRestrictedCredentialRef)
 	if err == nil {
 		if _, decodeErr := decodeRestrictedGatewaySecret(stored); decodeErr != nil {
-			return GatewayRestrictedCredential{}, fmt.Errorf("validate gateway restricted credential: %w", decodeErr)
+			return GatewayRestrictedCredential{}, false, fmt.Errorf("validate gateway restricted credential: %w", decodeErr)
 		}
-		return GatewayRestrictedCredential{Reference: GatewayRestrictedCredentialRef, Generation: RestrictedGatewayCredentialGen}, nil
+		return GatewayRestrictedCredential{Reference: GatewayRestrictedCredentialRef, Generation: RestrictedGatewayCredentialGen}, false, nil
 	}
 	if !errors.Is(err, store.ErrSecretNotFound) && !errors.Is(err, fs.ErrNotExist) {
-		return GatewayRestrictedCredential{}, fmt.Errorf("read gateway restricted credential: %w", err)
+		return GatewayRestrictedCredential{}, false, fmt.Errorf("read gateway restricted credential: %w", err)
 	}
 	material, err := newRestrictedGatewaySecret(random)
 	if err != nil {
-		return GatewayRestrictedCredential{}, err
+		return GatewayRestrictedCredential{}, false, err
 	}
 	encoded, err := encodeRestrictedSecret(material)
 	if err != nil {
-		return GatewayRestrictedCredential{}, err
+		return GatewayRestrictedCredential{}, false, err
 	}
 	if err := secrets.PutIfAbsent(GatewayRestrictedCredentialRef, encoded); err != nil {
 		if !errors.Is(err, store.ErrSecretExists) {
-			return GatewayRestrictedCredential{}, fmt.Errorf("publish gateway restricted credential: %w", err)
+			return GatewayRestrictedCredential{}, false, fmt.Errorf("publish gateway restricted credential: %w", err)
 		}
 		stored, readErr := secrets.Get(GatewayRestrictedCredentialRef)
 		if readErr != nil {
-			return GatewayRestrictedCredential{}, fmt.Errorf("read concurrently published gateway restricted credential: %w", readErr)
+			return GatewayRestrictedCredential{}, false, fmt.Errorf("read concurrently published gateway restricted credential: %w", readErr)
 		}
 		if _, decodeErr := decodeRestrictedGatewaySecret(stored); decodeErr != nil {
-			return GatewayRestrictedCredential{}, fmt.Errorf("validate concurrently published gateway restricted credential: %w", decodeErr)
+			return GatewayRestrictedCredential{}, false, fmt.Errorf("validate concurrently published gateway restricted credential: %w", decodeErr)
 		}
+		return GatewayRestrictedCredential{Reference: GatewayRestrictedCredentialRef, Generation: RestrictedGatewayCredentialGen}, false, nil
 	}
-	return GatewayRestrictedCredential{Reference: GatewayRestrictedCredentialRef, Generation: RestrictedGatewayCredentialGen}, nil
+	return GatewayRestrictedCredential{Reference: GatewayRestrictedCredentialRef, Generation: RestrictedGatewayCredentialGen}, true, nil
 }
 
 // GenerateRestrictedIdentitySecret returns a root-only payload for one
