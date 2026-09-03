@@ -241,7 +241,7 @@ Alternative considered: an in-process Go reverse proxy. It removes nginx but inc
 
 ### 14. Use frp as the first replaceable multiplexed tunnel provider
 
-The initial tunnel provider pins frp and configures one shared internal-only `frps`, one `frpc` per node, `tcpMux` enabled, connection pooling disabled, dashboards and unused/public proxy types disabled. Each expose gets a stable loopback port from a persisted allocator.
+The initial tunnel provider pins frp and configures one shared internal-only `frps`, one `frpc` per node, `tcpMux` enabled, connection pooling disabled, dashboards and unused/public proxy types disabled. Each expose gets a stable loopback port from the persisted internal TCP `20000-29999` allocator; disabled exposes retain their assignment until removal. Restore preserves free saved ports and builds a complete deterministic remap plan for unavailable or legacy out-of-range ports before any tunnel or ingress generation is published.
 
 The gateway controller serves local-only frp `Login` and `NewProxy` authorization hooks. `Login` validates immutable node ID, current tunnel token hash/generation, and active lifecycle. `NewProxy` additionally validates the deterministic proxy name, TCP type, and exact loopback port against authoritative expose state. `frpc` configuration uses atomic render and loopback-only dynamic reload. The tunnel has TLS server verification in addition to its active outer transport.
 

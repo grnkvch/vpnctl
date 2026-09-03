@@ -278,6 +278,7 @@ func (state State) Validate() error {
 
 	exposeIDs := make(map[string]struct{}, len(state.Exposes))
 	exposeRoutes := make(map[string]string, len(state.Exposes))
+	exposeTunnelPorts := make(map[int]string, len(state.Exposes))
 	for index, expose := range state.Exposes {
 		if err := expose.Validate(); err != nil {
 			return wrap(indexPath("exposes", index), err)
@@ -292,6 +293,10 @@ func (state State) Validate() error {
 			return invalid(indexPath("exposes", index)+".id", "duplicates expose %s", expose.ID)
 		}
 		exposeIDs[expose.ID] = struct{}{}
+		if prior, duplicate := exposeTunnelPorts[expose.TunnelPort]; duplicate {
+			return invalid(indexPath("exposes", index)+".tunnel_port", "duplicates gateway loopback port owned by expose %s", prior)
+		}
+		exposeTunnelPorts[expose.TunnelPort] = expose.ID
 		if expose.State != ExposeDisabled {
 			key := string(expose.RouteMode) + ":" + expose.Path
 			if prior, duplicate := exposeRoutes[key]; duplicate {

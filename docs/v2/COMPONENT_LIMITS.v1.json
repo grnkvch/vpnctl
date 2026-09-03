@@ -261,6 +261,9 @@
     },
     "reverse_tunnel": {
       "internal_server_tcp": 17000,
+      "loopback_port_first": 20000,
+      "loopback_port_last": 29999,
+      "loopback_port_capacity": 10000,
       "tcp_mux": true,
       "effective_pool_count": 0,
       "frpc_per_node": 1,

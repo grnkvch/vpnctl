@@ -64,6 +64,23 @@ func TestStateJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateRejectsDuplicateExposeTunnelPorts(t *testing.T) {
+	t.Parallel()
+
+	state := gatewayState()
+	duplicate := state.Exposes[0]
+	duplicate.ID = "dddddddd-dddd-4ddd-8ddd-ddddddddddde"
+	duplicate.Name = "second-webhook"
+	duplicate.Path = "/second/webhook"
+	duplicate.State = ExposeDisabled
+	state.Exposes = append(state.Exposes, duplicate)
+
+	err := state.Validate()
+	if err == nil || !strings.Contains(err.Error(), "duplicates gateway loopback port") {
+		t.Fatalf("duplicate tunnel port error = %v", err)
+	}
+}
+
 func TestStateValidationRejectsInvalidStates(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +193,7 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "duplicate expose route", mutate: func(state *State) {
 			duplicate := state.Exposes[0]
 			duplicate.ID = "88888888-8888-4888-8888-888888888888"
+			duplicate.TunnelPort++
 			state.Exposes = append(state.Exposes, duplicate)
 		}, want: "duplicates active route"},
 		{name: "non-active node has live expose", mutate: func(state *State) {
