@@ -43,6 +43,9 @@ func TestPolicyManagerAtomicallyReplacesAndClearsExplicitClientPolicy(t *testing
 		public.RequiresAction[0].Command != "vpnctl client export "+catalogClientID+" clash" {
 		t.Fatalf("Commit(set).OutputResult().RequiresAction = %#v", public.RequiresAction)
 	}
+	if len(public.Warnings) != 1 || public.Warnings[0].Code != "classification_boundary" || public.Data["classification_boundary"] == nil {
+		t.Fatalf("Commit(set).OutputResult() classification diagnostics = %#v / %#v", public.Warnings, public.Data)
+	}
 	state := loadPolicyState(t, stateStore)
 	assertTargetPolicy(t, state, model.TargetClient, catalogClientID, []string{"openai"}, 2)
 	if !reflect.DeepEqual(state.Clients[0].AssignedPresets, []string{"openai"}) {

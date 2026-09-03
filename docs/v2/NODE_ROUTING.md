@@ -90,6 +90,11 @@ other local UDP and TCP destination-port-53 traffic to `1053`. This covers
 applications that open classic DNS sockets directly. DoH, DoT, and embedded
 IP literals remain outside this capture boundary.
 
+The exact implication for domain selectors, hardcoded destinations, and
+diagnostic output is documented in
+[CLASSIFICATION_BOUNDARY.md](CLASSIFICATION_BOUNDARY.md). In particular,
+vpnctl does not generate a global third-party DoH/DoT block.
+
 ## Kernel fail-closed guard
 
 The node guard owns only `table inet vpnctl`, route tables `20001`/`20002`,

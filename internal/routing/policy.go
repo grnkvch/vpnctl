@@ -142,6 +142,12 @@ func (result PolicyCommitResult) OutputResult() output.Result {
 			},
 		})
 	}
+	if len(result.Desired.Selectors) != 0 {
+		if boundary, err := InspectClassificationBoundary(result.Desired.Selectors); err == nil {
+			public.Data["classification_boundary"] = boundary.SafeObject()
+			public.Warnings = append(public.Warnings, boundary.Warnings()...)
+		}
+	}
 	return public
 }
 

@@ -121,7 +121,7 @@
 - [x] 10.7 Implement node systemd-resolved integration, classic port-53 capture, original DNS snapshot, and uninstall restore; verify resolved and direct-socket application DNS tests plus exact restoration.
 - [x] 10.8 Implement one shared gateway internal DNS forwarder and independent gateway/direct IPv4 upstream state with defaults; verify multiple nodes share it without cross-node policy leakage.
 - [x] 10.9 Implement policy/direct DNS modes and show/set/reset grammar for gateway and node scopes; verify selected DNS fails closed, direct DNS continues, gateway changes need no node rewrite/export, and resets use correct sources.
-- [ ] 10.10 Surface DoH/DoT/hardcoded-IP classification limits in docs, status/doctor, and policy diagnostics; verify no unsupported claim or global third-party DoH block is generated.
+- [x] 10.10 Surface DoH/DoT/hardcoded-IP classification limits in docs, status/doctor, and policy diagnostics; verify no unsupported claim or global third-party DoH block is generated.
 - [ ] 10.11 Add routing/DNS fault-injection tests for engine crash/restart, gateway loss, resolver loss, component update, transport switch, and uninstall; verify every selected-flow invariant and recovery path from the specs.
 
 ## 11. Multiplexed Reverse Tunnel
