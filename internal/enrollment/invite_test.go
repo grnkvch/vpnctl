@@ -15,6 +15,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	storepkg "github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 func TestInviteIssueStoresOnlyHashAndTokenRoundTrips(t *testing.T) {
@@ -187,7 +188,7 @@ func TestInviteConsumptionRejectsReplayWithoutSecondMutation(t *testing.T) {
 		t.Fatalf("replayed Consume() error = %v", err)
 	}
 	state, _ := stateStore.Load()
-	if state.Generation != 3 || state.Invites[0].State != model.InviteConsumed {
+	if state.Generation != 3 || state.Invites[0].State != model.InviteConsumed || len(state.Invites[0].ConsumptionHash) != 64 {
 		t.Fatalf("replay state = generation %d invite %+v", state.Generation, state.Invites[0])
 	}
 }
@@ -345,8 +346,13 @@ func TestInviteLimitsMatchDevelopmentManifest(t *testing.T) {
 	var manifest struct {
 		Limits struct {
 			Enrollment struct {
-				SecretBytes int `json:"invite_secret_bytes"`
-				TTLSeconds  int `json:"invite_ttl_seconds"`
+				Transcript        string `json:"transcript"`
+				Signature         string `json:"signature"`
+				SecretBytes       int    `json:"invite_secret_bytes"`
+				NodeNonceBytes    int    `json:"node_nonce_bytes"`
+				GatewayNonceBytes int    `json:"gateway_nonce_bytes"`
+				TTLSeconds        int    `json:"invite_ttl_seconds"`
+				ClockSkewSeconds  int    `json:"clock_skew_seconds"`
 			} `json:"enrollment"`
 		} `json:"limits"`
 	}
@@ -354,7 +360,12 @@ func TestInviteLimitsMatchDevelopmentManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if manifest.Limits.Enrollment.SecretBytes != InviteSecretBytes ||
-		time.Duration(manifest.Limits.Enrollment.TTLSeconds)*time.Second != model.InviteTTL {
+		manifest.Limits.Enrollment.Transcript != EnrollmentTranscriptDomain ||
+		manifest.Limits.Enrollment.Signature != EnrollmentSignatureAlgorithm ||
+		manifest.Limits.Enrollment.NodeNonceBytes != EnrollmentNonceBytes ||
+		manifest.Limits.Enrollment.GatewayNonceBytes != EnrollmentNonceBytes ||
+		time.Duration(manifest.Limits.Enrollment.TTLSeconds)*time.Second != model.InviteTTL ||
+		time.Duration(manifest.Limits.Enrollment.ClockSkewSeconds)*time.Second != EnrollmentClockSkew {
 		t.Fatalf("invite limits drifted: %+v", manifest.Limits.Enrollment)
 	}
 }
@@ -396,7 +407,7 @@ func (store *inviteMemoryState) Save(expected uint64, candidate model.State) err
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.state.Generation != expected {
-		return errors.New("state conflict")
+		return storepkg.ErrStateConflict
 	}
 	if err := model.ValidateTransition(store.state, candidate); err != nil {
 		return err

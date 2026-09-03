@@ -101,7 +101,7 @@
 ## 9. Node Enrollment and Identity Lifecycle
 
 - [x] 9.1 Implement the versioned opaque invite codec, 256-bit secret generation, 15-minute expiry, hashed storage, one-time human display, status metadata, and idempotent cancel; verify decode, tamper, expiry, replay, cancellation, and no-secret output tests.
-- [ ] 9.2 Implement reserved public enrollment/recovery HTTP handlers behind `443/TCP` with bounded requests, token purpose separation, signed transcripts, and atomic secret consumption; verify scanning, replay, wrong-purpose, signature substitution, and race tests.
+- [x] 9.2 Implement reserved public enrollment/recovery HTTP handlers behind `443/TCP` with bounded requests, token purpose separation, signed transcripts, and atomic secret consumption; verify scanning, replay, wrong-purpose, signature substitution, and race tests.
 - [ ] 9.3 Implement node-local generation of Ed25519 control, WireGuard, restricted, and tunnel private material plus CSR/public exchange; verify gateway state and packet captures contain no node private keys.
 - [ ] 9.4 Implement atomic `join <transport> [preset...]` across gateway/node with unique name/ID, node IP, both transport credentials, control trust, tunnel token, explicit presets, health checks, and invite consumption; verify failed health/unknown preset leaves invite unused and no partial node.
 - [ ] 9.5 Implement joined-node idempotency/error behavior and gateway node list/show without secrets; verify repeated join changes nothing and multiple nodes retain isolated identities/resources.

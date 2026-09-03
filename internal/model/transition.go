@@ -189,7 +189,7 @@ func validateInviteTransitions(before, after []Invite) error {
 		current[invite.ID] = struct{}{}
 		old, exists := previous[invite.ID]
 		if !exists {
-			if invite.State != InviteActive || invite.CancelledAt != nil || invite.ConsumedAt != nil {
+			if invite.State != InviteActive || invite.CancelledAt != nil || invite.ConsumedAt != nil || invite.ConsumptionHash != "" {
 				return transitionError("new invite %s must start active", invite.ID)
 			}
 			continue

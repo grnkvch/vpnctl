@@ -219,6 +219,7 @@ type Invite struct {
 	ExpiresAt             time.Time   `json:"expires_at"`
 	CancelledAt           *time.Time  `json:"cancelled_at,omitempty"`
 	ConsumedAt            *time.Time  `json:"consumed_at,omitempty"`
+	ConsumptionHash       string      `json:"consumption_hash,omitempty"`
 }
 
 // HandshakeHost is the single restricted-transport TLS disguise selected from

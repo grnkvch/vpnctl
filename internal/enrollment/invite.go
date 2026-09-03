@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 const (
@@ -29,7 +31,7 @@ const (
 	InviteSecretBytes        = 32
 	InviteTokenPrefix        = "vpnctl-invite-v1"
 	InviteEnrollmentPath     = "/.well-known/vpnctl/enroll"
-	invitePurpose            = "node-enrollment"
+	invitePurpose            = string(PurposeEnroll)
 	inviteIDCharacters       = 6
 	inviteIDCollisionRetries = 32
 	maximumInviteTokenBytes  = 4096
@@ -48,6 +50,7 @@ var (
 	inviteIDPattern       = regexp.MustCompile(`^inv-[A-Z2-7]{6}$`)
 	protocolPattern       = regexp.MustCompile(`^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$`)
 	fingerprintPattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	hashPattern           = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	inviteIDEncoding      = base32.StdEncoding.WithPadding(base32.NoPadding)
 	tokenEncoding         = base64.RawURLEncoding
 )
@@ -94,6 +97,22 @@ type InviteConsumeResult struct {
 	InviteID        string
 	NodeName        string
 	StateGeneration uint64
+}
+
+// InviteAuthorization is the public, non-secret result of successfully
+// matching one presented token to one active authoritative invite. The private
+// snapshot prevents callers from constructing or retargeting authorizations.
+type InviteAuthorization struct {
+	InviteID                string
+	NodeName                string
+	ControlProtocol         string
+	GatewayEndpoint         string
+	EnrollmentFingerprint   string
+	IssuedAt                time.Time
+	ExpiresAt               time.Time
+	ExpectedStateGeneration uint64
+
+	invite model.Invite
 }
 
 type InviteDisplayState string
@@ -330,29 +349,73 @@ func (manager *InviteManager) CommitCancel(plan InviteCancelPlan) (InviteCancelR
 	return InviteCancelResult{InviteID: plan.InviteID, NodeName: plan.NodeName, Changed: true, StateGeneration: plan.candidate.Generation}, nil
 }
 
-// Consume verifies the token against its hash-only authoritative record and
-// performs the terminal state change. The public HTTP exchange is added in
-// task 9.2; this state primitive already makes a sequential replay unusable.
-func (manager *InviteManager) Consume(ctx context.Context, encoded []byte) (InviteConsumeResult, error) {
+// AuthorizeInvite verifies a token without changing state. A caller must bind
+// the returned authorization to its exact signed response and then invoke
+// CommitAuthorized; an authorization alone never consumes an invite.
+func (manager *InviteManager) AuthorizeInvite(encoded []byte) (InviteAuthorization, error) {
+	if manager == nil {
+		return InviteAuthorization{}, fmt.Errorf("invite manager is required")
+	}
+	token, err := DecodeInviteToken(encoded)
+	if err != nil {
+		return InviteAuthorization{}, err
+	}
+	defer token.Destroy()
+	state, err := manager.loadGatewayState()
+	if err != nil {
+		return InviteAuthorization{}, err
+	}
+	now := canonicalTime(manager.now())
+	index, err := verifyDecodedToken(state, token, now)
+	if err != nil {
+		return InviteAuthorization{}, err
+	}
+	invite := state.Invites[index]
+	return InviteAuthorization{
+		InviteID: invite.ID, NodeName: invite.NodeName, ControlProtocol: invite.ControlProtocol,
+		GatewayEndpoint: invite.GatewayEndpoint, EnrollmentFingerprint: invite.EnrollmentFingerprint,
+		IssuedAt: invite.IssuedAt, ExpiresAt: invite.ExpiresAt, ExpectedStateGeneration: state.Generation,
+		invite: invite,
+	}, nil
+}
+
+// CommitAuthorized atomically consumes the invite and the exact signed
+// exchange replay hash in one authoritative state generation.
+func (manager *InviteManager) CommitAuthorized(ctx context.Context, authorization InviteAuthorization, consumptionHash string) (InviteConsumeResult, error) {
 	if manager == nil {
 		return InviteConsumeResult{}, fmt.Errorf("invite manager is required")
 	}
 	if ctx == nil {
 		return InviteConsumeResult{}, fmt.Errorf("invite consume context is required")
 	}
-	token, err := DecodeInviteToken(encoded)
-	if err != nil {
-		return InviteConsumeResult{}, err
+	if authorization.ExpectedStateGeneration == 0 || authorization.InviteID == "" ||
+		authorization.invite.ID != authorization.InviteID || authorization.invite.NodeName != authorization.NodeName ||
+		authorization.invite.ControlProtocol != authorization.ControlProtocol ||
+		authorization.invite.GatewayEndpoint != authorization.GatewayEndpoint ||
+		authorization.invite.EnrollmentFingerprint != authorization.EnrollmentFingerprint ||
+		!authorization.invite.IssuedAt.Equal(authorization.IssuedAt) ||
+		!authorization.invite.ExpiresAt.Equal(authorization.ExpiresAt) || !hashPattern.MatchString(consumptionHash) {
+		return InviteConsumeResult{}, fmt.Errorf("invalid invite authorization")
 	}
-	defer token.Destroy()
 	state, err := manager.loadGatewayState()
 	if err != nil {
 		return InviteConsumeResult{}, err
 	}
+	if state.Generation != authorization.ExpectedStateGeneration {
+		return InviteConsumeResult{}, manager.classifyAuthorizedConflict(state, authorization)
+	}
+	index := inviteIndex(state.Invites, authorization.InviteID)
+	if index < 0 || !reflect.DeepEqual(state.Invites[index], authorization.invite) {
+		return InviteConsumeResult{}, fmt.Errorf("%w: invite changed after authorization", ErrInvitePlanStale)
+	}
+	if state.EnrollmentIdentity == nil || authorization.EnrollmentFingerprint != state.EnrollmentIdentity.Fingerprint ||
+		authorization.GatewayEndpoint != gatewayEnrollmentEndpoint(state.Host.PublicIPv4) ||
+		!containsString(state.Components.ControlProtocols, authorization.ControlProtocol) {
+		return InviteConsumeResult{}, ErrInviteTokenInvalid
+	}
 	now := canonicalTime(manager.now())
-	index, err := verifyDecodedToken(state, token, now)
-	if err != nil {
-		return InviteConsumeResult{}, err
+	if now.Before(authorization.IssuedAt) || !now.Before(authorization.ExpiresAt) {
+		return InviteConsumeResult{}, ErrInviteExpired
 	}
 	if err := ctx.Err(); err != nil {
 		return InviteConsumeResult{}, err
@@ -362,6 +425,7 @@ func (manager *InviteManager) Consume(ctx context.Context, encoded []byte) (Invi
 	consumed := candidate.Invites[index]
 	consumed.State = model.InviteConsumed
 	consumed.ConsumedAt = &now
+	consumed.ConsumptionHash = consumptionHash
 	candidate.Invites[index] = consumed
 	candidate.Generation, err = model.NextGeneration(state.Generation)
 	if err != nil {
@@ -371,9 +435,40 @@ func (manager *InviteManager) Consume(ctx context.Context, encoded []byte) (Invi
 		return InviteConsumeResult{}, fmt.Errorf("build invite consumption transition: %w", err)
 	}
 	if err := manager.state.Save(state.Generation, candidate); err != nil {
+		if errors.Is(err, store.ErrStateConflict) {
+			current, loadErr := manager.loadGatewayState()
+			if loadErr == nil {
+				return InviteConsumeResult{}, manager.classifyAuthorizedConflict(current, authorization)
+			}
+		}
 		return InviteConsumeResult{}, fmt.Errorf("persist invite consumption: %w", err)
 	}
 	return InviteConsumeResult{InviteID: consumed.ID, NodeName: consumed.NodeName, StateGeneration: candidate.Generation}, nil
+}
+
+func (manager *InviteManager) classifyAuthorizedConflict(state model.State, authorization InviteAuthorization) error {
+	index := inviteIndex(state.Invites, authorization.InviteID)
+	if index < 0 {
+		return fmt.Errorf("%w: %s", ErrInviteNotFound, authorization.InviteID)
+	}
+	switch state.Invites[index].State {
+	case model.InviteConsumed:
+		return ErrInviteConsumed
+	case model.InviteCancelled:
+		return ErrInviteCancelled
+	default:
+		return fmt.Errorf("%w: authoritative generation changed", ErrInvitePlanStale)
+	}
+}
+
+// Consume is the token-only primitive retained for non-HTTP callers. Public
+// enrollment binds CommitAuthorized to a signed transcript instead.
+func (manager *InviteManager) Consume(ctx context.Context, encoded []byte) (InviteConsumeResult, error) {
+	authorization, err := manager.AuthorizeInvite(encoded)
+	if err != nil {
+		return InviteConsumeResult{}, err
+	}
+	return manager.CommitAuthorized(ctx, authorization, hashConsumptionEvidence("vpnctl-invite-token-consumption-v1", encoded))
 }
 
 func (manager *InviteManager) Status() ([]InviteStatus, error) {
@@ -716,6 +811,14 @@ func hashInviteSecret(secret []byte) string {
 	digest := sha256.New()
 	_, _ = digest.Write([]byte("vpnctl-invite-secret-v1\x00"))
 	_, _ = digest.Write(secret)
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func hashConsumptionEvidence(domain string, evidence []byte) string {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(domain))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(evidence)
 	return hex.EncodeToString(digest.Sum(nil))
 }
 

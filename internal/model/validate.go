@@ -904,19 +904,22 @@ func (invite Invite) Validate() error {
 	}
 	switch invite.State {
 	case InviteActive:
-		if invite.CancelledAt != nil || invite.ConsumedAt != nil {
+		if invite.CancelledAt != nil || invite.ConsumedAt != nil || invite.ConsumptionHash != "" {
 			return invalid("state", "active invite cannot have a terminal timestamp")
 		}
 	case InviteCancelled:
-		if invite.CancelledAt == nil || invite.ConsumedAt != nil {
+		if invite.CancelledAt == nil || invite.ConsumedAt != nil || invite.ConsumptionHash != "" {
 			return invalid("state", "cancelled invite requires only cancelled_at")
 		}
 		if err := validateInviteTerminalTime("cancelled_at", *invite.CancelledAt, invite.IssuedAt); err != nil {
 			return err
 		}
 	case InviteConsumed:
-		if invite.ConsumedAt == nil || invite.CancelledAt != nil {
-			return invalid("state", "consumed invite requires only consumed_at")
+		if invite.ConsumedAt == nil || invite.CancelledAt != nil || invite.ConsumptionHash == "" {
+			return invalid("state", "consumed invite requires consumed_at and consumption_hash")
+		}
+		if err := validateHash("consumption_hash", invite.ConsumptionHash); err != nil {
+			return err
 		}
 		if err := validateInviteTerminalTime("consumed_at", *invite.ConsumedAt, invite.IssuedAt); err != nil {
 			return err

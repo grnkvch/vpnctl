@@ -1,8 +1,8 @@
 # vpnctl v2 enrollment invites
 
-This document fixes the task-9.1 invite boundary. The public enrollment HTTP
-handler and signed enrollment transcript are added in task 9.2; node-local key
-generation and the cross-host join saga follow in tasks 9.3 and 9.4.
+This document fixes the task-9.1 invite lifecycle and task-9.2 public protocol
+boundary. Node-local key generation and the cross-host join saga follow in
+tasks 9.3 and 9.4; the recovery-token lifecycle follows in task 9.9.
 
 ## Issuance and persistence
 
@@ -30,7 +30,7 @@ The opaque v1 form is:
 vpnctl-invite-v1.<base64url canonical JSON>.<base64url HMAC-SHA-256>
 ```
 
-The canonical payload binds schema version, `node-enrollment` purpose, current
+The canonical payload binds schema version, `enroll` purpose, current
 control protocol, exact IP-only HTTPS enrollment endpoint, enrollment identity
 fingerprint, invite ID, 256-bit secret, node name, issue time, and expiry. Both
 base64url values are unpadded and canonical. The HMAC detects accidental or
@@ -60,3 +60,56 @@ Cancellation of a consumed invite is rejected with an explicit direction to
 revoke the enrolled node instead. A consumed invite continues to reserve its
 node name until the corresponding immutable node record exists; cancelled and
 expired unused invites do not prevent a fresh explicit issuance.
+
+## Reserved public protocol
+
+The public edge reserves exactly `/.well-known/vpnctl/enroll` and
+`/.well-known/vpnctl/recover` ahead of user expose routes. nginx terminates the
+ordinary public HTTPS connection on `443/TCP` and forwards only those paths to
+the enrollment handler; the handler does not open another public listener and
+does not expose a general management API. Its upstream contract is POST over
+HTTP/1.1 with `application/json` and no query string.
+
+Enrollment and recovery are separate protocol purposes and token namespaces:
+`vpnctl-invite-v1` is accepted only with `purpose=enroll` on the enrollment
+path, while `vpnctl-recovery-v1` is accepted only with `purpose=recover` on the
+recovery path. A wrong path, purpose, prefix, unknown route, malformed token,
+unknown token, terminal token, or replay returns the same fixed `404` response.
+This avoids turning the endpoint into an invite-status oracle. Recovery routing
+is implemented now, but issuing and authoritatively validating recovery tokens
+remains task 9.9.
+
+The request envelope contains schema version 1, purpose, the one-time token, a
+canonical unpadded-base64url 128-bit node nonce, and one bounded JSON object.
+The token is immediately wrapped in the non-serializable secret type and is
+never logged or returned. Requests inherit the control-plane ceilings: 64 KiB
+body, 8 KiB headers, JSON depth 32, five-second handler deadline, and at most 16
+concurrent sessions. The public response is at most 256 KiB and always carries
+`Cache-Control: no-store`; nginx supplies the edge read/header/idle bounds and
+rate enforcement when the reserved routes are integrated in section 12.
+
+## Signed response and atomic consumption
+
+The gateway creates an independent non-zero 128-bit nonce for each accepted
+request. The prepared transaction supplies a JSON response object plus all
+public facts needed for the canonical transcript. The handler refuses to sign
+unless purpose, exact IP-only endpoint, both nonces, 15-minute validity window,
+and enrollment-key fingerprint match the authenticated transaction.
+
+The `vpnctl-enrollment-transcript-v1` payload is a deterministic sequence of
+32-bit big-endian length-prefixed name/value frames. It binds purpose, invite or
+recovery ID, exact endpoint, immutable node ID, issue/expiry times, both nonces,
+selected transport, canonical preset set, sorted named SHA-256 key/CSR hashes,
+and normalized assignment SHA-256. The Ed25519 JSON envelope contains schema
+version, algorithm, the `sha256:<DER-SPKI>` enrollment fingerprint, canonical
+transcript bytes, and signature; binary values are canonical unpadded
+base64url. The response exposes the gateway nonce so the node can reconstruct
+the expected transcript, byte-compare it, verify the pinned key, enforce at
+most 120 seconds of clock skew, and reject `now >= expires_at`.
+
+The complete response is validated, signed, bounded, and serialized before the
+transaction can commit. Commit stores the domain-separated transcript/signature
+replay SHA-256 and moves the one-time invite to `consumed` in the same
+compare-and-swap state generation. Exactly one concurrent presentation can
+win; all stale authorizations and later replays fail without another state
+transition. Invalid or oversized prepared responses are never consumed.
