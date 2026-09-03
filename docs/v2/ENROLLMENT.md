@@ -232,6 +232,40 @@ Other nodes and their credentials/configuration are preserved. Deleted records
 remain as immutable lifecycle tombstones in authoritative state but are hidden
 from ordinary `node list/show`.
 
+## Full credential rotation
+
+`vpnctl node rotate` runs only on the joined private node and requires explicit
+confirmation. Its read-only plan binds the exact local state, immutable node
+identity, active transport, current gateway generation, and the single next
+credential generation. Apply durably records a request ID before generating a
+new control key/CSR, WireGuard key pair, restricted identity, and reverse-
+tunnel token locally. The asymmetric private keys never cross the node
+boundary; the gateway receives only the public CSR/key plus the two necessarily
+shared symmetric values through non-serializable callback-scoped aggregates.
+
+The gateway verifies the authenticated active node and expected generation,
+issues a new control leaf under the existing CA, prepares both transport
+records and tunnel authorization, and records the request result in bounded
+idempotency history. Gateway and node runtimes stage the complete new set next
+to the old set. Both must report control, standard, restricted, and tunnel
+readiness before either side may publish the next authoritative generation.
+The manually selected active transport, node ID/name/overlay address, policy,
+presets, and every expose remain unchanged; rotation never implies a transport
+switch.
+
+Before the gateway commit, any generation, staging, validation, health, or
+parallel-activation failure rolls back only attempt-owned generation files and
+runtime candidates, clears the pending request as failed, and leaves the
+complete old generation active. After the gateway confirms the new generation,
+the node converges to new rather than attempting an unsafe generation rollback.
+A known transient local state-write failure is retried and reconciled; an
+ambiguous outcome retains both generations and the request ID for inspection.
+After both states select the new generation, node and gateway drain the old
+generation concurrently under one 30-second default deadline, then remove its
+control, standard, restricted, tunnel, and leaf-certificate files. Drain or
+cleanup failures return explicit repair actions while the complete new set
+stays active.
+
 ## Signed response and atomic consumption
 
 The gateway creates an independent non-zero 128-bit nonce for each accepted
