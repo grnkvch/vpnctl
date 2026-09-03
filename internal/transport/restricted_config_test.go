@@ -224,6 +224,7 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 				HandshakeKeyID             string   `json:"handshake_host_key_id"`
 				HandshakeProbeTimeoutMS    int      `json:"handshake_host_probe_timeout_ms"`
 				HandshakeMaximumCandidates int      `json:"handshake_host_maximum_candidates"`
+				HandshakeRollbackSeconds   int      `json:"handshake_host_replacement_rollback_seconds"`
 				InitialCandidates          []string `json:"initial_candidates"`
 				AutomaticHostFallback      bool     `json:"automatic_host_fallback"`
 			} `json:"restricted_transport"`
@@ -241,6 +242,7 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 		componentManifest.Limits.Restricted.HandshakeKeyID != "sha256:9e061dd425ff7766f826911dec3502d6b8f1494705432da049ffed3c0fbe20bc" ||
 		componentManifest.Limits.Restricted.HandshakeProbeTimeoutMS != int(DefaultHandshakeHostProbeTimeout/time.Millisecond) ||
 		componentManifest.Limits.Restricted.HandshakeMaximumCandidates != maximumHandshakeHostCandidates || componentManifest.Limits.Restricted.AutomaticHostFallback ||
+		time.Duration(componentManifest.Limits.Restricted.HandshakeRollbackSeconds)*time.Second != DefaultHandshakeHostRollbackWindow ||
 		!reflect.DeepEqual(componentManifest.Limits.Restricted.InitialCandidates, []string{"www.microsoft.com", "www.apple.com", "www.cloudflare.com"}) {
 		t.Fatalf("production restricted constants drifted from component manifest: %+v", componentManifest)
 	}

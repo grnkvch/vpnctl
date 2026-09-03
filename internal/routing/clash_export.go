@@ -36,6 +36,8 @@ type ClashProfile struct {
 	SourceStateGeneration uint64
 	PolicyGeneration      uint64
 	CredentialGeneration  uint64
+	HandshakeHostID       string
+	HandshakeHostVersion  int
 	DNSMode               ClashDNSMode
 	content               []byte
 }
@@ -109,6 +111,15 @@ func (renderer *ClashProfileRenderer) Render(request ClashProfileRequest) (Clash
 	if err != nil {
 		return ClashProfile{}, fmt.Errorf("compile Clash policy: %w", err)
 	}
+	handshakeHostID := ""
+	handshakeHostVersion := 0
+	if clientHasRestrictedTransport(state.Transports, client.ID) {
+		if state.HandshakeHost == nil {
+			return ClashProfile{}, fmt.Errorf("client %s restricted transport has no authoritative handshake host", client.Name)
+		}
+		handshakeHostID = state.HandshakeHost.CandidateID
+		handshakeHostVersion = state.HandshakeHost.ListVersion
+	}
 	content, err := renderClashProfile(clashRenderInput{
 		Server: state.Host.PublicIPv4, ClientIP: client.OverlayIPv4,
 		PrivateKey: privateKey, GatewayPublicKey: gatewayPublicKey,
@@ -120,8 +131,19 @@ func (renderer *ClashProfileRenderer) Render(request ClashProfileRequest) (Clash
 	return ClashProfile{
 		ClientID: client.ID, ClientName: client.Name, SourceStateGeneration: state.Generation,
 		PolicyGeneration: policyGeneration, CredentialGeneration: client.CredentialGeneration,
+		HandshakeHostID: handshakeHostID, HandshakeHostVersion: handshakeHostVersion,
 		DNSMode: dnsMode, content: content,
 	}, nil
+}
+
+func clientHasRestrictedTransport(transports []model.Transport, clientID string) bool {
+	for _, transport := range transports {
+		if transport.OwnerKind == model.TargetClient && transport.OwnerID == clientID &&
+			transport.Kind == model.TransportRestricted && transport.State != model.TransportDisabled {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeClashDNS(mode ClashDNSMode, requested []string) (ClashDNSMode, []string, error) {

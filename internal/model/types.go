@@ -98,6 +98,7 @@ const (
 	OperationRevoke            OperationType = "revoke"
 	OperationDelete            OperationType = "delete"
 	OperationTransportSwitch   OperationType = "transport-switch"
+	OperationHandshakeHost     OperationType = "handshake-host-replace"
 	OperationExposeCreate      OperationType = "expose-create"
 	OperationExposeRemove      OperationType = "expose-remove"
 	OperationCertificateRotate OperationType = "certificate-rotate"
@@ -173,22 +174,23 @@ const (
 type SecretRef string
 
 type State struct {
-	SchemaVersion      int                 `json:"schema_version"`
-	Generation         uint64              `json:"generation"`
-	Host               Host                `json:"host"`
-	HandshakeHost      *HandshakeHost      `json:"handshake_host,omitempty"`
-	EnrollmentIdentity *EnrollmentIdentity `json:"enrollment_signing_identity,omitempty"`
-	Nodes              []Node              `json:"nodes"`
-	Clients            []Client            `json:"clients"`
-	Presets            []Preset            `json:"presets"`
-	Policies           []Policy            `json:"policies"`
-	Transports         []Transport         `json:"transports"`
-	Exposes            []Expose            `json:"exposes"`
-	Certificates       []Certificate       `json:"certificates"`
-	Operations         []Operation         `json:"operations"`
-	Logging            []LoggingSession    `json:"logging"`
-	Backups            []Backup            `json:"backups"`
-	Components         ComponentManifest   `json:"components"`
+	SchemaVersion       int                  `json:"schema_version"`
+	Generation          uint64               `json:"generation"`
+	Host                Host                 `json:"host"`
+	HandshakeHost       *HandshakeHost       `json:"handshake_host,omitempty"`
+	HandshakeHostChange *HandshakeHostChange `json:"handshake_host_change,omitempty"`
+	EnrollmentIdentity  *EnrollmentIdentity  `json:"enrollment_signing_identity,omitempty"`
+	Nodes               []Node               `json:"nodes"`
+	Clients             []Client             `json:"clients"`
+	Presets             []Preset             `json:"presets"`
+	Policies            []Policy             `json:"policies"`
+	Transports          []Transport          `json:"transports"`
+	Exposes             []Expose             `json:"exposes"`
+	Certificates        []Certificate        `json:"certificates"`
+	Operations          []Operation          `json:"operations"`
+	Logging             []LoggingSession     `json:"logging"`
+	Backups             []Backup             `json:"backups"`
+	Components          ComponentManifest    `json:"components"`
 }
 
 // HandshakeHost is the single restricted-transport TLS disguise selected from
@@ -201,6 +203,29 @@ type HandshakeHost struct {
 	CandidateID   string    `json:"candidate_id"`
 	Hostname      string    `json:"hostname"`
 	SelectedAt    time.Time `json:"selected_at"`
+}
+
+type HandshakeHostChangeState string
+
+const (
+	HandshakeHostPrepared  HandshakeHostChangeState = "prepared"
+	HandshakeHostCommitted HandshakeHostChangeState = "committed"
+)
+
+// HandshakeHostChange is the single durable gateway-only staged replacement.
+// Previous is a bounded rollback snapshot; affected IDs are non-secret impact
+// metadata used to report node-config and Clash-export staleness after commit.
+type HandshakeHostChange struct {
+	SchemaVersion     int                      `json:"schema_version"`
+	OperationID       string                   `json:"operation_id"`
+	State             HandshakeHostChangeState `json:"state"`
+	Previous          HandshakeHost            `json:"previous"`
+	Candidate         HandshakeHost            `json:"candidate"`
+	AffectedNodeIDs   []string                 `json:"affected_node_ids"`
+	AffectedClientIDs []string                 `json:"affected_client_ids"`
+	PreparedAt        time.Time                `json:"prepared_at"`
+	CommittedAt       *time.Time               `json:"committed_at,omitempty"`
+	RollbackExpiresAt *time.Time               `json:"rollback_expires_at,omitempty"`
 }
 
 type Host struct {

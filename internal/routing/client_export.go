@@ -249,6 +249,7 @@ type renderedClientExport struct {
 	stateGeneration      uint64
 	policyGeneration     uint64
 	credentialGeneration uint64
+	sourceGenerations    []render.SourceGeneration
 	content              []byte
 }
 
@@ -278,7 +279,9 @@ func (exporter *ClientExporter) render(request ClientExportRequest) (renderedCli
 		return renderedClientExport{
 			clientID: profile.ClientID, clientName: profile.ClientName,
 			stateGeneration: profile.SourceStateGeneration, policyGeneration: profile.PolicyGeneration,
-			credentialGeneration: profile.CredentialGeneration, content: profile.Bytes(),
+			credentialGeneration: profile.CredentialGeneration,
+			sourceGenerations:    handshakeHostSourceGeneration(profile.HandshakeHostID, profile.HandshakeHostVersion),
+			content:              profile.Bytes(),
 		}, nil
 	default:
 		return renderedClientExport{}, fmt.Errorf("unsupported client export format %q", request.Format)
@@ -387,6 +390,7 @@ func buildClientExportManifest(outputPath string, profile renderedClientExport) 
 	}
 	manifest, err := render.BuildManifest(profile.stateGeneration, []render.ArtifactInput{{
 		Path: outputPath, Mode: clientExportFileMode, Content: profile.content,
+		SourceGenerations: profile.sourceGenerations,
 		PolicyGenerations: policies,
 		CredentialGenerations: []render.SourceGeneration{{
 			Kind: "client-credential", ID: profile.clientID, Generation: profile.credentialGeneration,
@@ -396,6 +400,13 @@ func buildClientExportManifest(outputPath string, profile renderedClientExport) 
 		return render.ArtifactManifest{}, fmt.Errorf("build client export metadata: %w", err)
 	}
 	return manifest, nil
+}
+
+func handshakeHostSourceGeneration(candidateID string, listVersion int) []render.SourceGeneration {
+	if candidateID == "" || listVersion == 0 {
+		return nil
+	}
+	return []render.SourceGeneration{{Kind: "handshake-host", ID: candidateID, Generation: uint64(listVersion)}}
 }
 
 func (exporter *ClientExporter) preflightPublication(outputPath string, managed, force bool, metadataPath string) error {

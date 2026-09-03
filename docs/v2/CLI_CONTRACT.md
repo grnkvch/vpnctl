@@ -89,7 +89,7 @@ The options column excludes the applicable global flags described above. `node o
 | `vpnctl transport host prepare <host>` | `operation-v1:transport.host.prepare` | gateway | candidate hostname; creates one staged replacement | none | yes | no | `sudo vpnctl transport host prepare www.example.com` |
 | `vpnctl transport host commit` | `operation-v1:transport.host.commit` | gateway | commits the single prepared replacement | confirm | yes | no | `sudo vpnctl transport host commit` |
 | `vpnctl transport host rollback` | `operation-v1:transport.host.rollback` | gateway | restores the bounded previous-host snapshot | confirm | yes | no | `sudo vpnctl transport host rollback` |
-| `vpnctl transport host recover <host>` | `operation-v1:transport.host.recover` | node | emergency SSH alignment to the gateway-authorized pending host | confirm | yes | no | `sudo vpnctl transport host recover www.example.com` |
+| `vpnctl transport host recover <host>` | `operation-v1:transport.host.recover` | node | emergency SSH alignment to the explicitly gateway-authorized active host | confirm | yes | no | `sudo vpnctl transport host recover www.example.com` |
 | `vpnctl expose <upstream>` | `operation-v1:expose` | node | port or `host:port`; optional `--name`, `--path`, `--prefix`, `--allow-non-loopback`, `--body-limit`, `--timeout` | none | yes | yes | `sudo vpnctl expose 3000 --path /telegram/webhook` |
 | `vpnctl expose list` | `collection-v1:expose.list` | node | none | none | no | no | `sudo vpnctl expose list` |
 | `vpnctl expose show <name-or-id>` | `resource-v1:expose.show` | node | one expose reference; refreshes the public certificate copy when reachable | none | no | no | `sudo vpnctl expose show telegram-api` |

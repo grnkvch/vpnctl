@@ -15,11 +15,13 @@ func TestManifestIsDeterministicAndContentFree(t *testing.T) {
 	policyA := SourceGeneration{Kind: "node", ID: "node-a", Generation: 7}
 	policyB := SourceGeneration{Kind: "node", ID: "node-b", Generation: 3}
 	credential := SourceGeneration{Kind: "transport", ID: "node-a-standard", Generation: 2}
+	source := SourceGeneration{Kind: "handshake-host", ID: "microsoft", Generation: 1}
 	first, err := BuildManifest(12, []ArtifactInput{
 		{
 			Path:                  "/etc/vpnctl/transport.conf",
 			Mode:                  0600,
 			Content:               []byte("secret-canary-value"),
+			SourceGenerations:     []SourceGeneration{source},
 			PolicyGenerations:     []SourceGeneration{policyB, policyA},
 			CredentialGenerations: []SourceGeneration{credential},
 		},
@@ -34,6 +36,7 @@ func TestManifestIsDeterministicAndContentFree(t *testing.T) {
 			Path:                  "/etc/vpnctl/transport.conf",
 			Mode:                  0600,
 			Content:               []byte("secret-canary-value"),
+			SourceGenerations:     []SourceGeneration{source},
 			PolicyGenerations:     []SourceGeneration{policyA, policyB},
 			CredentialGenerations: []SourceGeneration{credential},
 		},
@@ -62,6 +65,9 @@ func TestManifestIsDeterministicAndContentFree(t *testing.T) {
 	if got := first.Artifacts[1].PolicyGenerations; !reflect.DeepEqual(got, []SourceGeneration{policyA, policyB}) {
 		t.Fatalf("policy generations not canonical: %+v", got)
 	}
+	if got := first.Artifacts[1].SourceGenerations; !reflect.DeepEqual(got, []SourceGeneration{source}) {
+		t.Fatalf("source generations not canonical: %+v", got)
+	}
 
 	decoded, err := DecodeManifest(firstJSON)
 	if err != nil {
@@ -77,8 +83,9 @@ func TestCompareManifestsMarksOnlyAffectedArtifacts(t *testing.T) {
 
 	policyV1 := SourceGeneration{Kind: "client", ID: "ios", Generation: 1}
 	credentialV1 := SourceGeneration{Kind: "wireguard", ID: "ios", Generation: 1}
+	sourceV1 := SourceGeneration{Kind: "handshake-host", ID: "microsoft", Generation: 1}
 	before := mustManifest(t, 20, []ArtifactInput{
-		{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{credentialV1}},
+		{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), SourceGenerations: []SourceGeneration{sourceV1}, PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{credentialV1}},
 		{Path: "/etc/vpnctl/ingress.conf", Mode: 0644, Content: []byte("ingress-v1")},
 	})
 
@@ -91,14 +98,14 @@ func TestCompareManifestsMarksOnlyAffectedArtifacts(t *testing.T) {
 			name: "state generation alone is provenance",
 			inputs: []ArtifactInput{
 				{Path: "/etc/vpnctl/ingress.conf", Mode: 0644, Content: []byte("ingress-v1")},
-				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{credentialV1}},
+				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), SourceGenerations: []SourceGeneration{sourceV1}, PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{credentialV1}},
 			},
 			changes: []ArtifactChange{},
 		},
 		{
 			name: "policy change is local",
 			inputs: []ArtifactInput{
-				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v2"), PolicyGenerations: []SourceGeneration{{Kind: "client", ID: "ios", Generation: 2}}, CredentialGenerations: []SourceGeneration{credentialV1}},
+				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v2"), SourceGenerations: []SourceGeneration{sourceV1}, PolicyGenerations: []SourceGeneration{{Kind: "client", ID: "ios", Generation: 2}}, CredentialGenerations: []SourceGeneration{credentialV1}},
 				{Path: "/etc/vpnctl/ingress.conf", Mode: 0644, Content: []byte("ingress-v1")},
 			},
 			changes: []ArtifactChange{{Path: "/etc/vpnctl/client.conf", Kind: ArtifactUpdated}},
@@ -106,7 +113,15 @@ func TestCompareManifestsMarksOnlyAffectedArtifacts(t *testing.T) {
 		{
 			name: "credential metadata change is local even with same content",
 			inputs: []ArtifactInput{
-				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{{Kind: "wireguard", ID: "ios", Generation: 2}}},
+				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), SourceGenerations: []SourceGeneration{sourceV1}, PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{{Kind: "wireguard", ID: "ios", Generation: 2}}},
+				{Path: "/etc/vpnctl/ingress.conf", Mode: 0644, Content: []byte("ingress-v1")},
+			},
+			changes: []ArtifactChange{{Path: "/etc/vpnctl/client.conf", Kind: ArtifactUpdated}},
+		},
+		{
+			name: "generic source change is local even with same content",
+			inputs: []ArtifactInput{
+				{Path: "/etc/vpnctl/client.conf", Mode: 0600, Content: []byte("client-v1"), SourceGenerations: []SourceGeneration{{Kind: "handshake-host", ID: "apple", Generation: 1}}, PolicyGenerations: []SourceGeneration{policyV1}, CredentialGenerations: []SourceGeneration{credentialV1}},
 				{Path: "/etc/vpnctl/ingress.conf", Mode: 0644, Content: []byte("ingress-v1")},
 			},
 			changes: []ArtifactChange{{Path: "/etc/vpnctl/client.conf", Kind: ArtifactUpdated}},

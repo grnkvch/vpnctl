@@ -13,7 +13,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/render"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -373,6 +375,163 @@ func TestClientExportManifestsTrackFormatSpecificStaleness(t *testing.T) {
 			t.Fatalf("%s credential staleness = %#v, %v", name, changes, compareErr)
 		}
 	}
+}
+
+func TestHandshakeHostReplacementStalesOnlyAffectedClashExport(t *testing.T) {
+	t.Parallel()
+
+	fixture := newClientExporterFixture(t)
+	state := loadPolicyState(t, fixture.stateStore)
+	restrictedCredential, err := model.NewSecretRef("client-restricted", fixture.clientID)
+	if err != nil {
+		t.Fatalf("NewSecretRef(restricted) error = %v", err)
+	}
+	state.Generation++
+	state.Transports = append(append([]model.Transport(nil), state.Transports...), model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: fixture.clientID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
+		Port: 8443, CredentialGeneration: 1, CredentialRef: restrictedCredential,
+		HandshakeHost: state.HandshakeHost.Hostname, ConfigHash: strings.Repeat("e", 64),
+	})
+	if err := fixture.stateStore.Save(state.Generation-1, state); err != nil {
+		t.Fatalf("Save(restricted client transport) error = %v", err)
+	}
+
+	clash, err := fixture.exporter.Export(ClientExportRequest{
+		ClientReference: fixture.clientID, Format: ClientExportClash, GatewayPublicKey: v1CompatibleServerPublicKey,
+	})
+	if err != nil {
+		t.Fatalf("Export(clash) error = %v", err)
+	}
+	wireGuard, err := fixture.exporter.Export(ClientExportRequest{
+		ClientReference: fixture.clientID, Format: ClientExportWireGuard, GatewayPublicKey: v1CompatibleServerPublicKey,
+	})
+	if err != nil {
+		t.Fatalf("Export(wireguard) error = %v", err)
+	}
+	previousClash := readClientExportManifest(t, clash.metadataPath)
+	previousWireGuard := readClientExportManifest(t, wireGuard.metadataPath)
+	wantSource := []render.SourceGeneration{{Kind: "handshake-host", ID: state.HandshakeHost.CandidateID, Generation: uint64(state.HandshakeHost.ListVersion)}}
+	if !reflect.DeepEqual(previousClash.Artifacts[0].SourceGenerations, wantSource) {
+		t.Fatalf("Clash handshake-host dependency = %#v, want %#v", previousClash.Artifacts[0].SourceGenerations, wantSource)
+	}
+	if len(previousWireGuard.Artifacts[0].SourceGenerations) != 0 {
+		t.Fatalf("WireGuard unexpectedly depends on handshake host: %#v", previousWireGuard.Artifacts[0].SourceGenerations)
+	}
+	clashBytes := readExportFile(t, clash.OutputPath, clientExportFileMode)
+	wireGuardBytes := readExportFile(t, wireGuard.OutputPath, clientExportFileMode)
+
+	changed := state
+	changed.Generation++
+	changed.HandshakeHost = &model.HandshakeHost{
+		SchemaVersion: model.ResourceSchemaVersion, ListVersion: state.HandshakeHost.ListVersion,
+		CandidateID: "apple", Hostname: "www.apple.com", SelectedAt: state.HandshakeHost.SelectedAt.Add(time.Hour),
+	}
+	changed.Transports = append([]model.Transport(nil), state.Transports...)
+	for index := range changed.Transports {
+		if changed.Transports[index].Kind == model.TransportRestricted {
+			changed.Transports[index].HandshakeHost = changed.HandshakeHost.Hostname
+		}
+	}
+	if err := changed.Validate(); err != nil {
+		t.Fatalf("Validate(changed handshake host) error = %v", err)
+	}
+	changedStore := &clientExportStaticStateStore{state: changed}
+	fixture.exporter.state = changedStore
+	fixture.exporter.clash.state = changedStore
+	fixture.exporter.wireguard.state = changedStore
+
+	client := findClientByID(t, changed.Clients, fixture.clientID)
+	if found, current := inspectClientExportFormat(fixture.paths, changed, client, ClientExportClash); !found || current {
+		t.Fatalf("Clash export after handshake-host replacement = found %t current %t, want found stale", found, current)
+	}
+	if found, current := inspectClientExportFormat(fixture.paths, changed, client, ClientExportWireGuard); !found || !current {
+		t.Fatalf("WireGuard export after handshake-host replacement = found %t current %t, want found current", found, current)
+	}
+
+	currentClash := renderClientExportForTest(t, fixture.exporter, ClientExportRequest{
+		ClientReference: fixture.clientID, Format: ClientExportClash, GatewayPublicKey: v1CompatibleServerPublicKey,
+	})
+	currentWireGuard := renderClientExportForTest(t, fixture.exporter, ClientExportRequest{
+		ClientReference: fixture.clientID, Format: ClientExportWireGuard, GatewayPublicKey: v1CompatibleServerPublicKey,
+	})
+	if !bytes.Equal(currentClash.content, clashBytes) || !bytes.Equal(currentWireGuard.content, wireGuardBytes) {
+		t.Fatal("handshake-host metadata change unexpectedly changed exported profile bytes")
+	}
+	desiredClash, err := buildClientExportManifest(clash.OutputPath, currentClash)
+	if err != nil {
+		t.Fatalf("build changed Clash manifest: %v", err)
+	}
+	changes, err := render.CompareManifests(previousClash, desiredClash)
+	if err != nil || !reflect.DeepEqual(changes, []render.ArtifactChange{{Path: clash.OutputPath, Kind: render.ArtifactUpdated}}) {
+		t.Fatalf("Clash handshake-host staleness = %#v, %v", changes, err)
+	}
+	desiredWireGuard, err := buildClientExportManifest(wireGuard.OutputPath, currentWireGuard)
+	if err != nil {
+		t.Fatalf("build changed WireGuard manifest: %v", err)
+	}
+	changes, err = render.CompareManifests(previousWireGuard, desiredWireGuard)
+	if err != nil || len(changes) != 0 {
+		t.Fatalf("WireGuard handshake-host staleness = %#v, %v; want current", changes, err)
+	}
+}
+
+func TestLegacyClashManifestWithoutHandshakeHostDependencyIsReadableButStale(t *testing.T) {
+	t.Parallel()
+
+	fixture := newClientExporterFixture(t)
+	state := loadPolicyState(t, fixture.stateStore)
+	restrictedCredential, err := model.NewSecretRef("client-restricted", fixture.clientID)
+	if err != nil {
+		t.Fatalf("NewSecretRef(restricted) error = %v", err)
+	}
+	state.Generation++
+	state.Transports = append(append([]model.Transport(nil), state.Transports...), model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: fixture.clientID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
+		Port: 8443, CredentialGeneration: 1, CredentialRef: restrictedCredential,
+		HandshakeHost: state.HandshakeHost.Hostname, ConfigHash: strings.Repeat("e", 64),
+	})
+	if err := fixture.stateStore.Save(state.Generation-1, state); err != nil {
+		t.Fatalf("Save(restricted client transport) error = %v", err)
+	}
+	result, err := fixture.exporter.Export(ClientExportRequest{
+		ClientReference: fixture.clientID, Format: ClientExportClash, GatewayPublicKey: v1CompatibleServerPublicKey,
+	})
+	if err != nil {
+		t.Fatalf("Export(clash) error = %v", err)
+	}
+	legacy := readClientExportManifest(t, result.metadataPath)
+	legacy.Artifacts[0].SourceGenerations = nil
+	encoded, err := render.EncodeManifest(legacy)
+	if err != nil {
+		t.Fatalf("EncodeManifest(legacy) error = %v", err)
+	}
+	if bytes.Contains(encoded, []byte("source_generations")) {
+		t.Fatalf("legacy manifest unexpectedly encoded optional dependency: %s", encoded)
+	}
+	if err := os.WriteFile(result.metadataPath, encoded, clientExportFileMode); err != nil {
+		t.Fatalf("WriteFile(legacy metadata) error = %v", err)
+	}
+	if _, err := render.DecodeManifest(encoded); err != nil {
+		t.Fatalf("DecodeManifest(legacy) error = %v", err)
+	}
+	client := findClientByID(t, state.Clients, fixture.clientID)
+	if found, current := inspectClientExportFormat(fixture.paths, state, client, ClientExportClash); !found || current {
+		t.Fatalf("legacy Clash export = found %t current %t, want found stale", found, current)
+	}
+}
+
+type clientExportStaticStateStore struct {
+	state model.State
+}
+
+func (store *clientExportStaticStateStore) Load() (model.State, error) {
+	return store.state, nil
+}
+
+func (*clientExportStaticStateStore) Save(uint64, model.State) error {
+	return errors.New("static client export state is read-only")
 }
 
 func TestPublishClientExportLeavesProfileUntouchedWhenMetadataTargetIsUnsafe(t *testing.T) {

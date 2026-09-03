@@ -95,7 +95,7 @@
 - [x] 8.6 Start and supervise both gateway transport listeners while keeping exactly one active per node; verify gateway restart restores listeners and a node outage does not activate standby.
 - [x] 8.7 Implement non-mutating `transport test` with isolated control, tunnel, TCP, UDP, cleanup, and bounded deadlines; verify active routing/generation is unchanged on success and failure.
 - [x] 8.8 Implement confirmed make-before-break `transport switch`, idempotent active-target health check, bounded drain, rollback, and `--defer`; verify target failure preserves old production paths and successful switch moves control/tunnel/selected egress together.
-- [ ] 8.9 Implement staged handshake-host prepare/commit/rollback, impact/staleness reporting, and local SSH emergency alignment; verify no auto-fallback, one active host, short-downtime rollback, and identity preservation.
+- [x] 8.9 Implement staged handshake-host prepare/commit/rollback, impact/staleness reporting, and local SSH emergency alignment; verify no auto-fallback, one active host, short-downtime rollback, and identity preservation.
 - [ ] 8.10 Add standard/restricted alternatives to Clash export with manual client selection only; verify no health-test or fallback rule changes the user's chosen transport.
 
 ## 9. Node Enrollment and Identity Lifecycle

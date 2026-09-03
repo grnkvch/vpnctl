@@ -269,6 +269,7 @@ func (state State) Validate() error {
 	}
 
 	operationIDs := make(map[string]struct{}, len(state.Operations))
+	operations := make(map[string]Operation, len(state.Operations))
 	operationRequestIDs := make(map[string]string, len(state.Operations))
 	for index, operation := range state.Operations {
 		if err := operation.Validate(); err != nil {
@@ -278,12 +279,16 @@ func (state State) Validate() error {
 			return invalid(indexPath("operations", index)+".id", "duplicates operation %s", operation.ID)
 		}
 		operationIDs[operation.ID] = struct{}{}
+		operations[operation.ID] = operation
 		if operation.RequestID != "" {
 			if prior, duplicate := operationRequestIDs[operation.RequestID]; duplicate {
 				return invalid(indexPath("operations", index)+".request_id", "duplicates request owned by operation %s", prior)
 			}
 			operationRequestIDs[operation.RequestID] = operation.ID
 		}
+	}
+	if err := validateHandshakeHostChange(state, operations); err != nil {
+		return err
 	}
 	loggingIDs := make(map[string]struct{}, len(state.Logging))
 	for index, session := range state.Logging {
@@ -362,6 +367,113 @@ func (state State) Validate() error {
 			if expose.NodeID != localID {
 				return invalid(indexPath("exposes", index), "node state may contain only its local exposes")
 			}
+		}
+	}
+	return nil
+}
+
+func (change HandshakeHostChange) Validate() error {
+	if err := validateSchema("handshake host change", change.SchemaVersion, ResourceSchemaVersion); err != nil {
+		return err
+	}
+	if err := validateUUID("operation_id", change.OperationID); err != nil {
+		return err
+	}
+	if change.State != HandshakeHostPrepared && change.State != HandshakeHostCommitted {
+		return invalid("state", "unsupported value %q", change.State)
+	}
+	if err := change.Previous.Validate(); err != nil {
+		return wrap("previous", err)
+	}
+	if err := change.Candidate.Validate(); err != nil {
+		return wrap("candidate", err)
+	}
+	if change.Previous == change.Candidate || change.Previous.Hostname == change.Candidate.Hostname {
+		return invalid("candidate", "must differ from previous handshake host")
+	}
+	if change.Previous.ListVersion != change.Candidate.ListVersion {
+		return invalid("candidate.list_version", "must match previous selection")
+	}
+	if err := validateUUIDSnapshot("affected_node_ids", change.AffectedNodeIDs); err != nil {
+		return err
+	}
+	if err := validateUUIDSnapshot("affected_client_ids", change.AffectedClientIDs); err != nil {
+		return err
+	}
+	if err := validateTime("prepared_at", change.PreparedAt); err != nil {
+		return err
+	}
+	if change.Candidate.SelectedAt != change.PreparedAt {
+		return invalid("candidate.selected_at", "must equal prepared_at")
+	}
+	switch change.State {
+	case HandshakeHostPrepared:
+		if change.CommittedAt != nil || change.RollbackExpiresAt != nil {
+			return invalid("committed_at", "prepared change cannot contain commit or rollback-expiry times")
+		}
+	case HandshakeHostCommitted:
+		if change.CommittedAt == nil || change.RollbackExpiresAt == nil {
+			return invalid("committed_at", "committed change requires commit and rollback-expiry times")
+		}
+		if err := validateTime("committed_at", *change.CommittedAt); err != nil {
+			return err
+		}
+		if err := validateTime("rollback_expires_at", *change.RollbackExpiresAt); err != nil {
+			return err
+		}
+		if change.CommittedAt.Before(change.PreparedAt) || !change.RollbackExpiresAt.After(*change.CommittedAt) {
+			return invalid("rollback_expires_at", "must follow a commit at or after prepare")
+		}
+	}
+	return nil
+}
+
+func validateUUIDSnapshot(path string, values []string) error {
+	if values == nil {
+		return invalid(path, "must be present as a JSON array")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if err := validateUUID(indexPath(path, index), value); err != nil {
+			return err
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return invalid(indexPath(path, index), "duplicates %s", value)
+		}
+		if index > 0 && values[index-1] >= value {
+			return invalid(path, "must be in canonical ascending order")
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+func validateHandshakeHostChange(state State, operations map[string]Operation) error {
+	if state.HandshakeHostChange == nil {
+		return nil
+	}
+	if state.Host.Role != RoleGateway {
+		return invalid("handshake_host_change", "is gateway-only")
+	}
+	change := *state.HandshakeHostChange
+	if err := change.Validate(); err != nil {
+		return wrap("handshake_host_change", err)
+	}
+	if change.Previous.ListVersion != state.Components.HandshakeHostListVersion || change.Candidate.ListVersion != state.Components.HandshakeHostListVersion {
+		return invalid("handshake_host_change", "selection list versions must match the installed component manifest")
+	}
+	operation, found := operations[change.OperationID]
+	if !found || operation.Type != OperationHandshakeHost || operation.TargetKind != "transport" || operation.TargetID != change.Candidate.CandidateID {
+		return invalid("handshake_host_change.operation_id", "must reference its handshake-host replacement operation")
+	}
+	switch change.State {
+	case HandshakeHostPrepared:
+		if state.HandshakeHost == nil || *state.HandshakeHost != change.Previous || operation.State != OperationPending {
+			return invalid("handshake_host_change", "prepared change must retain previous active host and pending operation")
+		}
+	case HandshakeHostCommitted:
+		if state.HandshakeHost == nil || *state.HandshakeHost != change.Candidate || operation.State != OperationActive {
+			return invalid("handshake_host_change", "committed change must select candidate host and active rollback operation")
 		}
 	}
 	return nil

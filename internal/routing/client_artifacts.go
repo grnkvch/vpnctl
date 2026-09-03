@@ -105,14 +105,21 @@ func clientExportDependenciesCurrent(record render.ArtifactRecord, state model.S
 		return false
 	}
 	wantPolicy := []render.SourceGeneration{}
+	var wantSources []render.SourceGeneration
 	if format == ClientExportClash {
 		if generation := clientPolicyGeneration(state, client.ID); generation != 0 {
 			wantPolicy = append(wantPolicy, render.SourceGeneration{
 				Kind: "client-policy", ID: client.ID, Generation: generation,
 			})
 		}
+		if clientHasRestrictedTransport(state.Transports, client.ID) {
+			if state.HandshakeHost == nil {
+				return false
+			}
+			wantSources = handshakeHostSourceGeneration(state.HandshakeHost.CandidateID, state.HandshakeHost.ListVersion)
+		}
 	}
-	return reflect.DeepEqual(record.PolicyGenerations, wantPolicy)
+	return reflect.DeepEqual(record.PolicyGenerations, wantPolicy) && reflect.DeepEqual(record.SourceGenerations, wantSources)
 }
 
 func clientPolicyGeneration(state model.State, clientID string) uint64 {
@@ -231,10 +238,13 @@ func clientExportRecordBelongsToClient(record render.ArtifactRecord, clientID st
 		return false
 	}
 	if format == ClientExportWireGuard {
-		return len(record.PolicyGenerations) == 0
+		return len(record.PolicyGenerations) == 0 && len(record.SourceGenerations) == 0
 	}
-	return len(record.PolicyGenerations) == 0 || (len(record.PolicyGenerations) == 1 &&
+	policyBelongs := len(record.PolicyGenerations) == 0 || (len(record.PolicyGenerations) == 1 &&
 		record.PolicyGenerations[0].Kind == "client-policy" && record.PolicyGenerations[0].ID == clientID)
+	sourceBelongs := len(record.SourceGenerations) == 0 || (len(record.SourceGenerations) == 1 &&
+		record.SourceGenerations[0].Kind == "handshake-host")
+	return policyBelongs && sourceBelongs
 }
 
 func rejectReservedRecordedExportPath(paths store.Paths, path string) error {

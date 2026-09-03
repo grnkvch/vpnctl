@@ -1,11 +1,10 @@
 # Restricted transport
 
-Tasks 8.3-8.6 implement the restricted-provider foundation, mandatory
-UDP-over-TCP readiness, the pinned handshake-host lifecycle, and independent
-gateway listener supervision. It remains a development-gated path: explicit
-non-mutating test orchestration is implemented, explicit switching belongs to
-task 8.8, and testing against a deployed gateway/node plus real Clash Mi to
-release gate 16.11.
+Tasks 8.3-8.9 implement the restricted-provider foundation, mandatory
+UDP-over-TCP readiness, pinned handshake-host selection and replacement,
+independent gateway listener supervision, explicit testing/switching, and
+node-local SSH recovery. It remains a development-gated path: testing against
+a deployed gateway/node plus real Clash Mi belongs to release gate 16.11.
 
 ## Pinned provider contract
 
@@ -18,8 +17,8 @@ release gate 16.11.
 
 The gateway public IP remains an operator-supplied value. The handshake
 hostname is selected from the signed list described below; every restricted
-identity must agree with that authoritative state. Manual replacement remains
-the separate staged task 8.9 flow.
+identity must agree with that authoritative state. Replacement is always a
+manual staged operation.
 
 ## Signed handshake-host selection
 
@@ -51,8 +50,57 @@ Runtime observation is deliberately passive. Given an observation of the exact
 pinned candidate, health reports `handshake-host-healthy` or
 `handshake-host-degraded` plus a required manual action. It cannot inspect the
 candidate bundle, probe another hostname, alter state, activate standby, or
-rotate/fail over. Explicit prepare/commit/rollback and SSH recovery are task
-8.9.
+rotate or fail over.
+
+## Manual replacement and SSH recovery
+
+`transport host prepare <host>` probes exactly the supplied canonical hostname
+for reachability, a normally verified certificate, TLS 1.3, and the pinned
+three-second latency bound. It never scans the signed list for another answer.
+A bundled hostname retains its signed candidate ID; a valid manually supplied
+hostname receives a deterministic non-secret ID. A successful prepare stores
+one pending candidate and the exact affected active node/client IDs while the
+old host remains the sole active selection. A second pending replacement is
+rejected.
+
+`transport host commit` requires explicit confirmation and repeats the exact
+candidate probe. The gateway runtime stages and validates the candidate before
+the authoritative write, then publishes it only after the single next state
+generation is durable. That generation replaces the one authoritative host and
+every enabled restricted transport record together; it never retains two
+active host selections or chooses a fallback. A brief restricted-path outage
+during listener publication is accepted by the product contract.
+
+Commit retains one exact previous-host snapshot for 24 hours. It reports every
+affected node configuration and Clash client export as stale, with explicit
+`apply`/re-export actions; WireGuard exports are independent. Clash sidecars
+carry a non-secret `{candidate_id, list_version}` source dependency, so the
+staleness remains detectable even if the currently rendered profile bytes are
+unchanged. Legacy sidecars without that optional dependency remain readable
+but are stale for a client with an enabled restricted transport.
+
+`transport host rollback` also requires confirmation. Before expiry it stages
+the previous listener, restores the exact stored selection and all restricted
+records in one new generation, and reports the same node/Clash restaleness.
+After expiry rollback is refused; the next explicit prepare may close that old
+operation and replace its snapshot. No timer performs this transition.
+
+If the committed change broke a node's restricted control path, the operator
+logs into that private VPS over SSH and runs `transport host recover <host>`.
+Recovery is node-local and requires the restricted transport to remain the
+manual active selection. It renders only the requested host with the existing
+node ID and credential generation, performs native validation plus authenticated
+control, reverse-tunnel, selected-TCP, and selected-UDP checks against the
+gateway, then activates and persists one local generation. A failed check
+leaves the old host active; a post-activation failure restores the old rendered
+candidate before candidate cleanup. Recovery never rejoins the node, rotates
+credentials, changes its address, edits gateway state, or tests an alternative
+hostname.
+
+`transport host show` checks only the active pinned hostname and reports its
+healthy/degraded observation, pending impact, and rollback availability. A
+degraded observation produces a manual replacement action but cannot mutate
+selection or runtime state.
 
 ## Credential boundary
 

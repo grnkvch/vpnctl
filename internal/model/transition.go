@@ -167,8 +167,48 @@ func ValidateTransition(before, after State) error {
 			return transitionError("enrollment signing identity is immutable")
 		}
 	}
+	if err := validateHandshakeHostChangeTransition(before, after); err != nil {
+		return err
+	}
 	if err := validateStableRecordIdentities(before, after); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateHandshakeHostChangeTransition(before, after State) error {
+	selectionChanged := !reflect.DeepEqual(before.HandshakeHost, after.HandshakeHost)
+	if before.Host.Role == RoleNode {
+		if after.HandshakeHostChange != nil {
+			return transitionError("node state cannot persist a gateway handshake-host change")
+		}
+		return nil
+	}
+	switch {
+	case reflect.DeepEqual(before.HandshakeHostChange, after.HandshakeHostChange):
+		if selectionChanged {
+			return transitionError("gateway handshake host cannot change while its staged replacement record is unchanged")
+		}
+	case before.HandshakeHostChange == nil && after.HandshakeHostChange != nil:
+		if after.HandshakeHostChange.State != HandshakeHostPrepared || selectionChanged {
+			return transitionError("new handshake-host replacement must start prepared without changing active selection")
+		}
+	case before.HandshakeHostChange != nil && before.HandshakeHostChange.State == HandshakeHostPrepared && after.HandshakeHostChange != nil:
+		old, current := before.HandshakeHostChange, after.HandshakeHostChange
+		if current.State != HandshakeHostCommitted || old.OperationID != current.OperationID || old.Previous != current.Previous || old.Candidate != current.Candidate ||
+			!reflect.DeepEqual(old.AffectedNodeIDs, current.AffectedNodeIDs) || !reflect.DeepEqual(old.AffectedClientIDs, current.AffectedClientIDs) || !old.PreparedAt.Equal(current.PreparedAt) || !selectionChanged {
+			return transitionError("prepared handshake-host replacement may only commit its reviewed candidate")
+		}
+	case before.HandshakeHostChange != nil && before.HandshakeHostChange.State == HandshakeHostCommitted && after.HandshakeHostChange == nil:
+		if !selectionChanged || after.HandshakeHost == nil || *after.HandshakeHost != before.HandshakeHostChange.Previous {
+			return transitionError("handshake-host rollback must restore its exact previous snapshot")
+		}
+	case before.HandshakeHostChange != nil && before.HandshakeHostChange.State == HandshakeHostCommitted && after.HandshakeHostChange != nil:
+		if after.HandshakeHostChange.State != HandshakeHostPrepared || selectionChanged || *after.HandshakeHost != before.HandshakeHostChange.Candidate || after.HandshakeHostChange.OperationID == before.HandshakeHostChange.OperationID {
+			return transitionError("a new handshake-host replacement may supersede only an expired committed snapshot")
+		}
+	default:
+		return transitionError("unsupported handshake-host replacement transition")
 	}
 	return nil
 }

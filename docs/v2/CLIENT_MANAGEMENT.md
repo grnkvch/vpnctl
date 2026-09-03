@@ -168,9 +168,14 @@ below:
 
 The sidecar contains only the output path, required mode, content SHA-256, and
 source generations. Both formats depend on the client credential generation;
-only Clash depends on client policy generation. Global state generation is
-provenance rather than a blanket invalidation trigger, so a preset-only edit
-marks Clash stale while the full-tunnel WireGuard artifact remains current.
+only Clash depends on client policy generation. When a client has an enabled
+restricted transport, Clash additionally depends on the authoritative
+handshake-host candidate ID and signed-list version; WireGuard never does.
+Global state generation is provenance rather than a blanket invalidation
+trigger, so a preset or handshake-host edit marks only the affected Clash
+artifact stale while the full-tunnel WireGuard artifact remains current.
+Pre-dependency Clash sidecars remain valid input but compare stale for an
+affected restricted client.
 `client show` performs this comparison without reading client secrets. A
 changed client-policy result also returns a `re_export_client` action and a
 copy-ready Clash export command; it never rewrites a profile already copied to

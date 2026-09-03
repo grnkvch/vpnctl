@@ -23,8 +23,9 @@ var (
 )
 
 // SourceGeneration identifies a versioned input used to render an artifact.
-// Policy and credential dependencies are kept separate in the manifest so a
-// planner can explain why an artifact became stale without exposing the input.
+// Policy, credential, and other configuration dependencies are kept separate
+// in the manifest so a planner can explain why an artifact became stale
+// without exposing the input.
 type SourceGeneration struct {
 	Kind       string `json:"kind"`
 	ID         string `json:"id"`
@@ -37,6 +38,7 @@ type ArtifactInput struct {
 	Path                  string
 	Mode                  fs.FileMode
 	Content               []byte
+	SourceGenerations     []SourceGeneration
 	PolicyGenerations     []SourceGeneration
 	CredentialGenerations []SourceGeneration
 }
@@ -51,6 +53,7 @@ type ArtifactRecord struct {
 	Path                  string             `json:"path"`
 	Mode                  string             `json:"mode"`
 	ContentSHA256         string             `json:"content_sha256"`
+	SourceGenerations     []SourceGeneration `json:"source_generations,omitempty"`
 	PolicyGenerations     []SourceGeneration `json:"policy_generations"`
 	CredentialGenerations []SourceGeneration `json:"credential_generations"`
 }
@@ -124,11 +127,16 @@ func BuildManifest(stateGeneration uint64, inputs []ArtifactInput) (ArtifactMani
 		if err != nil {
 			return ArtifactManifest{}, fmt.Errorf("artifact input %d credential generations: %w", index, err)
 		}
+		sources, err := canonicalOptionalGenerations(input.SourceGenerations)
+		if err != nil {
+			return ArtifactManifest{}, fmt.Errorf("artifact input %d source generations: %w", index, err)
+		}
 		hash := sha256.Sum256(input.Content)
 		manifest.Artifacts = append(manifest.Artifacts, ArtifactRecord{
 			Path:                  input.Path,
 			Mode:                  mode,
 			ContentSHA256:         hex.EncodeToString(hash[:]),
+			SourceGenerations:     sources,
 			PolicyGenerations:     policies,
 			CredentialGenerations: credentials,
 		})
@@ -184,6 +192,11 @@ func (artifact ArtifactRecord) validate() error {
 	}
 	if err := validateCanonicalGenerations(artifact.CredentialGenerations); err != nil {
 		return fmt.Errorf("credential generations: %w", err)
+	}
+	if artifact.SourceGenerations != nil {
+		if err := validateCanonicalGenerations(artifact.SourceGenerations); err != nil {
+			return fmt.Errorf("source generations: %w", err)
+		}
 	}
 	return nil
 }
@@ -372,6 +385,20 @@ func canonicalGenerations(values []SourceGeneration) ([]SourceGeneration, error)
 	return result, nil
 }
 
+// SourceGenerations was added as a backwards-compatible optional field to the
+// v1 manifest. A nil value therefore remains valid for existing sidecars;
+// producers use a non-empty canonical value when an artifact has a generic
+// configuration dependency.
+func canonicalOptionalGenerations(values []SourceGeneration) ([]SourceGeneration, error) {
+	if values == nil {
+		return nil, nil
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("must be omitted or contain at least one entry")
+	}
+	return canonicalGenerations(values)
+}
+
 func validateCanonicalGenerations(values []SourceGeneration) error {
 	if values == nil {
 		return fmt.Errorf("must be present")
@@ -422,7 +449,8 @@ func equalArtifactRecord(first, second ArtifactRecord) bool {
 	if first.Path != second.Path || first.Mode != second.Mode || first.ContentSHA256 != second.ContentSHA256 {
 		return false
 	}
-	return equalGenerations(first.PolicyGenerations, second.PolicyGenerations) &&
+	return equalGenerations(first.SourceGenerations, second.SourceGenerations) &&
+		equalGenerations(first.PolicyGenerations, second.PolicyGenerations) &&
 		equalGenerations(first.CredentialGenerations, second.CredentialGenerations)
 }
 

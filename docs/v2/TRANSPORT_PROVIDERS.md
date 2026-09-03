@@ -3,8 +3,9 @@
 Task 8.1 fixes the provider-neutral boundary used by both `standard` and
 `restricted`; task 8.7 adds the read-only-state, non-mutating transport-test
 orchestration on that boundary; task 8.8 adds the confirmed make-before-break
-switch workflow. Concrete WireGuard and Mihomo/ShadowTLS providers are
-documented separately.
+switch workflow; task 8.9 reuses the restricted provider for explicit
+node-local handshake-host recovery. Concrete WireGuard and Mihomo/ShadowTLS
+providers are documented separately.
 
 ## Provider contract
 

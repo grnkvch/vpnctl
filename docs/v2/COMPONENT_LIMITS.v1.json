@@ -38,7 +38,7 @@
     },
     {
       "path": "docs/v2/CLI_CONTRACT.md",
-      "sha256": "b3a3732396b33dbece2a9540617ac30cada93b1a64d27ce92afd48fae4c3e441"
+      "sha256": "b94248c1671117d498ed6f9ffc684bc1d800c71a2cdba37c6c6d439f974c509a"
     }
   ],
   "decision_records": [
@@ -166,6 +166,7 @@
       "handshake_host_key_id": "sha256:9e061dd425ff7766f826911dec3502d6b8f1494705432da049ffed3c0fbe20bc",
       "handshake_host_probe_timeout_ms": 3000,
       "handshake_host_maximum_candidates": 8,
+      "handshake_host_replacement_rollback_seconds": 86400,
       "initial_candidates": [
         "www.microsoft.com",
         "www.apple.com",
