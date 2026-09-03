@@ -482,7 +482,7 @@ func handshakeHostGatewayState(t *testing.T, created time.Time) model.State {
 			restrictedTransportFixture(model.TargetClient, lifecycleClientID, model.TransportStandby, 1, "www.microsoft.com"),
 		},
 		Exposes: []model.Expose{}, Certificates: []model.Certificate{}, Operations: []model.Operation{},
-		Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: standardComponentManifest(),
+		Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Invites: []model.Invite{}, Components: standardComponentManifest(),
 	}
 	state.Components.Components = append(state.Components.Components, restrictedComponentPin())
 	if err := state.Validate(); err != nil {

@@ -292,7 +292,7 @@ func controllerTestState(t *testing.T, role model.Role) (store.Paths, *store.Sta
 		Host:          host,
 		Nodes:         []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
-		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{},
+		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Invites: []model.Invite{},
 		Components: model.ComponentManifest{
 			SchemaVersion: model.ComponentManifestSchemaVersion, ManifestVersion: 1, VPNCTLVersion: "v2.0.0-dev",
 			ControlProtocols: []string{"1.0"}, StateSchemaMinimum: 1, StateSchemaMaximum: 1,

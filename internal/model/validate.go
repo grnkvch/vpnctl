@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -23,6 +24,7 @@ var (
 	candidateIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	errorCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,62}$`)
 	protocolPattern    = regexp.MustCompile(`^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$`)
+	inviteIDPattern    = regexp.MustCompile(`^inv-[A-Z2-7]{6}$`)
 )
 
 func (state State) Validate() error {
@@ -60,8 +62,28 @@ func (state State) Validate() error {
 			return wrap("enrollment_signing_identity", err)
 		}
 	}
-	if state.Nodes == nil || state.Clients == nil || state.Presets == nil || state.Policies == nil || state.Transports == nil || state.Exposes == nil || state.Certificates == nil || state.Operations == nil || state.Logging == nil || state.Backups == nil {
+	if state.Invites == nil || state.Nodes == nil || state.Clients == nil || state.Presets == nil || state.Policies == nil || state.Transports == nil || state.Exposes == nil || state.Certificates == nil || state.Operations == nil || state.Logging == nil || state.Backups == nil {
 		return invalid("state", "all resource collections must be present as JSON arrays")
+	}
+
+	inviteIDs := make(map[string]struct{}, len(state.Invites))
+	for index, invite := range state.Invites {
+		if err := invite.Validate(); err != nil {
+			return wrap(indexPath("invites", index), err)
+		}
+		if state.Host.Role != RoleGateway {
+			return invalid(indexPath("invites", index), "is gateway-only")
+		}
+		if state.EnrollmentIdentity == nil {
+			return invalid(indexPath("invites", index)+".enrollment_fingerprint", "requires an enrollment signing identity")
+		}
+		if invite.EnrollmentFingerprint != state.EnrollmentIdentity.Fingerprint {
+			return invalid(indexPath("invites", index)+".enrollment_fingerprint", "must match the stable gateway enrollment identity")
+		}
+		if _, duplicate := inviteIDs[invite.ID]; duplicate {
+			return invalid(indexPath("invites", index)+".id", "duplicates invite %s", invite.ID)
+		}
+		inviteIDs[invite.ID] = struct{}{}
 	}
 
 	nodes := make(map[string]Node, len(state.Nodes))
@@ -324,8 +346,8 @@ func (state State) Validate() error {
 		if len(state.Nodes) > 1 {
 			return invalid("nodes", "node host may contain at most one local node identity")
 		}
-		if len(state.Clients) != 0 || len(state.Presets) != 0 || len(state.Backups) != 0 {
-			return invalid("host.role", "node state cannot contain gateway client, preset, or backup collections")
+		if len(state.Invites) != 0 || len(state.Clients) != 0 || len(state.Presets) != 0 || len(state.Backups) != 0 {
+			return invalid("host.role", "node state cannot contain gateway client, invite, preset, or backup collections")
 		}
 		if len(state.Nodes) == 1 && state.Nodes[0].Gateway == nil {
 			return invalid("nodes[0].gateway", "joined local node requires gateway trust")
@@ -847,6 +869,88 @@ func (identity EnrollmentIdentity) Validate() error {
 		return invalid("generation", "must be positive")
 	}
 	return validateTime("created_at", identity.CreatedAt)
+}
+
+func (invite Invite) Validate() error {
+	if err := validateSchema("invite", invite.SchemaVersion, ResourceSchemaVersion); err != nil {
+		return err
+	}
+	if !inviteIDPattern.MatchString(invite.ID) {
+		return invalid("id", "must be inv- followed by six upper-case base32 characters")
+	}
+	if err := validateName("node_name", invite.NodeName); err != nil {
+		return err
+	}
+	if !protocolPattern.MatchString(invite.ControlProtocol) {
+		return invalid("control_protocol", "must be canonical major.minor")
+	}
+	if err := validateInviteEndpoint(invite.GatewayEndpoint); err != nil {
+		return err
+	}
+	if err := validateFingerprint("enrollment_fingerprint", invite.EnrollmentFingerprint); err != nil {
+		return err
+	}
+	if err := validateHash("secret_hash", invite.SecretHash); err != nil {
+		return err
+	}
+	if err := validateTime("issued_at", invite.IssuedAt); err != nil {
+		return err
+	}
+	if err := validateTime("expires_at", invite.ExpiresAt); err != nil {
+		return err
+	}
+	if !invite.ExpiresAt.Equal(invite.IssuedAt.Add(InviteTTL)) {
+		return invalid("expires_at", "must be exactly 15 minutes after issued_at")
+	}
+	switch invite.State {
+	case InviteActive:
+		if invite.CancelledAt != nil || invite.ConsumedAt != nil {
+			return invalid("state", "active invite cannot have a terminal timestamp")
+		}
+	case InviteCancelled:
+		if invite.CancelledAt == nil || invite.ConsumedAt != nil {
+			return invalid("state", "cancelled invite requires only cancelled_at")
+		}
+		if err := validateInviteTerminalTime("cancelled_at", *invite.CancelledAt, invite.IssuedAt); err != nil {
+			return err
+		}
+	case InviteConsumed:
+		if invite.ConsumedAt == nil || invite.CancelledAt != nil {
+			return invalid("state", "consumed invite requires only consumed_at")
+		}
+		if err := validateInviteTerminalTime("consumed_at", *invite.ConsumedAt, invite.IssuedAt); err != nil {
+			return err
+		}
+		if !invite.ConsumedAt.Before(invite.ExpiresAt) {
+			return invalid("consumed_at", "must precede invite expiry")
+		}
+	default:
+		return invalid("state", "unsupported value %q", invite.State)
+	}
+	return nil
+}
+
+func validateInviteEndpoint(value string) error {
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+		endpoint.Port() != "" || endpoint.Path != "/.well-known/vpnctl/enroll" {
+		return invalid("gateway_endpoint", "must be a canonical IP-only HTTPS enrollment endpoint")
+	}
+	address, err := netip.ParseAddr(endpoint.Hostname())
+	if err != nil || !address.Is4() || address.String() != endpoint.Hostname() {
+		return invalid("gateway_endpoint", "must use a canonical IPv4 host")
+	}
+	return nil
+}
+
+func validateInviteTerminalTime(path string, value, issuedAt time.Time) error {
+	if err := validateTime(path, value); err != nil {
+		return err
+	}
+	if value.Before(issuedAt) {
+		return invalid(path, "must not precede issued_at")
+	}
+	return nil
 }
 
 func (operation Operation) Validate() error {

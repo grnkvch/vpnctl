@@ -147,6 +147,9 @@ func ValidateTransition(before, after State) error {
 	if err := validateClientTransitions(before, after); err != nil {
 		return err
 	}
+	if err := validateInviteTransitions(before.Invites, after.Invites); err != nil {
+		return err
+	}
 	if err := validateVersionedTransitions("preset", presetsByName(before.Presets), presetsByName(after.Presets)); err != nil {
 		return err
 	}
@@ -172,6 +175,46 @@ func ValidateTransition(before, after State) error {
 	}
 	if err := validateStableRecordIdentities(before, after); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateInviteTransitions(before, after []Invite) error {
+	previous := make(map[string]Invite, len(before))
+	for _, invite := range before {
+		previous[invite.ID] = invite
+	}
+	current := make(map[string]struct{}, len(after))
+	for _, invite := range after {
+		current[invite.ID] = struct{}{}
+		old, exists := previous[invite.ID]
+		if !exists {
+			if invite.State != InviteActive || invite.CancelledAt != nil || invite.ConsumedAt != nil {
+				return transitionError("new invite %s must start active", invite.ID)
+			}
+			continue
+		}
+		if old.SchemaVersion != invite.SchemaVersion || old.ID != invite.ID || old.NodeName != invite.NodeName ||
+			old.ControlProtocol != invite.ControlProtocol || old.GatewayEndpoint != invite.GatewayEndpoint ||
+			old.EnrollmentFingerprint != invite.EnrollmentFingerprint || old.SecretHash != invite.SecretHash ||
+			!old.IssuedAt.Equal(invite.IssuedAt) || !old.ExpiresAt.Equal(invite.ExpiresAt) {
+			return transitionError("invite %s identity and secret metadata are immutable", invite.ID)
+		}
+		switch old.State {
+		case InviteActive:
+			if invite.State != InviteActive && invite.State != InviteCancelled && invite.State != InviteConsumed {
+				return transitionError("invite %s cannot move from %s to %s", invite.ID, old.State, invite.State)
+			}
+		case InviteCancelled, InviteConsumed:
+			if !reflect.DeepEqual(old, invite) {
+				return transitionError("terminal invite %s is immutable", invite.ID)
+			}
+		}
+	}
+	for _, invite := range before {
+		if _, exists := current[invite.ID]; !exists {
+			return transitionError("invite %s cannot be removed", invite.ID)
+		}
 	}
 	return nil
 }

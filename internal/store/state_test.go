@@ -391,6 +391,7 @@ func testState(generation uint64) model.State {
 		Operations:   []model.Operation{},
 		Logging:      []model.LoggingSession{},
 		Backups:      []model.Backup{},
+		Invites:      []model.Invite{},
 		Components: model.ComponentManifest{
 			SchemaVersion:            model.ComponentManifestSchemaVersion,
 			ManifestVersion:          1,

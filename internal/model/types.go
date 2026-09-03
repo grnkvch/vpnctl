@@ -6,6 +6,7 @@ const (
 	StateSchemaVersion             = 1
 	ResourceSchemaVersion          = 1
 	ComponentManifestSchemaVersion = 1
+	InviteTTL                      = 15 * time.Minute
 )
 
 type Role string
@@ -171,6 +172,14 @@ const (
 	BackupComplete BackupState = "complete"
 )
 
+type InviteState string
+
+const (
+	InviteActive    InviteState = "active"
+	InviteCancelled InviteState = "cancelled"
+	InviteConsumed  InviteState = "consumed"
+)
+
 type SecretRef string
 
 type State struct {
@@ -180,6 +189,7 @@ type State struct {
 	HandshakeHost       *HandshakeHost       `json:"handshake_host,omitempty"`
 	HandshakeHostChange *HandshakeHostChange `json:"handshake_host_change,omitempty"`
 	EnrollmentIdentity  *EnrollmentIdentity  `json:"enrollment_signing_identity,omitempty"`
+	Invites             []Invite             `json:"invites"`
 	Nodes               []Node               `json:"nodes"`
 	Clients             []Client             `json:"clients"`
 	Presets             []Preset             `json:"presets"`
@@ -191,6 +201,24 @@ type State struct {
 	Logging             []LoggingSession     `json:"logging"`
 	Backups             []Backup             `json:"backups"`
 	Components          ComponentManifest    `json:"components"`
+}
+
+// Invite is the gateway-authoritative, non-secret half of a one-time node
+// enrollment token. SecretHash is a one-way digest; plaintext token material
+// is never persisted in State.
+type Invite struct {
+	SchemaVersion         int         `json:"schema_version"`
+	ID                    string      `json:"id"`
+	NodeName              string      `json:"node_name"`
+	ControlProtocol       string      `json:"control_protocol"`
+	GatewayEndpoint       string      `json:"gateway_endpoint"`
+	EnrollmentFingerprint string      `json:"enrollment_fingerprint"`
+	SecretHash            string      `json:"secret_hash"`
+	State                 InviteState `json:"state"`
+	IssuedAt              time.Time   `json:"issued_at"`
+	ExpiresAt             time.Time   `json:"expires_at"`
+	CancelledAt           *time.Time  `json:"cancelled_at,omitempty"`
+	ConsumedAt            *time.Time  `json:"consumed_at,omitempty"`
 }
 
 // HandshakeHost is the single restricted-transport TLS disguise selected from

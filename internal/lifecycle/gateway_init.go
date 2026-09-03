@@ -467,7 +467,7 @@ func initialGatewayState(hostID string, initializedAt time.Time, network linuxpl
 			PublicIPv4: network.PublicIPv4, ExternalInterface: network.ExternalInterface, SSHPort: sshPort,
 			ClientCIDR: network.ClientCIDR, NodeCIDR: network.NodeCIDR,
 		},
-		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
+		Invites: []model.Invite{}, Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
 		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Components: manifest,
 		HandshakeHost: &selection,

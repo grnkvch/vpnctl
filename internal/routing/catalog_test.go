@@ -272,7 +272,7 @@ func catalogGatewayState(presets []model.Preset, assigned bool) model.State {
 		},
 		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: append(make([]model.Preset, 0, len(presets)), presets...), Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{}, Operations: []model.Operation{},
-		Logging: []model.LoggingSession{}, Backups: []model.Backup{},
+		Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Invites: []model.Invite{},
 		Components: model.ComponentManifest{
 			SchemaVersion: model.ComponentManifestSchemaVersion, ManifestVersion: 1, VPNCTLVersion: "v2.0.0-dev",
 			ControlProtocols: []string{"1.0"}, StateSchemaMinimum: model.StateSchemaVersion, StateSchemaMaximum: model.StateSchemaVersion,

@@ -209,7 +209,7 @@ func standardGatewayState() model.State {
 		},
 		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
-		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{},
+		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{}, Invites: []model.Invite{},
 		Components: standardComponentManifest(),
 	}
 	for index := 0; index < 5; index++ {

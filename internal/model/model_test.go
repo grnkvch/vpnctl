@@ -79,6 +79,20 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "missing explicit public ip", mutate: func(state *State) { state.Host.PublicIPv4 = "" }, want: "public_ipv4"},
 		{name: "overlapping pools", mutate: func(state *State) { state.Host.NodeCIDR = state.Host.ClientCIDR }, want: "overlaps"},
 		{name: "missing root collection", mutate: func(state *State) { state.Logging = nil }, want: "collections"},
+		{name: "missing invite collection", mutate: func(state *State) { state.Invites = nil }, want: "collections"},
+		{name: "invalid invite endpoint", mutate: func(state *State) {
+			state.Invites = append(state.Invites, validInvite(state))
+			state.Invites[0].GatewayEndpoint = "https://gateway.example/.well-known/vpnctl/enroll"
+		}, want: "canonical IPv4 host"},
+		{name: "invalid invite ttl", mutate: func(state *State) {
+			state.Invites = append(state.Invites, validInvite(state))
+			state.Invites[0].ExpiresAt = state.Invites[0].ExpiresAt.Add(time.Second)
+		}, want: "exactly 15 minutes"},
+		{name: "active invite has cancellation time", mutate: func(state *State) {
+			state.Invites = append(state.Invites, validInvite(state))
+			cancelled := state.Invites[0].IssuedAt.Add(time.Minute)
+			state.Invites[0].CancelledAt = &cancelled
+		}, want: "active invite cannot"},
 		{name: "missing authoritative handshake host", mutate: func(state *State) { state.HandshakeHost = nil }, want: "requires an authoritative handshake-host selection"},
 		{name: "handshake list differs from manifest", mutate: func(state *State) { state.HandshakeHost.ListVersion++ }, want: "must match the installed component manifest"},
 		{name: "invalid handshake candidate id", mutate: func(state *State) { state.HandshakeHost.CandidateID = "Microsoft" }, want: "candidate_id"},
@@ -456,6 +470,7 @@ func gatewayState() State {
 			Generation:    1,
 			CreatedAt:     created,
 		},
+		Invites: []Invite{},
 		Nodes: []Node{{
 			SchemaVersion:        ResourceSchemaVersion,
 			ID:                   nodeID,
@@ -590,6 +605,16 @@ func gatewayTrust() *GatewayTrust {
 		EnrollmentFingerprint:      fingerprint("d"),
 		ControlCAFingerprints:      []string{fingerprint("e")},
 		LastKnownGatewayGeneration: 7,
+	}
+}
+
+func validInvite(state *State) Invite {
+	issuedAt := utc(2026, time.September, 3, 10, 0)
+	return Invite{
+		SchemaVersion: ResourceSchemaVersion, ID: "inv-ABC234", NodeName: "invited-node",
+		ControlProtocol: state.Components.ControlProtocols[0], GatewayEndpoint: "https://" + state.Host.PublicIPv4 + "/.well-known/vpnctl/enroll",
+		EnrollmentFingerprint: state.EnrollmentIdentity.Fingerprint, SecretHash: digest("7"), State: InviteActive,
+		IssuedAt: issuedAt, ExpiresAt: issuedAt.Add(InviteTTL),
 	}
 }
 
