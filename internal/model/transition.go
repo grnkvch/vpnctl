@@ -569,8 +569,27 @@ func validateStableRecordIdentities(before, after State) error {
 	}
 	for _, session := range after.Logging {
 		old, exists := logging[session.ID]
-		if exists && (old.Scope != session.Scope || !old.StartedAt.Equal(session.StartedAt)) {
+		if !exists {
+			if session.State != LogActive {
+				return transitionError("new logging session %s must start active", session.ID)
+			}
+			continue
+		}
+		if old.Scope != session.Scope || old.Level != session.Level || old.Destination != session.Destination ||
+			old.FilePath != session.FilePath || !old.StartedAt.Equal(session.StartedAt) || !old.ExpiresAt.Equal(session.ExpiresAt) {
 			return transitionError("logging session %s identity fields are immutable", session.ID)
+		}
+		if old.State != session.State && (old.State != LogActive || (session.State != LogExpired && session.State != LogDisabled)) {
+			return transitionError("logging session %s cannot move from %s to %s", session.ID, old.State, session.State)
+		}
+	}
+	currentLogging := make(map[string]struct{}, len(after.Logging))
+	for _, session := range after.Logging {
+		currentLogging[session.ID] = struct{}{}
+	}
+	for _, session := range before.Logging {
+		if _, exists := currentLogging[session.ID]; !exists && session.State == LogActive {
+			return transitionError("active logging session %s cannot be removed", session.ID)
 		}
 	}
 

@@ -50,6 +50,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isCertificateInvocation(args) {
 		return executeCertificate(args, stdout, stderr)
 	}
+	if isLoggingInvocation(args) {
+		return executeLogging(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -887,6 +890,7 @@ Commands:
   confirm    Confirm a lockout-risk transaction from a new SSH session
   dns        Show or change role-owned IPv4 DNS upstreams
   cert       Inspect or export the gateway public ingress certificate
+  log        Inspect or temporarily enable expanded local logging
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets

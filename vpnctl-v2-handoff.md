@@ -1474,7 +1474,7 @@ vpnctl doctor --probe-url <https-url>
 
 ```text
 vpnctl log status
-vpnctl log enable <scope> --level <level> --for <duration> [--file <path>]
+vpnctl log enable <scope> --level <level> --for <duration> [--file]
 vpnctl log disable <scope|all>
 ```
 
@@ -1485,8 +1485,12 @@ vpnctl log disable <scope|all>
   restart как абсолютное время окончания. `log status` показывает только
   active opt-ins и remaining time.
 - Default destination opt-in session — journald. Дополнительный file требует
-  отдельного `--file`, создаётся с mode `0600` и bounded size rotation. Remote
-  log destinations отсутствуют.
+  отдельного boolean-флага `--file`; произвольный path не принимается. vpnctl
+  использует `/var/log/vpnctl/<scope>.log`, mode `0600`, предел 8 MiB для
+  текущего файла и три архива. Один record ограничен 64 KiB. Remote log
+  destinations отсутствуют.
+- Одновременно разрешены разные explicit scopes. Повторный active scope
+  отклоняется, а `all` взаимно исключается с любым другим active scope.
 - Secrets, authorization headers, request/response bodies и webhook paths не
   логируются даже в diagnostic mode.
 - Telemetry и автоматические remote calls отсутствуют.

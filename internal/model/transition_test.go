@@ -406,6 +406,70 @@ func TestRecoveryInviteBindingIsImmutableAndConsumptionIsTerminal(t *testing.T) 
 	}
 }
 
+func TestLoggingSessionLifecycleIsAppendOnlyAndTerminal(t *testing.T) {
+	t.Parallel()
+
+	for _, terminal := range []LogState{LogExpired, LogDisabled} {
+		before := gatewayState()
+		after := cloneState(t, before)
+		after.Generation++
+		after.Logging[0].State = terminal
+		if err := ValidateTransition(before, after); err != nil {
+			t.Fatalf("active -> %s error = %v", terminal, err)
+		}
+
+		reactivated := cloneState(t, after)
+		reactivated.Generation++
+		reactivated.Logging[0].State = LogActive
+		if err := ValidateTransition(after, reactivated); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("%s -> active error = %v", terminal, err)
+		}
+	}
+
+	before := gatewayState()
+	removed := cloneState(t, before)
+	removed.Generation++
+	removed.Logging = []LoggingSession{}
+	if err := ValidateTransition(before, removed); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("remove active logging error = %v", err)
+	}
+
+	for _, terminal := range []LogState{LogExpired, LogDisabled} {
+		before := gatewayState()
+		added := cloneState(t, before)
+		added.Generation++
+		added.Logging = append(added.Logging, LoggingSession{
+			SchemaVersion: ResourceSchemaVersion, ID: "99999999-9999-4999-8999-999999999999",
+			Scope: LogRouting, Level: LogInfo, Destination: LogToJournald, State: terminal,
+			StartedAt: before.Logging[0].StartedAt, ExpiresAt: before.Logging[0].ExpiresAt,
+		})
+		if err := ValidateTransition(before, added); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("new %s logging session error = %v", terminal, err)
+		}
+	}
+}
+
+func TestLoggingSessionConfigurationAndExpiryAreImmutable(t *testing.T) {
+	t.Parallel()
+
+	tests := []func(*LoggingSession){
+		func(session *LoggingSession) { session.Level = LogTrace },
+		func(session *LoggingSession) {
+			session.Destination, session.FilePath = LogToFile, "/var/log/vpnctl/dns.log"
+		},
+		func(session *LoggingSession) { session.ExpiresAt = session.ExpiresAt.Add(time.Second) },
+	}
+	for index, mutate := range tests {
+		before := gatewayState()
+		after := cloneState(t, before)
+		after.Generation++
+		mutate(&after.Logging[0])
+		if err := ValidateTransition(before, after); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("immutable logging mutation %d error = %v", index, err)
+		}
+	}
+}
+
 func TestGenerationOverflow(t *testing.T) {
 	t.Parallel()
 

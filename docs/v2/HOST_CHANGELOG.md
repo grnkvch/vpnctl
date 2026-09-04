@@ -2,6 +2,62 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — persisted temporary logging opt-ins
+
+### Planned reversible validation
+
+- Task 13.9 is source-only. Logging enable/disable will persist an absolute
+  expiration in authoritative state and publish a deterministic runtime view
+  containing only active sessions and the next expiry. Reconciliation after a
+  controller restart will use that stored timestamp; it will never extend an
+  opt-in or introduce a long-running node-side agent.
+- Expanded logging remains off with no active session. The default destination
+  is journald. An explicit file destination uses only a vpnctl-managed absolute
+  path, refuses symlinks/non-regular files or unsafe permissions, creates files
+  as `0600`, and applies fixed size/count rotation bounds. Remote destinations
+  and arbitrary file paths are not representable.
+- Tests use in-memory state/runtime adapters and files below `t.TempDir()`. They
+  perform no journal write, service action, timer installation, host file
+  creation, network operation, VM change, or provider call. Runtime timer/file
+  adapters are exercised only as pure configuration or temporary-file code;
+  repository rollback is limited to the task 13.9 commit and no host rollback
+  is required.
+- Source-level message redaction and canary scans across component logs remain
+  task 13.10. This task establishes the default-off lifecycle, safe destination
+  boundary, persistence, status, explicit disable, and restart-safe expiry on
+  which that enforcement will depend.
+
+### Acceptance
+
+- Logging sessions are append-only versioned state. Scope, level, destination,
+  file path, start, and absolute expiry are immutable; new records must start
+  active and can move only to `expired` or `disabled`. Active duplicate scopes
+  are invalid and `all` conflicts with every other active scope. Gateway
+  mutations use the existing serialized controller writer, while node commands
+  remain local and no resident node management agent was introduced.
+- `log enable` requires every accepted scope, level, and a whole-second positive
+  duration of at most one hour. Journald is the default; `--file` derives only
+  `/var/log/vpnctl/<scope>.log`. `log status` is passive and emits only effective
+  active sessions plus remaining seconds; `log disable <scope|all>` is
+  idempotent, explicit, and applies its off policy without re-enable rollback.
+- The effective policy filters at the persisted absolute deadline on every
+  load. A fresh manager before and at the original expiry proved that restart
+  neither extends the session nor requires a timer/agent to stop emissions;
+  reconciliation terminalizes elapsed records and is idempotent. Default-off
+  produces an empty policy without a state write or destination operation.
+- The only file writer uses `O_NOFOLLOW`, nonblocking regular-file inspection,
+  a mode-`0700` real direct parent, mode `0600`, 64 KiB records, an 8 MiB current
+  file, and exactly three bounded archives. Temporary-file tests covered
+  creation, repeated rotation, excess record refusal, unsafe mode, symlink
+  target/archive refusal, and preservation of foreign targets.
+- Five repeated focused package/regression suites, three focused race-detector
+  suites, complete uncached ordinary and race-detector suites, vet, the full Go
+  dependency graph, Bash/JSON syntax, formatting/diff checks, JSON Schema
+  regression, and strict OpenSpec validation passed at `125/156`. Tests touched
+  only in-memory adapters and auto-removed temporary directories; no real
+  journal, logging file, service, timer, host/VM, network, provider, credential,
+  or application resource was changed, so no host rollback remains.
+
 ## 2026-09-04 — explicit external doctor probe
 
 ### Planned reversible validation

@@ -104,6 +104,14 @@ The options column excludes the applicable global flags described above. `node o
 | `vpnctl log status` | `status-v1:log.status` | gateway/node | none | none | no | no | `sudo vpnctl log status` |
 | `vpnctl log enable <scope>` | `operation-v1:log.enable` | gateway/node | scope is `control`, `transport`, `routing`, `dns`, `tunnel`, `ingress`, or `all`; required `--level`, `--for`; optional `--file` | none | yes | no | `sudo vpnctl log enable ingress --level trace --for 10m` |
 | `vpnctl log disable <scope>` | `operation-v1:log.disable` | gateway/node | a logging scope or `all` | none | yes | no | `sudo vpnctl log disable all` |
+
+Logging is off unless at least one unexpired opt-in exists. `--for` is mandatory,
+uses whole-second Go duration syntax, and is capped at `1h`; the persisted
+absolute expiry is never recalculated after restart. `--file` selects the fixed
+vpnctl-managed `/var/log/vpnctl/<scope>.log` destination with mode `0600`, an
+8 MiB current-file bound, and three archives. Journald is the default and no
+remote destination is supported. An active `all` opt-in conflicts with every
+other active scope; otherwise different explicit scopes may coexist.
 | `vpnctl backup [archive-path]` | `artifact-v1:backup` | gateway | optional output path; passphrase and confirmation via hidden prompts | none | yes | no | `sudo vpnctl backup /srv/backups/vpnctl.backup` |
 | `vpnctl restore <archive-path>` | `operation-v1:restore` | all | required `--public-ip <IPv4>`; optional `--replace` on an initialized gateway; passphrase via hidden prompt | confirm | yes | no | `sudo vpnctl restore vpnctl.backup --public-ip 203.0.113.10` |
 | `vpnctl update [version]` | `operation-v1:update` | gateway/node | optional stable version; omitted means latest stable | confirm+typed-if-irreversible | yes | no | `sudo vpnctl update 2.1.0` |

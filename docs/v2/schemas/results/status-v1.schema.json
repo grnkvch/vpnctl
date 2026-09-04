@@ -177,7 +177,8 @@
         "level": { "enum": ["error", "info", "debug", "trace"] },
         "destination": { "enum": ["journald", "file"] },
         "started_at": { "type": "string", "format": "date-time" },
-        "expires_at": { "type": "string", "format": "date-time" }
+        "expires_at": { "type": "string", "format": "date-time" },
+        "remaining_seconds": { "type": "integer", "minimum": 0, "maximum": 3600 }
       }
     },
     "certificate": {

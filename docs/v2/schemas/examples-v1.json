@@ -1053,7 +1053,8 @@
         "data": {
           "role": "gateway",
           "overall": "healthy",
-          "generation": 1
+          "generation": 1,
+          "log_opt_ins": []
         }
       }
     },
@@ -1065,12 +1066,44 @@
         "command": "log.enable",
         "status": "ok",
         "exit_category": "success",
-        "resource_ids": {},
-        "warnings": [],
-        "requires_action": [],
+        "resource_ids": {
+          "logging_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        },
+        "warnings": [
+          {
+            "code": "expanded_logging_active",
+            "message": "Temporary expanded logging is enabled until its fixed expiration.",
+            "resource_ids": {
+              "logging_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+            }
+          }
+        ],
+        "requires_action": [
+          {
+            "code": "disable_logging_early",
+            "message": "Disable this logging scope when diagnostics are complete.",
+            "command": "sudo vpnctl log disable ingress",
+            "resource_ids": {
+              "logging_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+            }
+          }
+        ],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 2,
+          "scope": "ingress",
+          "dry_run": false,
+          "disabled_ids": [],
+          "expired_ids": [],
+          "enabled": {
+            "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "scope": "ingress",
+            "level": "trace",
+            "destination": "journald",
+            "started_at": "2026-09-04T12:00:00Z",
+            "expires_at": "2026-09-04T12:10:00Z",
+            "remaining_seconds": 600
+          }
         }
       }
     },
@@ -1086,8 +1119,14 @@
         "warnings": [],
         "requires_action": [],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 3,
+          "scope": "all",
+          "dry_run": false,
+          "disabled_ids": [
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+          ],
+          "expired_ids": []
         }
       }
     },

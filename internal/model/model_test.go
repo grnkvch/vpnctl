@@ -228,6 +228,20 @@ func TestStateValidationRejectsInvalidStates(t *testing.T) {
 		{name: "journald has a file path", mutate: func(state *State) {
 			state.Logging[0].FilePath = "/var/log/vpnctl.log"
 		}, want: "only for file destination"},
+		{name: "remote logging destination", mutate: func(state *State) {
+			state.Logging[0].Destination = LogDestination("remote")
+		}, want: "unsupported value"},
+		{name: "duplicate active logging scope", mutate: func(state *State) {
+			duplicate := state.Logging[0]
+			duplicate.ID = "99999999-9999-4999-8999-999999999999"
+			state.Logging = append(state.Logging, duplicate)
+		}, want: "duplicates active logging scope"},
+		{name: "all overlaps active logging scope", mutate: func(state *State) {
+			overlap := state.Logging[0]
+			overlap.ID = "99999999-9999-4999-8999-999999999999"
+			overlap.Scope = LogAll
+			state.Logging = append(state.Logging, overlap)
+		}, want: "overlaps"},
 		{name: "relative backup path", mutate: func(state *State) {
 			state.Backups[0].Path = "backup.v2"
 		}, want: "must be absolute"},

@@ -24,8 +24,34 @@
           "required": ["changed"],
           "properties": {
             "changed": { "type": "boolean" },
+            "dry_run": { "type": "boolean" },
             "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
             "generation": { "type": "integer", "minimum": 0 },
+            "scope": { "enum": ["control", "transport", "routing", "dns", "tunnel", "ingress", "all"] },
+            "disabled_ids": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "expired_ids": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "enabled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "scope", "level", "destination", "started_at", "expires_at", "remaining_seconds"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+                "scope": { "enum": ["control", "transport", "routing", "dns", "tunnel", "ingress", "all"] },
+                "level": { "enum": ["error", "info", "debug", "trace"] },
+                "destination": { "enum": ["journald", "file"] },
+                "started_at": { "type": "string", "format": "date-time" },
+                "expires_at": { "type": "string", "format": "date-time" },
+                "remaining_seconds": { "type": "integer", "minimum": 0, "maximum": 3600 }
+              }
+            },
             "repair_count": { "type": "integer", "minimum": 0 },
             "repairs": {
               "type": "array",

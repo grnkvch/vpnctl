@@ -368,6 +368,7 @@ func (state State) Validate() error {
 		return err
 	}
 	loggingIDs := make(map[string]struct{}, len(state.Logging))
+	activeLoggingScopes := make(map[LogScope]string)
 	for index, session := range state.Logging {
 		if err := session.Validate(); err != nil {
 			return wrap(indexPath("logging", index), err)
@@ -376,6 +377,19 @@ func (state State) Validate() error {
 			return invalid(indexPath("logging", index)+".id", "duplicates logging session %s", session.ID)
 		}
 		loggingIDs[session.ID] = struct{}{}
+		if session.State != LogActive {
+			continue
+		}
+		if prior, duplicate := activeLoggingScopes[session.Scope]; duplicate {
+			return invalid(indexPath("logging", index)+".scope", "duplicates active logging scope owned by session %s", prior)
+		}
+		if session.Scope == LogAll && len(activeLoggingScopes) != 0 {
+			return invalid(indexPath("logging", index)+".scope", "all overlaps another active logging scope")
+		}
+		if prior, overlaps := activeLoggingScopes[LogAll]; overlaps {
+			return invalid(indexPath("logging", index)+".scope", "overlaps active all scope owned by session %s", prior)
+		}
+		activeLoggingScopes[session.Scope] = session.ID
 	}
 	backupIDs := make(map[string]struct{}, len(state.Backups))
 	for index, backup := range state.Backups {

@@ -268,7 +268,7 @@ func (controller *Controller) applyPreparedMutation(state model.State, request c
 	err = prepared.Apply(applyContext)
 	cancelApply()
 	if err != nil {
-		return localFailureWithGeneration("runtime_apply_failed", "DNS runtime could not be activated", state.Generation)
+		return localFailureWithGeneration("runtime_apply_failed", "operation runtime could not be activated", state.Generation)
 	}
 	if err := controller.runtime.State.Save(state.Generation, prepared.Candidate); err != nil {
 		observed, loadErr := controller.runtime.State.Load()
