@@ -28,7 +28,8 @@ This journal records development-host mutations made while implementing and vali
   `vpnctl-v2-dns-spike-v1`, their exact paths/namespaces/units/nftables tables,
   and the DNS integration snapshot/restore boundary.
 - Pinned Mihomo archives must already exist and match both routing and DNS
-  manifests before either VM starts; no live gate may fetch during this run.
+  manifests before either VM starts; no live gate may fetch Mihomo during this
+  run.
   Each child gate captures foreign nftables/rules/routes/resolved state where
   applicable and rejects conflicts before mutation. Interrupted-run cleanup
   invokes only the corresponding uninstall/cleanup when the exact owner marker
@@ -36,6 +37,41 @@ This journal records development-host mutations made while implementing and vali
   left unchanged and rejected. Manual recovery is the same owner-checked child
   cleanup. Repository rollback for the harness-prep and final task commits is
   ordinary `git revert`.
+
+### Acceptance and completed rollback
+
+- The successful run used source commit
+  `fb28ace05643bd461a901ccbe3e87eaf0ed607e5`. Fourteen focused production
+  tests rejected invite and consumed-recovery replay without a second
+  mutation, non-mTLS and wrong-generation identities, malicious/stale/cross-
+  node mappings, symlink and unsafe-permission trees, raw secret output,
+  reserved firewall conflicts, corrupt release/provider bundles, wrong backup
+  passphrases, corrupt/truncated/appended backups, and invalid restore archives
+  before host mutation.
+- The native control gate independently proved TLS 1.3 mTLS, transcript replay
+  rejection, and authoritative credential-generation checks. The native
+  backup gate rejected authenticated header, record-order, ciphertext,
+  truncation, and appended-data corruption, left failed restore output absent,
+  and stayed within its minimum-host KDF/resource bounds. Go dependencies used
+  only pre-existing shared module entries plus `/tmp/vpnctl-go-mod`; the latter
+  is an ordinary disposable build cache excluded by this journal's policy.
+- The firewall namespace gate passed public/internal port scope, closed
+  UDP/443 and UDP/8443, private identity guard, lateral isolation, IPv6
+  fail-closed, atomic replacement, and byte-for-byte foreign-table retention.
+  The routing gate blocked static and resolved selected IPv6 TCP/UDP, never
+  failed selected TCP/UDP to direct across crash/restart, retained established
+  unrelated direct flows, and preserved foreign nftables/rules plus the root
+  namespace. The DNS gate observed zero selected direct-fallback queries and
+  zero upstream bypass queries during resolver loss, then restored the exact
+  original resolved, nftables, address, and route state.
+- Owner-checked cleanup removed every control, backup, firewall, routing, and
+  DNS path/process/unit/namespace/table; final absence checks passed and both
+  exact fixtures returned to their prior `Stopped` state. No public VPS,
+  device, Telegram, or provider state was touched. Stable acceptance is in
+  `test/v2lab/adversarial-e2e/manifest.json`; raw ignored evidence is at
+  `artifacts/v2lab/adversarial-e2e/run-20260904T233908Z/summary.json`.
+  Repository rollback is `git revert <task-16.7-commit>`; completed host
+  rollback requires no further action.
 
 ## 2026-09-05 — planned ingress and tunnel failure E2E
 

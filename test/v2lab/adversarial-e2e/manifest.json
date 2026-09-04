@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "automated-linux-adversarial",
+  "actual_deployment": "deferred-to-task-16.11",
+  "target": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64",
+    "vcpu": 1,
+    "memory_bytes": 536870912,
+    "disk_bytes": 10737418240
+  },
+  "identity": {
+    "invite_replay_rejected": true,
+    "recovery_replay_rejected": true,
+    "enrollment_transcript_replay_rejected": true,
+    "mtls_impersonation_rejected": true,
+    "stale_generation_rejected": true,
+    "malicious_tunnel_mapping_rejected": true
+  },
+  "filesystem_and_output": {
+    "symlink_attacks_rejected": true,
+    "unsafe_permissions_fail_closed": true,
+    "secret_redaction_enforced": true
+  },
+  "artifacts": {
+    "corrupt_release_bundle_rejected_before_mutation": true,
+    "wrong_backup_passphrase_rejected": true,
+    "corrupt_backup_rejected": true,
+    "failed_restore_output_absent": true
+  },
+  "network": {
+    "firewall_conflict_rejected_and_foreign_preserved": true,
+    "selected_ipv6_tcp_udp_fail_closed": true,
+    "selected_tcp_udp_never_fail_direct": true,
+    "dns_selected_direct_fallback_queries": 0,
+    "dns_resolver_loss_bypass_queries": 0,
+    "foreign_network_resources_preserved": true
+  },
+  "providers": {
+    "control_native": true,
+    "backup_native": true,
+    "firewall_namespace_native": true,
+    "routing_native": true,
+    "dns_native": true
+  },
+  "cleanup": {
+    "owner_scoped": true,
+    "temporary_resources_absent": true,
+    "fixtures_restored_stopped": true
+  }
+}
