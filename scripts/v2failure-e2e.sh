@@ -285,8 +285,7 @@ verify() {
   run_root="$artifact_root/run-$stamp"
   tunnel_evidence="$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.6-$stamp"
   ingress_evidence="$repository_root/artifacts/v2lab/ingress-release-gate/task-16.6-$stamp"
-  umask 077
-  mkdir -p "$run_root"
+  (umask 077; mkdir -p "$run_root")
 
   assert_cached_archive "$repository_root/test/v2lab/tunnel/manifest.json" '.frp'
   assert_cached_archive "$repository_root/test/v2lab/restricted/manifest.json" '.mihomo'
