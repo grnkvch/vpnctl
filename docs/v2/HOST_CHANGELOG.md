@@ -2,6 +2,83 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned standalone v1 migration orchestration
+
+### Planned reversible implementation
+
+- Task 15.4 is source-only on this development host. It will add a separate
+  one-time migration executable and lifecycle orchestration; no production
+  `/etc/vpnctl`, `/var/lib/vpnctl`, `/run/vpnctl`, v1 workspace, UFW/nftables,
+  WireGuard, service, route, sysctl, swap, gateway, node, or client will be
+  changed while implementing or testing it.
+- Dry-run will perform the bounded v1 inspection, complete compatibility
+  analysis, signed local v2 bundle verification, and deterministic phase-plan
+  rendering without creating a maintenance directory, staged v2 tree,
+  operation journal, role files, watchdog transaction, or firewall change.
+- Apply will require a compatible report and explicit maintenance root, take a
+  no-follow root-only snapshot before mutation, persist an atomic phase journal,
+  install the verified gateway role from the local bundle, publish the already
+  validated converted state, translate only the exact inspected v1 UFW
+  WireGuard/verified-SSH ownership, and activate v2 networking through the
+  existing independent watchdog boundary before validating retained clients.
+- Every phase will carry a stable input fingerprint and idempotent completion
+  record. A repeated invocation with identical inputs will resume after the
+  last committed phase; changed inputs or ambiguous/foreign UFW ownership will
+  stop before mutation. Fault-injection tests will interrupt each boundary and
+  prove safe resume without duplicate installation, snapshot, activation, or
+  client-validation effects.
+- Tests will use only `t.TempDir()` host/workspace/bundle fixtures and fake
+  role, firewall, watchdog, activation, and client-validation adapters.
+  Temporary roots are disposable; repository rollback is limited to reverting
+  the future task 15.4 commit. The retained production rollback package and its
+  explicit acceptance/removal workflow remain task 15.5.
+
+### Result
+
+- Added the separate `vpnctl-v1-migrate` executable plus the thin
+  `scripts/migrate-v1-to-v2.sh` launcher; no command was added to the permanent
+  vpnctl CLI registry. It requires an explicit signed local bundle, public
+  IPv4, verified SSH listener, reviewed `--dry-run`, and explicit `--yes` for
+  the accepted maintenance downtime.
+- The resumable journal now binds the release manifest, private v1 source
+  fingerprint, selected handshake host, original known-UFW state, converted
+  state, maintenance snapshot, watchdog transaction, client validation, and
+  strictly ordered completed phases. Changed inputs/source ownership stop with
+  a conflict; a UFW disable interrupted after its effect is recognized only
+  after the new network was confirmed.
+- The root-only maintenance snapshot preserves the complete v1 workspace tree
+  and inspected WireGuard/sysctl/UFW files with source modes, per-file hashes,
+  an aggregate hash, bounded file/byte counts, atomic publication, exact owner
+  markers, and tamper/symlink/foreign-incomplete-directory refusal. Repeated
+  creation verifies and reuses the same snapshot.
+- Gateway role setup preserves the v1 WireGuard identity and client
+  identities/keys/addresses, provisions the new control/public identities,
+  renders all role configs, installs only gateway bundle components, publishes
+  validated state, stops/disables the old WireGuard unit during the accepted
+  window, and installs role/watchdog units idempotently.
+- Network activation persists its watchdog transaction reference between the
+  durable rollback snapshot and independent timer start. Re-entry restarts the
+  same timer before mutation, atomically replaces only a previously absent
+  `inet/vpnctl`, requires the ordinary new-SSH `vpnctl confirm` flow, and keeps
+  UFW enabled until confirmation. Known UFW is disabled only when rules still
+  match preflight and the disabled result is re-inspected; retained client
+  identity/address/key-pair/profile metadata is then validated.
+- Fault injection covers every effect-before-journal boundary, watchdog
+  rollback, pre-confirmation UFW drift, changed inputs, prepared-hook crash
+  windows, snapshot tampering/foreign ownership, role setup replay, UFW replay,
+  and owned-firewall replay. Twenty focused repetitions, three focused race
+  repetitions, full ordinary and race suites, vet, package/dependency checks,
+  shell syntax, formatting, and diff checks passed. One initial full-suite run
+  observed the existing timing-sensitive controller-outage assertion; the
+  unchanged complete rerun and full race run passed.
+- A static Linux/amd64 migrator was built successfully at the exact temporary
+  path `/private/tmp/vpnctl-v1-migrate-linux-amd64.check` with SHA-256
+  `3454a6ab8448f96ab1384508231f768d2ea34d230505329022e42696a1e703d3`,
+  verified as an x86-64 ELF, and removed. No production package, path, unit,
+  process, listener, network state, UFW rule, WireGuard state, VPS, gateway,
+  node, or client was changed. Source rollback is the task 15.4 commit; the
+  runtime rollback/acceptance package remains task 15.5.
+
 ## 2026-09-04 — planned v1 migration compatibility and impact report
 
 ### Planned reversible implementation

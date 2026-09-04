@@ -155,6 +155,8 @@ type V1InspectionReport struct {
 type V1Inspection struct {
 	Report V1InspectionReport
 
+	workspaceRoot   string
+	systemRoot      string
 	state           v1state.State
 	rulesets        map[string]v1state.Ruleset
 	privateKeys     map[string][]byte
@@ -195,6 +197,8 @@ func (inspection *V1Inspection) Destroy() {
 	inspection.systemWireGuard = nil
 	inspection.rulesets = nil
 	inspection.state = v1state.State{}
+	inspection.workspaceRoot = ""
+	inspection.systemRoot = ""
 	inspection.destroyed = true
 }
 
@@ -266,6 +270,7 @@ func (inspector *V1InstallationInspector) Inspect(ctx context.Context) (V1Inspec
 			Issues: []V1InspectionIssue{},
 		},
 		rulesets: map[string]v1state.Ruleset{}, privateKeys: map[string][]byte{}, generated: map[string][]byte{},
+		workspaceRoot: inspector.workspaceRoot, systemRoot: inspector.systemRoot,
 	}
 	present, err := v1RealDirectory(inspector.stateRoot)
 	if err != nil {

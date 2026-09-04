@@ -66,6 +66,96 @@ func TestWatchdogArmPersistsSnapshotBeforeStartingTimer(t *testing.T) {
 	}
 }
 
+func TestWatchdogArmPreparedHookRunsDurablyBeforeTimer(t *testing.T) {
+	t.Parallel()
+
+	paths := testWatchdogPaths(t)
+	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
+	supervisor := &fakeWatchdogSupervisor{}
+	watchdog, err := NewWatchdog(paths, network, supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 4, 18, 0, 0, 0, time.UTC)}
+	watchdog.newID = func() (string, error) { return "fw-H00K01", nil }
+	hookCalled := false
+	supervisor.onStart = func(string) error {
+		if !hookCalled {
+			return errors.New("timer started before the prepared hook")
+		}
+		return nil
+	}
+	transaction, err := watchdog.ArmWithPreparedHook(context.Background(), WatchdogArmInput{AllowedSSHPort: 22}, func(transaction WatchdogTransaction) error {
+		if _, err := watchdog.store.Load(transaction.ID); err != nil {
+			return err
+		}
+		hookCalled = true
+		return nil
+	})
+	if err != nil || !hookCalled || !reflect.DeepEqual(supervisor.started, []string{transaction.ID}) {
+		t.Fatalf("prepared arm = %+v, hook=%t, timers=%v, err=%v", transaction, hookCalled, supervisor.started, err)
+	}
+}
+
+func TestWatchdogArmPreparedHookFailureNeverStartsTimer(t *testing.T) {
+	t.Parallel()
+
+	paths := testWatchdogPaths(t)
+	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
+	supervisor := &fakeWatchdogSupervisor{}
+	watchdog, _ := NewWatchdog(paths, network, supervisor)
+	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 4, 18, 0, 0, 0, time.UTC)}
+	watchdog.newID = func() (string, error) { return "fw-H00K02", nil }
+	_, err := watchdog.ArmWithPreparedHook(context.Background(), WatchdogArmInput{AllowedSSHPort: 22}, func(transaction WatchdogTransaction) error {
+		if _, loadErr := watchdog.store.Load(transaction.ID); loadErr != nil {
+			return loadErr
+		}
+		return errors.New("injected intent write failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected intent") || len(supervisor.started) != 0 {
+		t.Fatalf("prepared hook failure error=%v timers=%v", err, supervisor.started)
+	}
+}
+
+func TestWatchdogStoreStatusFollowsDurableMarkers(t *testing.T) {
+	paths := testWatchdogPaths(t)
+	network := &fakeWatchdogNetwork{snapshot: testNetworkSnapshot()}
+	supervisor := &fakeWatchdogSupervisor{}
+	watchdog, err := NewWatchdog(paths, network, supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchdog.clock = fixedWatchdogClock{now: time.Date(2026, 9, 4, 18, 0, 0, 0, time.UTC)}
+	transaction, err := watchdog.Arm(context.Background(), WatchdogArmInput{AllowedSSHPort: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := watchdog.store.Status(transaction.ID); err != nil || status != WatchdogStatusArmed {
+		t.Fatalf("armed status = %q, %v", status, err)
+	}
+	activation := WatchdogActivation{
+		TransactionID: transaction.ID, ActivatedAt: watchdog.clock.Now(),
+		SessionBoundary: linuxplatform.MonotonicBoundary{BootID: "11111111-1111-1111-1111-111111111111", MonotonicNanos: 10},
+	}
+	if err := watchdog.store.MarkActivated(transaction.ID, activation); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := watchdog.store.Status(transaction.ID); err != nil || status != WatchdogStatusActive {
+		t.Fatalf("active status = %q, %v", status, err)
+	}
+	if _, err := watchdog.store.Commit(context.Background(), transaction.ID, watchdog.clock.Now(), func(WatchdogTransaction, WatchdogActivation) (linuxplatform.SSHSessionProof, error) {
+		return linuxplatform.SSHSessionProof{
+			Connection: linuxplatform.SSHConnection{ServerPort: 22}, BootID: activation.SessionBoundary.BootID,
+			StartedMonotonicNanos: 11, ObservedMonotonicNanos: 12,
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := watchdog.store.Status(transaction.ID); err != nil || status != WatchdogStatusCommitted {
+		t.Fatalf("committed status = %q, %v", status, err)
+	}
+}
+
 func TestWatchdogArmNeverStartsTimerAfterSnapshotFailure(t *testing.T) {
 	t.Parallel()
 

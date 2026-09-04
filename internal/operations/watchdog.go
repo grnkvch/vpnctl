@@ -88,6 +88,15 @@ type WatchdogConfirmation struct {
 	TimerStopped  bool
 }
 
+type WatchdogTransactionStatus string
+
+const (
+	WatchdogStatusArmed      WatchdogTransactionStatus = "armed"
+	WatchdogStatusActive     WatchdogTransactionStatus = "active"
+	WatchdogStatusCommitted  WatchdogTransactionStatus = "committed"
+	WatchdogStatusRolledBack WatchdogTransactionStatus = "rolled_back"
+)
+
 type WatchdogNetwork interface {
 	Snapshot(context.Context, linuxplatform.OwnedNetworkScope) (linuxplatform.NetworkSnapshot, error)
 	Restore(context.Context, linuxplatform.NetworkSnapshot) error
@@ -152,6 +161,22 @@ func NewSystemWatchdog(paths store.Paths) (*Watchdog, error) {
 // Arm persists the complete rollback input before asking systemd to start the
 // timer. Callers must not apply any lockout-risk candidate until Arm succeeds.
 func (watchdog *Watchdog) Arm(ctx context.Context, input WatchdogArmInput) (WatchdogTransaction, error) {
+	return watchdog.arm(ctx, input, nil)
+}
+
+// ArmWithPreparedHook lets a resumable caller durably persist its transaction
+// reference after the rollback snapshot exists but before the independent
+// timer can start. If the process exits in either adjacent crash window, the
+// caller can recover the exact transaction and start the same timer before it
+// performs any network mutation.
+func (watchdog *Watchdog) ArmWithPreparedHook(ctx context.Context, input WatchdogArmInput, prepared func(WatchdogTransaction) error) (WatchdogTransaction, error) {
+	if prepared == nil {
+		return WatchdogTransaction{}, fmt.Errorf("watchdog prepared hook is required")
+	}
+	return watchdog.arm(ctx, input, prepared)
+}
+
+func (watchdog *Watchdog) arm(ctx context.Context, input WatchdogArmInput, prepared func(WatchdogTransaction) error) (WatchdogTransaction, error) {
 	if ctx == nil {
 		return WatchdogTransaction{}, fmt.Errorf("context is required")
 	}
@@ -201,6 +226,11 @@ func (watchdog *Watchdog) Arm(ctx context.Context, input WatchdogArmInput) (Watc
 	}
 	if !created {
 		return WatchdogTransaction{}, fmt.Errorf("generate unique watchdog transaction ID after %d attempts", maximumWatchdogIDAttempts)
+	}
+	if prepared != nil {
+		if err := prepared(transaction); err != nil {
+			return WatchdogTransaction{}, fmt.Errorf("persist watchdog transaction reference: %w", err)
+		}
 	}
 	if err := watchdog.supervisor.StartTimer(ctx, transaction.ID); err != nil {
 		return WatchdogTransaction{}, fmt.Errorf("start independent watchdog timer: %w", err)
@@ -470,6 +500,44 @@ func (transactionStore *WatchdogStore) Load(transactionID string) (WatchdogTrans
 		return WatchdogTransaction{}, err
 	}
 	return transaction, nil
+}
+
+// Status reports the durable transaction markers without performing a probe,
+// rollback, confirmation, or timer action. Migration uses it to resume an
+// activation whose initiating process exited after arming the watchdog.
+func (transactionStore *WatchdogStore) Status(transactionID string) (WatchdogTransactionStatus, error) {
+	if transactionStore == nil {
+		return "", fmt.Errorf("watchdog store is nil")
+	}
+	status := WatchdogStatusArmed
+	err := transactionStore.withLock(transactionID, func(_ WatchdogTransaction, directory string) error {
+		committed, err := watchdogMarkerExists(directory, watchdogCommittedFile)
+		if err != nil {
+			return err
+		}
+		rolledBack, err := watchdogMarkerExists(directory, watchdogRolledBackFile)
+		if err != nil {
+			return err
+		}
+		activated, err := watchdogMarkerExists(directory, watchdogActivatedFile)
+		if err != nil {
+			return err
+		}
+		switch {
+		case committed && rolledBack:
+			return fmt.Errorf("watchdog transaction has conflicting terminal markers")
+		case committed:
+			status = WatchdogStatusCommitted
+		case rolledBack:
+			status = WatchdogStatusRolledBack
+		case activated:
+			status = WatchdogStatusActive
+		default:
+			status = WatchdogStatusArmed
+		}
+		return nil
+	})
+	return status, err
 }
 
 // TransactionIDs returns only exact owner transaction directories. Any

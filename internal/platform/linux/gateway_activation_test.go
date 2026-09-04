@@ -61,6 +61,30 @@ func TestActivateGatewayStopsBeforeMutationWhenNFTCheckFails(t *testing.T) {
 	}
 }
 
+func TestActivateGatewayReplacingOwnedUsesOneAtomicReplayBatch(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingGatewayActivationRunner{}
+	manager, err := NewNetworkManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := RenderGatewayFirewall(GatewayFirewallInput{
+		ExternalInterface: "eth0", SSHPort: 22,
+		ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ActivateGatewayReplacingOwned(context.Background(), artifact); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.stdins) != 2 || !strings.HasPrefix(string(runner.stdins[0]), "delete table inet vpnctl\n") ||
+		string(runner.stdins[0]) != string(runner.stdins[1]) || strings.Contains(string(runner.stdins[0]), "flush ruleset") {
+		t.Fatalf("unsafe replay batches = %q", runner.stdins)
+	}
+}
+
 func TestGatewayInitNetworkScopeMatchesCandidate(t *testing.T) {
 	t.Parallel()
 
