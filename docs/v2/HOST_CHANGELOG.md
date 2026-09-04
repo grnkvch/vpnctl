@@ -2,6 +2,33 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned update/rollback and backup/restore E2E
+
+### Source-only execution boundary
+
+- Task 16.8 will compose production update, rollback, backup, restore, control
+  protocol, system RPC preflight, and CLI interaction tests into one clean-
+  commit release gate. It must cover exact release/state rollback, health-
+  failure rollback, data-plane continuity for controller-only changes,
+  gateway-first current/previous protocol windows, same-public-IP trust and
+  reconnect material, changed-public-IP certificate/staleness impact, explicit
+  interruptions, and complete required actions.
+- All release trees, encrypted archives, restore staging, emergency snapshots,
+  states, credentials, client exports, service adapters, and host adapters are
+  Go fixtures below test-managed temporary directories. The mTLS protocol and
+  node-preflight cases use only short-lived loopback listeners. The run will
+  not start or mutate Lima VMs, host routes/firewall/DNS/listeners, public VPSs,
+  client devices, Telegram, or any external provider. Evidence is limited to
+  the ignored `artifacts/v2lab/update-restore-e2e/run-*` directory; ordinary Go
+  cache use remains outside this journal by policy.
+- Verification must prove an incompatible node or protocol window blocks
+  before local mutation; rollback consumes only a valid previous snapshot;
+  same-IP restore preserves control/node/client trust; changed-IP restore
+  rotates only public ingress identity and enumerates node reconnect, both
+  client re-exports, webhook/certificate work, and affected exposes without
+  exposing webhook paths or claiming seamless continuity. Repository rollback
+  is `git revert <task-16.8-commit>`; no development-host rollback is expected.
+
 ## 2026-09-05 — planned adversarial security E2E
 
 ### Planned reversible lab mutations
