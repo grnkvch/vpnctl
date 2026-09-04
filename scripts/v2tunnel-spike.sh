@@ -867,12 +867,13 @@ verify() {
 
   apply_proxy_file "$fixture_root/proxies-one.toml"
   wait_gateway_port 18112 closed
-  controller_rejected_before=$(plugin_metrics | jq -r '.requests.NewProxy.rejected')
+  controller_rejected_before=$(plugin_metrics | jq -r '[.requests.Login.rejected, .requests.NewProxy.rejected, .requests.Ping.rejected] | add')
   hide_auth_state
   apply_proxy_file "$fixture_root/proxies-two.toml"
   for attempt in $(seq 1 40); do
     plugin_metrics > "$evidence_dir/metrics-after-controller-unavailable.json"
-    controller_rejected_after=$(jq -r '.requests.NewProxy.rejected' "$evidence_dir/metrics-after-controller-unavailable.json")
+    controller_rejected_after=$(jq -r '[.requests.Login.rejected, .requests.NewProxy.rejected, .requests.Ping.rejected] | add' \
+      "$evidence_dir/metrics-after-controller-unavailable.json")
     if [ "$controller_rejected_after" -gt "$controller_rejected_before" ]; then
       break
     fi
@@ -880,7 +881,8 @@ verify() {
   done
   wait_gateway_port 18112 closed
   if [ "$controller_rejected_after" -le "$controller_rejected_before" ] || \
-     ! jq -e '.last_by_operation.NewProxy.reason == "controller_error"' "$evidence_dir/metrics-after-controller-unavailable.json" >/dev/null; then
+     ! jq -e '[.last_by_operation[] | select(.reason == "controller_error")] | length > 0' \
+       "$evidence_dir/metrics-after-controller-unavailable.json" >/dev/null; then
     echo "authorization plugin did not fail closed with unavailable controller state" >&2
     exit 1
   fi

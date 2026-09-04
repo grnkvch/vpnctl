@@ -110,6 +110,8 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 		"assert_forward_ignored", "assert_owned_or_absent", "frpc reload", "direct_control_connections",
 		"proxies-malicious.toml", "proxies-stale-generation.toml", "frpc-untrusted-server.toml",
 		"frpc-pool-negative.toml", "hide_auth_state", "controller_error", "set_node_active false", "revoke_bound_seconds",
+		"[.requests.Login.rejected, .requests.NewProxy.rejected, .requests.Ping.rejected] | add",
+		"[.last_by_operation[] | select(.reason == \"controller_error\")] | length > 0",
 		"transport.proxyURL", "mihomo_mode global", "capture_table=vpnctl_v2_spike_tunnel_capture",
 		"restricted_shadowtls_packets", "owner-checked tunnel spike resources removed",
 	} {
