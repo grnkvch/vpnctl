@@ -2,6 +2,73 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned fleet isolation and authorization E2E
+
+### Planned reversible lab mutations
+
+- Task 16.4 will compose existing source-level fleet, client, tunnel,
+  authorization, ingress-namespace, and expose-removal tests with the live
+  standard and FRP harnesses. The accepted scope is two private-node
+  identities, five personal-client identities, and two simultaneous exposes;
+  no actual public VPS, client device, application, webhook provider, or
+  Telegram registration is involved.
+- The only mutable machines are the exact existing `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` Lima fixtures after revalidating their QEMU/amd64, Ubuntu
+  24.04, 1-vCPU/512-MiB/10-GiB, pinned image digest, and rootless `user-v2`
+  network contract. Both begin `Stopped`; the run may start them and must
+  restore both to `Stopped`. The unrelated `realty-front-docker-vm` and macOS
+  routes, firewall, DNS, and listeners remain outside scope.
+- Live client/node isolation is limited to the owner value
+  `vpnctl-v2-standard-test-v1`, `/tmp/vpnctl-v2-standard-test`, and namespaces
+  `vpnctl-v2-wg-{gateway,network,wan,c1,c2,c3,c4,c5,n1,n2}` on the node
+  fixture. Its exit trap removes only that owner-marked runtime and those
+  namespaces.
+- Live multi-expose/authorization mutation is limited to owner values
+  `vpnctl-v2-tunnel-spike-v1` and `vpnctl-v2-restricted-spike-v1`, their exact
+  `/etc/vpnctl-v2-spike/{tunnel,restricted}` paths, the tunnel authentication
+  state directory, named spike units/binaries, and
+  `inet/vpnctl_v2_spike_{tunnel,uot}_capture`. The FRP verification may
+  temporarily switch through the already pinned restricted transport, then
+  restores standard mode and removes both owned fixtures. Cached archives
+  must exist and match their manifests before any VM starts, so this run
+  cannot trigger a network download.
+- Interrupted-run recovery may remove a fixture only when both hosts carry
+  the exact expected owner marker. Partial, foreign, or unmarked state is left
+  unchanged and rejected by preflight. Final verification requires every
+  named path, namespace, capture table, and service to be absent or inactive,
+  followed by both fixtures returning to `Stopped`. Manual recovery is only
+  the matching owner-checked `cleanup`/`uninstall`; repository rollback will
+  be `git revert <task-16.4-commit>`.
+
+### Acceptance and completed rollback
+
+- Both required archives were present before VM startup and matched their
+  pinned SHA-256 manifests, so the run performed no network fetch. Focused
+  source acceptance passed for two independently enrolled nodes, unique
+  generation-scoped node material, five stable clients with unique standard
+  and restricted credentials, preservation of another node during lifecycle
+  mutation, cross-node tunnel authorization rejection, global mapping-port
+  collision rejection, and removal of only one expose while retaining the
+  other route and mapping.
+- The live standard fixture completed with five clients, two nodes, seven
+  distinct WireGuard peers, successful handshakes and permitted internet
+  TCP/UDP. Its negative probes blocked client-to-client, client-to-node, and
+  node-to-node destinations. The live FRP fixture kept exactly one persistent
+  connection for two exposes with twelve concurrent streams per expose;
+  dynamic add/remove did not restart that connection, and malicious plus
+  stale-generation mapping announcements were rejected.
+- The stable accepted result is recorded in
+  `test/v2lab/fleet-isolation/manifest.json`; raw ignored evidence is under
+  `artifacts/v2lab/fleet-isolation-e2e/run-20260904T224552Z/summary.json`.
+  Actual deployed-host verification remains part of task 16.11 rather than
+  being inferred from the Lima lab.
+- Final preflight-equivalent checks found every named runtime, namespace,
+  capture table, authentication-state directory, and spike service absent or
+  inactive. Both `vpnctl-v2-gateway` and `vpnctl-v2-node` were restored to
+  `Stopped`; the unrelated VM and host networking were untouched. Host
+  rollback is complete; repository rollback is
+  `git revert <task-16.4-commit>`.
+
 ## 2026-09-05 — planned bidirectional private-node transport E2E
 
 ### Planned reversible lab mutations

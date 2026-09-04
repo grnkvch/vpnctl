@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "automated-linux-fleet",
+  "actual_deployment": "deferred-to-task-16.11",
+  "fleet": {
+    "private_nodes": 2,
+    "personal_clients": 5,
+    "simultaneous_exposes": 2
+  },
+  "credentials": {
+    "node_unique": true,
+    "client_unique": true,
+    "generation_scoped": true
+  },
+  "networking": {
+    "client_to_client_blocked": true,
+    "client_to_node_blocked": true,
+    "node_to_node_blocked": true,
+    "permitted_internet_tcp_udp": true
+  },
+  "mappings": {
+    "one_connection_for_two_exposes": true,
+    "cross_node_rejected": true,
+    "malicious_rejected": true,
+    "stale_generation_rejected": true,
+    "global_port_collision_rejected": true
+  },
+  "removal": {
+    "only_target_removed": true,
+    "other_mapping_continued": true,
+    "other_node_preserved": true
+  },
+  "cleanup": {
+    "owner_scoped": true,
+    "temporary_resources_absent": true,
+    "fixtures_restored_stopped": true
+  }
+}
