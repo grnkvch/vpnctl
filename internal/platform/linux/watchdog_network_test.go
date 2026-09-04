@@ -3,6 +3,8 @@ package linux
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -263,6 +265,75 @@ func TestRenderWatchdogUnitsPinsIndependent120SecondTimer(t *testing.T) {
 	}
 	if _, err := WatchdogTimerInstance("../../escape"); err == nil {
 		t.Fatal("WatchdogTimerInstance() accepted an unsafe ID")
+	}
+}
+
+func TestWatchdogUnitRemovalStopsExactInstancesAndDeletesTemplates(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	unitDir := filepath.Join(root, "etc", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := newWatchdogRunner(nil)
+	installer, err := NewWatchdogUnitInstaller(root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	install, _ := installer.Plan(DefaultVPNCTLBinaryPath)
+	if _, err := installer.Apply(context.Background(), install); err != nil {
+		t.Fatal(err)
+	}
+	removal, err := installer.PlanRemoval(DefaultVPNCTLBinaryPath)
+	if err != nil || len(removal.PresentUnits) != 2 {
+		t.Fatalf("PlanRemoval() = %+v, %v", removal, err)
+	}
+	runner.calls = nil
+	ids := []string{"fw-00000A", "fw-00000B"}
+	if err := installer.StopInstances(context.Background(), removal, ids); err != nil {
+		t.Fatal(err)
+	}
+	if err := installer.RemoveTemplates(context.Background(), removal); err != nil {
+		t.Fatal(err)
+	}
+	joined := runner.joinedCalls()
+	for _, id := range ids {
+		for _, suffix := range []string{".timer", ".service"} {
+			if !strings.Contains(joined, "systemctl stop vpnctl-watchdog@"+id+suffix) {
+				t.Fatalf("watchdog removal omitted %s%s:\n%s", id, suffix, joined)
+			}
+		}
+	}
+	for _, path := range removal.UnitFiles {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("watchdog template remains %s: %v", path, err)
+		}
+	}
+}
+
+func TestWatchdogUnitRemovalRefusesTamperedTemplateBeforeStop(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	unitDir := filepath.Join(root, "etc", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := newWatchdogRunner(nil)
+	installer, _ := NewWatchdogUnitInstaller(root, runner)
+	install, _ := installer.Plan(DefaultVPNCTLBinaryPath)
+	if _, err := installer.Apply(context.Background(), install); err != nil {
+		t.Fatal(err)
+	}
+	removal, _ := installer.PlanRemoval(DefaultVPNCTLBinaryPath)
+	if err := os.WriteFile(removal.UnitFiles[0], []byte("foreign\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+	if err := installer.StopInstances(context.Background(), removal, []string{"fw-00000A"}); err == nil {
+		t.Fatal("tampered watchdog template was stopped or removed")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("tampered watchdog removal issued systemctl calls: %v", runner.calls)
 	}
 }
 

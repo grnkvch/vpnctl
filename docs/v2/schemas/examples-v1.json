@@ -1211,8 +1211,30 @@
         "warnings": [],
         "requires_action": [],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 8,
+          "role": "gateway",
+          "blocked": false,
+          "force_required": false,
+          "local_only": false,
+          "node_revoked": false,
+          "gateway_generation": 0,
+          "dns_restored": false,
+          "network_restored": true,
+          "managed_swap_disabled": true,
+          "binary_removed": true,
+          "installer_binary_retained": false,
+          "affected_services": ["nginx.service", "vpnctl-controller.service"],
+          "active_node_ids": [],
+          "active_client_ids": [],
+          "active_expose_ids": [],
+          "preserved": [
+            "/etc/vpnctl/presets.d",
+            "/var/lib/vpnctl/backups",
+            "/var/lib/vpnctl/exports",
+            "/var/lib/vpnctl/secrets",
+            "/var/lib/vpnctl/state.json"
+          ]
         }
       }
     },
@@ -1225,11 +1247,39 @@
         "status": "ok",
         "exit_category": "success",
         "resource_ids": {},
-        "warnings": [],
+        "warnings": [
+          {
+            "code": "portable_backups_preserved",
+            "message": "Preserved 1 portable backup archive(s) under /var/lib/vpnctl/backups; all other managed recovery data is erased."
+          }
+        ],
         "requires_action": [],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 8,
+          "role": "gateway",
+          "local_only": false,
+          "include_backups": false,
+          "backup_archives": 1,
+          "node_revoked": false,
+          "gateway_generation": 0,
+          "dns_restored": false,
+          "network_restored": true,
+          "managed_swap_purged": true,
+          "data_purged": true,
+          "backups_removed": false,
+          "binary_removed": true,
+          "installer_binary_retained": false,
+          "affected_services": ["nginx.service", "vpnctl-controller.service"],
+          "active_node_ids": [],
+          "active_client_ids": [],
+          "active_expose_ids": [],
+          "removed": [
+            "/etc/vpnctl",
+            "/var/lib/vpnctl managed state, identities, secrets, certificates, operations, snapshots, and exports",
+            "vpnctl managed swap allocation"
+          ],
+          "preserved": ["/var/lib/vpnctl/backups"]
         }
       }
     }

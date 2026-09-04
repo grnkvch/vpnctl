@@ -210,6 +210,46 @@ func (manager *NodeDNSIntegrationManager) Restore(ctx context.Context) error {
 	return syncNodeDNSDirectory(nodeRoutingStatePath(manager.paths))
 }
 
+// CanRestore performs the uninstall preflight without removing the drop-in,
+// table, or durable original resolver snapshot.
+func (manager *NodeDNSIntegrationManager) CanRestore(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		return false, fmt.Errorf("context is required")
+	}
+	if manager == nil || manager.runner == nil {
+		return false, fmt.Errorf("node DNS integration manager is incomplete")
+	}
+	snapshot, present, err := loadNodeDNSOriginalState(nodeDNSResolvedSnapshotPath(manager.paths), manager.paths.Root)
+	if err != nil {
+		return false, err
+	}
+	tablePresent, tableOwned, err := manager.inspectTable(ctx)
+	if err != nil {
+		return false, err
+	}
+	dropinPresent, err := validateNodeDNSDropin(nodeDNSResolvedDropinPath(manager.paths), nodeDNSResolvedDropin)
+	if err != nil {
+		return false, err
+	}
+	if !present {
+		if tablePresent || dropinPresent {
+			return false, fmt.Errorf("refusing node DNS restoration without an original snapshot")
+		}
+		return false, nil
+	}
+	if tablePresent && !tableOwned {
+		return false, fmt.Errorf("existing node DNS nftables table is not vpnctl-owned")
+	}
+	currentTarget, err := manager.readResolvConfTarget(ctx)
+	if err != nil {
+		return false, err
+	}
+	if currentTarget != snapshot.ResolvConfTarget {
+		return false, fmt.Errorf("resolv.conf target changed after node DNS activation")
+	}
+	return true, nil
+}
+
 func (manager *NodeDNSIntegrationManager) preflight(ctx context.Context, candidate NodeDNSIntegrationCandidate) error {
 	version, err := manager.runner.Run(ctx, linuxplatform.ProbeCommand{Name: "systemd", Args: []string{"--version"}})
 	if err != nil {

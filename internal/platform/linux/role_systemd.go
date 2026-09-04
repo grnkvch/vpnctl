@@ -8,9 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
@@ -65,6 +67,14 @@ type RoleInstallationPlan struct {
 type RoleInstallationResult struct {
 	Plan         RoleInstallationPlan
 	ChangedFiles []string
+}
+
+type RoleRemovalPlan struct {
+	Role             model.Role
+	BinaryPath       string
+	UnitFiles        []string
+	PresentUnits     []string
+	GeneratedRoleDir string
 }
 
 type RoleSystemdInstaller struct {
@@ -211,6 +221,197 @@ func (installer *RoleSystemdInstaller) Apply(ctx context.Context, request RoleIn
 		}
 	}
 	return RoleInstallationResult{Plan: plan, ChangedFiles: changed}, nil
+}
+
+// PlanRemoval proves ownership of every present role unit and the narrow
+// generated role tree without changing service or filesystem state.
+func (installer *RoleSystemdInstaller) PlanRemoval(role model.Role, binaryPath string) (RoleRemovalPlan, error) {
+	if installer == nil || installer.runner == nil {
+		return RoleRemovalPlan{}, fmt.Errorf("role installer is incomplete")
+	}
+	request, err := renderRoleInstallation(role, binaryPath)
+	if err != nil {
+		return RoleRemovalPlan{}, err
+	}
+	plan, err := installer.Plan(request)
+	if err != nil {
+		return RoleRemovalPlan{}, err
+	}
+	removal := RoleRemovalPlan{
+		Role: role, BinaryPath: binaryPath, UnitFiles: append([]string(nil), plan.UnitFiles...),
+		PresentUnits: []string{}, GeneratedRoleDir: filepath.Join(installer.configRoot, string(role)),
+	}
+	for _, unit := range request.Units {
+		path := filepath.Join(installer.unitDir, unit.Name)
+		content, present, err := readExactRoleFile(path, 0o644)
+		if err != nil {
+			return RoleRemovalPlan{}, err
+		}
+		if !present {
+			continue
+		}
+		if !bytes.Equal(content, normalizedText(unit.Content)) {
+			return RoleRemovalPlan{}, fmt.Errorf("%w: role unit %s differs from the vpnctl template", ErrInvalidRoleInstallation, path)
+		}
+		removal.PresentUnits = append(removal.PresentUnits, unit.Name)
+	}
+	if err := validateOwnedRoleTree(removal.GeneratedRoleDir); err != nil {
+		return RoleRemovalPlan{}, err
+	}
+	sort.Strings(removal.PresentUnits)
+	return removal, nil
+}
+
+// StopRemoval disables and stops only units proven by PlanRemoval. Unit files
+// stay in place until DNS/network restoration has completed.
+func (installer *RoleSystemdInstaller) StopRemoval(ctx context.Context, plan RoleRemovalPlan) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	fresh, err := installer.PlanRemoval(plan.Role, plan.BinaryPath)
+	if err != nil || !reflect.DeepEqual(fresh, plan) {
+		return fmt.Errorf("%w: role removal plan changed", ErrInvalidRoleInstallation)
+	}
+	for _, unit := range roleRemovalStopOrder(plan.Role, plan.PresentUnits) {
+		if err := installer.systemctl(ctx, "stop", unit); err != nil {
+			return err
+		}
+		if err := installer.systemctl(ctx, "disable", unit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func roleRemovalStopOrder(role model.Role, present []string) []string {
+	remaining := append([]string(nil), present...)
+	sort.Sort(sort.Reverse(sort.StringSlice(remaining)))
+	result := make([]string, 0, len(remaining))
+	move := func(name string, first bool) {
+		for index, unit := range remaining {
+			if unit != name {
+				continue
+			}
+			remaining = append(remaining[:index], remaining[index+1:]...)
+			if first {
+				result = append(result, name)
+			}
+			return
+		}
+	}
+	if role == model.RoleGateway {
+		move("vpnctl-controller.service", true)
+	}
+	guard := ""
+	if role == model.RoleNode {
+		guard = "vpnctl-routing-guard.service"
+		move(guard, false)
+	}
+	result = append(result, remaining...)
+	if guard != "" {
+		for _, unit := range present {
+			if unit == guard {
+				result = append(result, guard)
+				break
+			}
+		}
+	}
+	return result
+}
+
+// RemoveStopped removes the exact unit files and generated role tree after
+// controlled restoration. Durable state and presets are outside its paths.
+func (installer *RoleSystemdInstaller) RemoveStopped(ctx context.Context, plan RoleRemovalPlan) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	fresh, err := installer.PlanRemoval(plan.Role, plan.BinaryPath)
+	if err != nil || !reflect.DeepEqual(fresh, plan) {
+		return fmt.Errorf("%w: role removal plan changed", ErrInvalidRoleInstallation)
+	}
+	for _, path := range plan.UnitFiles {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove role unit %s: %w", path, err)
+		}
+	}
+	if err := removeOwnedRoleTree(plan.GeneratedRoleDir); err != nil {
+		return err
+	}
+	if err := os.Remove(installer.configRoot); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+		return err
+	}
+	return installer.systemctl(ctx, "daemon-reload")
+}
+
+func renderRoleInstallation(role model.Role, binaryPath string) (RoleInstallationRequest, error) {
+	switch role {
+	case model.RoleGateway:
+		return RenderGatewayRoleInstallation(binaryPath)
+	case model.RoleNode:
+		return RenderNodeRoleInstallation(binaryPath)
+	default:
+		return RoleInstallationRequest{}, fmt.Errorf("%w: unsupported role %q", ErrInvalidRoleInstallation, role)
+	}
+}
+
+func readExactRoleFile(path string, mode os.FileMode) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != mode || info.Size() <= 0 || info.Size() > maximumRoleUnitBytes {
+		return nil, false, fmt.Errorf("%w: role file %s is not an owned regular file", ErrInvalidRoleInstallation, path)
+	}
+	content, err := os.ReadFile(path)
+	return content, true, err
+}
+
+func validateOwnedRoleTree(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%w: generated role path %s is not a real directory", ErrInvalidRoleInstallation, path)
+	}
+	return filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == path {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(current)
+			if err != nil || filepath.IsAbs(target) {
+				return fmt.Errorf("%w: generated role entry %s has an unsafe symlink", ErrInvalidRoleInstallation, current)
+			}
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(current), target))
+			relative, err := filepath.Rel(path, resolved)
+			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("%w: generated role symlink %s escapes its owner tree", ErrInvalidRoleInstallation, current)
+			}
+			return nil
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: generated role entry %s is not an owned regular file or directory", ErrInvalidRoleInstallation, current)
+		}
+		return nil
+	})
+}
+
+func removeOwnedRoleTree(path string) error {
+	if err := validateOwnedRoleTree(path); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove generated role tree %s: %w", path, err)
+	}
+	return nil
 }
 
 func roleConfigLess(left, right string) bool {

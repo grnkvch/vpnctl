@@ -174,6 +174,38 @@ func TestWatchdogStoreRejectsTamperingAndSymlinks(t *testing.T) {
 	}
 }
 
+func TestWatchdogStoreReturnsSortedIDsAndOriginalGatewayNetwork(t *testing.T) {
+	t.Parallel()
+	paths := testWatchdogPaths(t)
+	transactionStore, _ := NewWatchdogStore(paths)
+	newer := testWatchdogTransaction("fw-00000Y")
+	newer.PreparedAt = newer.PreparedAt.Add(time.Hour)
+	newer.Deadline = newer.PreparedAt.Add(120 * time.Second)
+	newer.Network.Sysctls[0].Value = "1"
+	newer.NetworkSHA256 = networkDigest(newer.Network)
+	older := testWatchdogTransaction("fw-00000X")
+	if err := transactionStore.Create(newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := transactionStore.Create(older); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := transactionStore.TransactionIDs()
+	if err != nil || !reflect.DeepEqual(ids, []string{"fw-00000X", "fw-00000Y"}) {
+		t.Fatalf("TransactionIDs() = %v, %v", ids, err)
+	}
+	snapshot, err := transactionStore.InitialNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(snapshot, older.Network) {
+		t.Fatalf("InitialNetworkSnapshot() = %+v, %v", snapshot, err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.WatchdogDir, "foreign"), []byte("foreign\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transactionStore.TransactionIDs(); err == nil {
+		t.Fatal("unexpected watchdog entry was accepted as an uninstall target")
+	}
+}
+
 func TestWatchdogRollbackRefusesUnsafeCommitMarkerBeforeMutation(t *testing.T) {
 	t.Parallel()
 

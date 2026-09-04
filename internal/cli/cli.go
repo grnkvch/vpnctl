@@ -62,6 +62,12 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isRestoreInvocation(args) {
 		return executeRestore(args, stdout, stderr)
 	}
+	if isUninstallInvocation(args) {
+		return executeUninstall(args, stdout, stderr)
+	}
+	if isPurgeInvocation(args) {
+		return executePurge(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -902,6 +908,8 @@ Commands:
   log        Inspect or temporarily enable expanded local logging
   backup     Create an encrypted portable gateway backup
   update     Update or roll back the local vpnctl release
+	  uninstall Remove managed runtime while preserving recoverable state
+	  purge     Irreversibly remove managed runtime and state
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets

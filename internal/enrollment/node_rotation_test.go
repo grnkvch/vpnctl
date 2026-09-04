@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
-	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -621,7 +620,7 @@ func assertSuccessfulNodeRotation(t *testing.T, fixture *nodeRotationFixture, be
 			certificate = current
 		}
 	}
-	authorizer, _ := controller.NewRPCNodeAuthorizer(fixture.gatewayState)
+	authorizer, _ := control.NewStateNodeAuthorizer(fixture.gatewayState)
 	authorization, err := authorizer.AuthorizeRPC(context.Background(), control.RPCPeer{
 		NodeID: joinTestNodeID, CertificateFingerprint: beforeGateway.Certificates[len(beforeGateway.Certificates)-1].Fingerprint,
 	}, control.RPCRequest{NodeID: joinTestNodeID, CredentialGeneration: 1})

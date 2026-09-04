@@ -74,13 +74,22 @@ func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore
 	if err != nil {
 		return nil, err
 	}
+	lifecycleManager, err := newSystemGatewayNodeLifecycleManager(paths, stateStore, secrets)
+	if err != nil {
+		return nil, err
+	}
+	uninstall, err := NewGatewayNodeUninstallHandler(controller, lifecycleManager)
+	if err != nil {
+		return nil, err
+	}
+	handler := systemRPCMux{update: preflight, uninstall: uninstall}
 	handlers := make(map[int]control.RPCHandler, len(state.Components.ControlProtocols))
 	for _, rawVersion := range state.Components.ControlProtocols {
 		version, parseErr := control.ParseRPCProtocolVersion(rawVersion)
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse installed control protocol: %w", parseErr)
 		}
-		handlers[version.Major] = preflight
+		handlers[version.Major] = handler
 	}
 	protocols, err := control.NewRPCProtocolRegistryFromVersions(state.Components.ControlProtocols, handlers)
 	if err != nil {

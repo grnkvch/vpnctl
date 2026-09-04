@@ -3,8 +3,12 @@ package linux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 )
 
@@ -17,6 +21,12 @@ type WatchdogUnitInstallationPlan struct {
 type WatchdogUnitInstaller struct {
 	unitDir string
 	runner  ProbeRunner
+}
+
+type WatchdogUnitRemovalPlan struct {
+	BinaryPath   string
+	UnitFiles    []string
+	PresentUnits []string
 }
 
 func NewWatchdogUnitInstaller(root string, runner ProbeRunner) (*WatchdogUnitInstaller, error) {
@@ -78,6 +88,73 @@ func (installer *WatchdogUnitInstaller) Apply(ctx context.Context, plan Watchdog
 		return changed, fmt.Errorf("systemctl daemon-reload failed with exit code %d", result.ExitCode)
 	}
 	return changed, nil
+}
+
+func (installer *WatchdogUnitInstaller) PlanRemoval(binaryPath string) (WatchdogUnitRemovalPlan, error) {
+	install, err := installer.Plan(binaryPath)
+	if err != nil {
+		return WatchdogUnitRemovalPlan{}, err
+	}
+	removal := WatchdogUnitRemovalPlan{BinaryPath: binaryPath, UnitFiles: append([]string(nil), install.UnitFiles...), PresentUnits: []string{}}
+	for _, unit := range install.Units {
+		path := filepath.Join(installer.unitDir, unit.Name)
+		content, present, err := readExactRoleFile(path, 0o644)
+		if err != nil {
+			return WatchdogUnitRemovalPlan{}, err
+		}
+		if present {
+			if !bytes.Equal(content, normalizedText(unit.Content)) {
+				return WatchdogUnitRemovalPlan{}, fmt.Errorf("watchdog unit %s differs from the vpnctl template", path)
+			}
+			removal.PresentUnits = append(removal.PresentUnits, unit.Name)
+		}
+	}
+	sort.Strings(removal.PresentUnits)
+	return removal, nil
+}
+
+func (installer *WatchdogUnitInstaller) StopInstances(ctx context.Context, plan WatchdogUnitRemovalPlan, transactionIDs []string) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	fresh, err := installer.PlanRemoval(plan.BinaryPath)
+	if err != nil || !reflect.DeepEqual(fresh, plan) {
+		return fmt.Errorf("watchdog unit removal plan changed")
+	}
+	for _, id := range transactionIDs {
+		timer, err := WatchdogTimerInstance(id)
+		if err != nil {
+			return err
+		}
+		service, _ := WatchdogServiceInstance(id)
+		for _, unit := range []string{timer, service} {
+			result, err := installer.runner.Run(ctx, ProbeCommand{Name: "systemctl", Args: []string{"stop", unit}})
+			if err != nil || result.ExitCode != 0 {
+				return fmt.Errorf("stop watchdog instance %s", unit)
+			}
+		}
+	}
+	return nil
+}
+
+func (installer *WatchdogUnitInstaller) RemoveTemplates(ctx context.Context, plan WatchdogUnitRemovalPlan) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	fresh, err := installer.PlanRemoval(plan.BinaryPath)
+	if err != nil || !reflect.DeepEqual(fresh, plan) {
+		return fmt.Errorf("watchdog unit removal plan changed")
+	}
+	for _, path := range plan.UnitFiles {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	result, err := installer.runner.Run(ctx, ProbeCommand{Name: "systemctl", Args: []string{"daemon-reload"}})
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("systemctl daemon-reload failed while removing watchdog templates")
+	}
+	return nil
 }
 
 func equalWatchdogUnitPlans(left, right WatchdogUnitInstallationPlan) bool {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -469,6 +470,57 @@ func (transactionStore *WatchdogStore) Load(transactionID string) (WatchdogTrans
 		return WatchdogTransaction{}, err
 	}
 	return transaction, nil
+}
+
+// TransactionIDs returns only exact owner transaction directories. Any
+// unexpected entry is a conflict rather than an implicit deletion target.
+func (transactionStore *WatchdogStore) TransactionIDs() ([]string, error) {
+	if transactionStore == nil {
+		return nil, fmt.Errorf("watchdog store is nil")
+	}
+	entries, err := os.ReadDir(transactionStore.paths.WatchdogDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() || !watchdogIDPattern.MatchString(entry.Name()) {
+			return nil, fmt.Errorf("unexpected watchdog transaction entry %s", entry.Name())
+		}
+		if _, err := transactionStore.Load(entry.Name()); err != nil {
+			return nil, err
+		}
+		ids = append(ids, entry.Name())
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// InitialNetworkSnapshot returns the oldest retained owner transaction. Init
+// arms its watchdog before the first network mutation, making this the exact
+// gateway pre-vpnctl restoration boundary.
+func (transactionStore *WatchdogStore) InitialNetworkSnapshot() (linuxplatform.NetworkSnapshot, error) {
+	ids, err := transactionStore.TransactionIDs()
+	if err != nil {
+		return linuxplatform.NetworkSnapshot{}, err
+	}
+	if len(ids) == 0 {
+		return linuxplatform.NetworkSnapshot{}, fmt.Errorf("gateway has no retained watchdog network snapshot")
+	}
+	var oldest WatchdogTransaction
+	for _, id := range ids {
+		transaction, err := transactionStore.Load(id)
+		if err != nil {
+			return linuxplatform.NetworkSnapshot{}, err
+		}
+		if oldest.ID == "" || transaction.PreparedAt.Before(oldest.PreparedAt) || transaction.PreparedAt.Equal(oldest.PreparedAt) && transaction.ID < oldest.ID {
+			oldest = transaction
+		}
+	}
+	return oldest.Network, nil
 }
 
 func (transactionStore *WatchdogStore) MarkActivated(transactionID string, activation WatchdogActivation) error {

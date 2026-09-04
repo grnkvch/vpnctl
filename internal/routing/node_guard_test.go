@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -372,6 +373,9 @@ func TestNodeRoutingGuardServiceRequiresCanonicalRootOnlyConfig(t *testing.T) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(paths.StateDir, NodeRoutingStateRelativePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := nodeRoutingGuardConfigPath(paths)
 	candidate := nodeRoutingGuardFixture(t)
 	if err := os.WriteFile(path, candidate.Bytes(), 0o600); err != nil {
@@ -394,6 +398,50 @@ func TestNodeRoutingGuardServiceRequiresCanonicalRootOnlyConfig(t *testing.T) {
 	}
 	if err := RunNodeRoutingGuardService(context.Background(), paths, runner, "remove"); err == nil {
 		t.Fatal("unsupported guard action succeeded")
+	}
+}
+
+func TestPersistentNodeRoutingGuardRestoresExactOriginalAndConsumesSnapshot(t *testing.T) {
+	t.Parallel()
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := newNodeRoutingGuardRunner()
+	manager, err := NewPersistentNodeRoutingGuardManager(paths, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Install(context.Background(), nodeRoutingGuardFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(paths.StateDir, NodeRoutingStateRelativePath, NodeRoutingGuardSnapshotName)
+	if info, err := os.Lstat(snapshot); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("persistent guard snapshot = %v, %v", info, err)
+	}
+	if can, err := manager.CanRestore(context.Background()); err != nil || !can {
+		t.Fatalf("CanRestore() = %t, %v", can, err)
+	}
+	if err := manager.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(snapshot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed guard snapshot still exists: %v", err)
+	}
+	if runner.tableDefinition != "" || runner.rulesInstalled {
+		t.Fatalf("guard runtime survived restoration: table=%q rules=%t", runner.tableDefinition, runner.rulesInstalled)
+	}
+	if can, err := manager.CanRestore(context.Background()); err != nil || can {
+		t.Fatalf("post-restore CanRestore() = %t, %v", can, err)
+	}
+	joined := runner.joinedCalls()
+	for _, want := range []string{"sysctl -q -w net.ipv4.conf.all.rp_filter=0", "ip -4 rule del priority 10020", "nft --file -"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("restore calls omit %q:\n%s", want, joined)
+		}
 	}
 }
 
@@ -562,6 +610,8 @@ func (runner *nodeRoutingGuardRunner) Run(_ context.Context, command linuxplatfo
 		runner.lastAppliedNFT = append([]byte(nil), command.Stdin...)
 		if strings.Contains(string(command.Stdin), "table inet vpnctl {") {
 			runner.tableDefinition = string(command.Stdin)
+		} else if strings.Contains(string(command.Stdin), "delete table inet vpnctl") {
+			runner.tableDefinition = ""
 		}
 		return linuxplatform.ProbeResult{}, nil
 	case strings.HasPrefix(key, "ip -json -4 route show table "), strings.HasPrefix(key, "ip -json -6 route show table "):

@@ -117,7 +117,7 @@ other active scope; otherwise different explicit scopes may coexist.
 | `vpnctl update [version]` | `operation-v1:update` | gateway/node | optional `vMAJOR.MINOR.PATCH` stable version (leading `v` optional, no prerelease); omitted means latest stable; gateway first, each node locally afterward | confirm+typed-if-irreversible | yes | no | `sudo vpnctl update 2.1.0` |
 | `vpnctl update rollback` | `operation-v1:update.rollback` | gateway/node | no arguments | confirm | yes | no | `sudo vpnctl update rollback` |
 | `vpnctl uninstall` | `operation-v1:uninstall` | gateway/node | gateway optional `--force`; node optional `--local-only` | confirm | yes | no | `sudo vpnctl uninstall --local-only` |
-| `vpnctl purge` | `operation-v1:purge` | gateway/node | optional gateway `--include-backups` with a second typed confirmation | typed | yes | no | `sudo vpnctl purge --include-backups` |
+| `vpnctl purge` | `operation-v1:purge` | gateway/node | gateway optional `--force` and `--include-backups`; node optional `--local-only`; backup deletion has a second typed confirmation | typed | yes | no | `sudo vpnctl purge --force --include-backups` |
 
 Restore never merges authoritative states. With the archive public IP,
 existing node trust and client profiles remain usable after the accepted
@@ -129,6 +129,30 @@ the `scp` step for the new public certificate. Node rebinding, replacement of
 profiles on devices, and webhook URL/certificate registration are manual;
 vpnctl neither contacts providers nor claims seamless continuity. Webhook paths
 are excluded from the JSON action list.
+
+`uninstall` is recoverable removal, not data erasure. It stops and removes only
+the current role's validated vpnctl runtime, restores the saved node DNS and
+network state (or the gateway's original watchdog network snapshot), disables
+managed swap activation while retaining its allocation/ownership record, and
+removes a verified installer-managed `vpnctl` binary last. Authoritative state,
+editable presets, identities, secrets, certificates, exports, and portable
+backups remain. A gateway with active nodes, clients, or exposes refuses the
+operation until their complete impact is shown and `--force` is explicit. An
+enrolled node must receive a gateway-confirmed revoke before local mutation;
+`--local-only` is the explicit offline exception and returns a mandatory
+gateway-side revoke action for the immutable node ID. Uninstall never supports
+`--defer`.
+
+`purge` performs the same role-scoped shutdown, revoke, ownership checks, and
+DNS/network restoration, but then deletes the managed swap allocation and all
+vpnctl state, presets, identities, secrets, certificates, operations,
+snapshots, and exports before removing a verified installer binary last. It
+always requires the exact typed phrase `purge gateway` or `purge node`; `--yes`
+cannot satisfy it. Managed portable archives are the only default exception
+and are reported explicitly. Gateway-only `--include-backups` deletes them
+after the independent exact phrase `delete backups`; no vpnctl-managed recovery
+material then remains. Purge never supports `--defer` or an implicit recovery
+promise.
 
 ## Deliberate omissions and simplifications
 

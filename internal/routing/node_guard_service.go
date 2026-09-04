@@ -3,8 +3,11 @@ package routing
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +21,7 @@ import (
 
 const (
 	NodeRoutingGuardInstallAction   = "install"
+	NodeRoutingGuardRestoreAction   = "restore"
 	NodeRoutingGuardNotReadyAction  = "not-ready"
 	NodeRoutingGuardWaitReadyAction = "wait-ready"
 
@@ -28,6 +32,7 @@ const (
 type NodeRoutingGuardManager struct {
 	runner  linuxplatform.ProbeRunner
 	network *linuxplatform.NetworkManager
+	paths   *store.Paths
 	wait    func(context.Context, time.Duration) error
 }
 
@@ -40,6 +45,22 @@ func NewNodeRoutingGuardManager(runner linuxplatform.ProbeRunner) (*NodeRoutingG
 		return nil, err
 	}
 	return &NodeRoutingGuardManager{runner: runner, network: network, wait: waitNodeRoutingGuardInterval}, nil
+}
+
+// NewPersistentNodeRoutingGuardManager retains the exact pre-guard network
+// snapshot needed by an explicit uninstall. The older constructor remains for
+// isolated renderer/runtime tests that never claim a host lifecycle.
+func NewPersistentNodeRoutingGuardManager(paths store.Paths, runner linuxplatform.ProbeRunner) (*NodeRoutingGuardManager, error) {
+	manager, err := NewNodeRoutingGuardManager(runner)
+	if err != nil {
+		return nil, err
+	}
+	want, err := store.NewPaths(paths.Root)
+	if err != nil || want != paths {
+		return nil, fmt.Errorf("node routing guard paths do not match the system root")
+	}
+	manager.paths = &paths
+	return manager, nil
 }
 
 // Install puts the fail-closed boundary in place before the userspace routing
@@ -74,6 +95,25 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 	if err := validatePriorNodeRoutingGuardOwnership(prior); err != nil {
 		return err
 	}
+	snapshotCreated := false
+	if manager.paths != nil {
+		_, present, err := loadNodeRoutingOriginalNetwork(*manager.paths)
+		if err != nil {
+			return err
+		}
+		if !present {
+			if prior.NFTables.Present || len(prior.Routes) != 0 || len(prior.PolicyRules) != 0 {
+				return fmt.Errorf("refusing to adopt an active node routing guard without its original network snapshot")
+			}
+			if err := ensureNodeDNSDirectory(nodeRoutingStatePath(*manager.paths), 0o700); err != nil {
+				return err
+			}
+			if err := writeNodeRoutingOriginalNetwork(nodeRoutingGuardSnapshotPath(*manager.paths), prior); err != nil {
+				return err
+			}
+			snapshotCreated = true
+		}
+	}
 	mutated := false
 	defer func() {
 		if returnErr == nil || !mutated {
@@ -83,6 +123,11 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 		defer cancel()
 		if restoreErr := manager.network.Restore(restoreContext, prior); restoreErr != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("restore prior node routing guard state: %w", restoreErr))
+		}
+		if snapshotCreated && manager.paths != nil {
+			if removeErr := removeNodeRoutingOriginalNetwork(*manager.paths); removeErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("remove failed-install node routing snapshot: %w", removeErr))
+			}
 		}
 	}()
 
@@ -118,6 +163,119 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 		return fmt.Errorf("install node routing guard table: %w", err)
 	}
 	return nil
+}
+
+// Restore removes the fail-closed boundary only through the persisted,
+// validated pre-install snapshot. It is intentionally separate from ordinary
+// service stop/restart paths, which must retain fail-closed behavior.
+func (manager *NodeRoutingGuardManager) Restore(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	if manager == nil || manager.network == nil || manager.paths == nil {
+		return fmt.Errorf("persistent node routing guard manager is required")
+	}
+	original, present, err := manager.inspectRestore(ctx)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
+	if err := manager.network.Restore(ctx, original); err != nil {
+		return fmt.Errorf("restore original node routing network: %w", err)
+	}
+	return removeNodeRoutingOriginalNetwork(*manager.paths)
+}
+
+// CanRestore validates the complete persistent restoration boundary without
+// changing it. Uninstall uses this during its public impact-plan phase.
+func (manager *NodeRoutingGuardManager) CanRestore(ctx context.Context) (bool, error) {
+	_, present, err := manager.inspectRestore(ctx)
+	return present, err
+}
+
+func (manager *NodeRoutingGuardManager) inspectRestore(ctx context.Context) (linuxplatform.NetworkSnapshot, bool, error) {
+	if ctx == nil {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("context is required")
+	}
+	if manager == nil || manager.network == nil || manager.paths == nil {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("persistent node routing guard manager is required")
+	}
+	original, present, err := loadNodeRoutingOriginalNetwork(*manager.paths)
+	if err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, err
+	}
+	scope := linuxplatform.OwnedNetworkScope{}
+	if present {
+		scope.Sysctls = originalSysctlNames(original)
+	}
+	current, err := manager.network.Snapshot(ctx, scope)
+	if err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("inspect node routing guard before restoration: %w", err)
+	}
+	if err := validatePriorNodeRoutingGuardOwnership(current); err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, err
+	}
+	if !present && (current.NFTables.Present || len(current.Routes) != 0 || len(current.PolicyRules) != 0) {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("refusing node routing restoration without an original network snapshot")
+	}
+	return original, present, nil
+}
+
+func originalSysctlNames(snapshot linuxplatform.NetworkSnapshot) []string {
+	result := make([]string, len(snapshot.Sysctls))
+	for index, value := range snapshot.Sysctls {
+		result[index] = value.Name
+	}
+	return result
+}
+
+func loadNodeRoutingOriginalNetwork(paths store.Paths) (linuxplatform.NetworkSnapshot, bool, error) {
+	path := nodeRoutingGuardSnapshotPath(paths)
+	content, err := readNodeDNSBoundedFile(path, 1<<20, 0o600)
+	if errors.Is(err, fs.ErrNotExist) {
+		return linuxplatform.NetworkSnapshot{}, false, nil
+	}
+	if err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("read original node routing snapshot: %w", err)
+	}
+	var snapshot linuxplatform.NetworkSnapshot
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snapshot); err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("decode original node routing snapshot: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("decode original node routing snapshot: trailing data")
+	}
+	if err := snapshot.Validate(); err != nil {
+		return linuxplatform.NetworkSnapshot{}, false, err
+	}
+	return snapshot, true, nil
+}
+
+func writeNodeRoutingOriginalNetwork(path string, snapshot linuxplatform.NetworkSnapshot) error {
+	if err := snapshot.Validate(); err != nil {
+		return err
+	}
+	content, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	return installNodeDNSExclusiveFile(path, append(content, '\n'), 0o600)
+}
+
+func removeNodeRoutingOriginalNetwork(paths store.Paths) error {
+	path := nodeRoutingGuardSnapshotPath(paths)
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return syncNodeDNSDirectory(nodeRoutingStatePath(paths))
+}
+
+func nodeRoutingGuardSnapshotPath(paths store.Paths) string {
+	return filepath.Join(nodeRoutingStatePath(paths), NodeRoutingGuardSnapshotName)
 }
 
 func nodeRoutingGatewayRoutes(config NodeRoutingGuardConfig) [][]string {
@@ -381,7 +539,7 @@ func waitNodeRoutingGuardInterval(ctx context.Context, duration time.Duration) e
 }
 
 func RunNodeRoutingGuardService(ctx context.Context, paths store.Paths, runner linuxplatform.ProbeRunner, action string) error {
-	manager, err := NewNodeRoutingGuardManager(runner)
+	manager, err := NewPersistentNodeRoutingGuardManager(paths, runner)
 	if err != nil {
 		return err
 	}
@@ -392,6 +550,8 @@ func RunNodeRoutingGuardService(ctx context.Context, paths store.Paths, runner l
 			return err
 		}
 		return manager.Install(ctx, candidate)
+	case NodeRoutingGuardRestoreAction:
+		return manager.Restore(ctx)
 	case NodeRoutingGuardNotReadyAction:
 		return manager.NotReady(ctx)
 	case NodeRoutingGuardWaitReadyAction:

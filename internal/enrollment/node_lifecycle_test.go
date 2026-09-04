@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
-	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -491,7 +490,7 @@ func assertNodeRevokedFailClosed(t *testing.T, fixture *nodeLifecycleFixture) {
 			certificate = current
 		}
 	}
-	authorizer, err := controller.NewRPCNodeAuthorizer(fixture.gatewayState)
+	authorizer, err := control.NewStateNodeAuthorizer(fixture.gatewayState)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 const (
 	NodeRoutingGuardSchemaVersion  = 1
 	NodeRoutingGuardConfigFileName = "routing-guard.json"
+	NodeRoutingGuardSnapshotName   = "network-original.json"
 	NodeRoutingGuardOwnerComment   = "vpnctl:v2:node-routing-guard"
 	NodeRoutingSelectedIPv6Set     = "selected_resolved_v6"
 	NodeRoutingSelectedIPv6Counter = "selected_ipv6_drop"

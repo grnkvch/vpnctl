@@ -2,6 +2,132 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned irreversible purge
+
+### Planned reversible implementation
+
+- Task 14.12 is source-only on this development host. `vpnctl purge` will
+  reuse the complete uninstall ownership/impact preflight but require exact
+  typed `purge gateway` or `purge node` consent that `--yes` cannot bypass. A
+  gateway with active nodes, clients, or exposes will additionally require an
+  explicit `--force` after the same complete impact is shown.
+- Purge will first revoke an online enrolled node (or require explicit
+  `--local-only` while returning the mandatory gateway revoke action), stop
+  only proven role/watchdog/nginx units, restore saved DNS/network state, and
+  remove the managed swap activation and allocation. It will then erase
+  authoritative/current and previous state, operations/snapshots, presets,
+  identities, secrets, certificates, and exports before removing the verified
+  installer binary last.
+- Portable archives under the exact managed backup directory will remain by
+  default. `--include-backups` will require the framework's separate exact
+  typed `delete backups` consent and remove that directory too. The result
+  will enumerate what was deleted or preserved and make no recovery promise.
+- Missing ownership evidence, unsafe symlinks/foreign entries, state/runtime
+  drift, gateway revoke failure, or missing typed consent must stop before the
+  affected irreversible step. No production service, network rule, DNS
+  setting, swap, file, gateway, node, client, credential, webhook, archive, or
+  binary will change; tests use temporary roots/fakes and rollback is limited
+  to the future task 14.12 commit.
+
+### Result
+
+- Added `vpnctl purge` for gateway and node roles on top of the recoverable
+  uninstall sequencer. Every apply requires the exact role phrase even with
+  `--yes`; active gateway resources additionally require `--force`, and
+  gateway-only `--include-backups` requires the independent exact `delete
+  backups` phrase. Dry-run, blocked impact, unsupported flags, plan tampering,
+  and node offline/local-only behavior use the common result and consent
+  contracts.
+- Purge revalidates authoritative state and every installer-owned host target,
+  revokes an online node before local mutation, restores saved DNS/network
+  state, removes the managed swap activation and allocation, removes exact
+  role/watchdog/proxy runtime, and then erases config, presets, current and
+  previous state, identities, secrets, certificates, operations, snapshots,
+  and exports. A hash-verified installer binary is removed and its parent
+  directory synced only after managed data removal.
+- Portable archives are the sole managed recovery boundary and remain alone
+  under `/var/lib/vpnctl/backups` by default. `--include-backups` removes them
+  too; empty backup directories are not advertised as preserved recovery.
+  Signed release-bundle metadata remains as a non-state installation artifact,
+  not as identity/state recovery material. Unsafe backup entries stop in
+  preflight, and partial apply failures report the completed phase fields
+  instead of falsely returning `changed: false` or promising recovery.
+- Domain and production-root integration tests cover gateway force, both typed
+  confirmations, online revoke ordering, offline refusal, local-only cleanup,
+  exact data erasure, default archive preservation, explicit archive deletion,
+  unsafe symlinks, binary-last ordering, and partial-error output. Full normal
+  and race-detector Go suites, `go vet`, Go formatting, shell syntax, JSON
+  parsing, `git diff --check`, and strict OpenSpec validation passed. Socket
+  tests ran outside the sandbox because it denies local binds. No production
+  host resource changed; tests used temporary roots and
+  `/tmp/vpnctl-go-cache` only.
+
+## 2026-09-04 — planned recoverable uninstall
+
+### Planned reversible implementation
+
+- Task 14.11 is source-only on this development host. `vpnctl uninstall` will
+  build a complete, role-specific impact plan from validated authoritative
+  state before mutation. A gateway with any active node, client, or expose will
+  stop unless `--force` is explicit; the forced plan will enumerate those
+  resources and the external client/webhook follow-up actions that vpnctl
+  cannot perform itself.
+- An online node uninstall will make one authenticated short-lived control RPC
+  and require a gateway-confirmed node revoke before local cleanup. An
+  unavailable or rejected gateway will leave the host untouched. Explicit
+  `--local-only` will skip that RPC, remove only local managed runtime, and
+  return a mandatory gateway-side revoke action without claiming credential
+  invalidation.
+- Local cleanup will stop/disable only the selected role's known vpnctl units,
+  restore node DNS and managed network state from validated owner-scoped
+  snapshots, remove only generated role configuration/runtime artifacts,
+  uninstall the managed swap activation while preserving its allocation and
+  disabled ownership record, and remove watchdog templates. State, presets,
+  identities, secrets, certificates, exports, and backups remain recoverable;
+  an installer-managed regular vpnctl binary is validated and removed last.
+- Plan drift, foreign files/symlinks, missing restoration evidence, revoke
+  failure, or any pre-binary cleanup failure must stop before binary removal
+  and preserve recoverable data. No production service, listener, firewall,
+  route, DNS setting, gateway, node, client, webhook, credential, swap, or
+  binary will change; tests use temporary roots and fakes, and rollback is
+  limited to the future task 14.11 commit.
+
+### Result
+
+- Added a role-aware recoverable `vpnctl uninstall` workflow and CLI with
+  dry-run/consent handling, complete gateway impact, active-resource `--force`,
+  explicit node `--local-only`, stable JSON fields, immutable node IDs in
+  follow-up actions, and binary-last cleanup. Unsupported expansive flags and
+  stale or tampered plans fail before the corresponding host mutation.
+- Online enrolled nodes now submit one bounded authenticated mTLS revoke RPC.
+  The gateway serializes it with local mutations, validates identity and state
+  generation, commits the existing fail-closed revoke lifecycle, republishes
+  transport/ingress state, and closes control, transport, and tunnel sessions
+  before confirming local cleanup. Gateway failure leaves ordinary node
+  uninstall untouched; the offline exception reports the mandatory remote
+  revoke by immutable node ID.
+- Production cleanup proves exact role/watchdog unit templates and signed
+  installed release files, stops only those units (plus managed nginx on a
+  gateway), restores the original node DNS/routing snapshots or the gateway's
+  oldest retained pre-vpnctl watchdog network snapshot, disables but preserves
+  managed swap allocation, removes generated/runtime/component paths, and
+  removes the verified installer binary last. State, presets, identities,
+  secrets, certificates, exports, backups, and signed bundle metadata remain.
+- The persistent node routing guard now records the exact first-install
+  network snapshot; DNS/routing/watchdog adapters expose read-only restoration
+  preflights. The state-based mTLS node authorizer moved into the lower control
+  package and watchdog access is injected at the lifecycle boundary, keeping
+  the dependency checker and enrollment tests cycle-free.
+- Focused online/offline, forced/blocked, drift, cleanup-failure, exact DNS and
+  network restoration, systemd ownership, watchdog, RPC, JSON Schema, and both
+  production-role integration tests passed. Full ordinary Go tests, the full
+  race suite before the final gateway fixture plus race tests for every changed
+  Go package, `go vet`, Go formatting, shell syntax, JSON parsing,
+  `git diff --check`, and strict OpenSpec validation passed. Socket tests ran
+  outside the sandbox because it denies local binds. No production host
+  service, network rule, DNS setting, swap, file, or binary changed; tests used
+  temporary roots and `/tmp/vpnctl-go-cache` only.
+
 ## 2026-09-04 — planned new-public-IP gateway restore
 
 ### Planned reversible implementation

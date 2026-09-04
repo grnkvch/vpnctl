@@ -222,6 +222,107 @@ func TestRoleSystemdInstallerRefusesSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestRoleSystemdInstallerRemovalProvesOwnershipStopsThenRemovesOnlyRole(t *testing.T) {
+	t.Parallel()
+	paths := newRoleInstallerTestPaths(t)
+	runner := &roleSystemdRunner{}
+	installer, _ := NewRoleSystemdInstaller(paths.root, paths.configDir, runner)
+	request, err := RenderGatewayRoleInstallation(DefaultVPNCTLBinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Apply(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	roleDir := filepath.Join(paths.configDir, "generated", "gateway")
+	generations := filepath.Join(roleDir, "ingress", "generations", "g1")
+	if err := os.MkdirAll(generations, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generations, "nginx.conf"), []byte("owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("generations", "g1"), filepath.Join(roleDir, "ingress", "current")); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(paths.configDir, "presets.d", "foreign.yaml")
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte("preserved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := installer.PlanRemoval(model.RoleGateway, DefaultVPNCTLBinaryPath)
+	if err != nil || len(plan.PresentUnits) != len(request.Units) {
+		t.Fatalf("PlanRemoval() = %+v, %v", plan, err)
+	}
+	runner.calls = nil
+	if err := installer.StopRemoval(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := installer.RemoveStopped(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range append(append([]string{}, plan.UnitFiles...), roleDir) {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("owned removal target remains %s: %v", path, err)
+		}
+	}
+	if content, err := os.ReadFile(foreign); err != nil || string(content) != "preserved\n" {
+		t.Fatalf("foreign preset changed: %q, %v", content, err)
+	}
+	joined := runner.joined()
+	controllerStop := strings.Index(joined, "stop vpnctl-controller.service")
+	standardStop := strings.Index(joined, "stop vpnctl-standard.service")
+	if controllerStop < 0 || standardStop < 0 || controllerStop > standardStop {
+		t.Fatalf("gateway controller was not stopped before data-plane removal:\n%s", joined)
+	}
+	for _, unit := range plan.PresentUnits {
+		if !strings.Contains(joined, "stop "+unit) || !strings.Contains(joined, "disable "+unit) {
+			t.Fatalf("removal did not stop and disable %s:\n%s", unit, joined)
+		}
+	}
+	if !strings.HasSuffix(joined, "daemon-reload") {
+		t.Fatalf("removal did not reload systemd last:\n%s", joined)
+	}
+}
+
+func TestRoleSystemdInstallerRemovalRefusesUnitOrSymlinkDriftBeforeMutation(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		mutate func(roleInstallerTestPaths, RoleInstallationRequest) error
+	}{
+		{name: "unit content", mutate: func(paths roleInstallerTestPaths, request RoleInstallationRequest) error {
+			return os.WriteFile(filepath.Join(paths.root, "etc", "systemd", "system", request.Units[0].Name), []byte("foreign\n"), 0o644)
+		}},
+		{name: "escaping generated symlink", mutate: func(paths roleInstallerTestPaths, _ RoleInstallationRequest) error {
+			return os.Symlink("../../../../foreign", filepath.Join(paths.configDir, "generated", "gateway", "escape"))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := newRoleInstallerTestPaths(t)
+			runner := &roleSystemdRunner{}
+			installer, _ := NewRoleSystemdInstaller(paths.root, paths.configDir, runner)
+			request, _ := RenderGatewayRoleInstallation(DefaultVPNCTLBinaryPath)
+			if _, err := installer.Apply(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			runner.calls = nil
+			if err := test.mutate(paths, request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := installer.PlanRemoval(model.RoleGateway, DefaultVPNCTLBinaryPath); err == nil {
+				t.Fatal("drifted removal plan succeeded")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("drifted removal mutated systemd: %v", runner.calls)
+			}
+		})
+	}
+}
+
 type roleInstallerTestPaths struct {
 	root      string
 	configDir string

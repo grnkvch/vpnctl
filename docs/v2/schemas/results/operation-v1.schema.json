@@ -83,6 +83,45 @@
             "previous_version": { "type": "string", "minLength": 1, "maxLength": 65 },
             "target_version": { "type": "string", "minLength": 1, "maxLength": 65 },
             "blocked": { "type": "boolean" },
+            "force_required": { "type": "boolean" },
+            "local_only": { "type": "boolean" },
+            "include_backups": { "type": "boolean" },
+            "backup_archives": { "type": "integer", "minimum": 0 },
+            "node_revoked": { "type": "boolean" },
+            "gateway_generation": { "type": "integer", "minimum": 0 },
+            "dns_restored": { "type": "boolean" },
+            "network_restored": { "type": "boolean" },
+            "managed_swap_disabled": { "type": "boolean" },
+            "managed_swap_purged": { "type": "boolean" },
+            "data_purged": { "type": "boolean" },
+            "backups_removed": { "type": "boolean" },
+            "binary_removed": { "type": "boolean" },
+            "installer_binary_retained": { "type": "boolean" },
+            "active_node_ids": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "active_client_ids": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "active_expose_ids": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "preserved": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "uniqueItems": true
+            },
+            "removed": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "uniqueItems": true
+            },
             "rollback_available": { "type": "boolean" },
             "affected_services": {
               "type": "array",
