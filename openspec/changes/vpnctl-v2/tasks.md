@@ -166,7 +166,7 @@
 
 ## 14. Delivery, Backup, Update, and Removal
 
-- [ ] 14.1 Define and implement the signed release manifest with binary/protocol/state ranges, OS/arch, pinned components/checksums/capabilities, apt compatibility, handshake-list version, and migration reversibility; verify signature, tamper, and unsupported-platform tests.
+- [x] 14.1 Define and implement the signed release manifest with binary/protocol/state ranges, OS/arch, pinned components/checksums/capabilities, apt compatibility, handshake-list version, and migration reversibility; verify signature, tamper, and unsupported-platform tests.
 - [ ] 14.2 Build a reproducible self-contained bundle for both roles and role-scoped local installation; verify normal init/apply/repair never fetch bundled components from upstream and an scp-transferred bundle installs successfully.
 - [ ] 14.3 Update the curl installer to verify signed metadata/checksums and install the standard binary/bundle layout; verify corrupt downloads leave the existing installation untouched.
 - [ ] 14.4 Implement manual `update [version]` planning, latest-stable lookup only on request, gateway-first fleet compatibility, whole-bundle staging, state migration preview, component-by-component health, and expected interruption; verify no background/remote-node update occurs.

@@ -10,3 +10,11 @@ The schemas intentionally reject unknown top-level fields and sensitive field na
 documents rather than a CLI result schema. `preset-v1.example.yaml` is its
 canonical example; parser-level checks additionally enforce canonical DNS/IP
 values, one YAML document, and the absence of aliases or anchors.
+
+`release-manifest-v1.schema.json` defines the canonical payload signed for a
+release, while `signed-release-manifest-v1.schema.json` defines its Ed25519
+envelope. The checked-in `release-manifest-v1.example.json` is deliberately
+non-installable: its vpnctl checksum is illustrative. Runtime verification
+also enforces cross-field component/artifact/apt references, deterministic
+ordering, canonical JSON/base64url, signature authenticity, exact artifact
+SHA-256, and the observed Ubuntu/architecture boundary.

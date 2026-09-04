@@ -2,6 +2,55 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — signed release-manifest boundary
+
+### Planned reversible validation
+
+- Task 14.1 is source-only. It will add a canonical, strict-decoded Ed25519
+  release envelope whose signed payload binds the installed vpnctl/component
+  manifest, exact role-scoped bundled artifact paths and SHA-256 values,
+  compatible Ubuntu apt package ranges, control/state-schema windows, target
+  OS/architecture, handshake-list version, and migration reversibility.
+- Verification will accept an explicit observed platform rather than probing
+  or changing this macOS development host. Tests will use ephemeral generated
+  keys and in-memory artifact bytes, reject signature/payload/checksum/path
+  tampering and unsupported platforms before any installation boundary, and
+  retain no signing material.
+- No release asset will be downloaded or installed and no real signing key,
+  bundle, package manager, systemd unit, service, VM, network rule, public
+  endpoint, or deployed gateway/node state will be created or changed.
+  Repository rollback is limited to the future task 14.1 commit; test
+  directories and Go caches are disposable.
+
+### Result
+
+- The v1 release payload and Ed25519 envelope are now strict, bounded, and
+  canonical. The domain-separated signature binds the installed component
+  manifest, role-scoped relative artifacts, apt ranges, protocol/state
+  windows, Ubuntu `24.04`/`amd64`, handshake-list version, and the explicit
+  migration-reversibility bit. The caller supplies the trusted public key;
+  signed `key_id` metadata cannot select trust.
+- The production v2 constructor imports the exact runtime pins for Mihomo
+  `v1.19.30`, frp `0.69.0`, and Ubuntu nginx
+  `1.24.0-2ubuntu7.17`, requires the build-specific vpnctl binary checksum,
+  and records nftables/nginx/wireguard-tools inclusive-minimum and
+  exclusive-maximum apt ranges. Bundled and apt components must have exact,
+  non-ambiguous cross-references, sorted capabilities/entries, valid roles,
+  and canonical non-traversing artifact paths.
+- Public JSON Schemas and a deliberately non-installable example match the Go
+  boundary. Ten repeated ordinary and three repeated race-detector focused
+  runs accepted the complete signed contract and rejected payload/signature/
+  key substitution, wrong algorithms, unknown/duplicate/non-canonical JSON,
+  oversized envelopes, invalid component/range/role/path metadata, traversal,
+  artifact checksum/read failures, and unsupported OS/version/architecture.
+  An explicit irreversible migration remains valid and signed as `false`.
+- The full ordinary and race-detector suites, `go vet ./...`, dependency
+  listing, Bash syntax, all JSON parsing, formatting/diff checks, and strict
+  OpenSpec validation passed at `128/156`. No asset, signing key, package,
+  service, VM, listener, network rule, public endpoint, or deployed state was
+  created or changed; ephemeral keys existed only in test memory. Source
+  rollback is the single task 14.1 commit.
+
 ## 2026-09-04 — controller-outage data-plane independence
 
 ### Planned reversible validation

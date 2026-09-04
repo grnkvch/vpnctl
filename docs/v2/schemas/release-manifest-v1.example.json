@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "component_manifest": {
+    "schema_version": 1,
+    "manifest_version": 1,
+    "vpnctl_version": "v2.0.0-example",
+    "control_protocols": ["1.0"],
+    "state_schema_minimum": 1,
+    "state_schema_maximum": 1,
+    "target_os": "ubuntu 24.04",
+    "target_architecture": "amd64",
+    "handshake_host_list_version": 1,
+    "migration_reversible": true,
+    "components": [
+      {
+        "name": "frp",
+        "version": "0.69.0",
+        "source": "vpnctl-release-bundle",
+        "bundled": true,
+        "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e",
+        "capabilities": ["dynamic-reload", "http-plugin-authorization", "tcp-mux", "tls-server-verification"]
+      },
+      {
+        "name": "mihomo",
+        "version": "v1.19.30",
+        "source": "vpnctl-release-bundle",
+        "bundled": true,
+        "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84",
+        "capabilities": ["redir-host-split-dns", "shadowsocks-2022-blake3-aes-256-gcm", "shadowtls-v3-strict", "tun-routing", "uot-v2"]
+      },
+      {
+        "name": "nftables",
+        "version": "1.0.9",
+        "source": "ubuntu-24.04-noble",
+        "bundled": false,
+        "capabilities": ["atomic-ruleset", "inet-family"]
+      },
+      {
+        "name": "nginx",
+        "version": "1.24.0-2ubuntu7.17",
+        "source": "ubuntu-24.04-noble-updates",
+        "bundled": false,
+        "capabilities": ["http-1", "http-2", "streaming-proxy"]
+      },
+      {
+        "name": "vpnctl",
+        "version": "v2.0.0-example",
+        "source": "vpnctl-release-bundle",
+        "bundled": true,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capabilities": ["cli", "controller"]
+      },
+      {
+        "name": "wireguard-tools",
+        "version": "1.0.20210914",
+        "source": "ubuntu-24.04-noble",
+        "bundled": false,
+        "capabilities": ["wireguard-userspace-tools"]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "component": "vpnctl",
+      "path": "bin/vpnctl",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "roles": ["gateway", "node"]
+    },
+    {
+      "component": "frp",
+      "path": "components/frp_0.69.0_linux_amd64.tar.gz",
+      "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e",
+      "roles": ["gateway", "node"]
+    },
+    {
+      "component": "mihomo",
+      "path": "components/mihomo-linux-amd64-v1.19.30.gz",
+      "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84",
+      "roles": ["gateway", "node"]
+    }
+  ],
+  "apt_packages": [
+    {
+      "component": "nftables",
+      "package": "nftables",
+      "source": "ubuntu-24.04-noble",
+      "minimum_version": "1.0.9-1build1",
+      "maximum_version_exclusive": "1.1",
+      "roles": ["gateway", "node"],
+      "capabilities": ["atomic-ruleset", "inet-family"]
+    },
+    {
+      "component": "nginx",
+      "package": "nginx",
+      "source": "ubuntu-24.04-noble-updates",
+      "minimum_version": "1.24.0-2ubuntu7.17",
+      "maximum_version_exclusive": "1.24.1",
+      "roles": ["gateway"],
+      "capabilities": ["http-1", "http-2", "streaming-proxy"]
+    },
+    {
+      "component": "wireguard-tools",
+      "package": "wireguard-tools",
+      "source": "ubuntu-24.04-noble",
+      "minimum_version": "1.0.20210914-1ubuntu4",
+      "maximum_version_exclusive": "1.1",
+      "roles": ["gateway", "node"],
+      "capabilities": ["wireguard-userspace-tools"]
+    }
+  ]
+}
