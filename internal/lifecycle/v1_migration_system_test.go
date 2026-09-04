@@ -186,8 +186,11 @@ func TestSystemV1MigrationPreparesConvertedGatewayRoleIdempotently(t *testing.T)
 	paths, _ := store.NewPaths(stageRoot)
 	stateStore, _ := store.NewStateStore(paths)
 	state, err := stateStore.Load()
-	if err != nil || state.Generation != 2 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
+	if err != nil || state.Generation != 3 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
 		t.Fatalf("prepared state = %+v, err=%v", state, err)
+	}
+	if len(state.Transports) != 2 || state.Transports[1].Kind != model.TransportRestricted || state.Transports[1].State != model.TransportStandby {
+		t.Fatalf("prepared migrated transports = %+v", state.Transports)
 	}
 	secrets, _ := store.NewSecretStore(paths)
 	standard, err := secrets.Get(transport.GatewayStandardCredentialRef)
@@ -255,7 +258,7 @@ func TestSystemV1MigrationSetsUpGatewayRoleFromVerifiedBundleIdempotently(t *tes
 	}
 	stateStore, _ := store.NewStateStore(paths)
 	state, err := stateStore.Load()
-	if err != nil || state.Host.Role != model.RoleGateway || state.Generation != 2 {
+	if err != nil || state.Host.Role != model.RoleGateway || state.Generation != 3 {
 		t.Fatalf("published gateway state = %+v, err=%v", state, err)
 	}
 	if installer.installCalls != 2 || installer.role != model.RoleGateway {

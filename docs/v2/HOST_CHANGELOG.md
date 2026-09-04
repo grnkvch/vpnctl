@@ -2,6 +2,93 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned v1 migration end-to-end acceptance
+
+### Planned reversible implementation
+
+- Task 15.6 will add a migration-specific E2E fixture assembled from every
+  checked-in v1 client golden artifact. It will run the real inspector,
+  converter, signed-bundle verification, system migration driver, watchdog
+  boundary, and v2 client exporters under temporary injected roots; fake
+  service/firewall adapters will prevent changes to the development host.
+- The source-level E2E will prove that retained identities, private/public
+  keypairs, `10.66.0.x` addresses, and preserved v1 profiles survive the full
+  resumable migration. A v2 WireGuard export will be required to match the v1
+  full-tunnel golden bytes when endpoint and DNS inputs are unchanged. A v2
+  Clash export will be checked as an intentional semantic extension: retained
+  standard credentials and selectors, manual standard/restricted choices,
+  policy DNS, selected gateway-or-block routing, unmatched direct routing, and
+  no automatic fallback.
+- A Linux/amd64 acceptance harness will use only disposable network namespaces
+  named `vpnctl-v1mig-e2e-*`, links named `v1me2e-*`, and a private runtime
+  tree `/run/vpnctl-v1mig-e2e`. It will establish a client from the unchanged v1
+  WireGuard golden identity, replace the gateway interface with the migrated
+  v2 interface while retaining server/client key material and address, then
+  require a new handshake and successful traffic from that same client.
+- The harness will run only inside the owned `vpnctl-v2-gateway` Lima fixture,
+  after its immutable 1-vCPU/512-MiB/10-GiB contract is revalidated. That VM is
+  currently stopped; validation may start it temporarily, copy the repository
+  harness to `/tmp/vpnctl-v1mig-e2e`, and will remove the copied tree,
+  namespaces, links, processes, and runtime files before stopping the VM again.
+  It will not touch the unrelated `realty-front-docker-vm`, production paths,
+  services, firewall state, routes outside the disposable namespaces, VPSs,
+  gateways, nodes, or external clients.
+- Cleanup assertions will fail if any owned namespace, process, link, or
+  runtime path remains. Repository rollback is limited to reverting the future
+  task 15.6 commit; disposable guest changes are reversed by harness cleanup
+  and returning the previously stopped lab VM to `Stopped`.
+
+### Result
+
+- Added a source-level migration E2E that discovers every checked-in v1 client
+  golden (`iphone.wireguard.conf` and `iphone.clash.yaml`), recreates the
+  representative v1 installation through the v1 exporter, exercises real
+  signed-bundle decoding in the no-mutation plan, and drives the complete
+  resumable system migration through watchdog confirmation. The migrated v2
+  WireGuard export must byte-match the retained v1 profile; the Clash export
+  must preserve the standard identity while adding policy DNS, a manual
+  standard/restricted choice, strict ShadowTLS/UoT, selected fail-closed rules,
+  and unmatched `DIRECT` without automatic fallback.
+- Migration convergence now creates one independent restricted standby
+  identity for each active retained client. The addition is generation-safe
+  and resumable: an already published record and secret must match exactly,
+  while a secret written before an interrupted state publication is reused.
+  Existing WireGuard credentials, logical client identity, `10.66.0.x`
+  address, selector presets, and active standard transport remain unchanged.
+- Added `test/v2lab/migration/reconnect.sh`. In isolated Linux namespaces it
+  established the retained v1 client against `wg0`, required an outage after
+  that interface disappeared, converged the gateway to `vpnctl-wg`, and
+  reconnected from the byte-identical already-copied client profile. The run
+  reported profile SHA-256
+  `7decc85ad55ecc64a0090649dce5602557bddb127a3f0992833b1b94411f8c39`,
+  retained address/private-key/peer identity, new handshakes on both sides of
+  migration, and successful post-migration traffic.
+- Revalidated and temporarily started only the existing
+  `vpnctl-v2-gateway` fixture: QEMU amd64, Ubuntu 24.04, 1 vCPU, 512 MiB RAM,
+  10 GiB disk, pinned image digest
+  `sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7`,
+  and rootless `user-v2` network. The E2E test binary
+  (`3d258e91133b9fff9fee0720619e6d3e1a55ff9e1403f03a4acfbe80e0bed084`)
+  and golden fixtures were copied only below `/tmp/vpnctl-v1mig-e2e`.
+- The migrated Clash export was accepted three consecutive times by the
+  existing pinned Mihomo Meta v1.19.30 binary at
+  `/usr/local/libexec/vpnctl-v2-spike/mihomo` (SHA-256
+  `3e92df24f5e80e86b9cf9183ceb7bb575f0bd132a9dc4081dae42e80f21076ae`).
+  That pre-existing binary was read and executed but not modified.
+- Harness cleanup reported all owned namespaces, veth links, and
+  `/run/vpnctl-v1mig-e2e` absent. Removed the exact guest tree
+  `/tmp/vpnctl-v1mig-e2e` and host test binary
+  `/private/tmp/vpnctl-v1mig-e2e-lifecycle.test`, then returned
+  `vpnctl-v2-gateway` to verified `Stopped`. `vpnctl-v2-node`, unrelated VMs,
+  host network/services, external VPSs, clients, and providers were untouched.
+- Verification passed: focused lifecycle migration tests five times, focused
+  lifecycle race tests, routing/export goldens five times, shell syntax, full
+  `go test ./...`, full `go test -race ./...`, `go vet ./...`,
+  `openspec validate vpnctl-v2 --strict`, and `git diff --check`.
+- Repository rollback is `git revert <task-15.6-commit>`. No host rollback is
+  pending because every temporary resource was removed and the lab VM was
+  restored to its prior stopped state.
+
 ## 2026-09-04 — planned bounded v1 migration rollback and acceptance
 
 ### Planned reversible implementation

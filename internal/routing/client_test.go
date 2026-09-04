@@ -19,6 +19,42 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
+func TestBuildImportedRestrictedClientTransportKeepsStandardActiveAndCreatesCanonicalStandby(t *testing.T) {
+	t.Parallel()
+	client := model.Client{
+		SchemaVersion:        model.ResourceSchemaVersion,
+		ID:                   "11111111-1111-4111-8111-111111111111",
+		Name:                 "iphone",
+		Platform:             "ios",
+		Lifecycle:            model.LifecycleActive,
+		OverlayIPv4:          "10.66.0.2",
+		CredentialGeneration: 1,
+		AssignedPresets:      []string{"telegram"},
+		ActiveTransport:      model.TransportStandard,
+		CreatedAt:            time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC),
+	}
+	record, err := BuildImportedRestrictedClientTransport(client, "www.microsoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReference, err := clientRestrictedCredentialReference(client.ID, client.CredentialGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.OwnerKind != model.TargetClient || record.OwnerID != client.ID || record.Kind != model.TransportRestricted ||
+		record.State != model.TransportStandby || record.Provider != restrictedcodec.ProviderName || record.Protocol != model.ProtocolTCP ||
+		record.Port != restrictedcodec.TCPPort || record.CredentialGeneration != 1 || record.CredentialRef != wantReference ||
+		record.HandshakeHost != "www.microsoft.com" || record.ConfigHash != clientRestrictedTransportHash(client.ID, 1, wantReference) {
+		t.Fatalf("imported restricted transport = %+v", record)
+	}
+	client.Lifecycle = model.LifecycleRevoked
+	revokedAt := client.CreatedAt.Add(time.Hour)
+	client.RevokedAt = &revokedAt
+	if _, err := BuildImportedRestrictedClientTransport(client, "www.microsoft.com"); err == nil {
+		t.Fatal("revoked imported client received a new restricted credential")
+	}
+}
+
 func TestClientManagerCreatesFiveStableIsolatedIdentitiesAndSecretFreeViews(t *testing.T) {
 	t.Parallel()
 

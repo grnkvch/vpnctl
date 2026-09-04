@@ -186,7 +186,7 @@
 - [x] 15.3 Implement migration impact/compatibility reporting for values that cannot be preserved and required re-export; verify every dropped or transformed field is explicit before mutation.
 - [x] 15.4 Implement the standalone migration script orchestration with maintenance snapshot, signed v2 bundle verification, role setup, known-UFW translation, watchdog-protected network activation, client validation, and accepted downtime; verify repeated dry runs and interrupted phases are safe.
 - [x] 15.5 Implement a bounded migration rollback package and documented acceptance/removal step; verify injected failures before acceptance restore the v1 binary, state, WireGuard, and known UFW behavior.
-- [ ] 15.6 Run migration E2E against representative v1 installations and all v1 client golden profiles; verify retained clients reconnect and v2 exports match expected semantics.
+- [x] 15.6 Run migration E2E against representative v1 installations and all v1 client golden profiles; verify retained clients reconnect and v2 exports match expected semantics.
 
 ## 16. End-to-End, Security, Capacity, and Release Gate
 

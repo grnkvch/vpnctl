@@ -24,6 +24,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
@@ -765,10 +766,14 @@ func (driver *SystemV1MigrationDriver) prepareGatewayStage(ctx context.Context, 
 			}
 		}
 		state = candidate
-	} else if state.Generation != 2 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
+	} else if state.Generation < 2 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
 		return linuxplatform.RoleInstallationRequest{}, fmt.Errorf("%w: converted stage identity publication is partial", ErrV1MigrationConflict)
 	}
 	if err := ensureV1MigrationStageLayout(paths); err != nil {
+		return linuxplatform.RoleInstallationRequest{}, err
+	}
+	state, err = driver.ensureV1MigrationClientRestrictedTransports(ctx, stateStore, secrets, state)
+	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, err
 	}
 	listeners, err := transport.NewGatewayListenerProvisioner(secrets, driver.keyRunner, driver.entropy)
@@ -801,6 +806,81 @@ func (driver *SystemV1MigrationDriver) prepareGatewayStage(ctx context.Context, 
 		}
 	}
 	return request, nil
+}
+
+func (driver *SystemV1MigrationDriver) ensureV1MigrationClientRestrictedTransports(ctx context.Context, stateStore *store.StateStore, secrets *store.SecretStore, state model.State) (model.State, error) {
+	if ctx == nil || driver == nil || driver.entropy == nil || stateStore == nil || secrets == nil || state.HandshakeHost == nil {
+		return model.State{}, fmt.Errorf("migrated client restricted transport input is incomplete")
+	}
+	existing := make(map[string]model.Transport)
+	for _, record := range state.Transports {
+		if record.OwnerKind != model.TargetClient || record.Kind != model.TransportRestricted {
+			continue
+		}
+		if _, duplicate := existing[record.OwnerID]; duplicate {
+			return model.State{}, fmt.Errorf("%w: migrated client %s has duplicate restricted transports", ErrV1MigrationConflict, record.OwnerID)
+		}
+		existing[record.OwnerID] = record
+	}
+
+	candidate := state
+	candidate.Transports = append([]model.Transport(nil), state.Transports...)
+	changed := false
+	for _, client := range state.Clients {
+		if client.Lifecycle != model.LifecycleActive {
+			continue
+		}
+		expected, err := routing.BuildImportedRestrictedClientTransport(client, state.HandshakeHost.Hostname)
+		if err != nil {
+			return model.State{}, err
+		}
+		record, found := existing[client.ID]
+		if !found {
+			record = expected
+			candidate.Transports = append(candidate.Transports, record)
+			changed = true
+		} else if !reflect.DeepEqual(record, expected) {
+			return model.State{}, fmt.Errorf("%w: migrated client %s restricted transport differs from the staged identity", ErrV1MigrationConflict, client.ID)
+		}
+		credential, err := secrets.Get(record.CredentialRef)
+		if errors.Is(err, store.ErrSecretNotFound) || errors.Is(err, fs.ErrNotExist) {
+			credential, err = restricted.GenerateIdentitySecret(driver.entropy)
+			if err == nil {
+				err = secrets.PutIfAbsent(record.CredentialRef, credential)
+			}
+			if errors.Is(err, store.ErrSecretExists) {
+				clear(credential)
+				credential, err = secrets.Get(record.CredentialRef)
+			}
+		}
+		if err != nil {
+			clear(credential)
+			return model.State{}, fmt.Errorf("prepare migrated client %s restricted credential: %w", client.ID, err)
+		}
+		_, decodeErr := restricted.DecodeIdentitySecret(credential)
+		clear(credential)
+		if decodeErr != nil {
+			return model.State{}, fmt.Errorf("%w: migrated client %s restricted credential is invalid", ErrV1MigrationConflict, client.ID)
+		}
+	}
+	if !changed {
+		return state, nil
+	}
+	next, err := model.NextGeneration(state.Generation)
+	if err != nil {
+		return model.State{}, err
+	}
+	candidate.Generation = next
+	if err := model.ValidateTransition(state, candidate); err != nil {
+		return model.State{}, fmt.Errorf("validate migrated restricted client publication: %w", err)
+	}
+	if err := stateStore.Save(state.Generation, candidate); err != nil {
+		loaded, loadErr := stateStore.Load()
+		if loadErr != nil || !reflect.DeepEqual(loaded, candidate) {
+			return model.State{}, errors.Join(err, loadErr)
+		}
+	}
+	return candidate, nil
 }
 
 func clearIncompleteV1MigrationIdentity(secrets *store.SecretStore) error {
@@ -939,7 +1019,7 @@ func publishV1MigrationStage(stageRoot string, paths store.Paths) error {
 		return err
 	}
 	state, err := stateStore.Load()
-	if err != nil || state.Host.Role != model.RoleGateway || state.Generation != 2 {
+	if err != nil || state.Host.Role != model.RoleGateway || state.Generation < 2 {
 		return fmt.Errorf("published migrated gateway state did not validate")
 	}
 	return nil

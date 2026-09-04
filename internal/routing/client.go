@@ -576,6 +576,37 @@ func BuildImportedStandardClientTransport(client model.Client, publicKey string)
 	return transport, nil
 }
 
+// BuildImportedRestrictedClientTransport creates the independent restricted
+// standby record needed to export an active migrated client through either v2
+// transport. The caller owns generation-safe secret publication because v1
+// has no restricted credential to preserve.
+func BuildImportedRestrictedClientTransport(client model.Client, handshakeHost string) (model.Transport, error) {
+	if err := client.Validate(); err != nil {
+		return model.Transport{}, fmt.Errorf("validate imported client: %w", err)
+	}
+	if client.Lifecycle != model.LifecycleActive {
+		return model.Transport{}, fmt.Errorf("only an active imported client can receive restricted transport credentials")
+	}
+	if client.ActiveTransport != model.TransportStandard {
+		return model.Transport{}, fmt.Errorf("imported client must retain standard as its active transport")
+	}
+	reference, err := clientRestrictedCredentialReference(client.ID, client.CredentialGeneration)
+	if err != nil {
+		return model.Transport{}, err
+	}
+	record := model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: client.ID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: restricted.ProviderName,
+		Protocol: model.ProtocolTCP, Port: restricted.TCPPort, CredentialGeneration: client.CredentialGeneration,
+		CredentialRef: reference, HandshakeHost: handshakeHost,
+		ConfigHash: clientRestrictedTransportHash(client.ID, client.CredentialGeneration, reference),
+	}
+	if err := record.Validate(); err != nil {
+		return model.Transport{}, fmt.Errorf("validate imported client restricted transport: %w", err)
+	}
+	return record, nil
+}
+
 func clientRestrictedCredentialReference(clientID string, generation uint64) (model.SecretRef, error) {
 	if generation == 0 {
 		return "", fmt.Errorf("client credential generation must be positive")
