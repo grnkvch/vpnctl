@@ -22,6 +22,9 @@ type updateManager interface {
 	Plan(context.Context, string) (lifecycle.UpdatePlan, error)
 	Apply(context.Context, lifecycle.UpdatePlan) (lifecycle.UpdateResult, error)
 	Discard(lifecycle.UpdatePlan) error
+	PlanRollback(context.Context) (lifecycle.UpdateRollbackPlan, error)
+	ApplyRollback(context.Context, lifecycle.UpdateRollbackPlan) (lifecycle.UpdateResult, error)
+	DiscardRollback(lifecycle.UpdateRollbackPlan) error
 }
 
 var (
@@ -68,24 +71,30 @@ func executeUpdate(args []string, stdout, stderr io.Writer) int {
 		return ExitInternal
 	}
 	if err != nil {
-		return emitUpdateFailure(emitter, output.CategoryValidation, "invalid_arguments", err.Error())
+		return emitUpdateFailure(emitter, "update", output.CategoryValidation, "invalid_arguments", err.Error())
 	}
+	commandID := "update"
 	if parsed.Rollback {
-		return emitUpdateFailure(emitter, output.CategoryValidation, "rollback_not_available", "update rollback is not available until a previous release snapshot exists")
+		commandID = "update.rollback"
 	}
 	paths := updateSystemPaths()
 	role, err := updateLoadRole(paths)
 	if err != nil || role == RoleUninitialized {
-		return emitUpdateFailure(emitter, output.CategoryValidation, "invalid_host_state", "update requires an initialized gateway or node")
+		return emitUpdateFailure(emitter, commandID, output.CategoryValidation, "invalid_host_state", "update requires an initialized gateway or node")
 	}
 	manager, err := updateBuilder(context.Background(), paths, role)
 	if err != nil {
 		category, code, message := classifyUpdateError(err)
-		return emitUpdateFailure(emitter, category, code, message)
+		return emitUpdateFailure(emitter, commandID, category, code, message)
 	}
-	workflow, err := NewUpdateWorkflow(manager, parsed.Version)
+	var workflow discardableUpdateWorkflow
+	if parsed.Rollback {
+		workflow, err = NewUpdateRollbackWorkflow(manager)
+	} else {
+		workflow, err = NewUpdateWorkflow(manager, parsed.Version)
+	}
 	if err != nil {
-		return emitUpdateFailure(emitter, output.CategoryInternal, "update_internal_error", "vpnctl could not prepare the update workflow")
+		return emitUpdateFailure(emitter, commandID, output.CategoryInternal, "update_internal_error", "vpnctl could not prepare the update workflow")
 	}
 	defer workflow.Discard()
 	var terminal PromptIO
@@ -97,17 +106,22 @@ func executeUpdate(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	outcome, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
-		CommandID: "update", Role: role, DryRun: parsed.DryRun, Yes: parsed.Yes, JSON: parsed.JSON,
+		CommandID: commandID, Role: role, DryRun: parsed.DryRun, Yes: parsed.Yes, JSON: parsed.JSON,
 	}, terminal, workflow, nil)
 	if err != nil {
 		category, code, message := classifyUpdateError(err)
-		return emitUpdateFailure(emitter, category, code, message)
+		return emitUpdateFailure(emitter, commandID, category, code, message)
 	}
 	code, err := emitter.Emit(outcome.Result)
 	if err != nil {
 		return ExitInternal
 	}
 	return code
+}
+
+type discardableUpdateWorkflow interface {
+	MutationWorkflow
+	Discard() error
 }
 
 func parseUpdateArguments(args []string) (updateArguments, error) {
@@ -154,9 +168,6 @@ func parseUpdateArguments(args []string) (updateArguments, error) {
 		return parsed, nil
 	}
 	if positionals[1] == "rollback" {
-		if parsed.DryRun {
-			return parsed, fmt.Errorf("update rollback does not support --dry-run")
-		}
 		parsed.Rollback = true
 		return parsed, nil
 	}
@@ -216,7 +227,65 @@ func (workflow *UpdateWorkflow) Apply(ctx context.Context, public MutationPlan, 
 	if err != nil {
 		return AppliedMutation{}, err
 	}
-	return AppliedMutation{Result: updateResultOutput(result)}, nil
+	return AppliedMutation{Result: updateResultOutput("update", result)}, nil
+}
+
+type UpdateRollbackWorkflow struct {
+	manager  updateManager
+	plan     lifecycle.UpdateRollbackPlan
+	public   MutationPlan
+	planned  bool
+	finished bool
+}
+
+func NewUpdateRollbackWorkflow(manager updateManager) (*UpdateRollbackWorkflow, error) {
+	if manager == nil {
+		return nil, fmt.Errorf("update rollback manager is required")
+	}
+	return &UpdateRollbackWorkflow{manager: manager}, nil
+}
+
+func (workflow *UpdateRollbackWorkflow) Plan(ctx context.Context, _ *InteractionInputs) (MutationPlan, error) {
+	if workflow == nil || workflow.manager == nil || workflow.planned {
+		return MutationPlan{}, fmt.Errorf("update rollback workflow cannot be planned")
+	}
+	plan, err := workflow.manager.PlanRollback(ctx)
+	if err != nil {
+		return MutationPlan{}, err
+	}
+	public, err := updateRollbackPlanOutput(plan)
+	if err != nil {
+		_ = workflow.manager.DiscardRollback(plan)
+		return MutationPlan{}, err
+	}
+	impact := ImpactAvailability
+	if plan.Blocked {
+		impact = ImpactNone
+	}
+	workflow.plan = plan
+	workflow.public = MutationPlan{Impact: impact, Result: public}
+	workflow.planned = true
+	return workflow.public, nil
+}
+
+func (workflow *UpdateRollbackWorkflow) Apply(ctx context.Context, public MutationPlan, _ *InteractionInputs) (AppliedMutation, error) {
+	if workflow == nil || workflow.manager == nil || !workflow.planned || workflow.finished || !reflect.DeepEqual(public, workflow.public) {
+		return AppliedMutation{}, fmt.Errorf("update rollback apply does not match the retained plan")
+	}
+	result, err := workflow.manager.ApplyRollback(ctx, workflow.plan)
+	workflow.finished = true
+	if err != nil {
+		return AppliedMutation{}, err
+	}
+	return AppliedMutation{Result: updateResultOutput("update.rollback", result)}, nil
+}
+
+func (workflow *UpdateRollbackWorkflow) Discard() error {
+	if workflow == nil || workflow.manager == nil || !workflow.planned || workflow.finished {
+		return nil
+	}
+	workflow.finished = true
+	return workflow.manager.DiscardRollback(workflow.plan)
 }
 
 func (workflow *UpdateWorkflow) Discard() error {
@@ -322,14 +391,97 @@ func updatePlanData(plan lifecycle.UpdatePlan) output.SafeObject {
 	}
 }
 
-func updateResultOutput(result lifecycle.UpdateResult) output.Result {
+func updateRollbackPlanOutput(plan lifecycle.UpdateRollbackPlan) (output.Result, error) {
+	status, category := output.StatusOK, output.CategorySuccess
+	if plan.Blocked {
+		status, category = output.StatusFailed, output.CategoryConflict
+	}
+	result := output.NewResult("update.rollback", status, category, updateRollbackPlanData(plan))
+	for _, interruption := range plan.ExpectedInterruptions {
+		result.Warnings = append(result.Warnings, output.Message{Code: "expected_interruption", Message: interruption})
+	}
+	for _, action := range plan.RequiresAction {
+		result.RequiresAction = append(result.RequiresAction, output.Action{Code: "resolve_rollback_compatibility", Message: action})
+	}
+	componentRows := make([][]string, 0, len(plan.Components))
+	for _, component := range plan.Components {
+		componentRows = append(componentRows, []string{
+			component.Name, component.CurrentVersion, component.TargetVersion, fmt.Sprint(component.FileChanged), strings.Join(component.AffectedServices, ","),
+		})
+	}
+	if err := result.AddHumanTable("components", []string{"name", "current", "target", "file_changed", "services"}, componentRows); err != nil {
+		return output.Result{}, err
+	}
+	packageRows := make([][]string, 0, len(plan.Packages))
+	for _, check := range plan.Packages {
+		packageRows = append(packageRows, []string{check.Component, check.Package, check.InstalledVersion, fmt.Sprint(check.Compatible)})
+	}
+	if err := result.AddHumanTable("packages", []string{"component", "package", "installed", "compatible"}, packageRows); err != nil {
+		return output.Result{}, err
+	}
+	if err := result.AddHumanTable("migration", []string{"from_schema", "to_schema", "reversible"}, [][]string{{
+		fmt.Sprint(plan.Migration.FromSchema), fmt.Sprint(plan.Migration.ToSchema), fmt.Sprint(plan.Migration.Reversible),
+	}}); err != nil {
+		return output.Result{}, err
+	}
+	return result, nil
+}
+
+func updateRollbackPlanData(plan lifecycle.UpdateRollbackPlan) output.SafeObject {
+	components := make(output.SafeList, 0, len(plan.Components))
+	affected := make(map[string]struct{})
+	for _, component := range plan.Components {
+		services := append([]string{}, component.AffectedServices...)
+		for _, service := range services {
+			affected[service] = struct{}{}
+		}
+		components = append(components, output.SafeObject{
+			"name": component.Name, "current_version": component.CurrentVersion, "target_version": component.TargetVersion,
+			"bundled": component.Bundled, "changed": component.Changed, "file_changed": component.FileChanged, "affected_services": services,
+		})
+	}
+	affectedServices := make([]string, 0, len(affected))
+	for service := range affected {
+		affectedServices = append(affectedServices, service)
+	}
+	sortStrings(affectedServices)
+	packages := make(output.SafeList, 0, len(plan.Packages))
+	for _, check := range plan.Packages {
+		packages = append(packages, output.SafeObject{
+			"component": check.Component, "package": check.Package, "installed_version": check.InstalledVersion, "compatible": check.Compatible,
+		})
+	}
+	nodes := make(output.SafeList, 0, len(plan.Fleet.Nodes))
+	for _, node := range plan.Fleet.Nodes {
+		nodes = append(nodes, output.SafeObject{
+			"id": node.ID, "name": node.Name, "control_protocol": node.ControlProtocol, "compatible": node.Compatible, "code": node.Code,
+		})
+	}
+	return output.SafeObject{
+		"changed": true, "operation_id": plan.OperationID, "snapshot_id": plan.SnapshotID,
+		"generation": plan.ExpectedStateGeneration, "role": string(plan.Role),
+		"current_version": plan.CurrentVersion, "target_version": plan.TargetVersion, "blocked": plan.Blocked,
+		"rollback_available": !plan.Blocked && plan.Migration.Reversible, "affected_services": affectedServices,
+		"expected_interruptions": append([]string{}, plan.ExpectedInterruptions...), "components": components, "packages": packages,
+		"fleet": output.SafeObject{
+			"compatible": plan.Fleet.Compatible, "selected_protocol": plan.Fleet.SelectedProtocol,
+			"gateway_version": plan.Fleet.GatewayVersion, "nodes": nodes,
+		},
+		"migration": output.SafeObject{
+			"from_schema": plan.Migration.FromSchema, "to_schema": plan.Migration.ToSchema,
+			"steps": append([]string{}, plan.Migration.Steps...), "reversible": plan.Migration.Reversible,
+		},
+	}
+}
+
+func updateResultOutput(command string, result lifecycle.UpdateResult) output.Result {
 	components := make(output.SafeList, 0, len(result.ComponentResults))
 	for _, component := range result.ComponentResults {
 		components = append(components, output.SafeObject{
 			"name": component.Name, "changed": component.Changed, "healthy": component.Healthy, "rolled_back": component.RolledBack,
 		})
 	}
-	outputResult := output.NewResult("update", output.StatusOK, output.CategorySuccess, output.SafeObject{
+	outputResult := output.NewResult(command, output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": result.Changed, "operation_id": result.OperationID, "role": string(result.Role),
 		"previous_version": result.PreviousVersion, "current_version": result.CurrentVersion, "generation": result.Generation,
 		"components": components, "expected_interruptions": append([]string{}, result.ExpectedInterruptions...),
@@ -363,6 +515,10 @@ func buildSystemUpdater(_ context.Context, paths store.Paths, role HostRole) (up
 	if err != nil {
 		return nil, err
 	}
+	snapshots, err := lifecycle.NewFilesystemUpdateSnapshotStore(paths.SnapshotsDir, publicKey, installer)
+	if err != nil {
+		return nil, err
+	}
 	source, err := lifecycle.NewUpdateReleaseSource(lifecycle.DefaultReleaseRepositoryURL, http.DefaultClient, publicKey, installer)
 	if err != nil {
 		return nil, err
@@ -379,7 +535,7 @@ func buildSystemUpdater(_ context.Context, paths store.Paths, role HostRole) (up
 		}
 	}
 	return lifecycle.NewUpdater(lifecycle.UpdateRuntime{
-		State: stateStore, Releases: source, Bundles: installer, Fleet: fleet, Host: host,
+		State: stateStore, Snapshots: snapshots, Releases: source, Bundles: installer, Fleet: fleet, Host: host,
 		CurrentBundlePath: filepath.Join(paths.Root, strings.TrimPrefix(lifecycle.ReleaseInstalledBundlePath, "/")),
 	})
 }
@@ -397,6 +553,12 @@ func updateModelRole(role HostRole) (model.Role, bool) {
 
 func classifyUpdateError(err error) (output.ExitCategory, string, string) {
 	switch {
+	case errors.Is(err, lifecycle.ErrUpdateSnapshotNotFound):
+		return output.CategoryValidation, "rollback_not_available", "no previous successful update snapshot is available"
+	case errors.Is(err, lifecycle.ErrUpdateSnapshotPending):
+		return output.CategoryConflict, "update_recovery_required", "an incomplete update snapshot requires repair before another update or rollback"
+	case errors.Is(err, lifecycle.ErrUpdateSnapshotInvalid):
+		return output.CategoryConflict, "update_snapshot_invalid", "the previous update snapshot is invalid or no longer matches authoritative state"
 	case errors.Is(err, lifecycle.ErrUpdateConflict), errors.Is(err, lifecycle.ErrReleaseUpdateConflict), errors.Is(err, store.ErrStateConflict):
 		return output.CategoryConflict, "update_conflict", "authoritative state or installed release changed; retry the update"
 	case errors.Is(err, lifecycle.ErrUpdateHealth):
@@ -410,8 +572,8 @@ func classifyUpdateError(err error) (output.ExitCategory, string, string) {
 	}
 }
 
-func emitUpdateFailure(emitter *ResultEmitter, category output.ExitCategory, warningCode, warningMessage string) int {
-	result := output.NewResult("update", output.StatusFailed, category, output.SafeObject{"changed": false})
+func emitUpdateFailure(emitter *ResultEmitter, command string, category output.ExitCategory, warningCode, warningMessage string) int {
+	result := output.NewResult(command, output.StatusFailed, category, output.SafeObject{"changed": false})
 	result.Warnings = append(result.Warnings, output.Message{Code: warningCode, Message: singleLineGatewayInitMessage(warningMessage)})
 	code, err := emitter.Emit(result)
 	if err != nil {
@@ -433,7 +595,7 @@ func printUpdateHelp(writer io.Writer) {
 
 Usage:
   vpnctl update [version] [--dry-run] [--yes] [--json]
-  vpnctl update rollback [--yes] [--json]
+  vpnctl update rollback [--dry-run] [--yes] [--json]
 
 With no version, vpnctl checks the latest stable release only for this command.
 Updates are local and manual; vpnctl never updates remote nodes automatically.
@@ -441,3 +603,4 @@ Updates are local and manual; vpnctl never updates remote nodes automatically.
 }
 
 var _ MutationWorkflow = (*UpdateWorkflow)(nil)
+var _ MutationWorkflow = (*UpdateRollbackWorkflow)(nil)

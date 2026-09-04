@@ -133,6 +133,56 @@ func (prepared *PreparedReleaseBundleUpdate) Changes() []ReleaseBundleComponentC
 	return append([]ReleaseBundleComponentChange(nil), prepared.changes...)
 }
 
+func (prepared *PreparedReleaseBundleUpdate) CurrentSnapshotFiles() (UpdateSnapshotReleaseFiles, error) {
+	if prepared == nil {
+		return UpdateSnapshotReleaseFiles{}, fmt.Errorf("prepared release update is required")
+	}
+	prepared.mu.Lock()
+	defer prepared.mu.Unlock()
+	if err := prepared.usableLocked(); err != nil {
+		return UpdateSnapshotReleaseFiles{}, err
+	}
+	return UpdateSnapshotReleaseFiles{
+		BundlePath: prepared.currentBundleBackup, ChecksumsPath: prepared.currentChecksumsBackup,
+		SignaturePath: prepared.currentSignatureBackup,
+	}, nil
+}
+
+func (prepared *PreparedReleaseBundleUpdate) ValidateInstalled(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	prepared.mu.Lock()
+	defer prepared.mu.Unlock()
+	if err := prepared.usableLocked(); err != nil {
+		return err
+	}
+	for name, current := range prepared.currentByName {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := os.Lstat(current.target)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
+			return fmt.Errorf("%w: installed component %s changed after planning", ErrReleaseUpdateConflict, name)
+		}
+		equal, err := equalReleaseFiles(current.target, current.source)
+		if err != nil || !equal {
+			return fmt.Errorf("%w: installed component %s changed after planning", ErrReleaseUpdateConflict, name)
+		}
+	}
+	for index, path := range prepared.installedMetadataPaths() {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			return fmt.Errorf("%w: installed release metadata changed after planning", ErrReleaseUpdateConflict)
+		}
+		equal, err := equalReleaseFiles(path, prepared.metadataBackups()[index])
+		if err != nil || !equal {
+			return fmt.Errorf("%w: installed release metadata changed after planning", ErrReleaseUpdateConflict)
+		}
+	}
+	return nil
+}
+
 func (prepared *PreparedReleaseBundleUpdate) ActivateComponent(ctx context.Context, component string) error {
 	if ctx == nil {
 		return fmt.Errorf("context is required")

@@ -29,6 +29,12 @@ type UpdateStateStore interface {
 	Save(uint64, model.State) error
 }
 
+type UpdateSnapshotManager interface {
+	Prepare(context.Context, UpdateSnapshotInput) (*PreparedUpdateSnapshot, error)
+	LoadPrevious(context.Context) (*LoadedUpdateSnapshot, error)
+	ConsumePrevious(string) error
+}
+
 type UpdateFleetChecker interface {
 	Check(context.Context, model.State, model.ComponentManifest) (UpdateFleetCompatibility, error)
 }
@@ -126,6 +132,7 @@ type UpdateComponentResult struct {
 
 type UpdateRuntime struct {
 	State             UpdateStateStore
+	Snapshots         UpdateSnapshotManager
 	Releases          UpdateReleaseStager
 	Bundles           *ReleaseBundleInstaller
 	Fleet             UpdateFleetChecker
@@ -141,7 +148,7 @@ type Updater struct {
 }
 
 func NewUpdater(runtime UpdateRuntime) (*Updater, error) {
-	if runtime.State == nil || runtime.Releases == nil || runtime.Bundles == nil || runtime.Fleet == nil || runtime.Host == nil {
+	if runtime.State == nil || runtime.Snapshots == nil || runtime.Releases == nil || runtime.Bundles == nil || runtime.Fleet == nil || runtime.Host == nil {
 		return nil, fmt.Errorf("software update dependencies are incomplete")
 	}
 	if runtime.CurrentBundlePath == "" {
@@ -160,7 +167,7 @@ func (updater *Updater) Plan(ctx context.Context, requestedVersion string) (Upda
 	if ctx == nil {
 		return UpdatePlan{}, fmt.Errorf("context is required")
 	}
-	if updater == nil || updater.runtime.State == nil || updater.runtime.Releases == nil || updater.runtime.Bundles == nil || updater.runtime.Fleet == nil || updater.runtime.Host == nil {
+	if updater == nil || updater.runtime.State == nil || updater.runtime.Snapshots == nil || updater.runtime.Releases == nil || updater.runtime.Bundles == nil || updater.runtime.Fleet == nil || updater.runtime.Host == nil {
 		return UpdatePlan{}, fmt.Errorf("software updater is incomplete")
 	}
 	updater.mu.Lock()
@@ -271,6 +278,9 @@ func (updater *Updater) Apply(ctx context.Context, plan UpdatePlan) (UpdateResul
 	if err != nil || !reflect.DeepEqual(current, plan.state) {
 		return UpdateResult{}, fmt.Errorf("%w: authoritative state changed after update planning", ErrUpdateConflict)
 	}
+	if err := plan.prepared.ValidateInstalled(ctx); err != nil {
+		return UpdateResult{}, err
+	}
 	if !plan.Changed {
 		return UpdateResult{
 			OperationID: plan.OperationID, Role: plan.Role, PreviousVersion: plan.CurrentVersion,
@@ -287,7 +297,28 @@ func (updater *Updater) Apply(ctx context.Context, plan UpdatePlan) (UpdateResul
 		_ = updater.runtime.Host.ResumeManagement(context.Background(), plan.Role)
 		return UpdateResult{}, fmt.Errorf("quiesce update management: %w", err)
 	}
+	currentFiles, err := plan.prepared.CurrentSnapshotFiles()
+	if err != nil {
+		_ = updater.runtime.Host.ResumeManagement(context.Background(), plan.Role)
+		return UpdateResult{}, fmt.Errorf("inspect previous release snapshot inputs: %w", err)
+	}
+	snapshot, err := updater.runtime.Snapshots.Prepare(ctx, UpdateSnapshotInput{
+		OperationID: plan.OperationID, Role: plan.Role, UpdatedToVersion: plan.TargetVersion,
+		UpdatedStateSchema: plan.Migration.ToSchema, MigrationReversible: plan.Migration.Reversible,
+		CreatedAt: now, PreviousState: current, Release: currentFiles,
+	})
+	if err != nil {
+		_ = updater.runtime.Host.ResumeManagement(context.Background(), plan.Role)
+		return UpdateResult{}, fmt.Errorf("preserve previous update snapshot: %w", err)
+	}
+	snapshotPromoted := false
+	defer func() {
+		if !snapshotPromoted {
+			_ = snapshot.Abort()
+		}
+	}()
 	if _, err := updater.saveState(current, pending); err != nil {
+		_ = snapshot.Abort()
 		_ = updater.runtime.Host.ResumeManagement(context.Background(), plan.Role)
 		return UpdateResult{}, fmt.Errorf("persist pending update operation: %w", err)
 	}
@@ -321,6 +352,7 @@ func (updater *Updater) Apply(ctx context.Context, plan UpdatePlan) (UpdateResul
 			persisted = reconciled
 		}
 		rollbackErrors = append(rollbackErrors, updater.runtime.Host.ResumeManagement(rollbackContext, plan.Role))
+		rollbackErrors = append(rollbackErrors, snapshot.Abort())
 		return errors.Join(cause, errors.Join(rollbackErrors...))
 	}
 	for _, change := range plan.Components {
@@ -365,6 +397,13 @@ func (updater *Updater) Apply(ctx context.Context, plan UpdatePlan) (UpdateResul
 		return UpdateResult{}, rollback(fmt.Errorf("complete update operation: %w", err))
 	}
 	persisted = completed
+	if err := snapshot.Finalize(persisted); err != nil {
+		return UpdateResult{}, rollback(fmt.Errorf("finalize previous update snapshot: %w", err))
+	}
+	if err := snapshot.Promote(); err != nil {
+		return UpdateResult{}, rollback(fmt.Errorf("promote previous update snapshot: %w", err))
+	}
+	snapshotPromoted = true
 	if err := plan.prepared.Commit(); err != nil {
 		return UpdateResult{}, fmt.Errorf("finalize release update: %w", err)
 	}

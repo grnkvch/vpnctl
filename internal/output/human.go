@@ -23,6 +23,7 @@ var humanScalarFields = map[string]struct{}{
 	"rollback_available": {},
 	"scp_command":        {},
 	"scope":              {},
+	"snapshot_id":        {},
 	"upstreams":          {},
 	"sha256":             {},
 	"target_version":     {},

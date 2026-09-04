@@ -115,6 +115,7 @@ const (
 	OperationTrustRotate       OperationType = "trust-rotate"
 	OperationRestore           OperationType = "restore"
 	OperationUpdate            OperationType = "update"
+	OperationUpdateRollback    OperationType = "update-rollback"
 	OperationUninstall         OperationType = "uninstall"
 	OperationPurge             OperationType = "purge"
 )

@@ -26,6 +26,7 @@
             "changed": { "type": "boolean" },
             "dry_run": { "type": "boolean" },
             "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "snapshot_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
             "generation": { "type": "integer", "minimum": 0 },
             "scope": { "enum": ["control", "transport", "routing", "dns", "tunnel", "ingress", "all"] },
             "disabled_ids": {

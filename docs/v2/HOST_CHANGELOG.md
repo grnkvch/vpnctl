@@ -2,6 +2,72 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — persistent update snapshot and manual rollback
+
+### Planned reversible validation
+
+- Task 14.5 is source-only on this development host. Before a changed update
+  activates any component, vpnctl will copy the verified prior bundle,
+  checksum metadata/signature, and canonical prior state into an owner-only
+  versioned directory under `/var/lib/vpnctl/snapshots`; a small atomic pointer
+  will distinguish a crash-recovery candidate from the last completed update.
+- A successful update will bind the snapshot to the exact resulting state and
+  promote it as the single previous-release rollback source. Failed updates
+  will remove only their own candidate and retain an older usable snapshot.
+  Snapshot reads will reject symlinks, wrong modes, malformed metadata,
+  changed hashes, role/version mismatches, incomplete promotion, and current
+  state that has changed since the associated update.
+- `vpnctl update rollback` will plan only from this local verified snapshot,
+  re-check role, package, fleet, state, and component compatibility, display
+  the restored version/state and interruption, and require the normal update
+  confirmation. It will stop before mutation when no snapshot exists or the
+  forward migration was irreversible. Forward updates with a real
+  irreversible schema migration retain the existing second typed consent;
+  `--yes` cannot satisfy that barrier.
+- Apply and rollback tests will use temporary roots, ephemeral signing keys,
+  injected state stores/service health, and deterministic failures. No real
+  binary, package, systemd unit, service, state, release path, VM, listener,
+  firewall, route, public endpoint, gateway, or node will change. Repository
+  rollback is limited to the future task 14.5 commit; every test snapshot and
+  staged release is automatically removed with its temporary root.
+
+### Result
+
+- Every changed forward update now persists a versioned mode-`0700` candidate
+  containing the exact verified previous bundle, signed checksum metadata and
+  signature, canonical state, strict metadata, and SHA-256 bindings before the
+  first component replacement. A mode-`0600` pending pointer prevents a
+  second update from hiding an incomplete attempt. Successful completion adds
+  the exact resulting-state hash and atomically promotes the candidate;
+  automatic failure removes only that candidate and keeps an older successful
+  snapshot available.
+- `vpnctl update rollback` and its `--dry-run` mode now use only the local
+  snapshot. Planning re-verifies file types/modes/hashes, signed release
+  metadata, the complete bundle and platform, role/version/state bindings,
+  current installed files, compatible apt ranges, and gateway-first fleet
+  protocol range. No snapshot, pending/corrupt material, a changed post-update
+  state, wrong role/version, incompatible fleet/package, or irreversible
+  migration returns a blocked/error result before state or service mutation.
+- Confirmed rollback restores changed components sequentially with health
+  checks, publishes the exact previous release metadata, and restores the
+  prior semantic state while retaining monotonic state generation and both
+  update/rollback audit operations. The previous pointer is consumed only
+  after success. Tests compare the complete installed release tree byte for
+  byte, compare restored state after normalizing generation/audit history, and
+  prove that rollback makes no release-source request.
+- Forward update apply now revalidates every installed component and metadata
+  file against its retained signed plan immediately before quiescing
+  management. Post-plan drift therefore stops without a state write, service
+  action, or snapshot. A real irreversible migration requires both ordinary
+  confirmation and the exact `accept irreversible migration` phrase;
+  `--yes` alone is refused.
+- Full ordinary and race-detector suites, `go vet ./...`, package listing,
+  Bash syntax, JSON parsing, formatting/diff checks, and strict OpenSpec
+  validation pass. One initial full run hit the existing controller-startup
+  timing test; ten isolated repetitions and the complete rerun passed. No real
+  host resource changed; only disposable temporary roots and Go build-cache
+  entries were used, so no host rollback is required.
+
 ## 2026-09-04 — manual gateway-first release update
 
 ### Planned reversible validation

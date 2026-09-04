@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,6 +78,127 @@ func TestUpdaterHealthFailureRollsBackFilesAndLeavesStateUntouched(t *testing.T)
 	if !reflect.DeepEqual(fixture.host.calls, want) {
 		t.Fatalf("rollback calls = %q, want %q", fixture.host.calls, want)
 	}
+	if _, err := fixture.snapshots.LoadPrevious(context.Background()); !errors.Is(err, ErrUpdateSnapshotNotFound) {
+		t.Fatalf("failed update retained rollback snapshot: %v", err)
+	}
+}
+
+func TestUpdateRollbackRestoresPreviousReleaseAndStateAndConsumesSnapshot(t *testing.T) {
+	fixture := newUpdaterFixture(t, model.RoleGateway, "new")
+	originalState := fixture.state.state
+	originalFiles := snapshotReleaseUpdateRoot(t, fixture.root)
+	plan, err := fixture.updater.Plan(context.Background(), "v2.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.updater.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := fixture.snapshots.LoadPrevious(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.State, originalState) || snapshot.Metadata.PreviousVersion != "v2.0.0" || snapshot.Metadata.UpdatedToVersion != "v2.1.0" {
+		t.Fatalf("previous snapshot=%+v state_equal=%t", snapshot.Metadata, reflect.DeepEqual(snapshot.State, originalState))
+	}
+	_ = snapshot.Close()
+
+	fixture.updater.runtime.NewUUID = func() (string, error) { return "90000000-0000-4000-8000-000000000020", nil }
+	rollbackPlan, err := fixture.updater.PlanRollback(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rollbackPlan.Blocked || rollbackPlan.CurrentVersion != "v2.1.0" || rollbackPlan.TargetVersion != "v2.0.0" || len(rollbackPlan.Components) == 0 {
+		t.Fatalf("rollback plan = %+v", rollbackPlan)
+	}
+	if fixture.source.requests != 1 {
+		t.Fatalf("rollback contacted release source: requests=%d", fixture.source.requests)
+	}
+	result, err := fixture.updater.ApplyRollback(context.Background(), rollbackPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CurrentVersion != "v2.0.0" || !result.Changed || fixture.state.state.Components.VPNCTLVersion != "v2.0.0" ||
+		len(fixture.state.state.Operations) != 2 || fixture.state.state.Operations[1].Type != model.OperationUpdateRollback ||
+		fixture.state.state.Operations[1].State != model.OperationCompleted {
+		t.Fatalf("rollback result=%+v state=%+v", result, fixture.state.state)
+	}
+	restored := fixture.state.state
+	restored.Generation = originalState.Generation
+	restored.Operations = append([]model.Operation{}, originalState.Operations...)
+	if !reflect.DeepEqual(restored, originalState) {
+		t.Fatalf("rollback did not restore prior semantic state")
+	}
+	if after := snapshotReleaseUpdateRoot(t, fixture.root); !reflect.DeepEqual(after, originalFiles) {
+		t.Fatalf("rollback release tree differs from exact prior tree")
+	}
+	if _, err := fixture.snapshots.LoadPrevious(context.Background()); !errors.Is(err, ErrUpdateSnapshotNotFound) {
+		t.Fatalf("consumed snapshot remains available: %v", err)
+	}
+}
+
+func TestUpdateRollbackRefusesIrreversibleMigrationBeforeMutation(t *testing.T) {
+	fixture := updatedFixtureWithSnapshot(t, model.RoleNode)
+	loaded, err := fixture.snapshots.LoadPrevious(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := loaded.Metadata
+	_ = loaded.Close()
+	metadata.MigrationReversible = false
+	encoded, _ := encodeUpdateSnapshotJSON(metadata)
+	path := filepath.Join(fixture.snapshots.root, "update-"+metadata.SnapshotID, updateSnapshotMetadataFile)
+	if err := replaceUpdateSnapshotFile(path, encoded, true); err != nil {
+		t.Fatal(err)
+	}
+	assertUpdateRollbackBlockedWithoutMutation(t, &fixture, "irreversible")
+}
+
+func TestUpdateRollbackRefusesStateChangedAfterUpdateBeforeMutation(t *testing.T) {
+	fixture := updatedFixtureWithSnapshot(t, model.RoleGateway)
+	fixture.state.state.Generation++
+	assertUpdateRollbackBlockedWithoutMutation(t, &fixture, "state changed")
+}
+
+func TestUpdateRollbackWithoutSnapshotDoesNotContactReleaseSourceOrHost(t *testing.T) {
+	fixture := newUpdaterFixture(t, model.RoleGateway, "new")
+	if _, err := fixture.updater.PlanRollback(context.Background()); !errors.Is(err, ErrUpdateSnapshotNotFound) {
+		t.Fatalf("rollback without snapshot = %v", err)
+	}
+	if fixture.source.requests != 0 || fixture.state.saves != 0 || len(fixture.host.calls) != 0 {
+		t.Fatalf("missing rollback snapshot caused work: source=%d saves=%d calls=%v", fixture.source.requests, fixture.state.saves, fixture.host.calls)
+	}
+}
+
+func updatedFixtureWithSnapshot(t *testing.T, role model.Role) updaterFixture {
+	t.Helper()
+	fixture := newUpdaterFixture(t, role, "new")
+	plan, err := fixture.updater.Plan(context.Background(), "v2.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.updater.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	fixture.updater.runtime.NewUUID = func() (string, error) { return "90000000-0000-4000-8000-000000000020", nil }
+	return fixture
+}
+
+func assertUpdateRollbackBlockedWithoutMutation(t *testing.T, fixture *updaterFixture, expectedAction string) {
+	t.Helper()
+	beforeSaves, beforeCalls := fixture.state.saves, len(fixture.host.calls)
+	plan, err := fixture.updater.PlanRollback(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.updater.DiscardRollback(plan)
+	if !plan.Blocked || len(plan.RequiresAction) != 1 || !strings.Contains(plan.RequiresAction[0], expectedAction) ||
+		fixture.state.saves != beforeSaves || len(fixture.host.calls) != beforeCalls {
+		t.Fatalf("blocked rollback=%+v saves=%d calls=%v", plan, fixture.state.saves, fixture.host.calls)
+	}
+	if _, err := fixture.updater.ApplyRollback(context.Background(), plan); !errors.Is(err, ErrUpdateIncompatible) {
+		t.Fatalf("blocked rollback apply = %v", err)
+	}
 }
 
 func TestUpdaterBlockedAndNoopPlansNeverMutateHost(t *testing.T) {
@@ -117,6 +240,24 @@ func TestUpdaterBlockedAndNoopPlansNeverMutateHost(t *testing.T) {
 			t.Fatalf("no-op update mutated host: calls=%q saves=%d", fixture.host.calls, fixture.state.saves)
 		}
 	})
+}
+
+func TestUpdaterRejectsInstalledDriftAfterPlanningBeforeMutation(t *testing.T) {
+	fixture := newUpdaterFixture(t, model.RoleGateway, "new")
+	plan, err := fixture.updater.Plan(context.Background(), "v2.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(fixture.root, "usr/local/bin/vpnctl")
+	if err := os.WriteFile(path, []byte("drift-after-plan"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.updater.Apply(context.Background(), plan); !errors.Is(err, ErrReleaseUpdateConflict) {
+		t.Fatalf("post-plan drift apply = %v", err)
+	}
+	if fixture.state.saves != 0 || len(fixture.host.calls) != 1 {
+		t.Fatalf("post-plan drift mutated state/service: saves=%d calls=%v", fixture.state.saves, fixture.host.calls)
+	}
 }
 
 func TestUpdateMigrationPreviewKeepsBinaryOnlyRollbackAvailable(t *testing.T) {
@@ -198,6 +339,7 @@ type updaterFixture struct {
 	host            *recordingUpdateHost
 	targetAssets    map[string][]byte
 	targetInstalled map[string][]byte
+	snapshots       *FilesystemUpdateSnapshotStore
 }
 
 func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updaterFixture {
@@ -205,6 +347,14 @@ func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updat
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	root := t.TempDir()
 	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	snapshotRoot := filepath.Join(root, "var/lib/vpnctl/snapshots")
+	if err := os.MkdirAll(snapshotRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err := NewFilesystemUpdateSnapshotStore(snapshotRoot, publicKey, installer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	currentAssets, currentManifest, _ := updateReleaseAssetsWithInstalled(t, privateKey, "v2.0.0", "old")
 	targetVersion := "v2.1.0"
 	if targetMarker == "old" {
@@ -238,7 +388,7 @@ func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updat
 	fleet := &staticUpdateFleetChecker{compatible: true}
 	host := &recordingUpdateHost{}
 	updater, err := NewUpdater(UpdateRuntime{
-		State: stateStore, Releases: source, Bundles: installer, Fleet: fleet, Host: host,
+		State: stateStore, Snapshots: snapshots, Releases: source, Bundles: installer, Fleet: fleet, Host: host,
 		CurrentBundlePath: standardReleaseBundleInRoot(root), Now: func() time.Time { return now.Add(time.Minute) },
 		NewUUID: func() (string, error) { return "90000000-0000-4000-8000-000000000010", nil },
 	})
@@ -247,7 +397,7 @@ func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updat
 	}
 	return updaterFixture{
 		root: root, updater: updater, state: stateStore, source: source, fleet: fleet, host: host,
-		targetAssets: targetAssets, targetInstalled: targetInstalled,
+		targetAssets: targetAssets, targetInstalled: targetInstalled, snapshots: snapshots,
 	}
 }
 

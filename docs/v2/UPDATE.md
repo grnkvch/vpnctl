@@ -72,9 +72,43 @@ passes, then gateway management resumes and the operation is completed.
 A proven failure in the active attempt restores already changed component
 files and release metadata in reverse order, health-checks the restored local
 services, restores the prior component state, records the failed operation,
-and resumes prior management. Persistent previous-release snapshots and the
-manual `vpnctl update rollback` lifecycle are defined separately by task 14.5;
-portable encrypted backups are a different recovery boundary.
+and resumes prior management.
+
+## Persistent snapshot and rollback
+
+Before the first component replacement, a changed update copies the verified
+prior bundle, signed checksum metadata, signature, and canonical prior state
+into a mode-`0700` versioned directory under
+`/var/lib/vpnctl/snapshots`. Every file is mode `0600` and bound by snapshot
+SHA-256 metadata. An atomic pending pointer makes an interrupted update visible
+instead of silently replacing the previous usable rollback. After the update
+state is complete, vpnctl binds the snapshot to the exact resulting state and
+atomically promotes it as the single previous-update snapshot. A failed update
+removes only its own candidate and preserves any older successful snapshot.
+
+```text
+sudo vpnctl update rollback --dry-run
+sudo vpnctl update rollback
+```
+
+Rollback is local and makes no release-network request. It re-verifies the
+snapshot hashes, signed release metadata, whole bundle, platform, role,
+component manifest, current-state binding, installed files, apt package
+ranges, and fleet protocol compatibility before showing its plan. The plan
+lists the version/state restoration, changed components, affected services,
+and expected interruption. Normal confirmation is required. Components and
+metadata are restored sequentially with the same per-component health and
+reverse-failure handling as a forward update; the prior semantic state is
+restored at a new monotonic generation with both update operations retained as
+audit history. The snapshot is consumed only after successful rollback.
+
+Rollback stops before mutation if the snapshot is absent, incomplete,
+corrupt, for another role/version, no longer matches current authoritative
+state, fails package/fleet compatibility, or records an irreversible state
+migration. The separate exact `accept irreversible migration` confirmation is
+required before applying a forward update with a real irreversible migration;
+`--yes` does not satisfy it. Portable encrypted backups remain a different
+recovery boundary.
 
 Single-gateway zero downtime is not promised. The exact plan is derived from
 changed components: a controller binary can briefly interrupt management, a
