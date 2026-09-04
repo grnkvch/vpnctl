@@ -2,6 +2,7 @@ package regression
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,52 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 		if !strings.Contains(limaTemplate, "guestPort: "+port) {
 			t.Errorf("Lima template is missing tunnel forwarding isolation for %s", port)
 		}
+	}
+}
+
+func TestV2TunnelReleaseGateContract(t *testing.T) {
+	t.Parallel()
+
+	repositoryRoot := filepath.Join("..", "..")
+	harnessPath := filepath.Join(repositoryRoot, "scripts", "v2tunnel-release-gate.sh")
+	info, err := os.Stat(harnessPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatal("tunnel release gate is not executable")
+	}
+	harness := readContractFile(t, harnessPath)
+	for _, required := range []string{
+		"release gate requires a clean source tree",
+		"assert_lab_instance", "assert_tunnel_fixture_absent", "assert_owned_path",
+		"TestFRPNativeConfigsWithPinnedBinaries",
+		"TestFRPNativeLoginUsesProductionAuthorizerAndEffectiveZeroPool",
+		"TestFRPNativeNewProxyUsesProductionAuthoritativeMapping",
+		"TestFRPNativeRejectedPingClosesRevokedSessionAndRejectsReconnect",
+		"TestFRPNativeReadinessRecoversWithoutStandbyAfterGatewayUpstreamAndClientRestarts",
+		"TestFRPNativeDynamicMappingReloadKeepsProcessConnectionAndStream",
+		"v2tunnel-spike.sh", "validate_spike_summary", "minimum_mem_available_kib",
+		"controller_unavailable_rejected", "revoke_reconnect_rejected",
+		"logical_identity_preserved", "resources.oom_kills == 0",
+		"cleanup_native_guest", "tunnel_cleanup", "restricted_cleanup",
+		"release gate refuses to replace evidence", "source_commit",
+	} {
+		if !strings.Contains(harness, required) {
+			t.Errorf("tunnel release gate is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"VPNCTL_RELEASE_GATE_ALLOW_DIRTY", "--force", "rm -rf /etc", "log.level = \"debug\"",
+	} {
+		if strings.Contains(harness, forbidden) {
+			t.Errorf("tunnel release gate contains forbidden behavior %q", forbidden)
+		}
+	}
+
+	orchestrator := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2tunnel-spike.sh"))
+	if !strings.Contains(orchestrator, "scripts/v2tunnel-spike.sh fetch") ||
+		!strings.Contains(orchestrator, "pinned frp cache ready") {
+		t.Fatal("tunnel spike does not expose checksum-verified provider fetch for the release gate")
 	}
 }

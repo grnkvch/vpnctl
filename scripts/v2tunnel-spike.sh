@@ -39,6 +39,7 @@ frps_binary=
 usage() {
   cat <<'EOF'
 Usage:
+  scripts/v2tunnel-spike.sh fetch
   scripts/v2tunnel-spike.sh prepare
   scripts/v2tunnel-spike.sh verify [evidence-directory]
   scripts/v2tunnel-spike.sh status
@@ -1177,6 +1178,11 @@ uninstall() {
 
 command=${1:-}
 case "$command" in
+  fetch)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    fetch_frp
+    printf 'pinned frp cache ready: %s, %s\n' "$frps_binary" "$frpc_binary"
+    ;;
   prepare)
     [ "$#" -eq 1 ] || { usage >&2; exit 2; }
     prepare

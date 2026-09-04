@@ -48,3 +48,33 @@ Stop the temporary logging/runtime without deleting evidence, or remove only own
 ./scripts/v2tunnel-spike.sh stop
 ./scripts/v2tunnel-spike.sh uninstall
 ```
+
+## Production provider release harness
+
+Task 11.9 promotes the spike checks into a repeatable release harness without
+promoting the spike implementation itself. On a clean source tree and the two
+running contract-matching Lima fixtures, run:
+
+```bash
+./scripts/v2tunnel-release-gate.sh run
+```
+
+The harness first runs every `TestFRPNative*` case from the production tunnel
+package against checksum-verified official frps/frpc binaries. This covers the
+production renderer, TLS identity, Login/NewProxy/Ping authorization, effective
+zero pool, dynamic mapping reload, reconnect/readiness, and live revoke close.
+It then runs the original two-host spike regression for concurrent
+multiplexing, standard/restricted path capture, and minimum-host resources.
+
+The harness refuses an existing tunnel fixture, foreign ownership, occupied
+paths/ports, drifted VM resources, a dirty source tree, or an existing evidence
+directory. It records the exact source commit, provider archive hash, sanitized
+native test output, fixture descriptors, and the complete spike summary below
+`artifacts/v2lab/tunnel-release-gate/`. It removes its temporary binaries and
+owner-created tunnel/restricted fixtures on both success and failure. A
+pre-existing owner-verified restricted fixture is reused and restored by its
+own transport cleanup contract rather than deleted.
+
+This is the tunnel capability's development release gate. It does not replace
+the sustained several-hundred-user capacity gate in task 16.9, deployed Clash
+Mi behavior, or the real Telegram webhook gate in task 16.11.
