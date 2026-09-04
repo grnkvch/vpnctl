@@ -3,6 +3,7 @@ package output
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"sort"
@@ -47,6 +48,23 @@ type Result struct {
 	Warnings       []Message         `json:"warnings"`
 	RequiresAction []Action          `json:"requires_action"`
 	Data           SafeObject        `json:"data"`
+	humanOnly      []humanOnlyField
+}
+
+type humanOnlyField struct {
+	key   string
+	value SensitivePath
+}
+
+// Format keeps human-only sensitive fields out of generic log/debug output.
+// Explicit user-facing rendering remains the sole path that may reveal them.
+func (result Result) Format(state fmt.State, _ rune) {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		_, _ = io.WriteString(state, "<vpnctl-result>")
+		return
+	}
+	_, _ = state.Write(encoded)
 }
 
 type Message struct {
@@ -82,6 +100,31 @@ func NewResult(command string, status Status, category ExitCategory, data SafeOb
 		RequiresAction: []Action{},
 		Data:           data,
 	}
+}
+
+// AddHumanSensitivePath adds a value that may be rendered only to the concise
+// human stream. The field is deliberately unexported from Result, so JSON and
+// ordinary debug formatting cannot reveal webhook paths or derived URLs.
+func (result *Result) AddHumanSensitivePath(key string, value SensitivePath) error {
+	if result == nil {
+		return fmt.Errorf("result is required")
+	}
+	if !safeKeyPattern.MatchString(key) {
+		return fmt.Errorf("human-only key must be a stable lower-case identifier")
+	}
+	if err := value.Use(func(string) error { return nil }); err != nil {
+		return err
+	}
+	for _, existing := range result.humanOnly {
+		if existing.key == key {
+			return fmt.Errorf("human-only key %q is duplicated", key)
+		}
+	}
+	if len(result.humanOnly) >= MaximumSafeItems {
+		return fmt.Errorf("human-only output contains too many entries")
+	}
+	result.humanOnly = append(result.humanOnly, humanOnlyField{key: key, value: value})
+	return nil
 }
 
 func (result Result) Validate() error {
@@ -122,7 +165,23 @@ func (result Result) Validate() error {
 	if result.Data == nil {
 		return fmt.Errorf("data must be present as a JSON object")
 	}
-	return validateSafeObject("data", result.Data, 0)
+	if err := validateSafeObject("data", result.Data, 0); err != nil {
+		return err
+	}
+	seenHumanOnly := make(map[string]struct{}, len(result.humanOnly))
+	for index, field := range result.humanOnly {
+		if !safeKeyPattern.MatchString(field.key) {
+			return fmt.Errorf("human-only field %d has an invalid key", index)
+		}
+		if _, duplicate := seenHumanOnly[field.key]; duplicate {
+			return fmt.Errorf("human-only field %q is duplicated", field.key)
+		}
+		seenHumanOnly[field.key] = struct{}{}
+		if err := field.value.Use(func(string) error { return nil }); err != nil {
+			return fmt.Errorf("human-only field %q: %w", field.key, err)
+		}
+	}
+	return nil
 }
 
 func (message Message) Validate() error {

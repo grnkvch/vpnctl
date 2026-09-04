@@ -25,7 +25,11 @@
           "properties": {
             "changed": { "type": "boolean" },
             "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "generation": { "type": "integer", "minimum": 0 }
+            "generation": { "type": "integer", "minimum": 0 },
+            "expose_state": { "enum": ["ready", "degraded"] },
+            "fingerprint": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "output_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "scp_command": { "type": "string", "minLength": 1, "maxLength": 4096 }
           }
         }
       }

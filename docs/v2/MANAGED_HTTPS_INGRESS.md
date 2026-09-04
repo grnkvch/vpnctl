@@ -163,3 +163,44 @@ guard wins before every user prefix. Consequently even a valid user prefix
 `/` can handle ordinary unmatched requests but can never shadow a vpnctl
 reserved endpoint. The renderer also rejects a corrupt expose that attempts to
 reuse loopback port `19092`.
+
+## Creation transaction
+
+Expose planning on a joined private node is read-only. The authoritative
+gateway checks the active node identity, its global expose namespace, and
+unavailable internal ports, then returns only the new node-owned plan, assigned
+port, public IPv4, and public-certificate metadata. Existing webhook paths from
+other nodes never cross this boundary. The generated path-bearing plan cannot
+be serialized. A stale node/gateway generation, remapped persisted port,
+inactive identity, route conflict, or certificate mismatch fails before either
+host is changed.
+
+Immediate creation then uses this strict order:
+
+1. the gateway exports the public certificate and reserves the exact expose as
+   authoritative `pending`, but does not render it into public ingress;
+2. the node atomically activates its complete tunnel topology with the added
+   mapping and persists the same expose as locally pending;
+3. readiness must match the exact tunnel candidate and expose generation, with
+   configuration, active connection, mapping set, and mapping registration all
+   ready;
+4. an available upstream yields `ready`; an unavailable local application is
+   intentionally accepted as `degraded`, with public requests returning `503`;
+5. the gateway publishes the HTTPS route last and commits the effective state,
+   after which the node records the final gateway generation.
+
+A known failure before publication reapplies the complete prior tunnel
+topology, removes only the exact gateway reservation, and advances node state
+through a compensating generation. A lost/ambiguous gateway response or a
+node-state failure after publication is reported as uncertain and is not
+blindly rolled back; later convergence owns that case.
+
+`--defer` performs only the authoritative gateway pending registration. It
+does not change node state, reload the tunnel, or publish ingress. The eventual
+apply path reuses the same ordered transaction.
+
+The normal human result shows the public URL, public-certificate export path
+and fingerprint, and a copy-ready `scp` command. The URL is held in a dedicated
+human-only sensitive-path field: JSON and generic result formatting contain no
+webhook path or derived URL. JSON receives only safe identities, generations,
+effective state, certificate metadata, and the SCP hint.

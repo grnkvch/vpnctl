@@ -7,18 +7,17 @@
 
 ## Актуальный snapshot решений
 
-Последнее обновление: **2026-09-03**.
+Последнее обновление: **2026-09-04**.
 
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 8.5 выполнено `71/156`
+и проходят strict validation. После завершения task 12.7 выполнено `112/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
-CLI/output/consent, host init, control plane и personal-client foundation до
-детерминированного WireGuard/Clash rendering, безопасной атомарной публикации
-client exports, полного lifecycle standard-client credentials и state-derived
-gateway isolation, реального standard WireGuard transport и restricted
-Mihomo/ShadowTLS provider foundation включительно.
+CLI/output/consent, host init, control plane, presets/policies/personal clients,
+оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
+reverse tunnel и managed HTTPS ingress вплоть до tunnel-before-ingress expose
+creation saga включительно.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -30,15 +29,13 @@ Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и 
 один TCP listener и отсутствие UDP listener. Selected restricted UDP теперь
 обязан идти через UoT v2; activatable candidate выдаётся только после
 обязательных TCP+UDP readiness probes, а broken-UoT control сохраняет TCP,
-блокирует UDP и не создаёт native/direct утечек. Signed Ed25519 handshake-host
-bundle теперь проверяется до mutation: gateway init последовательно тестирует
-reachability, TLS 1.3, сертификат и трёхсекундную latency boundary, закрепляет
-первый успешный stable candidate в authoritative state и доставляет только это
-значение node/client consumers. Повторный init и passive health не перебирают
-список и не выполняют runtime rotation. Следующая задача — 8.6 (запуск и
-supervision обоих gateway listeners при неизменном node selection). Фактический Clash Mi
-остаётся release-gate 16.11, а restricted alternative в Clash export — задачей
-8.10.
+блокирует UDP и не создаёт native/direct утечек. Reverse tunnel использует один
+frpc/tcpMux session на node, generation-scoped authorization и exact mapping
+readiness. Expose creation резервирует authoritative state, применяет tunnel,
+принимает stopped app как `degraded`, публикует HTTPS path последним и не
+выводит sensitive path в JSON. Следующая задача — 12.8 (stateless request/error
+semantics и защита non-idempotent requests от replay). Фактические Clash Mi и
+Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract
 
@@ -1210,6 +1207,17 @@ validate → stage → activate → confirm
 - Операция имеет уникальный ID и состояния как минимум `pending`, `active`,
   `degraded`, `failed`.
 - Для ingress публичный path активируется последним, после готовности tunnel.
+- Реализованный creation flow резервирует authoritative expose на gateway без
+  публикации, затем применяет полный tunnel mapping на private node, проверяет
+  exact generation/registration и только после этого публикует HTTPS route.
+  Остановленное local application не отменяет expose: resource сохраняется как
+  `degraded`, а ingress отвечает `503`. Ошибка tunnel/registration до
+  публикации компенсируется; неоднозначность после возможной публикации не
+  вызывает слепой rollback и передаётся convergence flow.
+- `expose --defer` выполняет только authoritative pending write на gateway, без
+  local state/tunnel/nginx mutation. Human result показывает URL, certificate
+  export/fingerprint и `scp`; webhook path и производный URL структурно
+  отсутствуют в JSON и generic logging.
 - Если связь оборвалась и итог неизвестен, vpnctl не выполняет blind rollback.
   Операция остаётся `pending`; следующий `status`/`apply` сверяет generation и
   фактическое состояние, затем продолжает движение к новому desired state.

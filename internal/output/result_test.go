@@ -2,6 +2,8 @@ package output
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -121,6 +123,37 @@ func TestNewResultCreatesRequiredEmptyCollections(t *testing.T) {
 	}
 	if result.ResourceIDs == nil || result.Warnings == nil || result.RequiresAction == nil || result.Data == nil {
 		t.Fatal("NewResult() omitted a required collection")
+	}
+}
+
+func TestHumanSensitivePathIsAbsentFromJSONAndGenericFormatting(t *testing.T) {
+	t.Parallel()
+
+	const canary = "https://203.0.113.10/hooks/sensitive-path-canary"
+	path, err := NewSensitivePath(canary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := NewResult("expose", StatusOK, CategorySuccess, SafeObject{"changed": true})
+	if err := result.AddHumanSensitivePath("public_url", path); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(canary)) || strings.Contains(fmt.Sprintf("%#v", result), canary) {
+		t.Fatal("human-only sensitive path leaked to JSON or generic formatting")
+	}
+	var human bytes.Buffer
+	if err := RenderHuman(&human, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human.String(), "public url: "+canary) {
+		t.Fatalf("human output = %q", human.String())
+	}
+	if err := result.AddHumanSensitivePath("public_url", path); err == nil {
+		t.Fatal("duplicate human-only key was accepted")
 	}
 }
 

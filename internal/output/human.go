@@ -19,6 +19,7 @@ var humanScalarFields = map[string]struct{}{
 	"output_path":      {},
 	"overall":          {},
 	"role":             {},
+	"scp_command":      {},
 	"scope":            {},
 	"upstreams":        {},
 	"sha256":           {},
@@ -40,6 +41,9 @@ func RenderHuman(writer io.Writer, result Result) error {
 	fmt.Fprintf(&output, "%s %s\n", strings.ToUpper(string(result.Status)), result.Command)
 	writeIdentifiers(&output, result.ResourceIDs, "")
 	writeHumanData(&output, result.Data)
+	if err := writeHumanOnly(&output, result.humanOnly); err != nil {
+		return err
+	}
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(&output, "warning %s: %s\n", warning.Code, warning.Message)
 		writeIdentifiers(&output, warning.ResourceIDs, "  ")
@@ -53,6 +57,20 @@ func RenderHuman(writer io.Writer, result Result) error {
 	}
 	if _, err := io.WriteString(writer, output.String()); err != nil {
 		return fmt.Errorf("write human result: %w", err)
+	}
+	return nil
+}
+
+func writeHumanOnly(writer *strings.Builder, fields []humanOnlyField) error {
+	ordered := append([]humanOnlyField(nil), fields...)
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].key < ordered[right].key })
+	for _, field := range ordered {
+		if err := field.value.Use(func(value string) error {
+			fmt.Fprintf(writer, "%s: %s\n", humanLabel(field.key), value)
+			return nil
+		}); err != nil {
+			return fmt.Errorf("render human-only field %q: %w", field.key, err)
+		}
 	}
 	return nil
 }
