@@ -34,6 +34,7 @@ type ClashProfileRequest struct {
 type ClashProfile struct {
 	ClientID              string
 	ClientName            string
+	GatewayPublicIPv4     string
 	SourceStateGeneration uint64
 	PolicyGeneration      uint64
 	CredentialGeneration  uint64
@@ -153,7 +154,7 @@ func (renderer *ClashProfileRenderer) Render(request ClashProfileRequest) (Clash
 		return ClashProfile{}, err
 	}
 	return ClashProfile{
-		ClientID: client.ID, ClientName: client.Name, SourceStateGeneration: state.Generation,
+		ClientID: client.ID, ClientName: client.Name, GatewayPublicIPv4: state.Host.PublicIPv4, SourceStateGeneration: state.Generation,
 		PolicyGeneration: policyGeneration, CredentialGeneration: client.CredentialGeneration,
 		HandshakeHostID: handshakeHostID, HandshakeHostVersion: handshakeHostVersion,
 		DNSMode: dnsMode, content: content,

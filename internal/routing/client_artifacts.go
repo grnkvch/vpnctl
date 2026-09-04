@@ -105,7 +105,8 @@ func clientExportDependenciesCurrent(record render.ArtifactRecord, state model.S
 		return false
 	}
 	wantPolicy := []render.SourceGeneration{}
-	var wantSources []render.SourceGeneration
+	wantSources := gatewayEndpointSourceGeneration(state.Host.PublicIPv4)
+	var legacySources []render.SourceGeneration
 	if format == ClientExportClash {
 		if generation := clientPolicyGeneration(state, client.ID); generation != 0 {
 			wantPolicy = append(wantPolicy, render.SourceGeneration{
@@ -116,10 +117,18 @@ func clientExportDependenciesCurrent(record render.ArtifactRecord, state model.S
 			if state.HandshakeHost == nil {
 				return false
 			}
-			wantSources = handshakeHostSourceGeneration(state.HandshakeHost.CandidateID, state.HandshakeHost.ListVersion)
+			handshake := handshakeHostSourceGeneration(state.HandshakeHost.CandidateID, state.HandshakeHost.ListVersion)
+			wantSources = append(wantSources, handshake...)
+			legacySources = handshake
 		}
 	}
-	return reflect.DeepEqual(record.PolicyGenerations, wantPolicy) && reflect.DeepEqual(record.SourceGenerations, wantSources)
+	if !reflect.DeepEqual(record.PolicyGenerations, wantPolicy) {
+		return false
+	}
+	// Manifests written before gateway-endpoint became an explicit dependency
+	// remain readable on the same endpoint. Changed-IP restore removes those
+	// sidecars, so their preserved profiles are still reported stale.
+	return reflect.DeepEqual(record.SourceGenerations, wantSources) || reflect.DeepEqual(record.SourceGenerations, legacySources)
 }
 
 func clientPolicyGeneration(state model.State, clientID string) uint64 {
@@ -238,13 +247,37 @@ func clientExportRecordBelongsToClient(record render.ArtifactRecord, clientID st
 		return false
 	}
 	if format == ClientExportWireGuard {
-		return len(record.PolicyGenerations) == 0 && len(record.SourceGenerations) == 0
+		return len(record.PolicyGenerations) == 0 && clientExportSourcesBelong(record.SourceGenerations, false)
 	}
 	policyBelongs := len(record.PolicyGenerations) == 0 || (len(record.PolicyGenerations) == 1 &&
 		record.PolicyGenerations[0].Kind == "client-policy" && record.PolicyGenerations[0].ID == clientID)
-	sourceBelongs := len(record.SourceGenerations) == 0 || (len(record.SourceGenerations) == 1 &&
-		record.SourceGenerations[0].Kind == "handshake-host")
+	sourceBelongs := clientExportSourcesBelong(record.SourceGenerations, true)
 	return policyBelongs && sourceBelongs
+}
+
+func clientExportSourcesBelong(sources []render.SourceGeneration, allowHandshake bool) bool {
+	if len(sources) > 1 && !allowHandshake || len(sources) > 2 {
+		return false
+	}
+	seenEndpoint := false
+	seenHandshake := false
+	for _, source := range sources {
+		switch source.Kind {
+		case "gateway-endpoint":
+			if seenEndpoint {
+				return false
+			}
+			seenEndpoint = true
+		case "handshake-host":
+			if !allowHandshake || seenHandshake {
+				return false
+			}
+			seenHandshake = true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func rejectReservedRecordedExportPath(paths store.Paths, path string) error {

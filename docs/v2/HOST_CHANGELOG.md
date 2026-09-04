@@ -2,6 +2,63 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned new-public-IP gateway restore
+
+### Planned reversible implementation
+
+- Task 14.10 is source-only on this development host. When the explicit restore
+  IPv4 differs from the authenticated archive endpoint, planning will retain
+  gateway/control/node/client identities, issue a new generation of the public
+  IP-only ingress certificate inside the private restore stage, rewrite only
+  the staged authoritative state and generation-scoped public certificate
+  files/export, and fully preflight that candidate before host mutation.
+- Existing managed client export metadata will be made stale for an endpoint
+  move while profile bytes remain available for audit/recovery. Results will
+  identify every active node, active client export format, and ready/degraded
+  expose that needs a manual rebind, re-export, or external webhook update;
+  sensitive webhook paths and provider credentials will not enter JSON or
+  logs. Changed-IP restore will explicitly report downtime and will not claim
+  seamless continuity.
+- Failed planning, discarded dry-runs, release drift, activation failure, or
+  health failure must remove the private staged certificate/key and preserve
+  the prior host through the existing non-merging transaction and emergency
+  snapshot. No production certificate, secret, state, service, listener,
+  firewall, route, gateway, node, client, webhook, or external endpoint will
+  change; tests use temporary roots and rollback is limited to the future task
+  14.10 commit.
+
+### Result
+
+- Changed-public-IP restore now clones the authenticated candidate, preserves
+  gateway/control/enrollment/node/client identity and credentials, advances
+  state and the logical public-certificate generation, and issues a validated
+  RSA-2048/SHA-256 five-year IP-only certificate for the explicit new IPv4.
+  Only the private restore stage is rewritten before full host preflight; the
+  old ingress generation is removed from that candidate and `gateway.crt` is
+  replaced with the new public PEM.
+- Managed client manifests now record the gateway endpoint dependency for both
+  Clash and WireGuard, with same-IP compatibility for older sidecars. During
+  endpoint restore, archived sidecars are excluded while profile bytes remain,
+  making every previously exported active-client format visibly stale until
+  its explicit managed re-export.
+- Dry-run and applied results deterministically identify the new certificate,
+  every active private node, every stale client/format pair, and every
+  ready/degraded expose. Actions cover certificate retrieval, node rebind,
+  client re-export, and webhook URL/certificate re-registration without
+  provider calls, invented node commands, webhook paths, or seamless-
+  continuity claims. The accepted downtime remains explicit until those
+  manual steps are complete.
+- Tests prove the new certificate SAN/key pair and generation, preservation of
+  non-public trust, omission of superseded ingress secrets and client
+  sidecars, exact action completeness, plan-tamper rejection, webhook-path
+  redaction, endpoint-driven Clash/WireGuard staleness, backward compatibility,
+  and zero host mutation/private-stage residue on entropy failure. Full
+  ordinary and race-detector Go suites, `go vet`, Go formatting, shell syntax,
+  JSON parsing, `git diff --check`, and strict OpenSpec validation passed. The
+  socket suites ran outside the sandbox because it blocks local binds; no
+  production host resource changed, and tests used temporary roots plus
+  `/tmp/vpnctl-go-cache` only.
+
 ## 2026-09-04 — validated non-merging gateway restore
 
 ### Planned reversible implementation

@@ -2,9 +2,14 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -12,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -21,7 +27,6 @@ var (
 	ErrGatewayRestoreConflict      = errors.New("gateway restore conflict")
 	ErrGatewayRestoreReplaceNeeded = errors.New("initialized gateway restore requires --replace")
 	ErrGatewayRestoreIncompatible  = errors.New("gateway restore is incompatible with the installed release")
-	ErrGatewayRestoreEndpointMove  = errors.New("gateway restore to a different public IP requires endpoint migration planning")
 )
 
 type GatewayRestoreInput struct {
@@ -101,9 +106,30 @@ type GatewayRestoreHost interface {
 }
 
 type GatewayRestoreRuntime struct {
-	Archives *GatewayRestoreArchiveLoader
-	Release  GatewayRestoreReleaseSource
-	Host     GatewayRestoreHost
+	Archives                    *GatewayRestoreArchiveLoader
+	Release                     GatewayRestoreReleaseSource
+	Host                        GatewayRestoreHost
+	Entropy                     io.Reader
+	Now                         func() time.Time
+	PublicCertificateExportPath string
+}
+
+type GatewayRestoreAffectedNode struct {
+	ID   string
+	Name string
+}
+
+type GatewayRestoreAffectedClientExport struct {
+	ClientID   string
+	ClientName string
+	Format     string
+}
+
+type GatewayRestoreAffectedExpose struct {
+	ID     string
+	NodeID string
+	Name   string
+	State  model.ExposeState
 }
 
 type GatewayRestorePlan struct {
@@ -123,24 +149,40 @@ type GatewayRestorePlan struct {
 	AffectedServices        []string
 	ExpectedInterruptions   []string
 	EmergencySnapshotNeeded bool
+	PublicCertificate       *model.Certificate
+	PublicCertificateExport string
+	AffectedNodes           []GatewayRestoreAffectedNode
+	StaleClientExports      []GatewayRestoreAffectedClientExport
+	AffectedExposes         []GatewayRestoreAffectedExpose
 
-	hostState GatewayRestoreHostState
-	preflight GatewayRestorePreflight
-	payload   *GatewayRestorePayload
+	hostState              GatewayRestoreHostState
+	preflight              GatewayRestorePreflight
+	payload                *GatewayRestorePayload
+	wantAffectedNodes      []GatewayRestoreAffectedNode
+	wantStaleClientExports []GatewayRestoreAffectedClientExport
+	wantAffectedExposes    []GatewayRestoreAffectedExpose
 }
 
+func (GatewayRestorePlan) String() string   { return "<redacted-gateway-restore-plan>" }
+func (GatewayRestorePlan) GoString() string { return "<redacted-gateway-restore-plan>" }
+
 type GatewayRestoreResult struct {
-	Changed               bool
-	GatewayID             string
-	PublicIPv4            string
-	Generation            uint64
-	SameEndpoint          bool
-	TrustPreserved        bool
-	NodeCount             int
-	ClientCount           int
-	EmergencySnapshot     *GatewayRestoreEmergencySnapshot
-	AffectedServices      []string
-	ExpectedInterruptions []string
+	Changed                 bool
+	GatewayID               string
+	PublicIPv4              string
+	Generation              uint64
+	SameEndpoint            bool
+	TrustPreserved          bool
+	NodeCount               int
+	ClientCount             int
+	EmergencySnapshot       *GatewayRestoreEmergencySnapshot
+	AffectedServices        []string
+	ExpectedInterruptions   []string
+	PublicCertificate       *model.Certificate
+	PublicCertificateExport string
+	AffectedNodes           []GatewayRestoreAffectedNode
+	StaleClientExports      []GatewayRestoreAffectedClientExport
+	AffectedExposes         []GatewayRestoreAffectedExpose
 }
 
 type GatewayRestorer struct {
@@ -151,6 +193,19 @@ type GatewayRestorer struct {
 func NewGatewayRestorer(runtime GatewayRestoreRuntime) (*GatewayRestorer, error) {
 	if runtime.Archives == nil || runtime.Release == nil || runtime.Host == nil {
 		return nil, fmt.Errorf("gateway restore dependencies are incomplete")
+	}
+	if runtime.Entropy == nil {
+		runtime.Entropy = rand.Reader
+	}
+	if runtime.Now == nil {
+		runtime.Now = time.Now
+	}
+	if runtime.PublicCertificateExportPath == "" {
+		runtime.PublicCertificateExportPath = "/var/lib/vpnctl/exports/gateway.crt"
+	}
+	if !filepath.IsAbs(runtime.PublicCertificateExportPath) || filepath.Clean(runtime.PublicCertificateExportPath) != runtime.PublicCertificateExportPath ||
+		strings.ContainsAny(runtime.PublicCertificateExportPath, "\x00\r\n") {
+		return nil, fmt.Errorf("gateway restore public certificate export path is invalid")
 	}
 	return &GatewayRestorer{runtime: runtime}, nil
 }
@@ -199,9 +254,6 @@ func (restorer *GatewayRestorer) Plan(ctx context.Context, input GatewayRestoreI
 		}
 	}()
 	restored := payload.State()
-	if restored.Host.PublicIPv4 != input.PublicIPv4 {
-		return GatewayRestorePlan{}, fmt.Errorf("%w: archive uses %s and requested endpoint is %s", ErrGatewayRestoreEndpointMove, restored.Host.PublicIPv4, input.PublicIPv4)
-	}
 	release, err := restorer.runtime.Release.Inspect(ctx)
 	if err != nil {
 		return GatewayRestorePlan{}, fmt.Errorf("inspect installed restore release: %w", err)
@@ -213,20 +265,41 @@ func (restorer *GatewayRestorer) Plan(ctx context.Context, input GatewayRestoreI
 	if err != nil {
 		return GatewayRestorePlan{}, err
 	}
+	sameEndpoint := restored.Host.PublicIPv4 == input.PublicIPv4
+	var publicCertificate *model.Certificate
+	var affectedNodes []GatewayRestoreAffectedNode
+	var staleClientExports []GatewayRestoreAffectedClientExport
+	var affectedExposes []GatewayRestoreAffectedExpose
+	if !sameEndpoint {
+		affectedNodes, staleClientExports, affectedExposes = gatewayRestoreEndpointImpact(restored, payload)
+		candidate, publicCertificate, err = restorer.prepareEndpointMove(payload, candidate, input.PublicIPv4)
+		if err != nil {
+			return GatewayRestorePlan{}, err
+		}
+	}
 	preflight, err := restorer.runtime.Host.Preflight(ctx, payload, candidate, hostState)
 	if err != nil {
 		return GatewayRestorePlan{}, fmt.Errorf("preflight gateway restore host: %w", err)
 	}
-	if err := validateGatewayRestorePreflight(candidate, restored, input.PublicIPv4, preflight); err != nil {
+	if !sameEndpoint {
+		preflight.ExpectedInterruptions = append(preflight.ExpectedInterruptions,
+			"private nodes, client profiles, and external webhook registrations remain unavailable until the listed endpoint actions are completed")
+	}
+	if err := validateGatewayRestorePreflight(candidate, input.PublicIPv4, preflight); err != nil {
 		return GatewayRestorePlan{}, err
 	}
 	plan := GatewayRestorePlan{
 		ArchivePath: input.ArchivePath, PublicIPv4: input.PublicIPv4, OriginalPublicIPv4: restored.Host.PublicIPv4,
-		Replace: input.Replace, ReplacingInitialized: hostState.Initialized, SameEndpoint: true, TrustPreserved: true,
+		Replace: input.Replace, ReplacingInitialized: hostState.Initialized, SameEndpoint: sameEndpoint, TrustPreserved: true,
 		GatewayID: restored.Host.ID, SourceGeneration: restored.Generation, TargetGeneration: preflight.Candidate.Generation,
 		NodeCount: len(restored.Nodes), ClientCount: len(restored.Clients), PortRemaps: append([]tunnel.PortRemap{}, preflight.PortRemaps...),
 		AffectedServices: append([]string{}, preflight.AffectedServices...), ExpectedInterruptions: append([]string{}, preflight.ExpectedInterruptions...),
+		PublicCertificate: cloneGatewayRestoreCertificate(publicCertificate), PublicCertificateExport: restoreOptionalString(!sameEndpoint, restorer.runtime.PublicCertificateExportPath),
+		AffectedNodes: append([]GatewayRestoreAffectedNode{}, affectedNodes...), StaleClientExports: append([]GatewayRestoreAffectedClientExport{}, staleClientExports...),
+		AffectedExposes:         append([]GatewayRestoreAffectedExpose{}, affectedExposes...),
 		EmergencySnapshotNeeded: hostState.Initialized, hostState: hostState, preflight: preflight, payload: payload,
+		wantAffectedNodes: append([]GatewayRestoreAffectedNode{}, affectedNodes...), wantStaleClientExports: append([]GatewayRestoreAffectedClientExport{}, staleClientExports...),
+		wantAffectedExposes: append([]GatewayRestoreAffectedExpose{}, affectedExposes...),
 	}
 	if err := plan.Validate(); err != nil {
 		return GatewayRestorePlan{}, err
@@ -239,7 +312,7 @@ func (plan GatewayRestorePlan) Validate() error {
 	if err := validateGatewayRestoreInput(GatewayRestoreInput{ArchivePath: plan.ArchivePath, PublicIPv4: plan.PublicIPv4, Replace: plan.Replace}); err != nil {
 		return err
 	}
-	if !plan.SameEndpoint || !plan.TrustPreserved || plan.OriginalPublicIPv4 != plan.PublicIPv4 || model.ValidateResourceID(plan.GatewayID) != nil ||
+	if plan.SameEndpoint != (plan.OriginalPublicIPv4 == plan.PublicIPv4) || !plan.TrustPreserved || model.ValidateResourceID(plan.GatewayID) != nil ||
 		plan.SourceGeneration == 0 || plan.TargetGeneration < plan.SourceGeneration || plan.NodeCount < 0 || plan.ClientCount < 0 ||
 		plan.ReplacingInitialized != plan.Replace || plan.EmergencySnapshotNeeded != plan.Replace {
 		return fmt.Errorf("gateway restore plan identity is invalid")
@@ -251,6 +324,20 @@ func (plan GatewayRestorePlan) Validate() error {
 	}
 	if err := plan.hostState.Validate(); err != nil {
 		return err
+	}
+	if err := validateGatewayRestoreEndpointImpact(plan.SameEndpoint, plan.GatewayID, plan.PublicIPv4, plan.PublicCertificateExport,
+		plan.PublicCertificate, plan.AffectedNodes, plan.StaleClientExports, plan.AffectedExposes); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(plan.AffectedNodes, plan.wantAffectedNodes) || !reflect.DeepEqual(plan.StaleClientExports, plan.wantStaleClientExports) ||
+		!reflect.DeepEqual(plan.AffectedExposes, plan.wantAffectedExposes) {
+		return fmt.Errorf("gateway restore endpoint impact differs from retained plan")
+	}
+	if !plan.SameEndpoint {
+		candidateCertificate, found := gatewayRestorePublicCertificate(plan.preflight.Candidate)
+		if !found || !reflect.DeepEqual(candidateCertificate, *plan.PublicCertificate) {
+			return fmt.Errorf("gateway restore public certificate differs from retained preflight")
+		}
 	}
 	return nil
 }
@@ -310,8 +397,11 @@ func (restorer *GatewayRestorer) Apply(ctx context.Context, plan GatewayRestoreP
 	}
 	result = GatewayRestoreResult{
 		Changed: true, GatewayID: plan.GatewayID, PublicIPv4: plan.PublicIPv4, Generation: plan.TargetGeneration,
-		SameEndpoint: true, TrustPreserved: true, NodeCount: plan.NodeCount, ClientCount: plan.ClientCount,
+		SameEndpoint: plan.SameEndpoint, TrustPreserved: plan.TrustPreserved, NodeCount: plan.NodeCount, ClientCount: plan.ClientCount,
 		AffectedServices: append([]string{}, plan.AffectedServices...), ExpectedInterruptions: append([]string{}, plan.ExpectedInterruptions...),
+		PublicCertificate: cloneGatewayRestoreCertificate(plan.PublicCertificate), PublicCertificateExport: plan.PublicCertificateExport,
+		AffectedNodes: append([]GatewayRestoreAffectedNode{}, plan.AffectedNodes...), StaleClientExports: append([]GatewayRestoreAffectedClientExport{}, plan.StaleClientExports...),
+		AffectedExposes: append([]GatewayRestoreAffectedExpose{}, plan.AffectedExposes...),
 	}
 	if plan.EmergencySnapshotNeeded {
 		copy := snapshot
@@ -354,14 +444,236 @@ func prepareGatewayRestoreReleaseState(restored model.State, installed model.Com
 	return candidate, nil
 }
 
-func validateGatewayRestorePreflight(base, restored model.State, publicIPv4 string, preflight GatewayRestorePreflight) error {
+func (restorer *GatewayRestorer) prepareEndpointMove(
+	payload *GatewayRestorePayload,
+	base model.State,
+	publicIPv4 string,
+) (model.State, *model.Certificate, error) {
+	encoded, err := model.EncodeState(base)
+	if err != nil {
+		return model.State{}, nil, err
+	}
+	candidate, err := model.DecodeState(encoded)
+	if err != nil {
+		return model.State{}, nil, err
+	}
+	certificateIndex := -1
+	for index, certificate := range candidate.Certificates {
+		if certificate.Kind != model.CertificatePublicIngress {
+			continue
+		}
+		if certificateIndex >= 0 {
+			return model.State{}, nil, fmt.Errorf("gateway restore has multiple public ingress certificates")
+		}
+		certificateIndex = index
+	}
+	if certificateIndex < 0 {
+		return model.State{}, nil, ingress.ErrPublicCertificateNotFound
+	}
+	current := candidate.Certificates[certificateIndex]
+	nextCertificateGeneration, err := model.NextGeneration(current.Generation)
+	if err != nil {
+		return model.State{}, nil, err
+	}
+	nextStateGeneration, err := model.NextGeneration(candidate.Generation)
+	if err != nil {
+		return model.State{}, nil, err
+	}
+	material, err := ingress.GeneratePublicCertificate(restorer.runtime.Entropy, publicIPv4, restorer.runtime.Now().UTC().Truncate(time.Second))
+	if err != nil {
+		return model.State{}, nil, fmt.Errorf("issue public ingress certificate for restored endpoint: %w", err)
+	}
+	defer wipeBackupBytes(material.PrivateKeyPEM)
+	certificateRef, privateKeyRef, err := ingress.PublicCertificateReferences(nextCertificateGeneration)
+	if err != nil {
+		return model.State{}, nil, err
+	}
+	fingerprint := sha256.Sum256(material.Certificate.Raw)
+	renewed := current
+	renewed.Fingerprint = "sha256:" + hex.EncodeToString(fingerprint[:])
+	renewed.SerialHex = material.Certificate.SerialNumber.Text(16)
+	renewed.Subject = material.Certificate.Subject.String()
+	renewed.SANs = []string{"IP:" + publicIPv4}
+	renewed.NotBefore = material.Certificate.NotBefore.UTC()
+	renewed.NotAfter = material.Certificate.NotAfter.UTC()
+	renewed.WarningDays = ingress.PublicCertificateWarningDays
+	renewed.Generation = nextCertificateGeneration
+	renewed.CertificateRef = certificateRef
+	renewed.PrivateKeyRef = privateKeyRef
+	if err := renewed.Validate(); err != nil {
+		return model.State{}, nil, fmt.Errorf("build restored public ingress certificate metadata: %w", err)
+	}
+	if _, err := ingress.ValidatePublicCertificatePEM(material.CertificatePEM, renewed, publicIPv4); err != nil {
+		return model.State{}, nil, err
+	}
+	candidate.Host.PublicIPv4 = publicIPv4
+	candidate.Certificates[certificateIndex] = renewed
+	candidate.Generation = nextStateGeneration
+	if err := candidate.Validate(); err != nil {
+		return model.State{}, nil, fmt.Errorf("validate restored endpoint migration: %w", err)
+	}
+	if err := payload.rewriteEndpoint(candidate, current, renewed, material.CertificatePEM, material.PrivateKeyPEM); err != nil {
+		return model.State{}, nil, err
+	}
+	return candidate, cloneGatewayRestoreCertificate(&renewed), nil
+}
+
+func gatewayRestoreEndpointImpact(
+	state model.State,
+	payload *GatewayRestorePayload,
+) ([]GatewayRestoreAffectedNode, []GatewayRestoreAffectedClientExport, []GatewayRestoreAffectedExpose) {
+	nodes := make([]GatewayRestoreAffectedNode, 0)
+	for _, node := range state.Nodes {
+		if node.Lifecycle == model.LifecycleActive {
+			nodes = append(nodes, GatewayRestoreAffectedNode{ID: node.ID, Name: node.Name})
+		}
+	}
+	sort.Slice(nodes, func(left, right int) bool {
+		leftName, rightName := strings.ToLower(nodes[left].Name), strings.ToLower(nodes[right].Name)
+		return leftName < rightName || (leftName == rightName && nodes[left].ID < nodes[right].ID)
+	})
+
+	files := make(map[string]struct{})
+	for _, file := range payload.Files() {
+		files[file.Path] = struct{}{}
+	}
+	clientExports := make([]GatewayRestoreAffectedClientExport, 0)
+	for _, client := range state.Clients {
+		if client.Lifecycle != model.LifecycleActive {
+			continue
+		}
+		for _, item := range []struct {
+			format    string
+			extension string
+		}{{"clash", ".clash.yaml"}, {"wireguard", ".wireguard.conf"}} {
+			profile := path.Join("exports/clients", client.Name+item.extension)
+			metadata := path.Join("exports/clients/.metadata", client.ID+"."+item.format+".json")
+			_, hasProfile := files[profile]
+			_, hasMetadata := files[metadata]
+			if hasProfile || hasMetadata {
+				clientExports = append(clientExports, GatewayRestoreAffectedClientExport{
+					ClientID: client.ID, ClientName: client.Name, Format: item.format,
+				})
+			}
+		}
+	}
+	sort.Slice(clientExports, func(left, right int) bool {
+		leftName, rightName := strings.ToLower(clientExports[left].ClientName), strings.ToLower(clientExports[right].ClientName)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if clientExports[left].ClientID != clientExports[right].ClientID {
+			return clientExports[left].ClientID < clientExports[right].ClientID
+		}
+		return clientExports[left].Format < clientExports[right].Format
+	})
+
+	exposes := make([]GatewayRestoreAffectedExpose, 0)
+	for _, expose := range state.Exposes {
+		if expose.State != model.ExposeReady && expose.State != model.ExposeDegraded {
+			continue
+		}
+		exposes = append(exposes, GatewayRestoreAffectedExpose{
+			ID: expose.ID, NodeID: expose.NodeID, Name: expose.Name, State: expose.State,
+		})
+	}
+	sort.Slice(exposes, func(left, right int) bool {
+		leftName, rightName := strings.ToLower(exposes[left].Name), strings.ToLower(exposes[right].Name)
+		return leftName < rightName || (leftName == rightName && exposes[left].ID < exposes[right].ID)
+	})
+	return nodes, clientExports, exposes
+}
+
+func validateGatewayRestoreEndpointImpact(
+	sameEndpoint bool,
+	gatewayID, publicIPv4, exportPath string,
+	certificate *model.Certificate,
+	nodes []GatewayRestoreAffectedNode,
+	clientExports []GatewayRestoreAffectedClientExport,
+	exposes []GatewayRestoreAffectedExpose,
+) error {
+	if sameEndpoint {
+		if certificate != nil || exportPath != "" || len(nodes) != 0 || len(clientExports) != 0 || len(exposes) != 0 {
+			return fmt.Errorf("same-endpoint gateway restore contains stale endpoint actions")
+		}
+		return nil
+	}
+	if certificate == nil || certificate.Validate() != nil || certificate.Kind != model.CertificatePublicIngress || certificate.OwnerKind != "host" ||
+		certificate.OwnerID != gatewayID || !reflect.DeepEqual(certificate.SANs, []string{"IP:" + publicIPv4}) || certificate.Generation < 2 ||
+		!filepath.IsAbs(exportPath) || filepath.Clean(exportPath) != exportPath || strings.ContainsAny(exportPath, "\x00\r\n") {
+		return fmt.Errorf("changed-endpoint gateway restore certificate is invalid")
+	}
+	previousNode := ""
+	activeNodeIDs := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		key := strings.ToLower(node.Name) + "\x00" + node.ID
+		if model.ValidateResourceID(node.ID) != nil || node.Name == "" || key <= previousNode {
+			return fmt.Errorf("changed-endpoint gateway restore node impact is invalid")
+		}
+		previousNode = key
+		activeNodeIDs[node.ID] = struct{}{}
+	}
+	previousClient := ""
+	for _, client := range clientExports {
+		key := strings.ToLower(client.ClientName) + "\x00" + client.ClientID + "\x00" + client.Format
+		if model.ValidateResourceID(client.ClientID) != nil || client.ClientName == "" || (client.Format != "clash" && client.Format != "wireguard") || key <= previousClient {
+			return fmt.Errorf("changed-endpoint gateway restore client impact is invalid")
+		}
+		previousClient = key
+	}
+	previousExpose := ""
+	for _, expose := range exposes {
+		key := strings.ToLower(expose.Name) + "\x00" + expose.ID
+		_, activeNode := activeNodeIDs[expose.NodeID]
+		if model.ValidateResourceID(expose.ID) != nil || model.ValidateResourceID(expose.NodeID) != nil || !activeNode ||
+			(expose.State != model.ExposeReady && expose.State != model.ExposeDegraded) || key <= previousExpose {
+			return fmt.Errorf("changed-endpoint gateway restore expose impact is invalid")
+		}
+		previousExpose = key
+	}
+	return nil
+}
+
+func cloneGatewayRestoreCertificate(certificate *model.Certificate) *model.Certificate {
+	if certificate == nil {
+		return nil
+	}
+	copy := *certificate
+	copy.SANs = append([]string{}, certificate.SANs...)
+	return &copy
+}
+
+func gatewayRestorePublicCertificate(state model.State) (model.Certificate, bool) {
+	var result model.Certificate
+	found := false
+	for _, certificate := range state.Certificates {
+		if certificate.Kind != model.CertificatePublicIngress {
+			continue
+		}
+		if found {
+			return model.Certificate{}, false
+		}
+		result = certificate
+		found = true
+	}
+	return result, found
+}
+
+func restoreOptionalString(include bool, value string) string {
+	if include {
+		return value
+	}
+	return ""
+}
+
+func validateGatewayRestorePreflight(base model.State, publicIPv4 string, preflight GatewayRestorePreflight) error {
 	if err := preflight.Candidate.Validate(); err != nil || preflight.Candidate.Host.Role != model.RoleGateway {
 		return fmt.Errorf("invalid gateway restore preflight candidate")
 	}
-	if preflight.Candidate.Host.ID != restored.Host.ID || preflight.Candidate.Host.PublicIPv4 != publicIPv4 ||
-		!reflect.DeepEqual(preflight.Candidate.EnrollmentIdentity, restored.EnrollmentIdentity) ||
-		!reflect.DeepEqual(preflight.Candidate.Nodes, restored.Nodes) || !reflect.DeepEqual(preflight.Candidate.Clients, restored.Clients) ||
-		!reflect.DeepEqual(preflight.Candidate.Certificates, restored.Certificates) || !reflect.DeepEqual(preflight.Candidate.Transports, restored.Transports) {
+	if preflight.Candidate.Host.ID != base.Host.ID || preflight.Candidate.Host.PublicIPv4 != publicIPv4 ||
+		!reflect.DeepEqual(preflight.Candidate.EnrollmentIdentity, base.EnrollmentIdentity) ||
+		!reflect.DeepEqual(preflight.Candidate.Nodes, base.Nodes) || !reflect.DeepEqual(preflight.Candidate.Clients, base.Clients) ||
+		!reflect.DeepEqual(preflight.Candidate.Certificates, base.Certificates) || !reflect.DeepEqual(preflight.Candidate.Transports, base.Transports) {
 		return fmt.Errorf("gateway restore preflight changed trust or identity material")
 	}
 	if preflight.Network.PublicIPv4 != publicIPv4 || preflight.Network.ClientCIDR != preflight.Candidate.Host.ClientCIDR ||

@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -48,6 +50,122 @@ func TestGatewayRestoreCleanHostPreservesSameEndpointTrustAndProfiles(t *testing
 	}
 	if !host.observedNodeTrust || !host.observedClientProfile {
 		t.Fatalf("same-endpoint reconnect material was not preserved: node=%t client=%t", host.observedNodeTrust, host.observedClientProfile)
+	}
+}
+
+func TestGatewayRestoreChangedEndpointRotatesIngressAndListsEveryStaleResource(t *testing.T) {
+	archivePath, passphrase, archived := writeGatewayRestoreArchiveFixture(t)
+	encrypted, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, files := decryptGatewayBackupFiles(t, encrypted, passphrase)
+	delete(files, "manifest.json")
+	const sensitiveWebhookPath = "/telegram/fixture-secret-webhook-token"
+	archived.Exposes = []model.Expose{
+		{
+			SchemaVersion: model.ResourceSchemaVersion, ID: "94000000-0000-4000-8000-000000000020", NodeID: backupAllowlistNodeID, Name: "telegram",
+			Upstream: "127.0.0.1:3000", RouteMode: model.RouteExact, Path: sensitiveWebhookPath,
+			BodyLimitBytes: 1 << 20, UpstreamTimeoutSeconds: 15, ConcurrentRequests: 40,
+			TunnelPort: 20000, State: model.ExposeReady, Generation: 1, CreatedAt: archived.Host.InitializedAt,
+		},
+		{
+			SchemaVersion: model.ResourceSchemaVersion, ID: "94000000-0000-4000-8000-000000000021", NodeID: backupAllowlistNodeID, Name: "disabled",
+			Upstream: "127.0.0.1:3001", RouteMode: model.RouteExact, Path: "/disabled-secret",
+			BodyLimitBytes: 1 << 20, UpstreamTimeoutSeconds: 15, ConcurrentRequests: 40,
+			TunnelPort: 20001, State: model.ExposeDisabled, Generation: 1, CreatedAt: archived.Host.InitializedAt,
+		},
+	}
+	if err := archived.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	files["state/state.json"], err = model.EncodeState(archived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["exports/clients/iphone.wireguard.conf"] = []byte("stale wireguard profile\n")
+	files["exports/clients/.metadata/"+backupAllowlistClientID+".wireguard.json"] = []byte("legacy metadata\n")
+	archivePath = writeAuthenticatedRestoreTestFiles(t, archived, files, passphrase)
+	restorer, host, input := newGatewayRestoreFixtureForArchive(t, GatewayRestoreHostState{}, archivePath)
+	input.PublicIPv4 = "198.51.100.20"
+	plan, err := restorer.Plan(context.Background(), input, append([]byte(nil), passphrase...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SameEndpoint || !plan.TrustPreserved || plan.OriginalPublicIPv4 != "203.0.113.10" || plan.PublicIPv4 != "198.51.100.20" ||
+		plan.PublicCertificate == nil || plan.PublicCertificate.ID != "94000000-0000-4000-8000-000000000012" ||
+		plan.PublicCertificate.Generation != 2 || !reflect.DeepEqual(plan.PublicCertificate.SANs, []string{"IP:198.51.100.20"}) ||
+		plan.PublicCertificate.Fingerprint == archived.Certificates[2].Fingerprint {
+		t.Fatalf("changed-endpoint restore plan = %+v", plan)
+	}
+	if !reflect.DeepEqual(plan.AffectedNodes, []GatewayRestoreAffectedNode{{ID: backupAllowlistNodeID, Name: "private-node"}}) ||
+		!reflect.DeepEqual(plan.StaleClientExports, []GatewayRestoreAffectedClientExport{
+			{ClientID: backupAllowlistClientID, ClientName: "iphone", Format: "clash"},
+			{ClientID: backupAllowlistClientID, ClientName: "iphone", Format: "wireguard"},
+		}) || !reflect.DeepEqual(plan.AffectedExposes, []GatewayRestoreAffectedExpose{{
+		ID: "94000000-0000-4000-8000-000000000020", NodeID: backupAllowlistNodeID, Name: "telegram", State: model.ExposeReady,
+	}}) {
+		t.Fatalf("changed-endpoint impact = nodes:%+v clients:%+v exposes:%+v", plan.AffectedNodes, plan.StaleClientExports, plan.AffectedExposes)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", plan), sensitiveWebhookPath) || strings.Contains(fmt.Sprintf("%+v", plan), "/disabled-secret") {
+		t.Fatal("changed-endpoint public plan exposed a webhook path")
+	}
+	for _, metadata := range []string{
+		"exports/clients/.metadata/" + backupAllowlistClientID + ".clash.json",
+		"exports/clients/.metadata/" + backupAllowlistClientID + ".wireguard.json",
+	} {
+		if _, err := plan.payload.Open(metadata); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stale client metadata %s remains active: %v", metadata, err)
+		}
+	}
+	for _, old := range []string{"secrets/ingress-cert/public-g1", "secrets/ingress-key/public-g1"} {
+		if _, err := plan.payload.Open(old); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("superseded public certificate material %s remains active: %v", old, err)
+		}
+	}
+	candidate := plan.preflight.Candidate
+	if !reflect.DeepEqual(candidate.EnrollmentIdentity, archived.EnrollmentIdentity) || !reflect.DeepEqual(candidate.Nodes, archived.Nodes) ||
+		!reflect.DeepEqual(candidate.Clients, archived.Clients) || !reflect.DeepEqual(candidate.Transports, archived.Transports) ||
+		!reflect.DeepEqual(nonPublicRestoreCertificates(candidate.Certificates), nonPublicRestoreCertificates(archived.Certificates)) {
+		t.Fatal("changed endpoint altered control, node, or client trust material")
+	}
+	tampered := plan
+	tampered.AffectedExposes = nil
+	if _, err := restorer.Apply(context.Background(), tampered); err == nil || !strings.Contains(err.Error(), "impact") {
+		t.Fatalf("incomplete endpoint action plan error = %v", err)
+	}
+	if host.mutationCalls() != 0 {
+		t.Fatalf("tampered endpoint action plan mutated host: %+v", host)
+	}
+	result, err := restorer.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SameEndpoint || !result.TrustPreserved || result.PublicCertificate == nil ||
+		!reflect.DeepEqual(result.AffectedNodes, plan.AffectedNodes) || !reflect.DeepEqual(result.StaleClientExports, plan.StaleClientExports) ||
+		!reflect.DeepEqual(result.AffectedExposes, plan.AffectedExposes) || !host.observedRotatedCertificate || !host.observedStaleClientMetadata {
+		t.Fatalf("changed-endpoint result/host = %+v / %+v", result, host)
+	}
+	for _, interruption := range result.ExpectedInterruptions {
+		if strings.Contains(strings.ToLower(interruption), "seamless") {
+			t.Fatalf("restore claimed seamless continuity: %q", interruption)
+		}
+	}
+}
+
+func TestGatewayRestoreChangedEndpointEntropyFailureLeavesNoPrivateStageOrHostMutation(t *testing.T) {
+	restorer, host, input, passphrase := newGatewayRestoreFixture(t, GatewayRestoreHostState{})
+	restorer.runtime.Entropy = failingGatewayRestoreEntropy{}
+	input.PublicIPv4 = "198.51.100.20"
+	if _, err := restorer.Plan(context.Background(), input, append([]byte(nil), passphrase...)); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("changed-endpoint entropy failure = %v", err)
+	}
+	if host.preflightCalls != 0 || host.mutationCalls() != 0 {
+		t.Fatalf("failed endpoint planning reached host: %+v", host)
+	}
+	entries, err := os.ReadDir(restorer.runtime.Archives.scratch)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed endpoint planning retained private stage: %v, entries=%v", err, entries)
 	}
 }
 
@@ -128,15 +246,19 @@ func TestGatewayRestoreInvalidInputsAndArchivesNeverReachHostMutation(t *testing
 
 	changedEndpoint := input
 	changedEndpoint.PublicIPv4 = "198.51.100.20"
-	if _, err := restorer.Plan(context.Background(), changedEndpoint, append([]byte(nil), passphrase...)); !errors.Is(err, ErrGatewayRestoreEndpointMove) {
-		t.Fatalf("changed endpoint error = %v", err)
+	changedPlan, err := restorer.Plan(context.Background(), changedEndpoint, append([]byte(nil), passphrase...))
+	if err != nil || changedPlan.SameEndpoint || changedPlan.PublicCertificate == nil {
+		t.Fatalf("changed endpoint plan = %+v, %v", changedPlan, err)
+	}
+	if err := restorer.Discard(changedPlan); err != nil {
+		t.Fatal(err)
 	}
 
 	wrong := []byte("incorrect passphrase")
 	if _, err := restorer.Plan(context.Background(), input, wrong); !errors.Is(err, ErrBackupAuthentication) {
 		t.Fatalf("invalid archive authentication error = %v", err)
 	}
-	if host.preflightCalls != 0 || host.mutationCalls() != 0 {
+	if host.preflightCalls != 1 || host.mutationCalls() != 0 {
 		t.Fatalf("invalid restore reached host preflight/mutation: %+v", host)
 	}
 
@@ -244,10 +366,12 @@ type recordingGatewayRestoreHost struct {
 	commitCalls    int
 	rollbackCalls  int
 
-	healthErr             error
-	lastPayloadRoot       string
-	observedNodeTrust     bool
-	observedClientProfile bool
+	healthErr                   error
+	lastPayloadRoot             string
+	observedNodeTrust           bool
+	observedClientProfile       bool
+	observedRotatedCertificate  bool
+	observedStaleClientMetadata bool
 }
 
 func (host *recordingGatewayRestoreHost) Inspect(context.Context) (GatewayRestoreHostState, error) {
@@ -275,7 +399,7 @@ func (host *recordingGatewayRestoreHost) EmergencySnapshot(context.Context, Gate
 	return GatewayRestoreEmergencySnapshot{ID: restoreTestSnapshotID, Path: "/var/lib/vpnctl/snapshots/restore-" + restoreTestSnapshotID, CreatedAt: time.Date(2026, 9, 4, 18, 0, 0, 0, time.UTC)}, nil
 }
 
-func (host *recordingGatewayRestoreHost) Activate(_ context.Context, payload *GatewayRestorePayload, _ GatewayRestorePreflight, _ GatewayRestoreEmergencySnapshot) (GatewayRestoreActivation, error) {
+func (host *recordingGatewayRestoreHost) Activate(_ context.Context, payload *GatewayRestorePayload, preflight GatewayRestorePreflight, _ GatewayRestoreEmergencySnapshot) (GatewayRestoreActivation, error) {
 	host.activateCalls++
 	host.lastPayloadRoot = payload.root
 	nodeTrust, err := payload.Open("secrets/tunnel-token/" + backupAllowlistNodeID + "-g1")
@@ -289,6 +413,34 @@ func (host *recordingGatewayRestoreHost) Activate(_ context.Context, payload *Ga
 		content, readErr := io.ReadAll(profile)
 		_ = profile.Close()
 		host.observedClientProfile = readErr == nil && bytes.Equal(content, []byte("client profile secret\n"))
+	}
+	if certificate, found := gatewayRestorePublicCertificate(preflight.Candidate); found && certificate.Generation > 1 {
+		certificatePath, _ := gatewayRestoreSecretPath(model.SecretRef(certificate.CertificateRef))
+		privateKeyPath, _ := gatewayRestoreSecretPath(certificate.PrivateKeyRef)
+		certificateFile, certificateErr := payload.Open(certificatePath)
+		privateKeyFile, privateKeyErr := payload.Open(privateKeyPath)
+		if certificateErr == nil && privateKeyErr == nil {
+			certificatePEM, certificateReadErr := io.ReadAll(certificateFile)
+			privateKeyPEM, privateKeyReadErr := io.ReadAll(privateKeyFile)
+			_, validationErr := ingress.ValidatePublicCertificatePEM(certificatePEM, certificate, preflight.Candidate.Host.PublicIPv4)
+			_, pairErr := tls.X509KeyPair(certificatePEM, privateKeyPEM)
+			host.observedRotatedCertificate = certificateReadErr == nil && privateKeyReadErr == nil && validationErr == nil && pairErr == nil
+		}
+		if certificateFile != nil {
+			_ = certificateFile.Close()
+		}
+		if privateKeyFile != nil {
+			_ = privateKeyFile.Close()
+		}
+		clashMetadata, clashMetadataErr := payload.Open("exports/clients/.metadata/" + backupAllowlistClientID + ".clash.json")
+		wireGuardMetadata, wireGuardMetadataErr := payload.Open("exports/clients/.metadata/" + backupAllowlistClientID + ".wireguard.json")
+		if clashMetadata != nil {
+			_ = clashMetadata.Close()
+		}
+		if wireGuardMetadata != nil {
+			_ = wireGuardMetadata.Close()
+		}
+		host.observedStaleClientMetadata = errors.Is(clashMetadataErr, os.ErrNotExist) && errors.Is(wireGuardMetadataErr, os.ErrNotExist)
 	}
 	return GatewayRestoreActivation{ID: restoreTestActivationID, Started: true}, nil
 }
@@ -315,6 +467,12 @@ func (host *recordingGatewayRestoreHost) mutationCalls() int {
 func newGatewayRestoreFixture(t *testing.T, hostState GatewayRestoreHostState) (*GatewayRestorer, *recordingGatewayRestoreHost, GatewayRestoreInput, []byte) {
 	t.Helper()
 	archivePath, passphrase, _ := writeGatewayRestoreArchiveFixture(t)
+	restorer, host, input := newGatewayRestoreFixtureForArchive(t, hostState, archivePath)
+	return restorer, host, input, passphrase
+}
+
+func newGatewayRestoreFixtureForArchive(t *testing.T, hostState GatewayRestoreHostState, archivePath string) (*GatewayRestorer, *recordingGatewayRestoreHost, GatewayRestoreInput) {
+	t.Helper()
 	loader, err := newGatewayRestoreArchiveLoader(t.TempDir(), fastBackupArchiveCodec())
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +486,23 @@ func newGatewayRestoreFixture(t *testing.T, hostState GatewayRestoreHostState) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	return restorer, host, GatewayRestoreInput{ArchivePath: archivePath, PublicIPv4: "203.0.113.10"}, passphrase
+	return restorer, host, GatewayRestoreInput{ArchivePath: archivePath, PublicIPv4: "203.0.113.10"}
+}
+
+func nonPublicRestoreCertificates(certificates []model.Certificate) []model.Certificate {
+	result := make([]model.Certificate, 0, len(certificates))
+	for _, certificate := range certificates {
+		if certificate.Kind != model.CertificatePublicIngress {
+			result = append(result, certificate)
+		}
+	}
+	return result
+}
+
+type failingGatewayRestoreEntropy struct{}
+
+func (failingGatewayRestoreEntropy) Read([]byte) (int, error) {
+	return 0, errors.New("injected entropy failure")
 }
 
 func restoreTestServices() []string {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -253,6 +254,8 @@ func restorePlanOutput(plan lifecycle.GatewayRestorePlan) output.Result {
 		"affected_services": stringSafeList(plan.AffectedServices), "expected_interruptions": stringSafeList(plan.ExpectedInterruptions),
 	})
 	result.ResourceIDs["gateway"] = plan.GatewayID
+	addRestoreEndpointActions(&result, plan.PublicIPv4, plan.PublicCertificateExport, plan.PublicCertificate,
+		plan.AffectedNodes, plan.StaleClientExports, plan.AffectedExposes, true)
 	return result
 }
 
@@ -266,7 +269,57 @@ func restoreResultOutput(value lifecycle.GatewayRestoreResult) output.Result {
 		result.Data["snapshot_id"] = value.EmergencySnapshot.ID
 		result.ResourceIDs["snapshot"] = value.EmergencySnapshot.ID
 	}
+	addRestoreEndpointActions(&result, value.PublicIPv4, value.PublicCertificateExport, value.PublicCertificate,
+		value.AffectedNodes, value.StaleClientExports, value.AffectedExposes, false)
 	return result
+}
+
+func addRestoreEndpointActions(
+	result *output.Result,
+	publicIPv4, certificateExport string,
+	certificate *model.Certificate,
+	nodes []lifecycle.GatewayRestoreAffectedNode,
+	clientExports []lifecycle.GatewayRestoreAffectedClientExport,
+	exposes []lifecycle.GatewayRestoreAffectedExpose,
+	planned bool,
+) {
+	if result == nil || certificate == nil {
+		return
+	}
+	result.ResourceIDs["certificate_id"] = certificate.ID
+	result.Data["fingerprint"] = certificate.Fingerprint
+	result.Data["output_path"] = certificateExport
+	scpCommand := "scp root@" + publicIPv4 + ":" + certificateExport + " ./" + filepath.Base(certificateExport)
+	result.Data["scp_command"] = scpCommand
+	copyMessage := "Copy the new public certificate after restore and update every external trust configuration that uses it."
+	if !planned {
+		copyMessage = "Copy the new public certificate and update every external trust configuration that uses it."
+	}
+	result.RequiresAction = append(result.RequiresAction, output.Action{
+		Code: "copy_public_certificate", Message: copyMessage, Command: scpCommand,
+		ResourceIDs: map[string]string{"certificate_id": certificate.ID},
+	})
+	for _, node := range nodes {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code:        "rebind_node",
+			Message:     "Rebind this private node to the restored gateway public IP; existing node trust and credentials remain valid.",
+			ResourceIDs: map[string]string{"node_id": node.ID},
+		})
+	}
+	for _, clientExport := range clientExports {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code: "re_export_client", Message: "Export a fresh profile for the restored gateway endpoint and replace it on the client device.",
+			Command:     "vpnctl client export " + clientExport.ClientID + " " + clientExport.Format,
+			ResourceIDs: map[string]string{"client_id": clientExport.ClientID, "export_format": clientExport.Format},
+		})
+	}
+	for _, expose := range exposes {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code:        "reregister_external_webhook",
+			Message:     "Update this external webhook URL to the restored gateway public IP and register the new public certificate.",
+			ResourceIDs: map[string]string{"expose_id": expose.ID, "node_id": expose.NodeID},
+		})
+	}
 }
 
 func stringSafeList(values []string) output.SafeList {
@@ -305,8 +358,6 @@ func classifyRestoreError(err error) (output.ExitCategory, string, string) {
 		return output.CategoryConflict, "restore_conflict", singleLineGatewayInitMessage(err.Error())
 	case errors.Is(err, lifecycle.ErrReleaseInstallConflict):
 		return output.CategoryConflict, "restore_release_conflict", "installed component files differ from the verified restore release"
-	case errors.Is(err, lifecycle.ErrGatewayRestoreEndpointMove):
-		return output.CategoryValidation, "restore_endpoint_move_unsupported", "this iteration restores only to the archive public IP"
 	case errors.Is(err, lifecycle.ErrGatewayRestoreIncompatible), errors.Is(err, linuxplatform.ErrUnsupportedHost),
 		errors.Is(err, linuxplatform.ErrInvalidGatewayNetwork), errors.Is(err, linuxplatform.ErrSSHPortUnverified),
 		errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrPromptInput), errors.Is(err, ErrConsentDeclined),
@@ -337,7 +388,10 @@ Usage:
 
 The passphrase is read once from the controlling terminal, including for
 --dry-run. Restoring an initialized gateway requires explicit --replace and
-creates a durable emergency snapshot before convergence.
+creates a durable emergency snapshot before convergence. A public-IP change
+issues a new ingress certificate and lists the required node, client-profile,
+webhook, and external-certificate actions; downtime continues until they are
+completed.
 `)
 }
 

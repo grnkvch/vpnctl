@@ -139,7 +139,10 @@ func NewSystemGatewayRestorer(
 	if err != nil {
 		return nil, err
 	}
-	return lifecycle.NewGatewayRestorer(lifecycle.GatewayRestoreRuntime{Archives: archives, Release: release, Host: host})
+	return lifecycle.NewGatewayRestorer(lifecycle.GatewayRestoreRuntime{
+		Archives: archives, Release: release, Host: host,
+		PublicCertificateExportPath: ingress.DefaultPublicCertificateExportPath(paths.ExportsDir),
+	})
 }
 
 func newSystemGatewayRestoreHost(

@@ -175,7 +175,7 @@
 - [x] 14.7 Implement authenticated streaming gateway backup with hidden passphrase confirmation, selected KDF/AEAD, manifest/hashes, atomic `0600` output, default timestamp path, and no overwrite; verify wrong passphrase/corruption/partial-write behavior.
 - [x] 14.8 Implement a structural backup allowlist including gateway trust/client material and excluding node private keys/application data; verify archive-content tests and canary node-secret scans.
 - [x] 14.9 Implement clean-host and `--replace` non-merging restore with full prevalidation, explicit public IP, emergency snapshot, atomic convergence, and same-endpoint trust preservation; verify invalid archives make no mutation and same-IP nodes/clients reconnect.
-- [ ] 14.10 Implement new-public-IP restore staleness and complete required actions for nodes, clients, webhook URLs/certificates, and external steps; verify no seamless-continuity claim and every affected resource is identified.
+- [x] 14.10 Implement new-public-IP restore staleness and complete required actions for nodes, clients, webhook URLs/certificates, and external steps; verify no seamless-continuity claim and every affected resource is identified.
 - [ ] 14.11 Implement recoverable `uninstall` with impact plan, gateway `--force`, node online revoke, node `--local-only`, DNS/network restoration, managed swap handling, state preservation, and binary-last removal; verify each role's online/offline cases.
 - [ ] 14.12 Implement typed-confirmed `purge` with state/preset/secret/cert/export removal and separately confirmed `--include-backups`; verify portable archives remain by default and purge has no hidden recovery promise.
 

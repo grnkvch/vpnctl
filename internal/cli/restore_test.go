@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -111,6 +112,54 @@ func TestRestoreInvocationUsesTheFirstCommandTokenOnly(t *testing.T) {
 		if isRestoreInvocation(args) {
 			t.Fatalf("isRestoreInvocation(%q) = true", args)
 		}
+	}
+}
+
+func TestRestoreChangedEndpointOutputListsCompleteActionsWithoutWebhookPaths(t *testing.T) {
+	certificate := &model.Certificate{ID: "97000000-0000-4000-8000-000000000010", Fingerprint: "sha256:" + strings.Repeat("a", 64)}
+	plan := cliRestorePlan(false)
+	plan.PublicIPv4 = "198.51.100.20"
+	plan.OriginalPublicIPv4 = "203.0.113.10"
+	plan.SameEndpoint = false
+	plan.PublicCertificate = certificate
+	plan.PublicCertificateExport = "/var/lib/vpnctl/exports/gateway.crt"
+	plan.AffectedNodes = []lifecycle.GatewayRestoreAffectedNode{{ID: "97000000-0000-4000-8000-000000000020", Name: "private-node"}}
+	plan.StaleClientExports = []lifecycle.GatewayRestoreAffectedClientExport{
+		{ClientID: "97000000-0000-4000-8000-000000000030", ClientName: "iphone", Format: "clash"},
+		{ClientID: "97000000-0000-4000-8000-000000000030", ClientName: "iphone", Format: "wireguard"},
+	}
+	plan.AffectedExposes = []lifecycle.GatewayRestoreAffectedExpose{{
+		ID: "97000000-0000-4000-8000-000000000040", NodeID: "97000000-0000-4000-8000-000000000020", Name: "telegram", State: model.ExposeReady,
+	}}
+	result := restorePlanOutput(plan)
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.RequiresAction) != 5 {
+		t.Fatalf("changed endpoint actions = %+v", result.RequiresAction)
+	}
+	wantCodes := []string{"copy_public_certificate", "rebind_node", "re_export_client", "re_export_client", "reregister_external_webhook"}
+	for index, want := range wantCodes {
+		if result.RequiresAction[index].Code != want {
+			t.Fatalf("action[%d] = %+v, want code %s", index, result.RequiresAction[index], want)
+		}
+	}
+	if result.RequiresAction[2].Command != "vpnctl client export 97000000-0000-4000-8000-000000000030 clash" ||
+		result.RequiresAction[3].Command != "vpnctl client export 97000000-0000-4000-8000-000000000030 wireguard" ||
+		result.RequiresAction[4].ResourceIDs["expose_id"] != "97000000-0000-4000-8000-000000000040" {
+		t.Fatalf("changed endpoint actions are incomplete: %+v", result.RequiresAction)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/telegram/fixture-secret-webhook-token", "seamless", "provider-token"} {
+		if strings.Contains(strings.ToLower(string(encoded)), strings.ToLower(forbidden)) {
+			t.Fatalf("changed endpoint JSON contains %q: %s", forbidden, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), "scp root@198.51.100.20:/var/lib/vpnctl/exports/gateway.crt") {
+		t.Fatalf("changed endpoint output omitted certificate retrieval: %s", encoded)
 	}
 }
 

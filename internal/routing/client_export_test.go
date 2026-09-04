@@ -404,12 +404,15 @@ func TestHandshakeHostReplacementStalesOnlyAffectedClashExport(t *testing.T) {
 	}
 	previousClash := readClientExportManifest(t, clash.metadataPath)
 	previousWireGuard := readClientExportManifest(t, wireGuard.metadataPath)
-	wantSource := []render.SourceGeneration{{Kind: "handshake-host", ID: state.HandshakeHost.CandidateID, Generation: uint64(state.HandshakeHost.ListVersion)}}
+	wantSource := []render.SourceGeneration{
+		{Kind: "gateway-endpoint", ID: state.Host.PublicIPv4, Generation: 1},
+		{Kind: "handshake-host", ID: state.HandshakeHost.CandidateID, Generation: uint64(state.HandshakeHost.ListVersion)},
+	}
 	if !reflect.DeepEqual(previousClash.Artifacts[0].SourceGenerations, wantSource) {
 		t.Fatalf("Clash handshake-host dependency = %#v, want %#v", previousClash.Artifacts[0].SourceGenerations, wantSource)
 	}
-	if len(previousWireGuard.Artifacts[0].SourceGenerations) != 0 {
-		t.Fatalf("WireGuard unexpectedly depends on handshake host: %#v", previousWireGuard.Artifacts[0].SourceGenerations)
+	if want := []render.SourceGeneration{{Kind: "gateway-endpoint", ID: state.Host.PublicIPv4, Generation: 1}}; !reflect.DeepEqual(previousWireGuard.Artifacts[0].SourceGenerations, want) {
+		t.Fatalf("WireGuard endpoint dependency = %#v, want %#v", previousWireGuard.Artifacts[0].SourceGenerations, want)
 	}
 	clashBytes := readExportFile(t, clash.OutputPath, clientExportFileMode)
 	wireGuardBytes := readExportFile(t, wireGuard.OutputPath, clientExportFileMode)
@@ -482,8 +485,20 @@ func TestLegacyClashManifestWithoutHandshakeHostDependencyIsReadableButStale(t *
 		t.Fatalf("Export(clash) error = %v", err)
 	}
 	legacy := readClientExportManifest(t, result.metadataPath)
-	legacy.Artifacts[0].SourceGenerations = nil
+	legacy.Artifacts[0].SourceGenerations = handshakeHostSourceGeneration(state.HandshakeHost.CandidateID, state.HandshakeHost.ListVersion)
 	encoded, err := render.EncodeManifest(legacy)
+	if err != nil {
+		t.Fatalf("EncodeManifest(pre-endpoint dependency) error = %v", err)
+	}
+	if err := os.WriteFile(result.metadataPath, encoded, clientExportFileMode); err != nil {
+		t.Fatalf("WriteFile(pre-endpoint dependency metadata) error = %v", err)
+	}
+	client := findClientByID(t, state.Clients, fixture.clientID)
+	if found, current := inspectClientExportFormat(fixture.paths, state, client, ClientExportClash); !found || !current {
+		t.Fatalf("pre-endpoint-dependency Clash export = found %t current %t, want backward-compatible current", found, current)
+	}
+	legacy.Artifacts[0].SourceGenerations = nil
+	encoded, err = render.EncodeManifest(legacy)
 	if err != nil {
 		t.Fatalf("EncodeManifest(legacy) error = %v", err)
 	}
@@ -496,9 +511,39 @@ func TestLegacyClashManifestWithoutHandshakeHostDependencyIsReadableButStale(t *
 	if _, err := render.DecodeManifest(encoded); err != nil {
 		t.Fatalf("DecodeManifest(legacy) error = %v", err)
 	}
-	client := findClientByID(t, state.Clients, fixture.clientID)
 	if found, current := inspectClientExportFormat(fixture.paths, state, client, ClientExportClash); !found || current {
 		t.Fatalf("legacy Clash export = found %t current %t, want found stale", found, current)
+	}
+}
+
+func TestClientExportEndpointDependencyMarksBothFormatsStaleAfterGatewayMove(t *testing.T) {
+	t.Parallel()
+
+	fixture := newClientExporterFixture(t)
+	state := loadPolicyState(t, fixture.stateStore)
+	for _, format := range []ClientExportFormat{ClientExportClash, ClientExportWireGuard} {
+		if _, err := fixture.exporter.Export(ClientExportRequest{
+			ClientReference: fixture.clientID, Format: format, GatewayPublicKey: v1CompatibleServerPublicKey,
+		}); err != nil {
+			t.Fatalf("Export(%s) error = %v", format, err)
+		}
+	}
+	client := findClientByID(t, state.Clients, fixture.clientID)
+	for _, format := range []ClientExportFormat{ClientExportClash, ClientExportWireGuard} {
+		if found, current := inspectClientExportFormat(fixture.paths, state, client, format); !found || !current {
+			t.Fatalf("fresh %s export = found %t current %t", format, found, current)
+		}
+	}
+	moved := state
+	moved.Generation++
+	moved.Host.PublicIPv4 = "198.51.100.20"
+	if err := moved.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []ClientExportFormat{ClientExportClash, ClientExportWireGuard} {
+		if found, current := inspectClientExportFormat(fixture.paths, moved, client, format); !found || current {
+			t.Fatalf("moved-endpoint %s export = found %t current %t, want stale", format, found, current)
+		}
 	}
 }
 

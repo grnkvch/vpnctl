@@ -103,6 +103,201 @@ func (payload *GatewayRestorePayload) Close() error {
 	return os.RemoveAll(root)
 }
 
+// rewriteEndpoint changes only the authenticated payload's private staging
+// tree. The live host remains untouched until the already-preflighted restore
+// transaction activates the complete candidate.
+func (payload *GatewayRestorePayload) rewriteEndpoint(
+	candidate model.State,
+	currentCertificate model.Certificate,
+	renewedCertificate model.Certificate,
+	certificatePEM, privateKeyPEM []byte,
+) error {
+	if payload == nil || payload.closed || payload.root == "" || len(certificatePEM) == 0 || len(privateKeyPEM) == 0 {
+		return fmt.Errorf("gateway restore endpoint rewrite is incomplete")
+	}
+	if err := candidate.Validate(); err != nil {
+		return fmt.Errorf("validate gateway restore endpoint payload: %w", err)
+	}
+	if currentCertificate.Kind != model.CertificatePublicIngress || renewedCertificate.Kind != model.CertificatePublicIngress ||
+		currentCertificate.ID != renewedCertificate.ID || currentCertificate.OwnerID != renewedCertificate.OwnerID ||
+		currentCertificate.CertificateRef == renewedCertificate.CertificateRef || currentCertificate.PrivateKeyRef == renewedCertificate.PrivateKeyRef {
+		return fmt.Errorf("gateway restore endpoint certificate transition is invalid")
+	}
+	oldCertificatePath, err := gatewayRestoreSecretPath(model.SecretRef(currentCertificate.CertificateRef))
+	if err != nil {
+		return err
+	}
+	oldPrivateKeyPath, err := gatewayRestoreSecretPath(currentCertificate.PrivateKeyRef)
+	if err != nil {
+		return err
+	}
+	newCertificatePath, err := gatewayRestoreSecretPath(model.SecretRef(renewedCertificate.CertificateRef))
+	if err != nil {
+		return err
+	}
+	newPrivateKeyPath, err := gatewayRestoreSecretPath(renewedCertificate.PrivateKeyRef)
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]GatewayRestoreFile, len(payload.files))
+	for _, file := range payload.files {
+		declared[file.Path] = file
+	}
+	for _, required := range []string{oldCertificatePath, oldPrivateKeyPath, "state/state.json"} {
+		if _, ok := declared[required]; !ok {
+			return restoreArchiveInvalid("endpoint rewrite is missing %s", required)
+		}
+	}
+	for _, absent := range []string{newCertificatePath, newPrivateKeyPath} {
+		if _, ok := declared[absent]; ok {
+			return restoreArchiveInvalid("endpoint rewrite target is already declared: %s", absent)
+		}
+	}
+	stateBytes, err := model.EncodeState(candidate)
+	if err != nil {
+		return err
+	}
+	updates := map[string][]byte{
+		"state/state.json": stateBytes,
+		newCertificatePath: append([]byte(nil), certificatePEM...),
+		newPrivateKeyPath:  append([]byte(nil), privateKeyPEM...),
+		path.Join("exports", ingress.PublicCertificateExportName): append([]byte(nil), certificatePEM...),
+	}
+	defer wipeBackupBytes(updates[newPrivateKeyPath])
+	for _, archivePath := range []string{"state/state.json", newCertificatePath, newPrivateKeyPath, path.Join("exports", ingress.PublicCertificateExportName)} {
+		_, replace := declared[archivePath]
+		if err := writeGatewayRestorePayloadEntry(payload.root, archivePath, updates[archivePath], replace); err != nil {
+			return err
+		}
+	}
+	removed := map[string]struct{}{oldCertificatePath: {}, oldPrivateKeyPath: {}}
+	for archivePath := range declared {
+		if strings.HasPrefix(archivePath, "exports/clients/.metadata/") {
+			removed[archivePath] = struct{}{}
+		}
+	}
+	for archivePath := range removed {
+		if err := removeGatewayRestorePayloadEntry(payload.root, archivePath); err != nil {
+			return err
+		}
+	}
+	for archivePath, content := range updates {
+		digest := sha256.Sum256(content)
+		declared[archivePath] = GatewayRestoreFile{
+			Path: archivePath, SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:]),
+		}
+	}
+	for archivePath := range removed {
+		delete(declared, archivePath)
+	}
+	paths := make([]string, 0, len(declared))
+	for archivePath := range declared {
+		paths = append(paths, archivePath)
+	}
+	sort.Strings(paths)
+	files := make([]GatewayRestoreFile, 0, len(paths))
+	entries := make([]backupPayloadManifestEntry, 0, len(paths))
+	for _, archivePath := range paths {
+		file := declared[archivePath]
+		files = append(files, file)
+		entries = append(entries, backupPayloadManifestEntry{Path: file.Path, SizeBytes: file.SizeBytes, SHA256: file.SHA256})
+	}
+	if err := validateGatewayRestoreAllowlist(candidate, entries); err != nil {
+		return err
+	}
+	payload.state = candidate
+	payload.files = files
+	payload.manifest.StateGeneration = candidate.Generation
+	payload.manifest.PublicIPv4 = candidate.Host.PublicIPv4
+	payload.manifest.Entries = entries
+	return nil
+}
+
+func gatewayRestoreSecretPath(reference model.SecretRef) (string, error) {
+	kind, id, err := reference.Parts()
+	if err != nil {
+		return "", err
+	}
+	return path.Join("secrets", kind, id), nil
+}
+
+func writeGatewayRestorePayloadEntry(root, archivePath string, content []byte, replace bool) (returnErr error) {
+	maximum, err := gatewayRestoreEntryMaximum(archivePath)
+	if err != nil {
+		return err
+	}
+	if len(content) == 0 || int64(len(content)) > maximum {
+		return restoreArchiveInvalid("rewritten entry %s has invalid size", archivePath)
+	}
+	target := filepath.Join(root, filepath.FromSlash(archivePath))
+	info, statErr := os.Lstat(target)
+	if replace {
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			return restoreArchiveInvalid("rewritten entry %s is unsafe", archivePath)
+		}
+	} else if statErr == nil {
+		return restoreArchiveInvalid("rewritten entry %s already exists", archivePath)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return statErr
+	}
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(parent, ".vpnctl-restore-rewrite-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			returnErr = errors.Join(returnErr, temporary.Close())
+		}
+		if removeErr := os.Remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+			returnErr = errors.Join(returnErr, removeErr)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	closed = true
+	if err := os.Rename(temporaryPath, target); err != nil {
+		return err
+	}
+	return syncGatewayRestorePayloadDirectory(parent)
+}
+
+func removeGatewayRestorePayloadEntry(root, archivePath string) error {
+	target := filepath.Join(root, filepath.FromSlash(archivePath))
+	info, err := os.Lstat(target)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return restoreArchiveInvalid("removed endpoint entry %s is unsafe or absent", archivePath)
+	}
+	if err := os.Remove(target); err != nil {
+		return err
+	}
+	return syncGatewayRestorePayloadDirectory(filepath.Dir(target))
+}
+
+func syncGatewayRestorePayloadDirectory(directory string) error {
+	handle, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
+}
+
 type GatewayRestoreArchiveLoader struct {
 	scratch string
 	codec   backupArchiveCodec

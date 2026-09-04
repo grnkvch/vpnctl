@@ -119,6 +119,17 @@ other active scope; otherwise different explicit scopes may coexist.
 | `vpnctl uninstall` | `operation-v1:uninstall` | gateway/node | gateway optional `--force`; node optional `--local-only` | confirm | yes | no | `sudo vpnctl uninstall --local-only` |
 | `vpnctl purge` | `operation-v1:purge` | gateway/node | optional gateway `--include-backups` with a second typed confirmation | typed | yes | no | `sudo vpnctl purge --include-backups` |
 
+Restore never merges authoritative states. With the archive public IP,
+existing node trust and client profiles remain usable after the accepted
+convergence interruption. With a different explicit public IP, restore issues
+a new generation of the IP-only ingress certificate, preserves internal trust
+and credentials, and returns one `requires_action` entry for every active node,
+previously exported client format, and ready/degraded expose. It also returns
+the `scp` step for the new public certificate. Node rebinding, replacement of
+profiles on devices, and webhook URL/certificate registration are manual;
+vpnctl neither contacts providers nor claims seamless continuity. Webhook paths
+are excluded from the JSON action list.
+
 ## Deliberate omissions and simplifications
 
 - There is no repeated `--gateway`, `--node`, node target, DNS scope, or transport status argument after initialization. Host role and current node identity supply that context.

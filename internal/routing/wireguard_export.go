@@ -24,6 +24,7 @@ type WireGuardProfileRequest struct {
 type WireGuardProfile struct {
 	ClientID              string
 	ClientName            string
+	GatewayPublicIPv4     string
 	SourceStateGeneration uint64
 	CredentialGeneration  uint64
 	content               []byte
@@ -92,7 +93,7 @@ func (renderer *WireGuardProfileRenderer) Render(request WireGuardProfileRequest
 		return WireGuardProfile{}, err
 	}
 	return WireGuardProfile{
-		ClientID: client.ID, ClientName: client.Name, SourceStateGeneration: state.Generation,
+		ClientID: client.ID, ClientName: client.Name, GatewayPublicIPv4: state.Host.PublicIPv4, SourceStateGeneration: state.Generation,
 		CredentialGeneration: client.CredentialGeneration, content: []byte(content),
 	}, nil
 }

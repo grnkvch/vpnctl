@@ -266,7 +266,7 @@ func (exporter *ClientExporter) render(request ClientExportRequest) (renderedCli
 		return renderedClientExport{
 			clientID: profile.ClientID, clientName: profile.ClientName,
 			stateGeneration: profile.SourceStateGeneration, credentialGeneration: profile.CredentialGeneration,
-			content: profile.Bytes(),
+			sourceGenerations: gatewayEndpointSourceGeneration(profile.GatewayPublicIPv4), content: profile.Bytes(),
 		}, nil
 	case ClientExportClash:
 		profile, err := exporter.clash.Render(ClashProfileRequest{
@@ -280,8 +280,9 @@ func (exporter *ClientExporter) render(request ClientExportRequest) (renderedCli
 			clientID: profile.ClientID, clientName: profile.ClientName,
 			stateGeneration: profile.SourceStateGeneration, policyGeneration: profile.PolicyGeneration,
 			credentialGeneration: profile.CredentialGeneration,
-			sourceGenerations:    handshakeHostSourceGeneration(profile.HandshakeHostID, profile.HandshakeHostVersion),
-			content:              profile.Bytes(),
+			sourceGenerations: append(gatewayEndpointSourceGeneration(profile.GatewayPublicIPv4),
+				handshakeHostSourceGeneration(profile.HandshakeHostID, profile.HandshakeHostVersion)...),
+			content: profile.Bytes(),
 		}, nil
 	default:
 		return renderedClientExport{}, fmt.Errorf("unsupported client export format %q", request.Format)
@@ -407,6 +408,13 @@ func handshakeHostSourceGeneration(candidateID string, listVersion int) []render
 		return nil
 	}
 	return []render.SourceGeneration{{Kind: "handshake-host", ID: candidateID, Generation: uint64(listVersion)}}
+}
+
+func gatewayEndpointSourceGeneration(publicIPv4 string) []render.SourceGeneration {
+	if publicIPv4 == "" {
+		return nil
+	}
+	return []render.SourceGeneration{{Kind: "gateway-endpoint", ID: publicIPv4, Generation: 1}}
 }
 
 func (exporter *ClientExporter) preflightPublication(outputPath string, managed, force bool, metadataPath string) error {
