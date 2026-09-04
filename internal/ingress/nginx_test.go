@@ -56,6 +56,9 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 		"map $host $vpnctl_expose_key { default \"\"; }",
 		"large_client_header_buffers 4 8192;", "client_max_body_size 8388608;",
 		"worker_shutdown_timeout 10s;", "access_log off;", "error_log /dev/null crit;",
+		"error_page 502 =503 @vpnctl_unavailable;", "error_page 504 =504 @vpnctl_timeout;",
+		"location @vpnctl_unavailable {", `return 503 '{"error":"service_unavailable"}';`,
+		"location @vpnctl_timeout {", `return 504 '{"error":"gateway_timeout"}';`,
 	} {
 		if !strings.Contains(main, directive) {
 			t.Errorf("main config lacks %q:\n%s", directive, main)
@@ -80,7 +83,8 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 	for _, directive := range []string{
 		"proxy_http_version 1.1;", "proxy_request_buffering off;", "proxy_buffering off;",
 		"proxy_max_temp_file_size 0;", "proxy_store off;", "proxy_cache off;",
-		"proxy_next_upstream off;", "proxy_redirect off;", "proxy_pass_request_body on;",
+		"proxy_next_upstream off;", "proxy_next_upstream_tries 1;", "proxy_intercept_errors off;",
+		"proxy_redirect off;", "proxy_pass_request_body on;",
 		`proxy_set_header Host "192.0.2.10";`, "proxy_set_header Authorization $http_authorization;", "proxy_set_header Forwarded \"\";",
 		"proxy_set_header X-Forwarded-For $remote_addr;", `proxy_set_header X-Forwarded-Host "192.0.2.10";`,
 		"proxy_set_header X-Forwarded-Port $server_port;", "proxy_set_header X-Forwarded-Proto $scheme;",
@@ -93,7 +97,7 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 		}
 	}
 	combined := strings.ToLower(main + routes + common)
-	for _, forbidden := range []string{"quic", "http3", "listen 0.0.0.0:443 udp", "$http_upgrade", "proxy_request_buffering on", "proxy_buffering on", "proxy_next_upstream on", "proxy_pass https://"} {
+	for _, forbidden := range []string{"quic", "http3", "listen 0.0.0.0:443 udp", "$http_upgrade", "proxy_request_buffering on", "proxy_buffering on", "proxy_next_upstream on", "proxy_intercept_errors on", "proxy_pass https://"} {
 		if strings.Contains(combined, forbidden) {
 			t.Errorf("configuration contains forbidden %q", forbidden)
 		}
@@ -102,6 +106,22 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 	// original normalized path and query string.
 	if strings.Contains(routes, "proxy_pass http://127.0.0.1:20000/") || strings.Contains(routes, "proxy_pass http://127.0.0.1:20001/") {
 		t.Fatalf("proxy_pass rewrites the application URI:\n%s", routes)
+	}
+	for _, handler := range []string{"vpnctl_unavailable", "vpnctl_timeout"} {
+		start := strings.Index(main, "location @"+handler+" {")
+		if start < 0 {
+			t.Fatalf("failure handler %s is absent:\n%s", handler, main)
+		}
+		end := strings.Index(main[start:], "        }\n")
+		if end < 0 || strings.Contains(main[start:start+end], "proxy_pass") {
+			t.Fatalf("failure handler %s can replay an upstream request:\n%s", handler, main[start:])
+		}
+	}
+	if strings.Count(combined, "proxy_pass ") != strings.Count(routes, "proxy_pass ") {
+		t.Fatalf("a proxy attempt escaped the route tree")
+	}
+	if strings.Contains(routes, "limit_req ") && strings.Count(routes, "limit_req ") != strings.Count(routes, "nodelay;") {
+		t.Fatalf("a request-rate limit can queue instead of reject immediately:\n%s", routes)
 	}
 }
 

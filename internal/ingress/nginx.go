@@ -309,7 +309,11 @@ func renderNginxMain(request NginxRenderRequest) []byte {
 	config.WriteString("        http2_body_preread_size 16k;\n")
 	fmt.Fprintf(&config, "        http2_max_concurrent_streams %d;\n", limits.HTTP2ConcurrentStreams)
 	fmt.Fprintf(&config, "        limit_conn vpnctl_gateway %d;\n", limits.GatewayConcurrentRequests)
+	config.WriteString("        error_page 502 =503 @vpnctl_unavailable;\n")
+	config.WriteString("        error_page 504 =504 @vpnctl_timeout;\n")
 	config.WriteString("        include conf.d/routes.conf;\n")
+	renderNginxFailureLocation(&config, "vpnctl_unavailable", 503, "service_unavailable")
+	renderNginxFailureLocation(&config, "vpnctl_timeout", 504, "gateway_timeout")
 	config.WriteString("    }\n")
 	config.WriteString("}\n")
 	return []byte(config.String())
@@ -323,6 +327,8 @@ proxy_max_temp_file_size 0;
 proxy_store off;
 proxy_cache off;
 proxy_next_upstream off;
+proxy_next_upstream_tries 1;
+proxy_intercept_errors off;
 proxy_redirect off;
 proxy_ignore_headers X-Accel-Buffering X-Accel-Redirect;
 proxy_pass_request_body on;
@@ -350,6 +356,16 @@ proxy_set_header Connection "";
 proxy_set_header Upgrade "";
 proxy_set_header TE "";
 `, nginxConnectTimeoutSeconds, nginxQuote(publicIPv4), nginxQuote(publicIPv4)))
+}
+
+func renderNginxFailureLocation(config *strings.Builder, name string, status int, code string) {
+	fmt.Fprintf(config, "        location @%s {\n", name)
+	config.WriteString("            internal;\n")
+	config.WriteString("            default_type application/json;\n")
+	config.WriteString("            add_header Cache-Control \"no-store\" always;\n")
+	config.WriteString("            add_header X-Content-Type-Options \"nosniff\" always;\n")
+	fmt.Fprintf(config, "            return %d '{\"error\":\"%s\"}';\n", status, code)
+	config.WriteString("        }\n")
 }
 
 func renderNginxRoutes(exposes []model.Expose) []byte {

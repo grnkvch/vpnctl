@@ -96,6 +96,31 @@ then derives trusted address/protocol/host/port fields from the accepted
 connection. Authorization and ordinary application/provider headers continue
 to the application, while access and error logging remain off by default.
 
+Each selected request has exactly one loopback `proxy_pass` target. Both
+`proxy_next_upstream off` and a one-attempt ceiling prevent a failed POST from
+being sent again; tunnel reconnect affects only later requests. nginx has no
+application request queue: gateway/expose connection overflow is rejected with
+`503`, and the sole enrollment rate limit uses `nodelay`. Backpressure is
+carried to the client instead of spilling a request or response body to a temp
+file.
+
+Before an upstream response starts, an nginx/tunnel `502` is internally
+translated to a fixed no-store JSON `503`, while a proxy timeout produces the
+same fixed form with `504`. The named handlers are internal `return` locations
+with no `proxy_pass`, so translation cannot create a second upstream attempt.
+`proxy_intercept_errors` remains off: an explicit `502` or `504` response that
+the application itself starts is not mistaken for a transport failure. Body
+excess is rejected as `413`, and an unknown public path remains `404`.
+
+Once upstream headers have been sent downstream, status replacement is no
+longer possible. With response buffering disabled, a later tunnel/upstream
+failure truncates and closes that downstream response; it never emits a second
+status or replays the request. The opt-in native fault gate covers synthetic
+nonce-bearing POSTs for pre-header abort, timeout, partial `200`, application
+`502`, and body excess. Every admitted nonce reached the upstream exactly once,
+the rejected body reached it zero times, the partial response ended with an
+unexpected EOF, and both temp directories remained free of body files.
+
 Both gateway and expose limits are repeated in every proxy location to avoid
 nginx's child-limit inheritance trap. One 64 KiB expose zone is keyed by the
 immutable expose UUID assigned inside the selected location; this enforces one

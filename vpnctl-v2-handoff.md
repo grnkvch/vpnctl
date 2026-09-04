@@ -12,12 +12,12 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 12.7 выполнено `112/156`
+и проходят strict validation. После завершения task 12.8 выполнено `113/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
-reverse tunnel и managed HTTPS ingress вплоть до tunnel-before-ingress expose
-creation saga включительно.
+reverse tunnel и managed HTTPS ingress вплоть до stateless request/error
+semantics включительно.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -33,9 +33,10 @@ Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и 
 frpc/tcpMux session на node, generation-scoped authorization и exact mapping
 readiness. Expose creation резервирует authoritative state, применяет tunnel,
 принимает stopped app как `degraded`, публикует HTTPS path последним и не
-выводит sensitive path в JSON. Следующая задача — 12.8 (stateless request/error
-semantics и защита non-idempotent requests от replay). Фактические Clash Mi и
-Telegram остаются deployed-service release-gate 16.11.
+выводит sensitive path в JSON. nginx выполняет ровно одну upstream-попытку,
+выдаёт `413`/`503`/`504` до начала ответа и закрывает partial response без
+replay. Следующая задача — 12.9 (expose list/show/remove и bounded drain).
+Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract
 
