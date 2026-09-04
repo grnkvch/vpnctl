@@ -183,7 +183,7 @@ func TestPassiveCoverageRequiresJoinedNodeGatewayAndSelectedTransportMetadata(t 
 	report.Runtime = healthyPassiveStatus().Resources
 	state := model.State{
 		Host:  model.Host{Role: model.RoleNode},
-		Nodes: []model.Node{{Lifecycle: model.LifecycleActive, Gateway: &model.GatewayTrust{}}},
+		Nodes: []model.Node{{Lifecycle: model.LifecycleActive, Gateway: &model.GatewayTrust{GatewayID: "90000000-0000-4000-8000-000000000099"}}},
 		Transports: []model.Transport{{
 			OwnerKind: model.TargetNode, OwnerID: "11111111-1111-4111-8111-111111111111",
 			Kind: model.TransportRestricted, State: model.TransportDegraded,

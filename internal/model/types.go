@@ -308,18 +308,22 @@ type ManagedSwap struct {
 }
 
 type Node struct {
-	SchemaVersion        int                 `json:"schema_version"`
-	ID                   string              `json:"id"`
-	Name                 string              `json:"name"`
-	Lifecycle            Lifecycle           `json:"lifecycle"`
-	OverlayIPv4          string              `json:"overlay_ipv4"`
-	CredentialGeneration uint64              `json:"credential_generation"`
-	AssignedPresets      []string            `json:"assigned_presets"`
-	ActiveTransport      TransportKind       `json:"active_transport"`
-	IdempotencyRecords   []IdempotencyRecord `json:"idempotency_records"`
-	Gateway              *GatewayTrust       `json:"gateway,omitempty"`
-	CreatedAt            time.Time           `json:"created_at"`
-	RevokedAt            *time.Time          `json:"revoked_at,omitempty"`
+	SchemaVersion        int       `json:"schema_version"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Lifecycle            Lifecycle `json:"lifecycle"`
+	OverlayIPv4          string    `json:"overlay_ipv4"`
+	CredentialGeneration uint64    `json:"credential_generation"`
+	// ControlProtocol is the last protocol version proven to the gateway by
+	// this node. It is optional for state written before the field existed;
+	// gateway compatibility falls back to the consumed enrollment record.
+	ControlProtocol    string              `json:"control_protocol,omitempty"`
+	AssignedPresets    []string            `json:"assigned_presets"`
+	ActiveTransport    TransportKind       `json:"active_transport"`
+	IdempotencyRecords []IdempotencyRecord `json:"idempotency_records"`
+	Gateway            *GatewayTrust       `json:"gateway,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	RevokedAt          *time.Time          `json:"revoked_at,omitempty"`
 }
 
 type IdempotencyRecord struct {
@@ -332,6 +336,7 @@ type IdempotencyRecord struct {
 }
 
 type GatewayTrust struct {
+	GatewayID                     string    `json:"gateway_id"`
 	PublicIPv4                    string    `json:"public_ipv4"`
 	NodeCIDR                      string    `json:"node_cidr"`
 	GatewayOverlayIPv4            string    `json:"gateway_overlay_ipv4"`

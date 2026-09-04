@@ -2,6 +2,72 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — manual gateway-first release update
+
+### Planned reversible validation
+
+- Task 14.4 is source-only on this development host. The update command will
+  make a release-network request only when the operator explicitly invokes
+  `vpnctl update`; an omitted version will resolve GitHub's latest stable
+  release and an explicit safe version will resolve only that release. Tests
+  will use bounded `httptest` servers or injected local sources, never GitHub.
+- The complete four-asset release set will be downloaded into a private
+  temporary directory and its metadata signature, payload sizes/checksums,
+  bundle signature/platform, and every bundled artifact will be verified
+  before a mutable update plan exists. Apply will repeat verification from the
+  retained local stage and update only the current host; a gateway will inspect
+  active-node compatibility, and a node will preflight its gateway, without
+  invoking an installer or service action on any remote node.
+- The plan will report exact release/component changes, state-schema migration
+  steps and reversibility, active-fleet compatibility, affected local services,
+  and possible transport reconnect, ingress `503`/request interruption, and
+  routing fail-closed interruption. The common v2 interaction boundary will
+  require normal confirmation and the existing separate typed barrier for an
+  irreversible migration; `--dry-run` will discard the verified stage without
+  mutation and `--defer` remains unsupported.
+- Component activation and health tests will use injected temporary files,
+  fake local service probes, and in-memory state stores. No real binary,
+  package, systemd unit, service, state, release path, VM, listener, firewall,
+  route, public endpoint, gateway, or node will be changed. Temporary stages
+  and HTTP fixtures are test-owned and removed automatically; repository
+  rollback is limited to the future task 14.4 commit.
+
+### Result
+
+- `vpnctl update` and `vpnctl update vMAJOR.MINOR.PATCH` now create an
+  evidence-based local plan from a completely downloaded and verified release.
+  Only an explicit invocation constructs the release client; omitted versions
+  resolve the GitHub latest-stable redirect, exact stable versions use their
+  canonical release path, and prerelease labels, arbitrary URLs, background
+  checks, deferred apply, and remote-node installation are rejected.
+- Planning verifies the signed checksum metadata, standalone binary, signed
+  whole-fleet bundle, platform, every artifact, role component diff, installed
+  Ubuntu package compatibility, state-schema migration/reversibility, active
+  node protocol window, affected services, and exact expected interruption.
+  The gateway now retains a last-proven node control protocol separately from
+  the one-time invite record, with a compatibility fallback for older state.
+- Apply quiesces only gateway management while it owns state, persists the
+  update operation through pending/active/completed generations, atomically
+  replaces changed providers before vpnctl, health-checks each changed local
+  component, and publishes verified release metadata and target component
+  state only after health succeeds. A failed attempt rolls back activated
+  files and metadata in reverse order, restores prior component state, records
+  failure, and resumes management. Successful gateway results list the manual
+  SSH update required for each compatible node.
+- The production gateway controller now serves the fixed overlay-only mTLS
+  update-preflight RPC alongside its root-only Unix socket, using the installed
+  current/previous protocol registry and restored control-CA trust. The
+  preflight remains read-only and short-lived; it cannot install on a node or
+  stop a data-plane service. Real mTLS loopback, cancellation, no-op,
+  compatibility, corruption, component-health, rollback, output, and
+  no-hidden-network tests pass.
+- Full ordinary and race-detector suites, `go vet ./...`, package listing,
+  Bash syntax, JSON parsing, diff checks, and strict OpenSpec validation pass.
+  No real binary, package, systemd unit, service, state, release path, VM,
+  listener, firewall, route, public endpoint, gateway, or node changed; only
+  disposable test roots/listeners and Go build-cache entries were used, so no
+  host rollback is required.
+
 ## 2026-09-04 — signed curl bootstrap and standard release layout
 
 ### Planned reversible validation

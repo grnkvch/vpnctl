@@ -597,7 +597,7 @@ func exposeSagaNodeState(t *testing.T) model.State {
 		AssignedPresets: []string{}, ActiveTransport: model.TransportStandard,
 		IdempotencyRecords: []model.IdempotencyRecord{}, CreatedAt: created,
 		Gateway: &model.GatewayTrust{
-			PublicIPv4: "203.0.113.10", NodeCIDR: model.DefaultNodeCIDR, GatewayOverlayIPv4: "10.67.0.1",
+			GatewayID: "90000000-0000-4000-8000-000000000099", PublicIPv4: "203.0.113.10", NodeCIDR: model.DefaultNodeCIDR, GatewayOverlayIPv4: "10.67.0.1",
 			ControlProtocol: "1.0", EnrollmentFingerprint: "sha256:" + strings.Repeat("d", 64),
 			EnrollmentPublicKeyRef:        "enrollment-public:gateway",
 			ControlCAFingerprints:         []string{"sha256:" + strings.Repeat("e", 64)},

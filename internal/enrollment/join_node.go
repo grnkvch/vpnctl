@@ -363,7 +363,7 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 	enrollmentReference := model.SecretRef("enrollment-public:gateway")
 	restrictedReference := model.SecretRef("restricted-server:gateway-g1")
 	trust := &model.GatewayTrust{
-		PublicIPv4: assignment.GatewayPublicIPv4, NodeCIDR: assignment.NodeCIDR,
+		GatewayID: assignment.GatewayID, PublicIPv4: assignment.GatewayPublicIPv4, NodeCIDR: assignment.NodeCIDR,
 		GatewayOverlayIPv4: assignment.GatewayOverlayIPv4, ControlProtocol: assignment.ControlProtocol,
 		EnrollmentFingerprint: assignment.EnrollmentFingerprint, EnrollmentPublicKeyRef: enrollmentReference.String(),
 		ControlCAFingerprints:         []string{assignment.ControlCAFingerprint},

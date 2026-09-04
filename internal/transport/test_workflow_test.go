@@ -318,7 +318,7 @@ func nodeTransportTestState(t *testing.T) model.State {
 			OverlayIPv4: "10.67.0.2", CredentialGeneration: 3, AssignedPresets: []string{},
 			ActiveTransport: model.TransportStandard, IdempotencyRecords: []model.IdempotencyRecord{}, CreatedAt: created,
 			Gateway: &model.GatewayTrust{
-				PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1", ControlProtocol: "1.0",
+				GatewayID: "90000000-0000-4000-8000-000000000099", PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1", ControlProtocol: "1.0",
 				EnrollmentFingerprint: "sha256:" + strings.Repeat("a", 64), EnrollmentPublicKeyRef: "enrollment-public:gateway",
 				ControlCAFingerprints: []string{"sha256:" + strings.Repeat("b", 64)}, ControlCACertificateRefs: []string{"control-cert:gateway-ca-g1"},
 				StandardPublicKey: standardTestKey(0x61), RestrictedServerCredentialRef: "restricted-upstream:gateway-g1",

@@ -165,6 +165,7 @@ type NodeJoinAssignment struct {
 	Selectors                     []model.Selector    `json:"selectors"`
 	PolicyEffectiveHash           string              `json:"policy_effective_hash,omitempty"`
 	CreatedAt                     time.Time           `json:"created_at"`
+	GatewayID                     string              `json:"gateway_id"`
 	GatewayPublicIPv4             string              `json:"gateway_public_ipv4"`
 	NodeCIDR                      string              `json:"node_cidr"`
 	GatewayOverlayIPv4            string              `json:"gateway_overlay_ipv4"`
@@ -185,7 +186,7 @@ func (assignment NodeJoinAssignment) Validate() error {
 		assignment.GatewayStateGeneration == 0 {
 		return fmt.Errorf("node join assignment version or generation is invalid")
 	}
-	if !transcriptUUIDPattern.MatchString(assignment.NodeID) || validateInviteName(assignment.NodeName) != nil {
+	if !transcriptUUIDPattern.MatchString(assignment.NodeID) || !transcriptUUIDPattern.MatchString(assignment.GatewayID) || validateInviteName(assignment.NodeName) != nil {
 		return fmt.Errorf("node join assignment identity is invalid")
 	}
 	if assignment.ActiveTransport != model.TransportStandard && assignment.ActiveTransport != model.TransportRestricted {

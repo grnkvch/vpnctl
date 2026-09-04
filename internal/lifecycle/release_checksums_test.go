@@ -92,7 +92,7 @@ func TestReleaseChecksumsRejectNonCanonicalOrUnboundedMetadata(t *testing.T) {
 		"invalid version":     {Version: "latest", Binary: valid.Binary, Bundle: valid.Bundle},
 		"empty binary":        {Version: "v2.0.0", Binary: ReleaseChecksumRecord{Name: ReleaseBinaryAsset, SHA256: strings.Repeat("a", 64)}, Bundle: valid.Bundle},
 		"oversized binary":    mustReleaseChecksumsForTest(t, MaximumStandaloneVPNCTLBytes+1, 456),
-		"oversized bundle":    mustReleaseChecksumsForTest(t, 123, maximumReleaseBundleBytes+1),
+		"oversized bundle":    mustReleaseChecksumsForTest(t, 123, MaximumReleaseBundleBytes+1),
 		"unexpected filename": {Version: "v2.0.0", Binary: ReleaseChecksumRecord{Name: "vpnctl", SHA256: strings.Repeat("a", 64), SizeBytes: 123}, Bundle: valid.Bundle},
 	} {
 		if _, err := EncodeReleaseChecksums(value); !errors.Is(err, ErrInvalidReleaseChecksums) {

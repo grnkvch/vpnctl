@@ -317,6 +317,7 @@ func TestNodeRoleStateBoundaries(t *testing.T) {
 			state.Clients = append(state.Clients, client)
 		}, want: "gateway client"},
 		{name: "missing gateway trust", mutate: func(state *State) { state.Nodes[0].Gateway = nil }, want: "requires gateway trust"},
+		{name: "missing gateway identity", mutate: func(state *State) { state.Nodes[0].Gateway.GatewayID = "" }, want: "gateway_id"},
 		{name: "invalid trusted node cidr", mutate: func(state *State) { state.Nodes[0].Gateway.NodeCIDR = "10.67.0.1/24" }, want: "node_cidr"},
 		{name: "wrong trusted gateway overlay", mutate: func(state *State) { state.Nodes[0].Gateway.GatewayOverlayIPv4 = "10.67.0.2" }, want: "first host"},
 		{name: "missing trusted control protocol", mutate: func(state *State) { state.Nodes[0].Gateway.ControlProtocol = "" }, want: "control_protocol"},
@@ -675,7 +676,7 @@ func TestDefaultGatewayDNSUpstreamsReturnsDefensiveDefaults(t *testing.T) {
 
 func gatewayTrust() *GatewayTrust {
 	return &GatewayTrust{
-		PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1",
+		GatewayID: "90000000-0000-4000-8000-000000000099", PublicIPv4: "203.0.113.10", NodeCIDR: "10.67.0.0/24", GatewayOverlayIPv4: "10.67.0.1",
 		ControlProtocol: "1.0", EnrollmentFingerprint: fingerprint("d"),
 		EnrollmentPublicKeyRef: "enrollment-public:gateway", ControlCAFingerprints: []string{fingerprint("e")},
 		ControlCACertificateRefs:      []string{"control-cert:gateway-ca-g1"},

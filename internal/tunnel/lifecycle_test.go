@@ -319,7 +319,7 @@ func tunnelLifecycleNodeState(t *testing.T) model.State {
 		OS: "ubuntu", OSVersion: "24.04", Architecture: "amd64", InitializedAt: state.Host.InitializedAt,
 	}
 	state.Nodes[0].Gateway = &model.GatewayTrust{
-		PublicIPv4: "203.0.113.10", NodeCIDR: model.DefaultNodeCIDR, GatewayOverlayIPv4: "10.67.0.1",
+		GatewayID: "90000000-0000-4000-8000-000000000099", PublicIPv4: "203.0.113.10", NodeCIDR: model.DefaultNodeCIDR, GatewayOverlayIPv4: "10.67.0.1",
 		ControlProtocol: "1.0", EnrollmentFingerprint: "sha256:" + strings.Repeat("a", 64),
 		EnrollmentPublicKeyRef:        "enrollment-public:gateway",
 		ControlCAFingerprints:         []string{"sha256:" + strings.Repeat("b", 64)},

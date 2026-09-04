@@ -78,3 +78,6 @@ For offline transfer, the operator copies the four signed release assets and
 installer with `scp`. The bootstrap stores the verified bundle at
 `/usr/local/lib/vpnctl/release/vpnctl.bundle`; the subsequent role init consumes
 that exact local file.
+
+The explicit online update flow, fleet ordering, health checks, and interruption
+contract are documented in [`UPDATE.md`](UPDATE.md).

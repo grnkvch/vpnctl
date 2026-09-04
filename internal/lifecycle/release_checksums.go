@@ -12,6 +12,31 @@ import (
 	"strings"
 )
 
+func CanonicalStableReleaseVersion(value string) (string, error) {
+	if strings.TrimSpace(value) != value || value == "" {
+		return "", fmt.Errorf("stable release version is required")
+	}
+	if value[0] != 'v' {
+		value = "v" + value
+	}
+	parts := strings.Split(value[1:], ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("stable release version must have form major.minor.patch")
+	}
+	for _, part := range parts {
+		if part == "" || len(part) > 1 && part[0] == '0' {
+			return "", fmt.Errorf("stable release version must be canonical")
+		}
+		if _, err := strconv.ParseUint(part, 10, 31); err != nil {
+			return "", fmt.Errorf("stable release version must contain bounded numeric components")
+		}
+	}
+	if !validReleaseVersion(value) {
+		return "", fmt.Errorf("stable release version is invalid")
+	}
+	return value, nil
+}
+
 const (
 	ReleaseBinaryAsset              = "vpnctl-linux-amd64"
 	ReleaseBundleAsset              = "vpnctl-v2-linux-amd64.bundle"
@@ -69,7 +94,7 @@ func (value ReleaseChecksums) Validate() error {
 	if value.Binary.Name != ReleaseBinaryAsset || value.Binary.SizeBytes > MaximumStandaloneVPNCTLBytes {
 		return releaseChecksumsInvalid("standalone vpnctl record is invalid")
 	}
-	if value.Bundle.Name != ReleaseBundleAsset || value.Bundle.SizeBytes > maximumReleaseBundleBytes {
+	if value.Bundle.Name != ReleaseBundleAsset || value.Bundle.SizeBytes > MaximumReleaseBundleBytes {
 		return releaseChecksumsInvalid("release bundle record is invalid")
 	}
 	return nil

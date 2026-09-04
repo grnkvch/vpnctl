@@ -26,7 +26,7 @@ import (
 
 const (
 	releaseBundleMagic             = "VPNCTLBUNDLE\x00\x01"
-	maximumReleaseBundleBytes      = int64(MaximumSignedReleaseManifestBytes) + maximumReleaseArtifactTotalBytes + 64<<10
+	MaximumReleaseBundleBytes      = int64(MaximumSignedReleaseManifestBytes) + maximumReleaseArtifactTotalBytes + 64<<10
 	maximumInstalledComponentBytes = int64(128 << 20)
 )
 
@@ -239,7 +239,7 @@ func (installer *ReleaseBundleInstaller) open(bundlePath string) (*os.File, Rele
 		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle path must be clean and absolute")
 	}
 	info, err := os.Lstat(bundlePath)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximumReleaseBundleBytes {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaximumReleaseBundleBytes {
 		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle must be a bounded regular file")
 	}
 	input, err := os.Open(bundlePath)

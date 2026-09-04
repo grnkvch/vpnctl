@@ -74,7 +74,100 @@
             "expose_state": { "enum": ["ready", "degraded"] },
             "fingerprint": { "type": "string", "minLength": 1, "maxLength": 128 },
             "output_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "scp_command": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            "scp_command": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "role": { "enum": ["gateway", "node"] },
+            "requested_version": { "type": "string", "maxLength": 65 },
+            "latest_stable": { "type": "boolean" },
+            "current_version": { "type": "string", "minLength": 1, "maxLength": 65 },
+            "previous_version": { "type": "string", "minLength": 1, "maxLength": 65 },
+            "target_version": { "type": "string", "minLength": 1, "maxLength": 65 },
+            "blocked": { "type": "boolean" },
+            "rollback_available": { "type": "boolean" },
+            "affected_services": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "uniqueItems": true
+            },
+            "expected_interruptions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "changed"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "current_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "bundled": { "type": "boolean" },
+                  "changed": { "type": "boolean" },
+                  "file_changed": { "type": "boolean" },
+                  "affected_services": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "uniqueItems": true
+                  },
+                  "healthy": { "type": "boolean" },
+                  "rolled_back": { "type": "boolean" }
+                }
+              }
+            },
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["component", "package", "installed_version", "compatible"],
+                "properties": {
+                  "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "package": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "installed_version": { "type": "string", "maxLength": 128 },
+                  "compatible": { "type": "boolean" }
+                }
+              }
+            },
+            "fleet": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["compatible", "selected_protocol", "gateway_version", "nodes"],
+              "properties": {
+                "compatible": { "type": "boolean" },
+                "selected_protocol": { "type": "string", "maxLength": 32 },
+                "gateway_version": { "type": "string", "maxLength": 65 },
+                "nodes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "name", "control_protocol", "compatible", "code"],
+                    "properties": {
+                      "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                      "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+                      "control_protocol": { "type": "string", "maxLength": 32 },
+                      "compatible": { "type": "boolean" },
+                      "code": { "type": "string", "maxLength": 128 }
+                    }
+                  }
+                }
+              }
+            },
+            "migration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from_schema", "to_schema", "steps", "reversible"],
+              "properties": {
+                "from_schema": { "type": "integer", "minimum": 1 },
+                "to_schema": { "type": "integer", "minimum": 0 },
+                "steps": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+                },
+                "reversible": { "type": "boolean" }
+              }
+            }
           }
         }
       }

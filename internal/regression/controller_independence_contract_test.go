@@ -10,15 +10,15 @@ import (
 func TestControllerAndTunnelAuthorizationHaveIndependentSourceLifecycles(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	controllerSource := readControllerIndependenceSource(t, root, "internal/controller/system_observer.go")
-	for _, forbidden := range []string{"internal/tunnel", "NewAuthorizationServer", "NewSecretStore", "runSystemControllerServices"} {
+	controllerSource := readControllerIndependenceSource(t, root, "internal/controller/system_rpc.go")
+	for _, forbidden := range []string{"internal/tunnel", "NewAuthorizationServer", "runGatewayTunnelServices"} {
 		if strings.Contains(controllerSource, forbidden) {
 			t.Errorf("controller process still owns tunnel authorization via %q", forbidden)
 		}
 	}
-	for _, required := range []string{"NewSystemController(paths)", "controller.Serve(ctx)"} {
+	for _, required := range []string{"newSystemController(paths, stateStore)", "newSystemControlRPC", "controller.Serve", "rpcServer.ListenAndServe", "runSystemManagement"} {
 		if !strings.Contains(controllerSource, required) {
-			t.Errorf("controller process omits management-only boundary %q", required)
+			t.Errorf("controller process omits local/overlay management boundary %q", required)
 		}
 	}
 

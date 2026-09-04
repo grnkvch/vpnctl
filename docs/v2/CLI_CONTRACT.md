@@ -114,7 +114,7 @@ remote destination is supported. An active `all` opt-in conflicts with every
 other active scope; otherwise different explicit scopes may coexist.
 | `vpnctl backup [archive-path]` | `artifact-v1:backup` | gateway | optional output path; passphrase and confirmation via hidden prompts | none | yes | no | `sudo vpnctl backup /srv/backups/vpnctl.backup` |
 | `vpnctl restore <archive-path>` | `operation-v1:restore` | all | required `--public-ip <IPv4>`; optional `--replace` on an initialized gateway; passphrase via hidden prompt | confirm | yes | no | `sudo vpnctl restore vpnctl.backup --public-ip 203.0.113.10` |
-| `vpnctl update [version]` | `operation-v1:update` | gateway/node | optional stable version; omitted means latest stable | confirm+typed-if-irreversible | yes | no | `sudo vpnctl update 2.1.0` |
+| `vpnctl update [version]` | `operation-v1:update` | gateway/node | optional `vMAJOR.MINOR.PATCH` stable version (leading `v` optional, no prerelease); omitted means latest stable; gateway first, each node locally afterward | confirm+typed-if-irreversible | yes | no | `sudo vpnctl update 2.1.0` |
 | `vpnctl update rollback` | `operation-v1:update.rollback` | gateway/node | no arguments | confirm | yes | no | `sudo vpnctl update rollback` |
 | `vpnctl uninstall` | `operation-v1:uninstall` | gateway/node | gateway optional `--force`; node optional `--local-only` | confirm | yes | no | `sudo vpnctl uninstall --local-only` |
 | `vpnctl purge` | `operation-v1:purge` | gateway/node | optional gateway `--include-backups` with a second typed confirmation | typed | yes | no | `sudo vpnctl purge --include-backups` |

@@ -101,6 +101,13 @@ func NewSystemController(paths store.Paths) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create controller state store: %w", err)
 	}
+	return newSystemController(paths, state)
+}
+
+func newSystemController(paths store.Paths, state *store.StateStore) (*Controller, error) {
+	if state == nil {
+		return nil, fmt.Errorf("create controller state store: state store is required")
+	}
 	observer, err := NewSystemUnitObserver(linuxplatform.OSProbeRunner{})
 	if err != nil {
 		return nil, err
@@ -118,12 +125,4 @@ func NewSystemController(paths store.Paths) (*Controller, error) {
 		return nil, err
 	}
 	return NewController(ControllerRuntime{Paths: paths, State: state, Observer: observer, Dispatcher: dispatcher})
-}
-
-func RunSystemController(ctx context.Context, paths store.Paths) error {
-	controller, err := NewSystemController(paths)
-	if err != nil {
-		return err
-	}
-	return controller.Serve(ctx)
 }

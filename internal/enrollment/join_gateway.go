@@ -383,7 +383,7 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 	node := model.Node{
 		SchemaVersion: model.ResourceSchemaVersion, ID: input.request.PublicExchange.NodeID,
 		Name: input.authorization.NodeName, Lifecycle: model.LifecycleActive,
-		OverlayIPv4: input.overlayIPv4, CredentialGeneration: 1,
+		OverlayIPv4: input.overlayIPv4, CredentialGeneration: 1, ControlProtocol: input.authorization.ControlProtocol,
 		AssignedPresets: append([]string{}, input.presetNames...), ActiveTransport: input.request.Transport,
 		IdempotencyRecords: []model.IdempotencyRecord{}, CreatedAt: input.preparedAt,
 	}
@@ -438,7 +438,7 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 		SchemaVersion: NodeJoinSchemaVersion, NodeID: node.ID, NodeName: node.Name, OverlayIPv4: node.OverlayIPv4,
 		CredentialGeneration: 1, ActiveTransport: node.ActiveTransport, Presets: append([]string{}, node.AssignedPresets...),
 		Selectors: append([]model.Selector{}, input.selectors...), CreatedAt: input.preparedAt,
-		GatewayPublicIPv4: input.state.Host.PublicIPv4, NodeCIDR: input.state.Host.NodeCIDR,
+		GatewayID: input.state.Host.ID, GatewayPublicIPv4: input.state.Host.PublicIPv4, NodeCIDR: input.state.Host.NodeCIDR,
 		GatewayOverlayIPv4: input.gatewayOverlayIPv4, GatewayStateGeneration: nextGeneration,
 		ControlProtocol:               input.authorization.ControlProtocol,
 		EnrollmentFingerprint:         input.authorization.EnrollmentFingerprint,

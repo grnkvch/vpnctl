@@ -162,6 +162,9 @@ func (registry CommandRegistry) RunMutation(
 	if err := planned.validate(resultCommand); err != nil {
 		return MutationOutcome{}, err
 	}
+	if planned.Result.ExitCategory != output.CategorySuccess {
+		return MutationOutcome{Mode: mode, Plan: planned, Result: planned.Result}, nil
+	}
 
 	interactionRequest.Impact = planned.Impact
 	interactionRequest.IrreversibleMigration = planned.IrreversibleMigration

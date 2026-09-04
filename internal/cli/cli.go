@@ -53,6 +53,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isLoggingInvocation(args) {
 		return executeLogging(args, stdout, stderr)
 	}
+	if isUpdateInvocation(args) {
+		return executeUpdate(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {

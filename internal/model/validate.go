@@ -668,6 +668,9 @@ func (node Node) Validate() error {
 	if node.AssignedPresets == nil {
 		return invalid("assigned_presets", "must be present as a JSON array")
 	}
+	if node.ControlProtocol != "" && !protocolPattern.MatchString(node.ControlProtocol) {
+		return invalid("control_protocol", "must be a major.minor version when present")
+	}
 	if err := validateIdempotencyHistory(node.IdempotencyRecords); err != nil {
 		return wrap("idempotency_records", err)
 	}
@@ -680,6 +683,9 @@ func (node Node) Validate() error {
 }
 
 func (trust GatewayTrust) Validate() error {
+	if err := validateUUID("gateway_id", trust.GatewayID); err != nil {
+		return err
+	}
 	if err := validateIPv4("public_ipv4", trust.PublicIPv4); err != nil {
 		return err
 	}

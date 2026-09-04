@@ -101,7 +101,7 @@ func TestOperationalLoggingHasNoNetworkCapabilityOrBakedExternalEndpoint(t *test
 					return true
 				}
 				lower := strings.ToLower(value)
-				if hasLiteralURLHost(lower) {
+				if hasLiteralURLHost(lower) && !allowedExplicitOperationEndpoint(path, root, value) {
 					t.Errorf("%s contains baked network endpoint %q", path, value)
 				}
 				if strings.Contains(lower, "analytics endpoint") || strings.Contains(lower, "telemetry endpoint") || strings.Contains(lower, "update-check endpoint") {
@@ -115,6 +115,15 @@ func TestOperationalLoggingHasNoNetworkCapabilityOrBakedExternalEndpoint(t *test
 			t.Fatal(err)
 		}
 	}
+}
+
+func allowedExplicitOperationEndpoint(path, root, value string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return filepath.ToSlash(relative) == "internal/lifecycle/update_source.go" &&
+		value == "https://github.com/grnkvch/vpnctl/releases"
 }
 
 func requireSourceFragments(t *testing.T, root, relative string, fragments ...string) {

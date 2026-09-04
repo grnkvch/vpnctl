@@ -369,7 +369,7 @@ func policyNode(local bool, createdAt time.Time) model.Node {
 	}
 	if local {
 		node.Gateway = &model.GatewayTrust{
-			PublicIPv4: "203.0.113.10", NodeCIDR: "10.45.0.0/24", GatewayOverlayIPv4: "10.45.0.1", ControlProtocol: "1.0",
+			GatewayID: "90000000-0000-4000-8000-000000000099", PublicIPv4: "203.0.113.10", NodeCIDR: "10.45.0.0/24", GatewayOverlayIPv4: "10.45.0.1", ControlProtocol: "1.0",
 			EnrollmentFingerprint: "sha256:" + strings.Repeat("e", 64), EnrollmentPublicKeyRef: "enrollment-public:gateway",
 			ControlCAFingerprints: []string{"sha256:" + strings.Repeat("f", 64)}, ControlCACertificateRefs: []string{"control-cert:gateway-ca-g1"},
 			StandardPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", RestrictedServerCredentialRef: "restricted-upstream:gateway-g1",
