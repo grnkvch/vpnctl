@@ -269,6 +269,107 @@ func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
 	waitForNativeEstablishedTunnel(t, 17000, 2)
 }
 
+func TestFRPNativeRejectedPingClosesRevokedSessionAndRejectsReconnect(t *testing.T) {
+	frpsBinary := os.Getenv("VPNCTL_FRPS")
+	frpcBinary := os.Getenv("VPNCTL_FRPC")
+	if frpsBinary == "" || frpcBinary == "" {
+		t.Skip("set VPNCTL_FRPS and VPNCTL_FRPC to pinned Linux binaries")
+	}
+	root := t.TempDir()
+	certificatePEM, privateKeyPEM := nativeFRPTLSIdentity(t)
+	certificatePath := filepath.Join(root, "tunnel-server.crt")
+	privateKeyPath := filepath.Join(root, "tunnel-server.key")
+	serverConfigPath := filepath.Join(root, "frps.toml")
+	clientConfigPath := filepath.Join(root, "frpc.toml")
+	endpoint := netip.AddrPortFrom(nativePrivateIPv4(t), FRPServerPort)
+	serverConfig := renderFRPServerConfig(endpoint, certificatePath, privateKeyPath)
+	session := testFRPSession(t)
+	session.Mappings = session.Mappings[:1]
+	clientConfig := renderFRPClientConfig(endpoint, session, testTunnelCredential, certificatePath)
+	for path, content := range map[string][]byte{
+		certificatePath: certificatePEM, privateKeyPath: privateKeyPEM,
+		serverConfigPath: serverConfig, clientConfigPath: clientConfig,
+	} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	authorizer, authoritative, _ := loginAuthorizationFixture(t)
+	decisions := make(chan string, 64)
+	authorizer.observe = func(operation string, allowed, unavailable bool, reason string) {
+		decisions <- fmt.Sprintf("%s/%t/%t/%s", operation, allowed, unavailable, reason)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend, err := net.Listen("tcp4", "127.0.0.1:3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go serveNativeEcho(ctx, backend)
+	authorizationResult := make(chan error, 1)
+	go func() { authorizationResult <- authorizer.Serve(ctx) }()
+	waitForNativeTCPListener(t, FRPAuthorizationAddress)
+
+	serverCommand := exec.CommandContext(ctx, frpsBinary, "-c", serverConfigPath)
+	serverCommand.Stdout = io.Discard
+	serverCommand.Stderr = io.Discard
+	if err := serverCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	serverResult := make(chan error, 1)
+	go func() { serverResult <- serverCommand.Wait() }()
+	waitForNativeTCPListener(t, endpoint.String())
+
+	clientCommand := exec.CommandContext(ctx, frpcBinary, "-c", clientConfigPath)
+	clientCommand.Stdout = io.Discard
+	clientCommand.Stderr = io.Discard
+	if err := clientCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	clientResult := make(chan error, 1)
+	go func() { clientResult <- clientCommand.Wait() }()
+	t.Cleanup(func() {
+		cancel()
+		_ = backend.Close()
+		for _, result := range []<-chan error{clientResult, serverResult, authorizationResult} {
+			select {
+			case <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("native revoke fixture did not stop")
+			}
+		}
+	})
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Login/true/false/identity_valid":   false,
+		"NewProxy/true/false/mapping_valid": false,
+		"Ping/true/false/identity_valid":    false,
+	})
+	waitForNativeTCPListener(t, "127.0.0.1:20000")
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+
+	revokedAt := authoritative.state.Nodes[0].CreatedAt.Add(time.Hour)
+	authoritative.mu.Lock()
+	authoritative.state.Nodes[0].Lifecycle = model.LifecycleRevoked
+	authoritative.state.Nodes[0].RevokedAt = &revokedAt
+	authoritative.mu.Unlock()
+	revokeStarted := time.Now()
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Ping/false/false/revoked": false,
+	})
+	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
+	if elapsed := time.Since(revokeStarted); elapsed > 6*time.Second {
+		t.Fatalf("rejected Ping closed revoked tunnel in %s, want at most 6s", elapsed)
+	}
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Login/false/false/revoked": false,
+	})
+	assertNoNativeTCPListener(t, "127.0.0.1:20000")
+	if clientCommand.Process.Signal(syscall.Signal(0)) != nil {
+		t.Fatal("loginFailExit=false frpc stopped instead of retaining bounded rejected reconnect attempts")
+	}
+}
+
 func TestFRPNativeReadinessRecoversWithoutStandbyAfterGatewayUpstreamAndClientRestarts(t *testing.T) {
 	frpsBinary := os.Getenv("VPNCTL_FRPS")
 	frpcBinary := os.Getenv("VPNCTL_FRPC")

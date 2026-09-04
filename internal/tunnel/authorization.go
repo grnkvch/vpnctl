@@ -10,8 +10,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
@@ -43,6 +45,27 @@ type AuthorizationServer struct {
 	listen      func(string, string) (net.Listener, error)
 	admission   chan struct{}
 	observe     func(string, bool, bool, string)
+	rotationMu  sync.RWMutex
+	rotations   map[string]credentialRotationWindow
+	nextLeaseID uint64
+}
+
+type credentialRotationWindow struct {
+	currentGeneration   uint64
+	candidateGeneration uint64
+	stateGeneration     uint64
+	leaseID             uint64
+}
+
+// CredentialRotationLease is an opaque, process-local capability for removing
+// exactly the staged authorization window that created it. It contains no
+// credential value or store reference and has no useful serialized form.
+type CredentialRotationLease struct {
+	nodeID              string
+	currentGeneration   uint64
+	candidateGeneration uint64
+	stateGeneration     uint64
+	leaseID             uint64
 }
 
 type frpAuthorizationRequest struct {
@@ -77,8 +100,110 @@ func NewAuthorizationServer(state AuthorizationStateReader, credentials FRPNodeC
 	}
 	return &AuthorizationServer{
 		state: state, credentials: credentials, listen: net.Listen,
-		admission: make(chan struct{}, FRPAuthorizationMaxConcurrent),
+		admission: make(chan struct{}, FRPAuthorizationMaxConcurrent), rotations: make(map[string]credentialRotationWindow),
 	}, nil
+}
+
+// BeginCredentialRotation temporarily admits the exact next tunnel credential
+// alongside the current generation while the full node rotation saga performs
+// its pre-commit readiness checks. The window remains valid only while the
+// authoritative state is byte-identical to the supplied before generation;
+// any concurrent commit, revoke, or unrelated state advance fails it closed.
+func (server *AuthorizationServer) BeginCredentialRotation(before, candidate model.State, nodeID string) (*CredentialRotationLease, error) {
+	if server == nil || server.state == nil || server.credentials == nil || server.rotations == nil {
+		return nil, fmt.Errorf("tunnel authorization server is incomplete")
+	}
+	if err := before.Validate(); err != nil {
+		return nil, fmt.Errorf("validate tunnel rotation source state: %w", err)
+	}
+	if err := candidate.Validate(); err != nil {
+		return nil, fmt.Errorf("validate tunnel rotation candidate state: %w", err)
+	}
+	if before.Host.Role != model.RoleGateway || candidate.Host.Role != model.RoleGateway {
+		return nil, fmt.Errorf("tunnel credential rotation requires gateway state")
+	}
+	if err := model.ValidateTransition(before, candidate); err != nil {
+		return nil, fmt.Errorf("validate tunnel credential rotation transition: %w", err)
+	}
+	current, currentOK := exactNodeByID(before.Nodes, nodeID)
+	next, nextOK := exactNodeByID(candidate.Nodes, nodeID)
+	if !currentOK || !nextOK || current.Lifecycle != model.LifecycleActive || next.Lifecycle != model.LifecycleActive ||
+		current.ActiveTransport != next.ActiveTransport || current.CredentialGeneration == ^uint64(0) ||
+		next.CredentialGeneration != current.CredentialGeneration+1 || candidate.Generation != before.Generation+1 {
+		return nil, fmt.Errorf("tunnel credential rotation identity or generation is invalid")
+	}
+	currentSession, err := NewNodeSession(current, before.Exposes, before.Generation)
+	if err != nil {
+		return nil, fmt.Errorf("compile current tunnel rotation identity: %w", err)
+	}
+	nextSession, err := NewNodeSession(next, candidate.Exposes, candidate.Generation)
+	if err != nil {
+		return nil, fmt.Errorf("compile candidate tunnel rotation identity: %w", err)
+	}
+	if currentSession.NodeID != nextSession.NodeID || !reflect.DeepEqual(currentSession.Mappings, nextSession.Mappings) {
+		return nil, fmt.Errorf("tunnel credential rotation changed logical tunnel identity")
+	}
+	authoritative, err := server.state.Load()
+	if err != nil || !reflect.DeepEqual(authoritative, before) {
+		return nil, fmt.Errorf("tunnel credential rotation source state is stale")
+	}
+	credential, err := server.credentials.TunnelCredential(nodeID, next.CredentialGeneration)
+	if err != nil {
+		return nil, fmt.Errorf("read staged tunnel credential")
+	}
+	defer clear(credential)
+	if err := ValidateCredential(credential); err != nil {
+		return nil, fmt.Errorf("validate staged tunnel credential")
+	}
+
+	server.rotationMu.Lock()
+	defer server.rotationMu.Unlock()
+	window := credentialRotationWindow{
+		currentGeneration: current.CredentialGeneration, candidateGeneration: next.CredentialGeneration,
+		stateGeneration: before.Generation,
+	}
+	if existing, found := server.rotations[nodeID]; found {
+		if existing.currentGeneration != window.currentGeneration || existing.candidateGeneration != window.candidateGeneration ||
+			existing.stateGeneration != window.stateGeneration {
+			return nil, fmt.Errorf("another tunnel credential rotation is already staged for node %s", nodeID)
+		}
+		window = existing
+	} else {
+		if server.nextLeaseID == ^uint64(0) {
+			return nil, fmt.Errorf("tunnel credential rotation lease space is exhausted")
+		}
+		server.nextLeaseID++
+		window.leaseID = server.nextLeaseID
+		server.rotations[nodeID] = window
+	}
+	return &CredentialRotationLease{
+		nodeID: nodeID, currentGeneration: window.currentGeneration, candidateGeneration: window.candidateGeneration,
+		stateGeneration: window.stateGeneration, leaseID: window.leaseID,
+	}, nil
+}
+
+// EndCredentialRotation removes one exact staged window. After it returns, a
+// rolled-back candidate generation cannot pass a new Login or Ping. A
+// committed candidate remains authorized through authoritative state alone.
+func (server *AuthorizationServer) EndCredentialRotation(lease *CredentialRotationLease) error {
+	if server == nil || server.rotations == nil || lease == nil || lease.nodeID == "" || lease.leaseID == 0 {
+		return fmt.Errorf("tunnel credential rotation lease is invalid")
+	}
+	server.rotationMu.Lock()
+	defer server.rotationMu.Unlock()
+	want := credentialRotationWindow{
+		currentGeneration: lease.currentGeneration, candidateGeneration: lease.candidateGeneration,
+		stateGeneration: lease.stateGeneration, leaseID: lease.leaseID,
+	}
+	current, found := server.rotations[lease.nodeID]
+	if !found {
+		return nil
+	}
+	if current != want {
+		return fmt.Errorf("tunnel credential rotation lease is stale")
+	}
+	delete(server.rotations, lease.nodeID)
+	return nil
 }
 
 func (server *AuthorizationServer) Serve(ctx context.Context) error {
@@ -174,6 +299,8 @@ func (server *AuthorizationServer) ServeHTTP(writer http.ResponseWriter, request
 		decision = server.authorizeLogin(parsed.Content)
 	case "NewProxy":
 		decision = server.authorizeNewProxy(parsed.Content)
+	case "Ping":
+		decision = server.authorizePing(parsed.Content)
 	default:
 		writeFRPAuthorizationResponse(writer, http.StatusBadRequest, deniedFRPAuthorizationResponse())
 		return
@@ -193,6 +320,29 @@ func (server *AuthorizationServer) ServeHTTP(writer http.ResponseWriter, request
 	default:
 		writeFRPAuthorizationResponse(writer, http.StatusOK, deniedFRPAuthorizationResponse())
 	}
+}
+
+// authorizePing deliberately reloads the same authoritative identity tuple as
+// Login and NewProxy. The pinned frpc closes its control session when frps
+// returns the rejected heartbeat as a Pong error, which withdraws every proxy
+// owned by that session and makes revoke/current-generation changes effective
+// without a separate public control or process-kill interface.
+func (server *AuthorizationServer) authorizePing(content map[string]json.RawMessage) authorizationDecision {
+	user, ok := rawJSONObject(content["user"])
+	if !ok {
+		return authorizationDecision{reason: "missing_identity"}
+	}
+	defer clearRawMessageMap(user)
+	metadata, ok := rawJSONObject(user["metas"])
+	if !ok {
+		return authorizationDecision{reason: "missing_identity"}
+	}
+	defer clearRawMessageMap(metadata)
+	_, decision := server.authorizeNodeIdentity(metadata)
+	if !decision.allowed {
+		return decision
+	}
+	return authorizationDecision{allowed: true, unchange: true, reason: "identity_valid"}
 }
 
 func (server *AuthorizationServer) authorizeLogin(content map[string]json.RawMessage) authorizationDecision {
@@ -270,6 +420,8 @@ func (server *AuthorizationServer) authorizeNewProxy(content map[string]json.Raw
 }
 
 func (server *AuthorizationServer) authorizeNodeIdentity(metadata map[string]json.RawMessage) (authorizedNodeIdentity, authorizationDecision) {
+	server.rotationMu.RLock()
+	defer server.rotationMu.RUnlock()
 	nodeID, nodeOK := rawJSONString(metadata["node_id"])
 	generationText, generationOK := rawJSONString(metadata["generation"])
 	token, tokenOK := rawJSONString(metadata["tunnel_token"])
@@ -300,7 +452,11 @@ func (server *AuthorizationServer) authorizeNodeIdentity(metadata map[string]jso
 	if authoritative.Lifecycle != model.LifecycleActive {
 		return authorizedNodeIdentity{}, authorizationDecision{reason: "revoked"}
 	}
-	if authoritative.CredentialGeneration != generation {
+	currentGeneration := authoritative.CredentialGeneration == generation
+	window, stagedGeneration := server.rotations[nodeID]
+	stagedGeneration = stagedGeneration && window.stateGeneration == state.Generation &&
+		window.currentGeneration == authoritative.CredentialGeneration && window.candidateGeneration == generation
+	if !currentGeneration && !stagedGeneration {
 		return authorizedNodeIdentity{}, authorizationDecision{reason: "generation_mismatch"}
 	}
 	expected, err := server.credentials.TunnelCredential(nodeID, generation)
@@ -318,6 +474,22 @@ func (server *AuthorizationServer) authorizeNodeIdentity(metadata map[string]jso
 		return authorizedNodeIdentity{}, authorizationDecision{reason: "token_mismatch"}
 	}
 	return authorizedNodeIdentity{state: state, node: *authoritative}, authorizationDecision{allowed: true, reason: "identity_valid"}
+}
+
+func exactNodeByID(nodes []model.Node, nodeID string) (model.Node, bool) {
+	var result model.Node
+	found := false
+	for _, node := range nodes {
+		if node.ID != nodeID {
+			continue
+		}
+		if found {
+			return model.Node{}, false
+		}
+		result = node
+		found = true
+	}
+	return result, found
 }
 
 func decodeFRPAuthorizationRequest(body []byte) (frpAuthorizationRequest, error) {
@@ -413,7 +585,7 @@ func exactAuthorizationOperationQuery(request *http.Request) (string, bool) {
 		return "", false
 	}
 	operation := operations[0]
-	return operation, operation == "Login" || operation == "NewProxy"
+	return operation, operation == "Login" || operation == "NewProxy" || operation == "Ping"
 }
 
 func rawJSONObject(value json.RawMessage) (map[string]json.RawMessage, bool) {

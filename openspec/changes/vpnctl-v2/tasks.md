@@ -133,7 +133,7 @@
 - [x] 11.5 Implement NewProxy authorization against exact authoritative expose owner/name/type/loopback port; verify malicious or stale announcements cannot bind arbitrary gateway endpoints.
 - [x] 11.6 Implement atomic node tunnel configuration and loopback-only dynamic mapping reload; verify adding/removing multiple mappings does not create additional persistent connections or interrupt unrelated streams.
 - [x] 11.7 Implement bounded exponential reconnect with jitter, readiness generation checks, upstream probes, and `503` degraded state using only active transport; verify gateway/tunnel restarts recover automatically without standby attempts.
-- [ ] 11.8 Integrate tunnel credential rotation, transport switch, and immediate node revoke connection close; verify identity preservation on switch and rejection after revoke.
+- [x] 11.8 Integrate tunnel credential rotation, transport switch, and immediate node revoke connection close; verify identity preservation on switch and rejection after revoke.
 - [ ] 11.9 Run provider security/resource regression from the spike in CI or a release harness; verify multiplexing, authorization, reconnect, dynamic mapping, and minimum-host budget before marking the tunnel capability complete.
 
 ## 12. Managed HTTPS Ingress

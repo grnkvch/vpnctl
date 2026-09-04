@@ -294,6 +294,75 @@ func TestNewProxyAuthorizationRejectsMalformedIdentityAndMapping(t *testing.T) {
 	}
 }
 
+func TestPingAuthorizationReloadsCurrentIdentityAndRejectsRevokedOrRotatedNode(t *testing.T) {
+	t.Parallel()
+
+	server, state, credentials := loginAuthorizationFixture(t)
+	content := pingAuthorizationContent(t, testNodeA, 1, testTunnelCredential)
+	recorder := serveAuthorization(t, server, "Ping", content)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Ping authorization status = %d", recorder.Code)
+	}
+	var response frpAuthorizationResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Reject || response.Unchange == nil || !*response.Unchange || response.Content != nil {
+		t.Fatalf("allowed Ping response = %+v", response)
+	}
+
+	state.mu.Lock()
+	revokedAt := state.state.Nodes[0].CreatedAt.Add(time.Hour)
+	state.state.Nodes[0].Lifecycle = model.LifecycleRevoked
+	state.state.Nodes[0].RevokedAt = &revokedAt
+	state.mu.Unlock()
+	decision := server.authorizePing(content)
+	if decision.allowed || decision.unavailable || decision.reason != "revoked" {
+		t.Fatalf("revoked Ping decision = %+v", decision)
+	}
+
+	state.mu.Lock()
+	state.state.Nodes[0].Lifecycle = model.LifecycleActive
+	state.state.Nodes[0].RevokedAt = nil
+	state.state.Nodes[0].CredentialGeneration = 2
+	state.mu.Unlock()
+	decision = server.authorizePing(content)
+	if decision.allowed || decision.unavailable || decision.reason != "generation_mismatch" {
+		t.Fatalf("old-generation Ping decision = %+v", decision)
+	}
+	if state.loads != 3 || len(credentials.calls) != 1 || credentials.calls[0] != testNodeA+"/1" {
+		t.Fatalf("Ping authorization dependencies = state:%d credentials:%v", state.loads, credentials.calls)
+	}
+}
+
+func TestPingAuthorizationFailsClosedOnMalformedOrUnavailableIdentity(t *testing.T) {
+	t.Parallel()
+
+	server, state, _ := loginAuthorizationFixture(t)
+	valid := pingAuthorizationContent(t, testNodeA, 1, testTunnelCredential)
+	for name, content := range map[string]map[string]json.RawMessage{
+		"missing user":       {},
+		"missing user metas": {"user": json.RawMessage(`{}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			decision := server.authorizePing(content)
+			if decision.allowed || decision.unavailable || decision.reason != "missing_identity" {
+				t.Fatalf("malformed Ping decision = %+v", decision)
+			}
+		})
+	}
+	state.err = errors.New("ping-state-path-canary")
+	decision := server.authorizePing(valid)
+	if decision.allowed || !decision.unavailable || decision.reason != "controller_error" {
+		t.Fatalf("unavailable Ping decision = %+v", decision)
+	}
+	recorder := serveAuthorization(t, server, "Ping", valid)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "vpnctl authorization unavailable") ||
+		strings.Contains(recorder.Body.String(), "canary") || strings.Contains(recorder.Body.String(), testTunnelCredential) {
+		t.Fatalf("unavailable Ping response = status:%d body:%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestLoginAuthorizationHTTPBoundaryRejectsMalformedAndOverloadedRequests(t *testing.T) {
 	t.Parallel()
 
@@ -539,6 +608,25 @@ func newProxyAuthorizationContent(t *testing.T, nodeID string, credentialGenerat
 		"proxy_type":  json.RawMessage(strconv.Quote(proxyType)),
 		"remote_port": json.RawMessage(fmt.Sprint(port)),
 		"metas":       mappingMetadata,
+	}
+}
+
+func pingAuthorizationContent(t *testing.T, nodeID string, credentialGeneration uint64, token string) map[string]json.RawMessage {
+	t.Helper()
+	identityMetadata, err := json.Marshal(map[string]string{
+		"node_id": nodeID, "generation": fmt.Sprint(credentialGeneration), "tunnel_token": token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := json.Marshal(map[string]json.RawMessage{"metas": identityMetadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]json.RawMessage{
+		"user":          user,
+		"timestamp":     json.RawMessage(`1720000000`),
+		"privilege_key": json.RawMessage(`"provider-owned"`),
 	}
 }
 

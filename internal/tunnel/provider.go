@@ -93,6 +93,62 @@ func (request RenderRequest) Validate() error {
 	return nil
 }
 
+// PlanFromState is the single desired-state compiler used by tunnel lifecycle
+// operations. Recompiling after a transport switch changes only the safe
+// active-transport descriptor, while recompiling after credential rotation
+// selects the new generation-scoped token. Revoked nodes are omitted on the
+// gateway and cannot produce a node-side tunnel plan.
+func PlanFromState(state model.State) (Plan, error) {
+	if err := state.Validate(); err != nil {
+		return Plan{}, fmt.Errorf("validate tunnel desired state: %w", err)
+	}
+	var endpoint netip.AddrPort
+	sessions := make([]NodeSession, 0, len(state.Nodes))
+	switch state.Host.Role {
+	case model.RoleGateway:
+		prefix, err := netip.ParsePrefix(state.Host.NodeCIDR)
+		if err != nil {
+			return Plan{}, fmt.Errorf("parse gateway node overlay: %w", err)
+		}
+		endpoint = netip.AddrPortFrom(prefix.Addr().Next(), FRPServerPort)
+		for _, node := range state.Nodes {
+			if node.Lifecycle != model.LifecycleActive {
+				continue
+			}
+			session, err := NewNodeSession(node, state.Exposes, state.Generation)
+			if err != nil {
+				return Plan{}, fmt.Errorf("compile gateway tunnel node %s: %w", node.ID, err)
+			}
+			sessions = append(sessions, session)
+		}
+	case model.RoleNode:
+		if len(state.Nodes) != 1 || state.Nodes[0].Lifecycle != model.LifecycleActive || state.Nodes[0].Gateway == nil {
+			return Plan{}, fmt.Errorf("node tunnel requires one joined active node")
+		}
+		gateway, err := netip.ParseAddr(state.Nodes[0].Gateway.GatewayOverlayIPv4)
+		if err != nil {
+			return Plan{}, fmt.Errorf("parse trusted gateway tunnel endpoint: %w", err)
+		}
+		endpoint = netip.AddrPortFrom(gateway, FRPServerPort)
+		session, err := NewNodeSession(state.Nodes[0], state.Exposes, state.Generation)
+		if err != nil {
+			return Plan{}, fmt.Errorf("compile node tunnel session: %w", err)
+		}
+		sessions = append(sessions, session)
+	default:
+		return Plan{}, fmt.Errorf("unsupported tunnel host role %q", state.Host.Role)
+	}
+	sort.Slice(sessions, func(left, right int) bool { return sessions[left].NodeID < sessions[right].NodeID })
+	plan := Plan{
+		HostRole: state.Host.Role, HostID: state.Host.ID, Generation: state.Generation,
+		ServerEndpoint: endpoint, Nodes: sessions,
+	}
+	if err := plan.Validate(); err != nil {
+		return Plan{}, fmt.Errorf("validate compiled tunnel plan: %w", err)
+	}
+	return plan, nil
+}
+
 // Plan models one shared gateway service or one node process. Mappings live
 // inside NodeSession so adding an expose cannot imply a second daemon or
 // persistent connection.

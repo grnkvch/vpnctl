@@ -139,7 +139,7 @@ allows only `AF_INET` and `AF_UNIX`. If either controller listener fails, the
 controller process exits and `frps` fails closed for new plugin decisions; it
 does not replace the authorizer with a cached or permissive decision.
 
-Only versioned frp `0.1.0` `Login` and `NewProxy` requests at the matching
+Only versioned frp `0.1.0` `Login`, `NewProxy`, and `Ping` requests at the matching
 `/handler?version=0.1.0&op=<operation>` endpoint are accepted. The HTTP boundary
 has three-second read/write/header/idle deadlines, an 8 KiB header cap, a
 64 KiB body cap, JSON depth and duplicate-field checks, and 32 non-blocking
@@ -178,8 +178,51 @@ Native acceptance with official frp first admitted the node Login but rejected
 an otherwise valid announcement changed from authoritative TCP `20000` to
 `20002`; no listener appeared on `20002`. A subsequent exact announcement
 bound only `127.0.0.1:20000` and retained one persistent control connection.
-Authenticated heartbeat/revocation handling remains a later provider task;
-until implemented, `Ping` is denied rather than admitted provisionally.
+
+Every `Ping` independently repeats the same identity, lifecycle, generation,
+and credential checks from `content.user.metas`; a successful Login is never a
+revocation cache. Pinned frps returns a rejected plugin heartbeat as a Pong
+error, and pinned frpc `0.69.0` closes its control session on that error. frps
+therefore withdraws every mapping owned by the session, while the following
+Login is checked against current state and rejected as well. Native acceptance
+revoked an already connected test node, observed the next Ping rejection and
+mapping/control close within six seconds, rejected reconnect Login, and
+observed no mapping reappearance. The endpoint remains loopback-only and there
+is no public kill API.
+
+## Lifecycle integration
+
+One desired-state compiler produces the tunnel plan for both gateway and node.
+The gateway includes only active node sessions; a revoked node disappears from
+the gateway plan. A node must have exactly one joined active identity, so a
+revoked node cannot compile or restart its local tunnel plan. Sessions and
+mappings are sorted and derived from immutable node/expose IDs and persisted
+tunnel ports.
+
+A manual standard/restricted transport switch recompiles the same node ID,
+credential generation, mappings, and byte-identical frpc configuration. Only
+the safe active-transport/state-generation descriptor changes, so new
+readiness evidence is required while tunnel identity is preserved. The tunnel
+provider does not select a transport and never introduces runtime automatic
+fallback.
+
+Full credential rotation creates a new generation-scoped tunnel value and a
+different frpc candidate while preserving every logical mapping. During the
+existing parallel readiness phase, the gateway authorizer can open one
+process-local lease for exactly the validated next generation. It first
+requires a valid one-generation state transition, byte-identical logical
+tunnel identity, the exact current authoritative source state, and a valid
+candidate credential. While the source state generation and current node
+generation remain authoritative, current and candidate Login/NewProxy/Ping
+requests may coexist. Any state-generation advance or revoke immediately makes
+candidate admission fail closed.
+
+Commit makes the candidate generation authoritative and causes the previous
+generation's next Ping/Login to fail. Rollback or finalization removes the
+lease; an uncommitted candidate can no longer connect. The lease holds no
+credential or secret-store reference, is safe against stale removal, and
+vanishes on controller restart. Thus a restart can reduce the rotation overlap
+but cannot broaden authorization.
 
 ## Atomic node mapping configuration
 
@@ -262,9 +305,8 @@ case. A live sentinel on an unconfigured standby TCP `17001` accepted zero
 connections, and the full pinned config/Login/NewProxy/reload suite remained
 green.
 
-## Deferred provider work
+## Remaining provider gate
 
-Tasks 11.8-11.9 supply authenticated revoke handling, rotation/switch
-integration, and the release resource gate. Those additions must preserve this
-topology, identity, allocation, credential, atomic configuration, readiness,
-and fail-closed authorization contract.
+Task 11.9 supplies the release resource regression gate. It must preserve this
+topology, identity, allocation, credential, lifecycle, atomic configuration,
+readiness, and fail-closed authorization contract.
