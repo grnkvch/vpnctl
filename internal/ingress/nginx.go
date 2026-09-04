@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,16 +23,21 @@ const (
 	NginxProviderPackageVersion = "1.24.0-2ubuntu7.17"
 	NginxProviderPackageSHA256  = "84bd95140500fa4d10e11383eac5c864ea7dff24fcca80c442b8449fcc65240c"
 
-	NginxMainConfigPath        = "nginx.conf"
-	NginxProxyCommonPath       = "conf.d/proxy-common.conf"
-	NginxRoutesConfigPath      = "conf.d/routes.conf"
-	NginxPublicHTTPSPort       = 443
-	nginxSharedZoneBytes       = 64 * 1024
-	nginxMaximumTreeBytes      = 32 * 1024 * 1024
-	nginxConnectTimeoutSeconds = 2
-	nginxClientTimeoutSeconds  = 10
-	nginxKeepaliveSeconds      = 15
-	nginxKeepaliveRequests     = 100
+	NginxMainConfigPath             = "nginx.conf"
+	NginxProxyCommonPath            = "conf.d/proxy-common.conf"
+	NginxRoutesConfigPath           = "conf.d/routes.conf"
+	NginxPublicHTTPSPort            = 443
+	NginxEnrollmentLoopbackPort     = 19092
+	NginxEnrollmentUpstream         = "127.0.0.1:19092"
+	NginxEnrollmentMaximumBodyBytes = 64 * 1024
+	NginxEnrollmentTimeoutSeconds   = 5
+	nginxSharedZoneBytes            = 64 * 1024
+	nginxEnrollmentZoneBytes        = 64 * 1024
+	nginxMaximumTreeBytes           = 32 * 1024 * 1024
+	nginxConnectTimeoutSeconds      = 2
+	nginxClientTimeoutSeconds       = 10
+	nginxKeepaliveSeconds           = 15
+	nginxKeepaliveRequests          = 100
 )
 
 type NginxRenderRequest struct {
@@ -154,6 +160,9 @@ func (candidate NginxCandidate) Validate() error {
 }
 
 func validateNginxRenderRequest(request NginxRenderRequest) ([]model.Expose, error) {
+	if err := validateNginxReservedContract(); err != nil {
+		return nil, err
+	}
 	if request.StateGeneration == 0 {
 		return nil, fmt.Errorf("nginx source state generation must be positive")
 	}
@@ -203,6 +212,9 @@ func validateNginxRenderRequest(request NginxRenderRequest) ([]model.Expose, err
 			return nil, fmt.Errorf("nginx expose identity %s is duplicated", expose.ID)
 		}
 		ids[expose.ID] = struct{}{}
+		if expose.TunnelPort == NginxEnrollmentLoopbackPort {
+			return nil, fmt.Errorf("nginx expose %s tunnel port collides with the reserved enrollment upstream", expose.ID)
+		}
 		if owner, duplicate := ports[expose.TunnelPort]; duplicate {
 			return nil, fmt.Errorf("nginx tunnel port %d is shared by exposes %s and %s", expose.TunnelPort, owner, expose.ID)
 		}
@@ -229,6 +241,25 @@ func validateNginxRenderRequest(request NginxRenderRequest) ([]model.Expose, err
 	return active, nil
 }
 
+func validateNginxReservedContract() error {
+	upstream, err := netip.ParseAddrPort(NginxEnrollmentUpstream)
+	if err != nil || upstream.Addr().String() != "127.0.0.1" || int(upstream.Port()) != NginxEnrollmentLoopbackPort {
+		return fmt.Errorf("nginx enrollment upstream contract is invalid")
+	}
+	paths := []string{model.ReservedEnrollmentPath, model.ReservedRecoveryPath, model.ReservedHealthPath}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if !model.IsReservedExposePath(path) || path == model.ReservedExposePathPrefix {
+			return fmt.Errorf("nginx reserved path contract is invalid")
+		}
+		if _, duplicate := seen[path]; duplicate {
+			return fmt.Errorf("nginx reserved path contract contains a duplicate")
+		}
+		seen[path] = struct{}{}
+	}
+	return nil
+}
+
 func renderNginxMain(request NginxRenderRequest) []byte {
 	limits := request.Limits
 	var config strings.Builder
@@ -250,7 +281,9 @@ func renderNginxMain(request NginxRenderRequest) []byte {
 	fmt.Fprintf(&config, "    limit_conn_zone $server_name zone=vpnctl_gateway:%dk;\n", nginxSharedZoneBytes/1024)
 	config.WriteString("    map $host $vpnctl_expose_key { default \"\"; }\n")
 	fmt.Fprintf(&config, "    limit_conn_zone $vpnctl_expose_key zone=vpnctl_expose:%dk;\n", nginxSharedZoneBytes/1024)
+	fmt.Fprintf(&config, "    limit_req_zone $binary_remote_addr zone=vpnctl_enrollment:%dk rate=1r/s;\n", nginxEnrollmentZoneBytes/1024)
 	config.WriteString("    limit_conn_status 503;\n")
+	config.WriteString("    limit_req_status 503;\n")
 	config.WriteString("    limit_conn_dry_run off;\n\n")
 	config.WriteString("    client_header_buffer_size 1k;\n")
 	fmt.Fprintf(&config, "    large_client_header_buffers %d %d;\n", limits.HeaderBufferCount, limits.HeaderBufferBytes)
@@ -321,6 +354,7 @@ proxy_set_header TE "";
 
 func renderNginxRoutes(exposes []model.Expose) []byte {
 	var config strings.Builder
+	renderNginxReservedRoutes(&config)
 	hasRootPrefix := false
 	for _, expose := range exposes {
 		if expose.RouteMode == model.RoutePrefix && expose.Path == "/" {
@@ -341,6 +375,38 @@ func renderNginxRoutes(exposes []model.Expose) []byte {
 		config.WriteString("location / {\n    return 404;\n}\n")
 	}
 	return []byte(config.String())
+}
+
+func renderNginxReservedRoutes(config *strings.Builder) {
+	for _, path := range []string{model.ReservedEnrollmentPath, model.ReservedRecoveryPath} {
+		fmt.Fprintf(config, "location = %s {\n", nginxQuote(path))
+		fmt.Fprintf(config, "    client_max_body_size %d;\n", NginxEnrollmentMaximumBodyBytes)
+		fmt.Fprintf(config, "    limit_conn vpnctl_gateway %d;\n", DefaultIngressGatewayConcurrentRequests)
+		config.WriteString("    limit_req zone=vpnctl_enrollment burst=4 nodelay;\n")
+		fmt.Fprintf(config, "    proxy_read_timeout %ds;\n", NginxEnrollmentTimeoutSeconds)
+		fmt.Fprintf(config, "    proxy_send_timeout %ds;\n", NginxEnrollmentTimeoutSeconds)
+		fmt.Fprintf(config, "    proxy_pass http://%s;\n", NginxEnrollmentUpstream)
+		config.WriteString("    include conf.d/proxy-common.conf;\n")
+		config.WriteString("}\n")
+	}
+	fmt.Fprintf(config, "location = %s {\n", nginxQuote(model.ReservedHealthPath))
+	config.WriteString("    default_type application/json;\n")
+	config.WriteString("    add_header Cache-Control \"no-store\" always;\n")
+	config.WriteString("    add_header X-Content-Type-Options \"nosniff\" always;\n")
+	config.WriteString("    return 204;\n")
+	config.WriteString("}\n")
+	renderNginxFixedNotFound(config, "=", model.ReservedExposePathPrefix)
+	renderNginxFixedNotFound(config, "^~", model.ReservedExposePathPrefix+"/")
+}
+
+func renderNginxFixedNotFound(config *strings.Builder, modifier, path string) {
+	fmt.Fprintf(config, "location %s %s {\n", modifier, nginxQuote(path))
+	config.WriteString("    default_type application/json;\n")
+	config.WriteString("    add_header Cache-Control \"no-store\" always;\n")
+	config.WriteString("    add_header Pragma \"no-cache\" always;\n")
+	config.WriteString("    add_header X-Content-Type-Options \"nosniff\" always;\n")
+	config.WriteString("    return 404 '{\"error\":\"not_found\"}';\n")
+	config.WriteString("}\n")
 }
 
 func renderNginxLocation(config *strings.Builder, expose model.Expose, modifier, path string) {

@@ -143,7 +143,7 @@
 - [x] 12.3 Implement implementation-neutral gateway hard limits and safe per-expose body/timeout overrides from measured defaults; verify impossible values and raw proxy directives are rejected before render.
 - [x] 12.4 Implement the selected reverse-proxy renderer with TLS 1.2/1.3, HTTP/1.1+bounded HTTP/2, internal HTTP/1.1, trusted forwarding headers, no WebSocket/HTTP3, streaming, no disk body buffering, and loopback tunnel upstreams; verify config validation and directive tests.
 - [x] 12.5 Implement complete generated proxy-tree staging, validation, atomic activation, graceful reload, hash drift detection, and rollback; verify invalid config and failed reload preserve the prior serving generation.
-- [ ] 12.6 Implement reserved enrollment/recovery/health paths ahead of user routes and unknown-path `404`; verify user exposes cannot shadow `/.well-known/vpnctl/`.
+- [x] 12.6 Implement reserved enrollment/recovery/health paths ahead of user routes and unknown-path `404`; verify user exposes cannot shadow `/.well-known/vpnctl/`.
 - [ ] 12.7 Implement expose creation saga in tunnel-before-ingress order, immediate/deferred mode, degraded local-app behavior, URL/certificate/scp result, and no sensitive JSON path; verify ready and stopped-app E2E cases.
 - [ ] 12.8 Implement stateless request handling with hard limits and `413`/`503`/`504`, no queue/retry/body persistence, and downstream close after partial-response failure; verify fault-injected non-idempotent request tests show no replay.
 - [ ] 12.9 Implement expose list/show/remove with certificate retrieval, new-request stop, bounded drain, isolated mapping removal, port release, and webhook-removal `requires_action`; verify one-of-many removal leaves others serving.

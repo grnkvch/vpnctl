@@ -5,7 +5,12 @@ import (
 	"strings"
 )
 
-const ReservedExposePathPrefix = "/.well-known/vpnctl"
+const (
+	ReservedExposePathPrefix = "/.well-known/vpnctl"
+	ReservedEnrollmentPath   = ReservedExposePathPrefix + "/enroll"
+	ReservedRecoveryPath     = ReservedExposePathPrefix + "/recover"
+	ReservedHealthPath       = ReservedExposePathPrefix + "/health"
+)
 
 const (
 	MaximumExposeBodyLimitBytes         int64 = 8 * 1024 * 1024

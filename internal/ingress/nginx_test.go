@@ -74,8 +74,8 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 	if strings.Contains(routes, "/disabled") || strings.Contains(routes, "127.0.0.1:20002") || strings.Contains(routes, "192.0.2.50") || strings.Contains(routes, ":4100") {
 		t.Fatalf("routes exposed a disabled route or node application endpoint:\n%s", routes)
 	}
-	if strings.Count(routes, "limit_conn vpnctl_gateway 64;") != 3 || strings.Count(routes, "limit_conn vpnctl_expose 40;") != 3 {
-		t.Fatalf("every exact/prefix proxy location must carry both limits:\n%s", routes)
+	if strings.Count(routes, "limit_conn vpnctl_gateway 64;") != 5 || strings.Count(routes, "limit_conn vpnctl_expose 40;") != 3 {
+		t.Fatalf("every reserved/user proxy location must carry its applicable limits:\n%s", routes)
 	}
 	for _, directive := range []string{
 		"proxy_http_version 1.1;", "proxy_request_buffering off;", "proxy_buffering off;",
@@ -162,8 +162,64 @@ func TestNginxRendererQuotesPathsAndHandlesRootPrefix(t *testing.T) {
 		!strings.Contains(files[NginxMainConfigPath], `ssl_certificate_key "/etc/vpnctl/key \$private.pem";`) {
 		t.Fatalf("opaque paths are not safely quoted:\n%s", files[NginxMainConfigPath])
 	}
-	if strings.Count(files[NginxRoutesConfigPath], `location "/" {`) != 1 || strings.Contains(files[NginxRoutesConfigPath], "return 404") {
+	if strings.Count(files[NginxRoutesConfigPath], `location "/" {`) != 1 || strings.Contains(files[NginxRoutesConfigPath], "location / {\n    return 404;") {
 		t.Fatalf("root prefix produced a duplicate fallback:\n%s", files[NginxRoutesConfigPath])
+	}
+}
+
+func TestNginxReservedRoutesPrecedeAndCannotBeShadowedByUserRoot(t *testing.T) {
+	t.Parallel()
+	request := nginxRenderFixture()
+	request.Exposes = []model.Expose{nginxExposeFixture(nginxTestExposeA, "/", model.RoutePrefix, 20000, model.ExposeReady)}
+	candidate, err := RenderNginxConfig(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := nginxArtifactContents(candidate)[NginxRoutesConfigPath]
+	userRoot := strings.Index(routes, `location "/" {`)
+	if userRoot < 0 {
+		t.Fatalf("root expose is absent:\n%s", routes)
+	}
+	for _, path := range []string{model.ReservedEnrollmentPath, model.ReservedRecoveryPath, model.ReservedHealthPath} {
+		location := `location = "` + path + `" {`
+		index := strings.Index(routes, location)
+		if index < 0 || index >= userRoot || strings.Count(routes, location) != 1 {
+			t.Errorf("reserved location %q does not uniquely precede root expose:\n%s", path, routes)
+		}
+	}
+	for _, directive := range []string{
+		`location = "/.well-known/vpnctl" {`,
+		`location ^~ "/.well-known/vpnctl/" {`,
+		`return 404 '{"error":"not_found"}';`,
+		"proxy_pass http://127.0.0.1:19092;",
+		"client_max_body_size 65536;",
+		"limit_req zone=vpnctl_enrollment burst=4 nodelay;",
+		"proxy_read_timeout 5s;",
+	} {
+		if !strings.Contains(routes, directive) {
+			t.Errorf("reserved route contract lacks %q:\n%s", directive, routes)
+		}
+	}
+	if strings.Count(routes, "proxy_pass http://"+NginxEnrollmentUpstream+";") != 2 {
+		t.Fatalf("enrollment and recovery do not share the exact private handler upstream:\n%s", routes)
+	}
+	healthStart := strings.Index(routes, `location = "`+model.ReservedHealthPath+`" {`)
+	if healthStart < 0 {
+		t.Fatalf("health route is absent:\n%s", routes)
+	}
+	healthEnd := strings.Index(routes[healthStart:], "}\n") + healthStart
+	if healthEnd < healthStart || strings.Contains(routes[healthStart:healthEnd], "proxy_pass") ||
+		!strings.Contains(routes[healthStart:healthEnd], "return 204;") {
+		t.Fatalf("health route is not a detail-free edge response:\n%s", routes)
+	}
+}
+
+func TestNginxRendererRejectsReservedEnrollmentPortCollision(t *testing.T) {
+	t.Parallel()
+	request := nginxRenderFixture()
+	request.Exposes = []model.Expose{nginxExposeFixture(nginxTestExposeA, "/hook", model.RouteExact, NginxEnrollmentLoopbackPort, model.ExposeReady)}
+	if _, err := RenderNginxConfig(request); err == nil || !strings.Contains(err.Error(), "reserved enrollment upstream") {
+		t.Fatalf("reserved upstream collision error = %v", err)
 	}
 }
 

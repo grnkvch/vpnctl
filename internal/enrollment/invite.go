@@ -30,7 +30,7 @@ const (
 	InviteTokenSchemaVersion = 1
 	InviteSecretBytes        = 32
 	InviteTokenPrefix        = "vpnctl-invite-v1"
-	InviteEnrollmentPath     = "/.well-known/vpnctl/enroll"
+	InviteEnrollmentPath     = model.ReservedEnrollmentPath
 	invitePurpose            = string(PurposeEnroll)
 	inviteIDCharacters       = 6
 	inviteIDCollisionRetries = 32

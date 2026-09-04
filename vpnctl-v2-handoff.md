@@ -1024,6 +1024,17 @@ https://PUBLIC_GATEWAY_IP/telegram/webhook
 - Ambiguous/overlapping routes отклоняются. Prefix
   `/.well-known/vpnctl/` зарезервирован для внутренних endpoints и недоступен
   пользовательским exposes.
+- Reserved namespace содержит точные endpoints
+  `/.well-known/vpnctl/enroll`, `/.well-known/vpnctl/recover` и
+  `/.well-known/vpnctl/health`. Первые два передаются одному loopback-only
+  enrollment handler на `127.0.0.1:19092`; health возвращает бездетальный
+  `204` непосредственно из nginx и не вызывает webhook или management API.
+- Slashless reserved root и неизвестные descendants возвращают fixed no-store
+  JSON `404`. Exact reserved locations и `^~` guard имеют приоритет над user
+  routes, поэтому даже пользовательский prefix `/` не может перехватить
+  внутренний endpoint. Ограничение request rate применяется только к публичным
+  enrollment/recovery requests; оно не добавляет per-IP policy пользовательским
+  webhook/API exposes.
 - Пользователь может задать path явно; vpnctl также может сгенерировать
   уникальный high-entropy path. Path не считается механизмом authentication.
   Проверка Telegram secret token и иная application authentication остаются

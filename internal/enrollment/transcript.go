@@ -26,7 +26,7 @@ const (
 	EnrollmentSignatureAlgorithm      = "Ed25519"
 	EnrollmentNonceBytes              = 16
 	EnrollmentClockSkew               = 120 * time.Second
-	EnrollmentRecoveryPath            = "/.well-known/vpnctl/recover"
+	EnrollmentRecoveryPath            = model.ReservedRecoveryPath
 	maximumTranscriptPresets          = 64
 	maximumTranscriptPublicKeyHashes  = 16
 	maximumEnrollmentTranscriptBytes  = 64 << 10

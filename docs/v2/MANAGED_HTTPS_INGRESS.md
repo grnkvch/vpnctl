@@ -141,3 +141,25 @@ trees remain and normal idempotence is disabled: the sole inactive newer tree
 is a recovery snapshot, and only an explicit retry of that same generation and
 hash may reconcile it. Stale staging entries, multiple inactive generations,
 or a different requested candidate fail closed for later reconciliation.
+
+## Reserved public namespace
+
+The edge owns exact `/.well-known/vpnctl/enroll`,
+`/.well-known/vpnctl/recover`, and `/.well-known/vpnctl/health` locations before
+rendering any user expose. Enrollment and recovery share one fixed
+`127.0.0.1:19092` HTTP/1.1 handler upstream; the handler remains private and
+performs the authoritative path, method, query, token, body, and concurrency
+checks. nginx adds a shared 64 KiB per-source request-rate zone, a four-request
+burst, the 64 KiB body ceiling, and five-second upstream bounds.
+
+Health is an nginx-owned, body-free `204` with no state or dependency details.
+It allows ingress diagnostics to test the public-IP certificate, TLS listener,
+and selected nginx generation without invoking enrollment or any real webhook.
+The slashless namespace root and every otherwise unknown descendant return the
+same fixed no-store JSON `404` before user routing.
+
+Exact nginx locations win before the reserved `^~` subtree guard, and that
+guard wins before every user prefix. Consequently even a valid user prefix
+`/` can handle ordinary unmatched requests but can never shadow a vpnctl
+reserved endpoint. The renderer also rejects a corrupt expose that attempts to
+reuse loopback port `19092`.
