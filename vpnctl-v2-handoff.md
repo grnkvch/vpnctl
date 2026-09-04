@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 12.11 выполнено `116/156`
+и проходят strict validation. После завершения task 13.1 выполнено `117/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
@@ -21,7 +21,11 @@ semantics, isolated expose inspection/removal и confirmed manual public
 certificate rotation. Production ingress release gate прошёл на minimum-host
 fixtures: production-rendered HTTP/1.1/2 forwarding, exact 40/64 concurrency,
 `404`/`413`/`503`/`504`, memory/OOM и zero body files подтверждены; token-safe
-Telegram harness packaged и проверен offline без provider call.
+Telegram harness packaged и проверен offline без provider call. Общий
+read-only convergence planner детерминированно разделяет зарегистрированный
+`desired ↔ applied` diff и vpnctl-owned `applied ↔ observed` drift, использует
+отдельные revision/runtime hashes и перечисляет availability/destructive impact
+без state/file/unit/network mutations.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -46,7 +50,7 @@ replay. Public certificate rotation выполняется только вруч
 подтверждением; plan перечисляет затронутые serving exposes, control/enrollment
 identity и node trust не меняются, public export обновляется атомарно, а в
 secret store остаются только active и previous поколения. Следующая задача —
-13.1 (deterministic discovery and pending-diff/drift planning).
+13.2 (reusable local validate-stage-activate-health-rollback transactions).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract

@@ -2,6 +2,48 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — deterministic convergence planning
+
+### Planned reversible validation
+
+- Task 13.1 is source-only. It adds a deterministic read-only convergence
+  planner and CLI result adapter. Pending desired changes are computed only
+  from the authoritative desired-versus-applied manifests; drift is computed
+  independently from the applied manifest versus observations returned by an
+  explicitly vpnctl-owned discovery scope.
+- The planner receives only snapshot/read interfaces. It has no state-save,
+  file-write, unit-control, or network-mutation dependency. Tests will use
+  spies for all four mutation classes and byte-for-byte filesystem/state
+  snapshots to prove planning leaves them unchanged.
+- Validation uses Go unit/race/regression tests, vet, dependency listing,
+  formatting/diff checks, and strict OpenSpec validation only. It will not
+  install packages, start or stop units, change listeners/firewall/routes,
+  contact a provider, or touch either lab VM. Repository rollback is limited
+  to the task 13.1 commit; no host rollback is required.
+
+### Acceptance
+
+- The planner canonicalizes desired/applied manifests, registered operation
+  bindings, and owned observations independently of enumeration order. Every
+  create/update/delete diff must be bound to one authoritative pending
+  operation; missing, modified, and unexpected owned drift always compares
+  actual runtime shape to the applied baseline, never to future desired state.
+- Separate revision and runtime SHA-256 fingerprints distinguish a
+  dependency-generation refresh from runtime drift. Plans contain only stable
+  resource identities and hashes, aggregate the exact
+  `none`/`availability`/`destructive` impact, and emit separate `changes` and
+  `drift` arrays through the frozen `plan-v1` result contract.
+- Read-only boundary tests observed exactly one state snapshot read plus file,
+  unit, and network inspection while all corresponding mutation counters
+  remained zero. The filesystem sentinel and authoritative source snapshot
+  stayed byte/structure-identical; the applied manifest passed to discovery is
+  isolated from the source. No provider, VM, package, unit, listener, firewall,
+  route, or persistent host resource was touched, so no host rollback remains.
+- Ten repeated focused contract runs, five race-detector focused runs, the
+  complete uncached ordinary and complete race-detector suites, vet, dependency
+  listing, formatting/diff checks, and strict OpenSpec validation passed at
+  `117/156`.
+
 ## 2026-09-04 — production ingress development gate
 
 ### Planned reversible minimum-host validation
