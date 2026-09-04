@@ -40,6 +40,7 @@ type ExposeCreateRequest struct {
 	Path             string
 	Prefix           bool
 	AllowNonLoopback bool
+	LimitOverrides   ExposeLimitOverrides
 }
 
 // ExposeNamespace is the authoritative global route/identity scope plus the
@@ -68,6 +69,7 @@ type ExposePlan struct {
 	Path                    string
 	NonLoopback             bool
 	Warnings                []ExposePlanWarning
+	Limits                  ExposeLimits
 	CreatedAt               time.Time
 	ExpectedStateGeneration uint64
 }
@@ -104,6 +106,10 @@ func (normalizer *ExposeNormalizer) Normalize(namespace ExposeNamespace, request
 		return ExposePlan{}, fmt.Errorf("%w: normalizer is incomplete", ErrExposeNamespaceInvalid)
 	}
 	if err := validateExposeNamespace(namespace); err != nil {
+		return ExposePlan{}, err
+	}
+	limits, err := ResolveExposeLimits(DefaultGatewayHardLimits(), request.LimitOverrides)
+	if err != nil {
 		return ExposePlan{}, err
 	}
 	if request.Name != "" {
@@ -163,7 +169,7 @@ func (normalizer *ExposeNormalizer) Normalize(namespace ExposeNamespace, request
 	plan := ExposePlan{
 		ExposeID: exposeID, NodeID: namespace.NodeID, Name: request.Name,
 		Upstream: upstream.Value, RouteMode: mode, Path: path, NonLoopback: !upstream.Loopback,
-		Warnings: []ExposePlanWarning{}, CreatedAt: createdAt, ExpectedStateGeneration: namespace.StateGeneration,
+		Warnings: []ExposePlanWarning{}, Limits: limits, CreatedAt: createdAt, ExpectedStateGeneration: namespace.StateGeneration,
 	}
 	if plan.NonLoopback {
 		plan.Warnings = append(plan.Warnings, ExposePlanWarning{
@@ -200,6 +206,9 @@ func (plan ExposePlan) Validate() error {
 	}
 	if plan.ExpectedStateGeneration == 0 || plan.CreatedAt.IsZero() {
 		return fmt.Errorf("%w: state generation and creation time are required", ErrExposeInvalidInput)
+	}
+	if err := plan.Limits.Validate(DefaultGatewayHardLimits()); err != nil {
+		return err
 	}
 	_, offset := plan.CreatedAt.Zone()
 	if offset != 0 {

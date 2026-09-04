@@ -114,12 +114,14 @@ func TestExposeNormalizerPrefixAndNonLoopbackOptIn(t *testing.T) {
 	normalizer := deterministicExposeNormalizer()
 	plan, err := normalizer.Normalize(emptyExposeNamespace(), ExposeCreateRequest{
 		Upstream: "10.0.0.5:3000", Name: "api", Path: "/api/", Prefix: true, AllowNonLoopback: true,
+		LimitOverrides: ExposeLimitOverrides{BodyLimitSet: true, BodyBytes: 2 << 20, TimeoutSet: true, TimeoutSeconds: 30},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.Path != "/api" || plan.RouteMode != model.RoutePrefix || !plan.NonLoopback || len(plan.Warnings) != 1 ||
-		plan.Warnings[0].Code != ExposeNonLoopbackWarningCode {
+		plan.Warnings[0].Code != ExposeNonLoopbackWarningCode ||
+		plan.Limits != (ExposeLimits{BodyBytes: 2 << 20, UpstreamTimeoutSeconds: 30, ConcurrentRequests: 40}) {
 		t.Fatalf("prefix/non-loopback plan = %+v", plan)
 	}
 }

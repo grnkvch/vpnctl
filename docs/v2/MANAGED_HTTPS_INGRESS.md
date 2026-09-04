@@ -40,7 +40,27 @@ checks the complete active exact/prefix namespace and retries at most 32 times;
 entropy failure or exhaustion fails closed without allocating state.
 
 Normalization is a read-only plan step. It records expected state generation,
-immutable identity, canonical upstream/path, and non-loopback warning, but does
-not allocate the gateway tunnel port, apply limits, persist state, or contact the
-gateway. Those operations belong to the creation saga after the remaining
-ingress contracts are implemented.
+immutable identity, canonical upstream/path, non-loopback warning, and resolved
+safe limits, but does not allocate the gateway tunnel port, persist state, or
+contact the gateway. Those operations belong to the creation saga after the
+remaining ingress contracts are implemented.
+
+## Hard limits and expose overrides
+
+The versioned measured gateway contract is provider-neutral: 256 edge
+connections, 64 concurrent gateway requests, 64 HTTP/2 streams, 40 concurrent
+requests per expose, an 8 MiB body ceiling, four 8 KiB large-header buffers, and
+a 10-second graceful shutdown bound. An expose defaults to a 1 MiB body and a
+15-second upstream timeout; the timeout ceiling is 60 seconds.
+
+Only `--body-limit` and `--timeout` are public overrides. Body values accept
+integer bytes or binary `KiB`/`MiB` units; timeout accepts a whole number of
+seconds, a `s` duration, or `1m`. Both may narrow or widen the expose default but
+cannot exceed the gateway hard ceiling. Per-expose concurrency, gateway totals,
+HTTP/2 streams, buffers, retry, and shutdown behavior have no override.
+
+The option parser is a strict whitelist. Duplicate/unknown options, fractional
+or zero values, overflow, shell/directive separators, and names such as
+`--proxy-read-timeout` or `--nginx-directive` fail before identity entropy,
+state mutation, or provider rendering. A future limit change requires a new
+versioned measured contract rather than an untracked configuration edit.

@@ -24,6 +24,12 @@ This journal records development-host mutations made while implementing and vali
 - The normalized plan is deliberately pre-activation: tunnel port allocation, hard limits, gateway persistence, and node/gateway saga work remain owned by tasks 12.3 and 12.7. Repository rollback is limited to the task 12.2 commit; no host rollback is required.
 - Acceptance covers canonical port/host parsing, loopback and explicit non-loopback behavior, immutable UUID collision handling, case-insensitive node-local names with cross-node reuse, global active-route conflicts, reserved/ambiguous path rejection, 256-bit generated-path shape/collision exhaustion, plan tamper rejection, and symmetric segment-aware overlap properties. Twenty focused repeats, three race-detector repeats, complete ordinary and race suites, vet, dependency listing, formatting/diff checks, and strict OpenSpec validation passed at `107/156`; `go list` emitted only the known non-fatal module stat-cache warning.
 
+## 2026-09-04 — ingress hard limits and safe overrides
+
+- Task 12.3 is source-only. It turns the measured gateway/expose values into one implementation-neutral versioned hard-limit contract and adds a strict parser/resolver for only `--body-limit` and `--timeout`. Invalid limits and unknown/raw provider options fail before generated path/UUID entropy, model creation, rendering, file I/O, or process activity.
+- Tests and documentation are repository-only; neither lab VM, the development-host network, a provider executable, service, config tree, listener, nor ignored evidence is touched. Repository rollback is the task 12.3 commit and no host rollback is required.
+- Acceptance fixes the measured 256/64/64 gateway connection/request/HTTP2 limits, 40-request expose cap, 8 MiB hard and 1 MiB default body, 15/60-second default/maximum upstream timeout, four 8 KiB header buffers, and 10-second graceful bound. Tests cover every unversioned hard-limit change, default/override resolution, all in-range body/timeout values, typed bypass attempts, duplicate/impossible/injection input, explicit raw nginx/proxy options, and rejection before entropy/identity allocation. Twenty focused repeats, three focused race repeats, complete ordinary and race suites, vet, dependency listing, formatting/diff checks, and strict OpenSpec validation passed at `108/156`; `go list` emitted only the known non-fatal module stat-cache warning.
+
 ## Operating rules
 
 1. Never modify, start, stop, or delete a host VM, service, package, network, or file that is not explicitly owned by the `vpnctl-v2` lab.

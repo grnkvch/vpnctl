@@ -865,13 +865,13 @@ func (expose Expose) Validate() error {
 	if err := ValidateExposePath(expose.Path, expose.RouteMode); err != nil {
 		return err
 	}
-	if expose.BodyLimitBytes < 1 || expose.BodyLimitBytes > 8*1024*1024 {
+	if expose.BodyLimitBytes < 1 || expose.BodyLimitBytes > MaximumExposeBodyLimitBytes {
 		return invalid("body_limit_bytes", "must be between 1 and 8388608")
 	}
-	if expose.UpstreamTimeoutSeconds < 1 || expose.UpstreamTimeoutSeconds > 60 {
+	if expose.UpstreamTimeoutSeconds < 1 || expose.UpstreamTimeoutSeconds > MaximumExposeUpstreamTimeoutSeconds {
 		return invalid("upstream_timeout_seconds", "must be between 1 and 60")
 	}
-	if expose.ConcurrentRequests < 1 || expose.ConcurrentRequests > 40 {
+	if expose.ConcurrentRequests < 1 || expose.ConcurrentRequests > MaximumExposeConcurrentRequests {
 		return invalid("concurrent_requests", "must be between 1 and 40")
 	}
 	if expose.TunnelPort < 1024 || expose.TunnelPort > 65535 {

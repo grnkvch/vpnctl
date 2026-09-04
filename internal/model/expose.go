@@ -7,6 +7,12 @@ import (
 
 const ReservedExposePathPrefix = "/.well-known/vpnctl"
 
+const (
+	MaximumExposeBodyLimitBytes         int64 = 8 * 1024 * 1024
+	MaximumExposeUpstreamTimeoutSeconds       = 60
+	MaximumExposeConcurrentRequests           = 40
+)
+
 // ValidateExposeName applies the same stable resource-name grammar used by an
 // authoritative Expose record. Empty names remain valid only when the Expose
 // field itself is optional.
