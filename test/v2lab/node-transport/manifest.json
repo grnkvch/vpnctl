@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "automated-linux-node",
+  "actual_gateway_node": "deferred-to-task-16.11",
+  "manual_flow": {
+    "standard_to_restricted_test_switch": true,
+    "restricted_to_standard_test_switch": true,
+    "deferred_without_local_apply": true,
+    "failed_target_preserves_active": true,
+    "automatic_fallback": false,
+    "one_active_transport": true
+  },
+  "standard": {
+    "wireguard_udp_51820": true,
+    "selected_tcp_udp_gateway": true
+  },
+  "restricted": {
+    "shadowtls_tcp_8443": true,
+    "selected_tcp": true,
+    "selected_udp_over_tcp": true,
+    "native_udp": false
+  },
+  "routing": {
+    "selected_tcp_fail_closed": true,
+    "selected_udp_fail_closed": true,
+    "unrelated_tcp_direct": true,
+    "unrelated_udp_direct": true,
+    "active_transport_preserved": true,
+    "automatic_fallback": false
+  },
+  "reverse_tunnel": {
+    "standard_path_observed": true,
+    "restricted_path_observed": true,
+    "logical_identity_preserved": true
+  },
+  "cleanup": {
+    "owner_scoped": true,
+    "temporary_resources_absent": true,
+    "fixtures_restored_stopped": true
+  }
+}

@@ -2,6 +2,85 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned bidirectional private-node transport E2E
+
+### Planned reversible lab mutations
+
+- Task 16.3 will compose the already owner-checked standard WireGuard,
+  restricted ShadowTLS/UoT, routing fail-closed, and FRP transport-switch
+  harnesses into one release-gate run. Source-level acceptance will first
+  exercise non-mutating target tests, confirmed standard-to-restricted and
+  restricted-to-standard switches, failed-target preservation, and deferred
+  registration without local activation.
+- The only mutable machines are the existing `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` Lima fixtures after revalidating their QEMU/amd64, Ubuntu
+  24.04, 1-vCPU/512-MiB/10-GiB, image-digest, and rootless `user-v2` network
+  contract. Both are currently `Stopped`; the run may start them and must
+  return both to `Stopped`. The unrelated `realty-front-docker-vm`, macOS
+  networking, public VPSs, client devices, Telegram, and all provider state
+  remain outside scope.
+- Standard-path mutation is limited to the existing owner-marked
+  `/tmp/vpnctl-v2-standard-test` runtime and namespaces
+  `vpnctl-v2-wg-{gateway,network,wan,c1,c2,c3,c4,c5,n1,n2}` on the node
+  fixture. Restricted-UoT mutation is limited to
+  `/tmp/vpnctl-v2-restricted-uot-test` on both fixtures and the exact
+  `inet/vpnctl_v2_task84_capture` table on the node fixture. Both harnesses
+  remove their complete scope in an armed exit trap.
+- Host-wide routing evidence is limited to the existing owner value
+  `vpnctl-v2-routing-spike-v1`, namespaces
+  `vpnctl-v2-r{node,direct,gateway}`, paths
+  `/etc/vpnctl-v2-spike/routing`, `/run/vpnctl-v2-spike-routing`, and
+  `/usr/local/libexec/vpnctl-v2-spike-routing`, plus the five exact
+  `vpnctl-v2-spike-routing-{guard,engine,direct,gateway,node}.service` units.
+  Its verification trap uninstalls those resources and compares root
+  nftables, policy-rule, and route snapshots before and after.
+- Reverse-tunnel switch evidence is limited to the existing owner value
+  `vpnctl-v2-tunnel-spike-v1`, `/etc/vpnctl-v2-spike/tunnel`,
+  `/var/lib/vpnctl-v2-spike-tunnel-auth`, the exact tunnel spike units and
+  binaries, and `inet/vpnctl_v2_spike_tunnel_capture`. It may temporarily use
+  the owner-verified restricted spike services on `8443/TCP`; its transport
+  cleanup restores the saved Mihomo selectors/mode, standard frpc config, and
+  authorization state before the outer uninstall removes the exact owned
+  resources.
+- Every harness must refuse foreign paths, units, sockets, namespaces, or
+  capture tables before mutation. Final status must show all temporary
+  runtimes/namespaces/capture tables absent, all spike units inactive or
+  absent, and both fixtures stopped. Manual recovery is to run only the
+  matching owner-checked `cleanup`/`uninstall` commands named by each harness,
+  then `scripts/v2lab.sh down`; repository rollback will be
+  `git revert <task-16.3-commit>`.
+
+### Acceptance and completed rollback
+
+- The first invocation refused a pre-existing
+  `/etc/vpnctl-v2-spike/restricted` path before overlapping it. Its armed exit
+  trap found the exact `vpnctl-v2-restricted-spike-v1` owner marker, ran the
+  matching uninstall, and returned both fixtures to `Stopped`. A subsequent
+  read-only inspection found the path absent and all three exact restricted
+  services inactive; no manual file deletion was used. The orchestrator now
+  performs that exact owner-aware interrupted-run recovery before its clean
+  preflight while still refusing every foreign or unmarked resource.
+- The clean run completed with status `passed`. Stateful source acceptance
+  exercised non-mutating tests and explicit switches in both directions,
+  deferred registration without local application, failed-target
+  preservation, a single active transport, and no standby observation during
+  active failure. Standard WireGuard used `51820/UDP`; restricted transport
+  used ShadowTLS on `8443/TCP` with selected UDP carried over TCP and zero
+  native/direct UDP observations.
+- Isolated routing evidence confirmed selected TCP and UDP fail closed during
+  active transport loss while unrelated TCP and UDP remain direct. Reverse
+  tunnel evidence observed packets on both the standard direct path and the
+  restricted ShadowTLS path while preserving one logical mapping identity.
+  The accepted stable result is recorded in
+  `test/v2lab/node-transport/manifest.json`; raw ignored evidence is under
+  `artifacts/v2lab/node-transport-e2e/run-20260904T222140Z/summary.json`.
+- Final cleanup proved all named temporary paths, namespaces, and nftables
+  tables absent. Both `vpnctl-v2-gateway` and `vpnctl-v2-node` were restored to
+  `Stopped`; the unrelated VM and host networking were untouched. A harmless
+  systemd message reported no transient state to clean for an already absent
+  unit. Host rollback is complete; repository rollback is
+  `git revert <task-16.3-commit>`.
+
 ## 2026-09-05 — planned gateway-to-node first-expose happy-path E2E
 
 ### Planned reversible implementation
