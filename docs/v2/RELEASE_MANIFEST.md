@@ -17,15 +17,15 @@ The signed payload binds:
 - exact Ubuntu `24.04` and `amd64` target values;
 - the handshake-host list version;
 - whether the release's state migrations are backward reversible;
-- every bundled component's version, capabilities, archive path, SHA-256, and
-  gateway/node role scope;
+- every bundled component's version, capabilities, archive path, exact byte
+  size, SHA-256, and gateway/node role scope;
 - every apt-provided component's selected version, source, capabilities,
   compatible inclusive minimum/exclusive maximum package versions, and role
   scope.
 
-The v2 constructor takes the build-specific vpnctl version/checksum and the
-explicit migration-reversibility decision. It imports the same Mihomo, frp,
-and nginx pins enforced by their runtime adapters. The current production
+The v2 constructor takes the build-specific vpnctl version/checksum/byte size
+and the explicit migration-reversibility decision. It imports the same Mihomo,
+frp, and nginx pins enforced by their runtime adapters. The current production
 contract includes bundled vpnctl, Mihomo `v1.19.30`, and frp `0.69.0`, plus
 Ubuntu compatibility ranges for nginx, nftables, and wireguard-tools.
 
@@ -38,9 +38,10 @@ Verification order is fail-closed and precedes installation:
    sort order, role, path, capability, checksum, compatibility field, protocol
    window, and state range.
 4. Compare an explicitly observed host to Ubuntu `24.04`/`amd64`.
-5. Stream-hash every selected artifact and compare it to the signed SHA-256.
-6. In task 14.2, compare installed/candidate Ubuntu versions to signed apt
-   ranges with Debian version semantics before any package or file mutation.
+5. Stream-hash every artifact and compare its exact byte size and SHA-256 to
+   the signed values before role selection or installation.
+6. Return the role-filtered signed Ubuntu package compatibility records to the
+   init/update preflight. Bundle installation itself never invokes apt.
 
 Artifact paths are canonical relative slash paths: absolute paths,
 backslashes, dot paths, traversal, duplicate paths, and multiple artifacts for
@@ -51,3 +52,7 @@ component exactly one compatibility record.
 The public schemas and deliberately non-installable example are under
 `docs/v2/schemas/`. Production private signing material is not stored in this
 repository; tests generate ephemeral keys and retain no key files.
+
+The deterministic framing, verification order, local-only boundary, and
+role-specific filesystem layout are defined in
+[`RELEASE_BUNDLE.md`](RELEASE_BUNDLE.md).

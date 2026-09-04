@@ -23,6 +23,7 @@ const (
 	FRPProviderVersion        = "0.69.0"
 	FRPProviderAsset          = "frp_0.69.0_linux_amd64.tar.gz"
 	FRPProviderSHA256         = "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e"
+	FRPProviderSizeBytes      = int64(14176749)
 	FRPServerPort             = 17000
 	FRPClientAdminPort        = 17400
 	FRPAuthorizationPort      = 19091

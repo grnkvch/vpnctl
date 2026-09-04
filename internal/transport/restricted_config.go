@@ -26,6 +26,7 @@ const (
 	RestrictedProviderVersion       = "v1.19.30"
 	RestrictedProviderAsset         = "mihomo-linux-amd64-v1.19.30.gz"
 	RestrictedProviderSHA256        = "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
+	RestrictedProviderSizeBytes     = int64(18868732)
 	RestrictedCipher                = restricted.Cipher
 	RestrictedShadowTLSVersion      = restricted.ShadowTLSVersion
 	RestrictedUDPOverTCPVersion     = restricted.UDPOverTCPVersion

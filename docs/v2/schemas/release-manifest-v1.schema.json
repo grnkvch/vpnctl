@@ -113,7 +113,7 @@
     "artifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["component", "path", "sha256", "roles"],
+      "required": ["component", "path", "sha256", "size_bytes", "roles"],
       "properties": {
         "component": { "$ref": "#/$defs/component_identifier" },
         "path": {
@@ -123,6 +123,7 @@
           "pattern": "^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$"
         },
         "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 268435456 },
         "roles": { "$ref": "#/$defs/roles" }
       }
     },

@@ -28,6 +28,8 @@ const (
 	MaximumReleaseManifestPayloadBytes    = 512 << 10
 	releaseManifestSignatureDomain        = "vpnctl-release-manifest-v1\x00"
 	maximumReleaseEntries                 = 64
+	maximumReleaseArtifactBytes           = int64(256 << 20)
+	maximumReleaseArtifactTotalBytes      = int64(512 << 20)
 )
 
 var (
@@ -52,6 +54,7 @@ type ReleaseArtifact struct {
 	Component string       `json:"component"`
 	Path      string       `json:"path"`
 	SHA256    string       `json:"sha256"`
+	SizeBytes int64        `json:"size_bytes"`
 	Roles     []model.Role `json:"roles"`
 }
 
@@ -81,8 +84,8 @@ type ReleasePlatform struct {
 
 // NewV2ReleaseManifest builds the production v2 delivery contract from the
 // same provider pins consumed by runtime validation. The caller supplies only
-// build-specific vpnctl identity and the migration reversibility decision.
-func NewV2ReleaseManifest(vpnctlVersion, vpnctlSHA256 string, migrationReversible bool) (ReleaseManifest, error) {
+// build-specific vpnctl identity/size and the migration reversibility decision.
+func NewV2ReleaseManifest(vpnctlVersion, vpnctlSHA256 string, vpnctlSizeBytes int64, migrationReversible bool) (ReleaseManifest, error) {
 	manifest := ReleaseManifest{
 		SchemaVersion: ReleaseManifestSchemaVersion,
 		ComponentManifest: model.ComponentManifest{
@@ -100,9 +103,9 @@ func NewV2ReleaseManifest(vpnctlVersion, vpnctlSHA256 string, migrationReversibl
 			},
 		},
 		Artifacts: []ReleaseArtifact{
-			{Component: "vpnctl", Path: "bin/vpnctl", SHA256: vpnctlSHA256, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
-			{Component: tunnel.FRPProviderName, Path: "components/" + tunnel.FRPProviderAsset, SHA256: tunnel.FRPProviderSHA256, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
-			{Component: transport.RestrictedProviderName, Path: "components/" + transport.RestrictedProviderAsset, SHA256: transport.RestrictedProviderSHA256, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: "vpnctl", Path: "bin/vpnctl", SHA256: vpnctlSHA256, SizeBytes: vpnctlSizeBytes, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: tunnel.FRPProviderName, Path: "components/" + tunnel.FRPProviderAsset, SHA256: tunnel.FRPProviderSHA256, SizeBytes: tunnel.FRPProviderSizeBytes, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: transport.RestrictedProviderName, Path: "components/" + transport.RestrictedProviderAsset, SHA256: transport.RestrictedProviderSHA256, SizeBytes: transport.RestrictedProviderSizeBytes, Roles: []model.Role{model.RoleGateway, model.RoleNode}},
 		},
 		APTPackages: []APTPackageCompatibility{
 			{Component: "nftables", Package: "nftables", Source: "ubuntu-24.04-noble", MinimumVersion: "1.0.9-1build1", MaximumVersionExclusive: "1.1", Roles: []model.Role{model.RoleGateway, model.RoleNode}, Capabilities: []string{"atomic-ruleset", "inet-family"}},
@@ -146,6 +149,7 @@ func (manifest ReleaseManifest) Validate() error {
 
 	artifactComponents := make(map[string]ReleaseArtifact, len(manifest.Artifacts))
 	artifactPaths := make(map[string]struct{}, len(manifest.Artifacts))
+	var artifactTotalBytes int64
 	for index, artifact := range manifest.Artifacts {
 		if index > 0 && manifest.Artifacts[index-1].Path >= artifact.Path {
 			return releaseManifestInvalid("artifacts must be sorted by unique path")
@@ -160,6 +164,11 @@ func (manifest ReleaseManifest) Validate() error {
 		if artifact.SHA256 != component.SHA256 || !validReleaseSHA256(artifact.SHA256) {
 			return releaseManifestInvalid("artifacts[%d].sha256 must match the component pin", index)
 		}
+		if artifact.SizeBytes <= 0 || artifact.SizeBytes > maximumReleaseArtifactBytes ||
+			artifactTotalBytes > maximumReleaseArtifactTotalBytes-artifact.SizeBytes {
+			return releaseManifestInvalid("artifacts[%d].size_bytes exceeds release bounds", index)
+		}
+		artifactTotalBytes += artifact.SizeBytes
 		if err := validateReleaseRoles(artifact.Roles); err != nil {
 			return releaseManifestInvalid("artifacts[%d].roles: %v", index, err)
 		}

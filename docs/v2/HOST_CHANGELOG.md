@@ -2,6 +2,65 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — reproducible self-contained role bundle
+
+### Planned reversible validation
+
+- Task 14.2 is source-only. The bundle will use a fixed versioned binary
+  framing rather than timestamp/owner-bearing archive metadata: magic,
+  bounded signed-manifest length, exact signed envelope bytes, then artifacts
+  in signed canonical order with bounded path/size framing and an exact EOF.
+  Identical inputs and signing key must produce identical bytes.
+- The local installer will verify signature, platform, every signed size and
+  SHA-256, framing order, and absence of extra bytes before selecting the
+  explicit gateway or node payload. It will stage provider archives under a
+  Go-owned temporary directory, extract only the pinned Mihomo binary and the
+  role-specific frps/frpc member, preflight exact destination conflicts, and
+  install only regular executable files under an injected test root.
+- Integration tests will copy the completed bundle byte-for-byte to a second
+  mode-`0600` path to model `scp`, install gateway and node into separate
+  temporary roots, and assert that no opposite-role frp binary or upstream
+  network/download dependency exists. Corrupt/truncated/extra/oversized and
+  wrong-role bundles must fail before installed paths change.
+- No real bundle, package, production binary, signing key, system directory,
+  package manager, service, VM, listener, network rule, public endpoint, or
+  deployed gateway/node state will be created or changed. All bundle copies,
+  staged archives/binaries, keys, and install roots remain test-owned and are
+  removed automatically; repository rollback is limited to the task 14.2
+  commit.
+
+### Result
+
+- The release unit now has deterministic `VPNCTLBUNDLE` v1 framing: one
+  canonical signed Ed25519 manifest followed by its artifacts in exact signed
+  path order with explicit byte lengths and exact EOF. The manifest itself
+  binds bounded artifact sizes; production Mihomo and frp archive sizes match
+  their accepted pinned assets. Equal inputs and key produced identical bundle
+  bytes in every repeated run.
+- Installation accepts only an absolute regular non-symlink local bundle,
+  verifies its trusted signature, Ubuntu `24.04`/`amd64` target, all artifact
+  paths/sizes/SHA-256 values, complete stream framing, and provider archive
+  structure before touching the injected install root. Gateway installation
+  writes only vpnctl, Mihomo, and `frps`; node installation writes only vpnctl,
+  Mihomo, and `frpc`. Exact mode-`0755` targets are idempotent, conflicts do not
+  replace foreign paths, and an interrupted multi-file install rolls back only
+  files and empty directories created by that invocation.
+- The offline integration copied a complete mode-`0600` bundle byte-for-byte
+  to another path as the `scp` boundary, removed the source copy, and installed
+  both roles independently without upstream access. A source contract test
+  keeps bundle/init/apply/repair paths free of HTTP clients, process-based
+  downloaders, URLs, curl, and wget. The installer returns the signed
+  role-filtered apt requirements without invoking a package manager; Ubuntu
+  repositories remain the separately documented OS-package boundary.
+- Ten repeated focused runs and three repeated focused race runs covered
+  reproducibility, offline role selection, idempotency, destination conflicts,
+  malformed provider archives, signature/platform/role failure, corrupt path
+  and size framing, checksum mismatch, truncation, appended bytes, oversized
+  files, and symlinks, with unchanged install roots on every rejected input.
+  Full ordinary and race-detector suites, `go vet ./...`, dependency listing,
+  Bash syntax, all JSON parsing, diff checks, and strict OpenSpec validation
+  pass. No real host resource changed and no rollback is required.
+
 ## 2026-09-04 — signed release-manifest boundary
 
 ### Planned reversible validation

@@ -64,18 +64,21 @@
       "component": "vpnctl",
       "path": "bin/vpnctl",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 12345678,
       "roles": ["gateway", "node"]
     },
     {
       "component": "frp",
       "path": "components/frp_0.69.0_linux_amd64.tar.gz",
       "sha256": "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e",
+      "size_bytes": 14176749,
       "roles": ["gateway", "node"]
     },
     {
       "component": "mihomo",
       "path": "components/mihomo-linux-amd64-v1.19.30.gz",
       "sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84",
+      "size_bytes": 18868732,
       "roles": ["gateway", "node"]
     }
   ],

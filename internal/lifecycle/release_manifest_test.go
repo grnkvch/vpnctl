@@ -66,7 +66,7 @@ func TestSignedReleaseManifestBindsCompleteReleaseContract(t *testing.T) {
 func TestV2ReleaseManifestUsesRuntimeProviderPinsAndAptRanges(t *testing.T) {
 	t.Parallel()
 	vpnctlHash := strings.Repeat("a", 64)
-	manifest, err := NewV2ReleaseManifest("v2.0.0", vpnctlHash, true)
+	manifest, err := NewV2ReleaseManifest("v2.0.0", vpnctlHash, 12345, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,10 +83,10 @@ func TestV2ReleaseManifestUsesRuntimeProviderPinsAndAptRanges(t *testing.T) {
 		manifest.APTPackages[1].MinimumVersion != "1.24.0-2ubuntu7.17" {
 		t.Fatalf("production nginx compatibility = %+v", manifest.APTPackages[1])
 	}
-	if _, err := NewV2ReleaseManifest("v2.0.0", "invalid", true); !errors.Is(err, ErrInvalidReleaseManifest) {
+	if _, err := NewV2ReleaseManifest("v2.0.0", "invalid", 12345, true); !errors.Is(err, ErrInvalidReleaseManifest) {
 		t.Fatalf("invalid vpnctl checksum error = %v", err)
 	}
-	if _, err := NewV2ReleaseManifest("", vpnctlHash, true); !errors.Is(err, ErrInvalidReleaseManifest) {
+	if _, err := NewV2ReleaseManifest("", vpnctlHash, 12345, true); !errors.Is(err, ErrInvalidReleaseManifest) {
 		t.Fatalf("invalid vpnctl version error = %v", err)
 	}
 }
@@ -198,6 +198,7 @@ func TestReleaseManifestRejectsIncompleteOrAmbiguousDeliveryMetadata(t *testing.
 		"vpnctl-one-role":              func(value *ReleaseManifest) { value.Artifacts[0].Roles = []model.Role{model.RoleGateway} },
 		"escaping-path":                func(value *ReleaseManifest) { value.Artifacts[0].Path = "../vpnctl" },
 		"artifact-checksum":            func(value *ReleaseManifest) { value.Artifacts[0].SHA256 = strings.Repeat("f", 64) },
+		"artifact-size":                func(value *ReleaseManifest) { value.Artifacts[0].SizeBytes = 0 },
 		"duplicate-artifact-component": func(value *ReleaseManifest) { value.Artifacts[1].Component = value.Artifacts[0].Component },
 		"artifact-order": func(value *ReleaseManifest) {
 			value.Artifacts[0], value.Artifacts[1] = value.Artifacts[1], value.Artifacts[0]
@@ -294,9 +295,9 @@ func releaseManifestFixture() (ReleaseManifest, map[string][]byte) {
 			},
 		},
 		Artifacts: []ReleaseArtifact{
-			{Component: "vpnctl", Path: "bin/vpnctl", SHA256: releaseDigest(artifacts["bin/vpnctl"]), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
-			{Component: "frp", Path: "components/frp-linux-amd64.tgz", SHA256: releaseDigest(artifacts["components/frp-linux-amd64.tgz"]), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
-			{Component: "mihomo", Path: "components/mihomo-linux-amd64.gz", SHA256: releaseDigest(artifacts["components/mihomo-linux-amd64.gz"]), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: "vpnctl", Path: "bin/vpnctl", SHA256: releaseDigest(artifacts["bin/vpnctl"]), SizeBytes: int64(len(artifacts["bin/vpnctl"])), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: "frp", Path: "components/frp-linux-amd64.tgz", SHA256: releaseDigest(artifacts["components/frp-linux-amd64.tgz"]), SizeBytes: int64(len(artifacts["components/frp-linux-amd64.tgz"])), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
+			{Component: "mihomo", Path: "components/mihomo-linux-amd64.gz", SHA256: releaseDigest(artifacts["components/mihomo-linux-amd64.gz"]), SizeBytes: int64(len(artifacts["components/mihomo-linux-amd64.gz"])), Roles: []model.Role{model.RoleGateway, model.RoleNode}},
 		},
 		APTPackages: []APTPackageCompatibility{
 			{Component: "nftables", Package: "nftables", Source: "ubuntu:noble", MinimumVersion: "1.0.9-1build1", MaximumVersionExclusive: "1.1", Roles: []model.Role{model.RoleGateway, model.RoleNode}, Capabilities: []string{"atomic-ruleset", "inet-family"}},

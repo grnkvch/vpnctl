@@ -204,9 +204,10 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 	var componentManifest struct {
 		Components struct {
 			Mihomo struct {
-				Version string `json:"version"`
-				Asset   string `json:"asset"`
-				SHA256  string `json:"sha256"`
+				Version   string `json:"version"`
+				Asset     string `json:"asset"`
+				SHA256    string `json:"sha256"`
+				SizeBytes int64  `json:"size_bytes"`
 			} `json:"mihomo"`
 		} `json:"components"`
 		Limits struct {
@@ -234,6 +235,7 @@ func TestRestrictedConstantsMatchPinnedManifests(t *testing.T) {
 	if componentManifest.Components.Mihomo.Version != RestrictedProviderVersion ||
 		componentManifest.Components.Mihomo.Asset != RestrictedProviderAsset ||
 		componentManifest.Components.Mihomo.SHA256 != RestrictedProviderSHA256 ||
+		componentManifest.Components.Mihomo.SizeBytes != RestrictedProviderSizeBytes || RestrictedProviderSizeBytes != 18868732 ||
 		componentManifest.Limits.PublicNetwork.RestrictedTCP != RestrictedTCPPort || componentManifest.Limits.PublicNetwork.RestrictedUDPOpen ||
 		componentManifest.Limits.Restricted.Cipher != RestrictedCipher ||
 		componentManifest.Limits.Restricted.ShadowTLSVersion != RestrictedShadowTLSVersion || !componentManifest.Limits.Restricted.Strict ||

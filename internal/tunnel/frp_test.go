@@ -19,6 +19,7 @@ func TestFRPProviderPinMatchesAcceptedManifest(t *testing.T) {
 
 	if FRPProviderVersion != "0.69.0" || FRPProviderAsset != "frp_0.69.0_linux_amd64.tar.gz" ||
 		FRPProviderSHA256 != "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e" ||
+		FRPProviderSizeBytes != 14176749 ||
 		FRPAuthorizationAddress != fmt.Sprintf("127.0.0.1:%d", FRPAuthorizationPort) {
 		t.Fatalf("unexpected frp pin: %s %s %s", FRPProviderVersion, FRPProviderAsset, FRPProviderSHA256)
 	}
