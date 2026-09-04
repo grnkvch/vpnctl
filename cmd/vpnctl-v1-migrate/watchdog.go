@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
@@ -14,6 +15,7 @@ type systemV1MigrationWatchdog struct {
 	watchdog   *operations.Watchdog
 	store      *operations.WatchdogStore
 	supervisor *operations.SystemdWatchdogSupervisor
+	network    *linuxplatform.NetworkManager
 }
 
 func newSystemV1MigrationWatchdog(root string) (*systemV1MigrationWatchdog, error) {
@@ -23,7 +25,8 @@ func newSystemV1MigrationWatchdog(root string) (*systemV1MigrationWatchdog, erro
 	}
 	runner := linuxplatform.OSProbeRunner{}
 	supervisor := operations.NewSystemdWatchdogSupervisor(runner)
-	watchdog, err := operations.NewWatchdog(paths, linuxplatform.NewOSNetworkManager(), supervisor)
+	network := linuxplatform.NewOSNetworkManager()
+	watchdog, err := operations.NewWatchdog(paths, network, supervisor)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +34,7 @@ func newSystemV1MigrationWatchdog(root string) (*systemV1MigrationWatchdog, erro
 	if err != nil {
 		return nil, err
 	}
-	return &systemV1MigrationWatchdog{watchdog: watchdog, store: transactionStore, supervisor: supervisor}, nil
+	return &systemV1MigrationWatchdog{watchdog: watchdog, store: transactionStore, supervisor: supervisor, network: network}, nil
 }
 
 func (watchdog *systemV1MigrationWatchdog) ArmPrepared(ctx context.Context, sshPort int, origin *linuxplatform.SSHConnection, prepared func(lifecycle.V1MigrationWatchdogTransaction) error) (lifecycle.V1MigrationWatchdogTransaction, error) {
@@ -87,6 +90,27 @@ func (watchdog *systemV1MigrationWatchdog) Status(_ context.Context, transaction
 	default:
 		return "", fmt.Errorf("unknown watchdog state %q", status)
 	}
+}
+
+func (watchdog *systemV1MigrationWatchdog) Restore(ctx context.Context, transactionID string) error {
+	if watchdog == nil || watchdog.store == nil || watchdog.supervisor == nil || watchdog.network == nil {
+		return fmt.Errorf("migration watchdog is incomplete")
+	}
+	status, err := watchdog.store.Status(transactionID)
+	if err != nil {
+		return err
+	}
+	if err := watchdog.supervisor.StopTimer(ctx, transactionID); err != nil {
+		return err
+	}
+	if status == operations.WatchdogStatusCommitted {
+		transaction, err := watchdog.store.Load(transactionID)
+		if err != nil {
+			return err
+		}
+		return watchdog.network.Restore(ctx, transaction.Network)
+	}
+	return watchdog.store.Rollback(ctx, transactionID, watchdog.network, time.Now().UTC())
 }
 
 var _ lifecycle.V1MigrationNetworkWatchdog = (*systemV1MigrationWatchdog)(nil)

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"os"
@@ -23,7 +24,7 @@ func TestSystemV1MigrationSnapshotIsCompleteIdempotentAndTamperEvident(t *testin
 	defer inspection.Destroy()
 	before := snapshotV1InspectionTrees(t, workspace, systemRoot)
 	root := filepath.Join(v1MigrationRealTempDir(t), "maintenance-snapshot")
-	driver := &SystemV1MigrationDriver{}
+	driver := &SystemV1MigrationDriver{runner: v1MigrationSnapshotRunner{}}
 
 	first, err := driver.CreateMaintenanceSnapshot(context.Background(), root, &inspection)
 	if err != nil {
@@ -68,6 +69,39 @@ func TestSystemV1MigrationSnapshotIsCompleteIdempotentAndTamperEvident(t *testin
 	}
 }
 
+func TestSystemV1MigrationSnapshotRetainsVerifiedBundleAtRollbackBoundary(t *testing.T) {
+	workspace, systemRoot, _, _ := completeV1InspectionFixture(t)
+	inspection := inspectV1ImpactFixture(t, workspace, systemRoot)
+	defer inspection.Destroy()
+	maintenanceRoot := v1MigrationRealTempDir(t)
+	snapshotRoot := filepath.Join(maintenanceRoot, v1MigrationSnapshotName)
+	bundlePath := filepath.Join(v1MigrationRealTempDir(t), "vpnctl-v2.bundle")
+	bundle := []byte("previously verified signed bundle fixture\n")
+	writeV1FixtureFile(t, bundlePath, bundle, 0o600)
+	driver := &SystemV1MigrationDriver{
+		runner: v1MigrationSnapshotRunner{}, bundles: &v1MigrationBundleInstallerStub{manifest: v1MigrationGatewayManifest()},
+	}
+	if _, err := driver.VerifyBundle(context.Background(), bundlePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.CreateMaintenanceSnapshot(context.Background(), snapshotRoot, &inspection); err != nil {
+		t.Fatal(err)
+	}
+	recoveryBundle := filepath.Join(maintenanceRoot, v1MigrationRecoveryBundleName)
+	if data, err := os.ReadFile(recoveryBundle); err != nil || !reflect.DeepEqual(data, bundle) {
+		t.Fatalf("retained recovery bundle = %q, err=%v", data, err)
+	}
+	if err := os.Remove(recoveryBundle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.CreateMaintenanceSnapshot(context.Background(), snapshotRoot, &inspection); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(recoveryBundle); err != nil || !reflect.DeepEqual(data, bundle) {
+		t.Fatalf("re-retained recovery bundle = %q, err=%v", data, err)
+	}
+}
+
 func TestSystemV1MigrationPreservesForeignIncompleteSnapshotDirectory(t *testing.T) {
 	workspace, systemRoot, _, _ := completeV1InspectionFixture(t)
 	inspection := inspectV1ImpactFixture(t, workspace, systemRoot)
@@ -81,11 +115,38 @@ func TestSystemV1MigrationPreservesForeignIncompleteSnapshotDirectory(t *testing
 	if err := os.WriteFile(foreign, []byte("keep\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (&SystemV1MigrationDriver{}).CreateMaintenanceSnapshot(context.Background(), root, &inspection); !errors.Is(err, ErrV1MigrationConflict) {
+	if _, err := (&SystemV1MigrationDriver{runner: v1MigrationSnapshotRunner{}}).CreateMaintenanceSnapshot(context.Background(), root, &inspection); !errors.Is(err, ErrV1MigrationConflict) {
 		t.Fatalf("foreign incomplete snapshot error = %v", err)
 	}
 	if data, err := os.ReadFile(foreign); err != nil || string(data) != "keep\n" {
 		t.Fatalf("foreign file changed: %q, %v", data, err)
+	}
+}
+
+func TestSystemV1MigrationSnapshotRejectsOversizedSourceWithoutPublishing(t *testing.T) {
+	workspace, systemRoot, _, _ := completeV1InspectionFixture(t)
+	inspection := inspectV1ImpactFixture(t, workspace, systemRoot)
+	defer inspection.Destroy()
+	oversized := filepath.Join(workspace, ".vpnctl", "oversized-sparse")
+	file, err := os.OpenFile(oversized, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(v1MigrationMaximumSnapshotBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(v1MigrationRealTempDir(t), v1MigrationSnapshotName)
+	if _, err := (&SystemV1MigrationDriver{runner: v1MigrationSnapshotRunner{}}).CreateMaintenanceSnapshot(context.Background(), root, &inspection); err == nil {
+		t.Fatal("oversized snapshot source succeeded")
+	}
+	for _, path := range []string{root, root + ".incomplete"} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("oversized snapshot published %s: %v", path, err)
+		}
 	}
 }
 
@@ -151,6 +212,7 @@ func TestSystemV1MigrationSetsUpGatewayRoleFromVerifiedBundleIdempotently(t *tes
 	defer inspection.Destroy()
 	manifest := v1MigrationGatewayManifest()
 	bundlePath := filepath.Join(v1MigrationRealTempDir(t), "vpnctl-v2.bundle")
+	writeV1FixtureFile(t, bundlePath, []byte("verified test bundle\n"), 0o600)
 	if err := os.MkdirAll(filepath.Join(systemRoot, "etc", "systemd", "system"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +266,43 @@ func TestSystemV1MigrationSetsUpGatewayRoleFromVerifiedBundleIdempotently(t *tes
 	}
 }
 
+func TestReleaseBundleInstallerReplacesOnlyCapturedV1BinaryAndRetainsBundle(t *testing.T) {
+	workspace, systemRoot, _, _ := completeV1InspectionFixture(t)
+	inspection := inspectV1ImpactFixture(t, workspace, systemRoot)
+	defer inspection.Destroy()
+	snapshotRoot := filepath.Join(v1MigrationRealTempDir(t), "maintenance-snapshot")
+	if _, err := (&SystemV1MigrationDriver{runner: v1MigrationSnapshotRunner{}, binaryPath: linuxplatform.DefaultVPNCTLBinaryPath}).CreateMaintenanceSnapshot(context.Background(), snapshotRoot, &inspection); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, artifacts, installed := releaseBundleFixture(t)
+	bundlePath := filepath.Join(v1MigrationRealTempDir(t), "vpnctl-v2.bundle")
+	writeReleaseBundleFile(t, bundlePath, manifest, privateKey, artifacts)
+	installer, err := NewReleaseBundleInstaller(systemRoot, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := installer.InstallV1Migration(context.Background(), bundlePath, model.RoleGateway, snapshotRoot, linuxplatform.DefaultVPNCTLBinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := installer.InstallV1Migration(context.Background(), bundlePath, model.RoleGateway, snapshotRoot, linuxplatform.DefaultVPNCTLBinaryPath)
+	if err != nil || len(second.ChangedFiles) != 0 || len(first.ChangedFiles) != 4 {
+		t.Fatalf("migration installs = %+v / %+v, err=%v", first, second, err)
+	}
+	assertReleaseInstalledFile(t, systemRoot, "usr/local/bin/vpnctl", installed["vpnctl"])
+	assertReleaseInstalledFile(t, systemRoot, "usr/local/libexec/vpnctl/mihomo", installed["mihomo"])
+	assertReleaseInstalledFile(t, systemRoot, "usr/local/libexec/vpnctl/frps", installed["frps"])
+	retained, err := os.ReadFile(filepath.Join(systemRoot, strings.TrimPrefix(ReleaseInstalledBundlePath, "/")))
+	source, sourceErr := os.ReadFile(bundlePath)
+	if err != nil || sourceErr != nil || !reflect.DeepEqual(retained, source) {
+		t.Fatalf("retained bundle mismatch: %v / %v", err, sourceErr)
+	}
+}
+
 func TestSystemV1MigrationDisablesKnownUFWAndVerifiesTheResult(t *testing.T) {
 	workspace, systemRoot, _, _ := completeV1InspectionFixture(t)
 	inspection := inspectV1ImpactFixture(t, workspace, systemRoot)
@@ -243,6 +342,22 @@ type v1MigrationUFWRunner struct {
 	leaveEnabled bool
 }
 
+type v1MigrationSnapshotRunner struct{}
+
+func (v1MigrationSnapshotRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
+	if command.Name != "systemctl" || len(command.Args) != 2 || command.Args[1] != "wg-quick@wg0.service" {
+		return linuxplatform.ProbeResult{}, errors.New("unexpected snapshot command")
+	}
+	switch command.Args[0] {
+	case "is-enabled":
+		return linuxplatform.ProbeResult{Stdout: []byte("enabled\n")}, nil
+	case "is-active":
+		return linuxplatform.ProbeResult{Stdout: []byte("active\n")}, nil
+	default:
+		return linuxplatform.ProbeResult{}, errors.New("unexpected snapshot action")
+	}
+}
+
 type v1MigrationBundleInstallerStub struct {
 	manifest     ReleaseManifest
 	installCalls int
@@ -253,10 +368,18 @@ func (installer *v1MigrationBundleInstallerStub) Inspect(context.Context, string
 	return cloneReleaseManifest(installer.manifest), nil
 }
 
-func (installer *v1MigrationBundleInstallerStub) Install(_ context.Context, _ string, role model.Role) (ReleaseBundleInstallResult, error) {
+func (installer *v1MigrationBundleInstallerStub) InstallV1Migration(_ context.Context, _ string, role model.Role, _, _ string) (ReleaseBundleInstallResult, error) {
 	installer.installCalls++
 	installer.role = role
 	return ReleaseBundleInstallResult{Manifest: cloneReleaseManifest(installer.manifest)}, nil
+}
+
+func (installer *v1MigrationBundleInstallerStub) PreflightV1MigrationRemoval(context.Context, string, model.Role, string, string) (ReleaseManifest, error) {
+	return installer.manifest, nil
+}
+
+func (installer *v1MigrationBundleInstallerStub) RemoveV1MigrationComponents(context.Context, string, model.Role, string, string) (ReleaseManifest, error) {
+	return cloneReleaseManifest(installer.manifest), nil
 }
 
 func v1MigrationGatewayManifest() ReleaseManifest {

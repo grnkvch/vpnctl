@@ -28,6 +28,8 @@ type migrationOptions struct {
 	maintenanceRoot string
 	publicIPv4      string
 	nodeCIDR        string
+	rollback        bool
+	accept          bool
 	dryRun          bool
 	yes             bool
 	json            bool
@@ -63,7 +65,12 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "migration validation failed: %v\n", err)
 		return 2
 	}
-	if !options.dryRun && !options.yes {
+	recoveryAction, recoveryMode := options.recoveryAction()
+	if recoveryMode && !options.yes {
+		fmt.Fprintln(stderr, "migration validation failed: rollback or acceptance requires --yes")
+		return 2
+	}
+	if !recoveryMode && !options.dryRun && !options.yes {
 		fmt.Fprintln(stderr, "migration validation failed: applying accepted downtime requires --yes after reviewing --dry-run")
 		return 2
 	}
@@ -75,11 +82,6 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	systemRoot, err := filepath.Abs(options.systemRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "migration validation failed: resolve system root: %v\n", err)
-		return 2
-	}
-	bundle, err := filepath.Abs(options.bundle)
-	if err != nil {
-		fmt.Fprintf(stderr, "migration validation failed: resolve bundle: %v\n", err)
 		return 2
 	}
 	maintenance := options.maintenanceRoot
@@ -103,13 +105,18 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "migration preflight failed: %v\n", err)
 		return 2
 	}
-	if err := snapshot.ValidateMandatoryCapabilities(); err != nil {
-		fmt.Fprintf(stderr, "migration preflight failed: %v\n", err)
-		return 2
+	if !recoveryMode {
+		if err := snapshot.ValidateMandatoryCapabilities(); err != nil {
+			fmt.Fprintf(stderr, "migration preflight failed: %v\n", err)
+			return 2
+		}
 	}
-	ssh, err := linuxplatform.ResolveSSHPort(linuxplatform.SSHPortInput{
-		ExplicitPort: explicitPort.value, SSHConnection: os.Getenv("SSH_CONNECTION"),
-	}, snapshot)
+	var ssh linuxplatform.SSHPortPlan
+	if !recoveryMode {
+		ssh, err = linuxplatform.ResolveSSHPort(linuxplatform.SSHPortInput{
+			ExplicitPort: explicitPort.value, SSHConnection: os.Getenv("SSH_CONNECTION"),
+		}, snapshot)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "migration preflight failed: %v\n", err)
 		return 2
@@ -130,6 +137,30 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "migration setup failed: %v\n", err)
 		return 5
+	}
+	if recoveryMode {
+		result, recoveryErr := driver.RecoverV1Migration(context.Background(), lifecycle.V1MigrationRecoveryInput{
+			MaintenanceRoot: maintenance, WorkspaceRoot: workspace, Action: recoveryAction, Confirmed: options.yes,
+		})
+		if result.SchemaVersion != 0 {
+			if emitErr := emitRecoveryResult(stdout, result, options.json); emitErr != nil {
+				fmt.Fprintf(stderr, "migration output failed: %v\n", emitErr)
+				return 5
+			}
+		}
+		if recoveryErr != nil {
+			fmt.Fprintf(stderr, "migration recovery failed: %v\n", recoveryErr)
+			if errors.Is(recoveryErr, lifecycle.ErrV1MigrationConflict) || errors.Is(recoveryErr, lifecycle.ErrV1MigrationTerminal) {
+				return 3
+			}
+			return 5
+		}
+		return 0
+	}
+	bundle, err := filepath.Abs(options.bundle)
+	if err != nil {
+		fmt.Fprintf(stderr, "migration validation failed: resolve bundle: %v\n", err)
+		return 2
 	}
 	inspector, err := lifecycle.NewV1InstallationInspector(workspace, systemRoot)
 	if err != nil {
@@ -178,8 +209,10 @@ func parseOptions(arguments []string) (migrationOptions, optionalPort, bool, err
 	flags.StringVar(&options.publicIPv4, "public-ip", "", "explicit public gateway IPv4")
 	flags.StringVar(&options.nodeCIDR, "node-cidr", "", "v2 private-node pool")
 	flags.Var(&port, "ssh-port", "verified SSH listener port")
+	flags.BoolVar(&options.rollback, "rollback", false, "restore the retained v1 maintenance snapshot")
+	flags.BoolVar(&options.accept, "accept", false, "accept v2 and remove the v1 rollback payload")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "verify and report without mutation")
-	flags.BoolVar(&options.yes, "yes", false, "accept the documented maintenance downtime")
+	flags.BoolVar(&options.yes, "yes", false, "confirm the selected mutating maintenance action")
 	flags.BoolVar(&options.json, "json", false, "emit one JSON result")
 	help := false
 	flags.BoolVar(&help, "help", false, "show help")
@@ -193,6 +226,19 @@ func parseOptions(arguments []string) (migrationOptions, optionalPort, bool, err
 	if flags.NArg() != 0 {
 		return options, port, false, fmt.Errorf("unexpected argument %q", flags.Arg(0))
 	}
+	if options.rollback && options.accept {
+		return options, port, false, fmt.Errorf("--rollback and --accept are mutually exclusive")
+	}
+	_, recoveryMode := options.recoveryAction()
+	if recoveryMode {
+		if options.dryRun {
+			return options, port, false, fmt.Errorf("recovery actions do not support --dry-run")
+		}
+		if strings.TrimSpace(options.bundle) != "" || strings.TrimSpace(options.publicIPv4) != "" || strings.TrimSpace(options.nodeCIDR) != "" || port.value != nil {
+			return options, port, false, fmt.Errorf("--rollback and --accept do not accept migration target options")
+		}
+		return options, port, false, nil
+	}
 	if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.publicIPv4) == "" {
 		return options, port, false, fmt.Errorf("--bundle and --public-ip are required")
 	}
@@ -200,6 +246,16 @@ func parseOptions(arguments []string) (migrationOptions, optionalPort, bool, err
 		return options, port, false, fmt.Errorf("--dry-run and --yes are mutually exclusive")
 	}
 	return options, port, false, nil
+}
+
+func (options migrationOptions) recoveryAction() (lifecycle.V1MigrationRecoveryAction, bool) {
+	if options.rollback {
+		return lifecycle.V1MigrationRecoveryRollback, true
+	}
+	if options.accept {
+		return lifecycle.V1MigrationRecoveryAccept, true
+	}
+	return "", false
 }
 
 func emitResult(writer io.Writer, result lifecycle.V1MigrationResult, jsonMode bool) error {
@@ -226,6 +282,27 @@ func emitResult(writer io.Writer, result lifecycle.V1MigrationResult, jsonMode b
 	return nil
 }
 
+func emitRecoveryResult(writer io.Writer, result lifecycle.V1MigrationRecoveryResult, jsonMode bool) error {
+	if jsonMode {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+	fmt.Fprintf(writer, "v1 migration %s (%s)\n", result.Status, result.MigrationID)
+	fmt.Fprintf(writer, "action: %s\n", result.Action)
+	if len(result.CompletedPhases) != 0 {
+		values := make([]string, len(result.CompletedPhases))
+		for index, phase := range result.CompletedPhases {
+			values[index] = string(phase)
+		}
+		fmt.Fprintf(writer, "completed: %s\n", strings.Join(values, ", "))
+	}
+	for _, action := range result.RequiresAction {
+		fmt.Fprintf(writer, "required: %s\n", action)
+	}
+	return nil
+}
+
 func printHelp(writer io.Writer) {
 	fmt.Fprint(writer, `One-time, resumable vpnctl v1 to v2 gateway migration.
 
@@ -233,10 +310,18 @@ Usage:
   vpnctl-v1-migrate --bundle <local.bundle> --public-ip <IPv4> [--workspace <dir>]
     [--maintenance-root <dir>] [--node-cidr <CIDR>] [--ssh-port <port>]
     [--dry-run | --yes] [--json]
+  vpnctl-v1-migrate --rollback --yes [--workspace <dir>]
+    [--maintenance-root <dir>] [--json]
+  vpnctl-v1-migrate --accept --yes [--workspace <dir>]
+    [--maintenance-root <dir>] [--json]
 
 Run --dry-run first. Applying requires --yes and intentionally stops/disables
 the v1 WireGuard unit during the accepted maintenance window. After v2 network
 activation, open a new SSH session, run the reported vpnctl confirm command,
 then rerun this exact migration command to finish UFW and client validation.
+
+Use --rollback --yes before acceptance to restore the retained v1 binary,
+state, WireGuard unit, network, and known UFW behavior. After validating all
+migrated clients, use --accept --yes to keep v2 and remove that rollback payload.
 `)
 }

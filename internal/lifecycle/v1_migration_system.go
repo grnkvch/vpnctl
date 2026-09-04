@@ -35,6 +35,7 @@ const (
 	v1MigrationSnapshotManifestName = "snapshot.json"
 	v1MigrationSnapshotOwnerName    = ".vpnctl-v1-migration-snapshot"
 	v1MigrationNetworkMarkerName    = "network-activation.json"
+	v1MigrationRecoveryBundleName   = "v2-release.bundle"
 	v1MigrationMaximumSnapshotFiles = 4096
 	v1MigrationMaximumSnapshotBytes = int64(256 << 20)
 )
@@ -47,7 +48,9 @@ type v1MigrationHandshakeSelector interface {
 
 type v1MigrationBundleInstaller interface {
 	Inspect(context.Context, string) (ReleaseManifest, error)
-	Install(context.Context, string, model.Role) (ReleaseBundleInstallResult, error)
+	InstallV1Migration(context.Context, string, model.Role, string, string) (ReleaseBundleInstallResult, error)
+	PreflightV1MigrationRemoval(context.Context, string, model.Role, string, string) (ReleaseManifest, error)
+	RemoveV1MigrationComponents(context.Context, string, model.Role, string, string) (ReleaseManifest, error)
 }
 
 type V1MigrationWatchdogTransaction struct {
@@ -71,23 +74,25 @@ type V1MigrationNetworkWatchdog interface {
 	EnsureTimer(context.Context, string) error
 	MarkActivated(context.Context, string) error
 	Status(context.Context, string) (V1MigrationWatchdogStatus, error)
+	Restore(context.Context, string) error
 }
 
 // SystemV1MigrationDriver composes the production host adapters used only by
 // the standalone one-time migrator. It is intentionally not reachable from
 // the permanent vpnctl command registry.
 type SystemV1MigrationDriver struct {
-	root       string
-	paths      store.Paths
-	bundles    v1MigrationBundleInstaller
-	bundlePath string
-	handshake  v1MigrationHandshakeSelector
-	runner     linuxplatform.ProbeRunner
-	network    *linuxplatform.NetworkManager
-	binaryPath string
-	keyRunner  wireguard.Runner
-	entropy    io.Reader
-	watchdog   V1MigrationNetworkWatchdog
+	root         string
+	paths        store.Paths
+	bundles      v1MigrationBundleInstaller
+	bundlePath   string
+	handshake    v1MigrationHandshakeSelector
+	runner       linuxplatform.ProbeRunner
+	network      *linuxplatform.NetworkManager
+	binaryPath   string
+	keyRunner    wireguard.Runner
+	entropy      io.Reader
+	watchdog     V1MigrationNetworkWatchdog
+	recoveryHook func(V1MigrationRecoveryPhase) error
 }
 
 func NewSystemV1MigrationDriver(root string, publicKey ed25519.PublicKey, platform ReleasePlatform, binaryPath string, watchdog V1MigrationNetworkWatchdog) (*SystemV1MigrationDriver, error) {
@@ -130,6 +135,316 @@ func (driver *SystemV1MigrationDriver) VerifyBundle(ctx context.Context, bundleP
 	return manifest, nil
 }
 
+// InstallV1Migration is deliberately narrower than the normal release
+// installer: after a verified maintenance snapshot exists it may atomically
+// replace only the captured v1 vpnctl binary. New role components and the
+// retained signed bundle still use the ordinary no-overwrite ownership rules,
+// and the binary is replaced last.
+func (installer *ReleaseBundleInstaller) InstallV1Migration(ctx context.Context, bundlePath string, role model.Role, snapshotRoot, binaryPath string) (ReleaseBundleInstallResult, error) {
+	if ctx == nil || installer == nil || len(installer.publicKey) != ed25519.PublicKeySize {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("v1 migration release installer is incomplete")
+	}
+	if role != model.RoleGateway {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("v1 migration installs only the gateway role")
+	}
+	if binaryPath == "" {
+		binaryPath = linuxplatform.DefaultVPNCTLBinaryPath
+	}
+	if !filepath.IsAbs(binaryPath) || filepath.Clean(binaryPath) != binaryPath {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("v1 migration binary path must be clean and absolute")
+	}
+	previousBinary, previousMode, err := loadV1MaintenanceSnapshotFile(snapshotRoot, filepath.ToSlash(filepath.Join("v1-system", strings.TrimPrefix(binaryPath, "/"))))
+	if err != nil {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("verify captured v1 binary: %w", err)
+	}
+	if previousMode != 0o755 {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("captured v1 binary mode must be 0755")
+	}
+	defer clear(previousBinary)
+	staged, err := installer.stage(ctx, bundlePath)
+	if err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	defer os.RemoveAll(staged.root)
+	candidates, err := installer.prepareCandidates(ctx, staged, role)
+	if err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	physicalBinary := filepath.Join(installer.root, strings.TrimPrefix(binaryPath, "/"))
+	var binaryCandidate *releaseInstallCandidate
+	nonBinary := make([]releaseInstallCandidate, 0, len(candidates)-1)
+	for index := range candidates {
+		candidate := candidates[index]
+		if candidate.target == physicalBinary {
+			copy := candidate
+			binaryCandidate = &copy
+			continue
+		}
+		nonBinary = append(nonBinary, candidate)
+	}
+	if binaryCandidate == nil {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("verified release has no vpnctl migration binary")
+	}
+	if err := preflightReleaseCandidates(nonBinary); err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	if err := preflightV1MigrationBinary(*binaryCandidate, previousBinary, previousMode); err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	retainedBundle := filepath.Join(installer.root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/"))
+	bundlePresent, err := preflightV1MigrationRetainedBundle(bundlePath, retainedBundle)
+	if err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	createdDirectories, err := installer.ensureTargetDirectories(candidates)
+	if err != nil {
+		return ReleaseBundleInstallResult{}, err
+	}
+	releaseDirectories, err := ensureReleaseDirectory(installer.root, filepath.Dir(retainedBundle))
+	if err != nil {
+		for index := len(createdDirectories) - 1; index >= 0; index-- {
+			_ = os.Remove(createdDirectories[index])
+		}
+		return ReleaseBundleInstallResult{}, err
+	}
+	createdDirectories = append(createdDirectories, releaseDirectories...)
+	changed := make([]string, 0, len(candidates)+1)
+	rollbackNew := func() {
+		for index := len(changed) - 1; index >= 0; index-- {
+			if changed[index] != physicalBinary {
+				_ = os.Remove(changed[index])
+			}
+		}
+		for index := len(createdDirectories) - 1; index >= 0; index-- {
+			_ = os.Remove(createdDirectories[index])
+		}
+	}
+	for _, candidate := range nonBinary {
+		updated, err := installReleaseCandidate(candidate)
+		if err != nil {
+			rollbackNew()
+			return ReleaseBundleInstallResult{}, err
+		}
+		if updated {
+			changed = append(changed, candidate.target)
+		}
+	}
+	if !bundlePresent {
+		if err := copyRegularReleaseFile(bundlePath, retainedBundle, 0o600); err != nil {
+			rollbackNew()
+			return ReleaseBundleInstallResult{}, fmt.Errorf("retain signed migration bundle: %w", err)
+		}
+		changed = append(changed, retainedBundle)
+	}
+	updated, err := replaceV1MigrationBinary(*binaryCandidate, previousBinary, previousMode)
+	if err != nil {
+		rollbackNew()
+		return ReleaseBundleInstallResult{}, err
+	}
+	if updated {
+		changed = append(changed, physicalBinary)
+	}
+	return ReleaseBundleInstallResult{
+		Manifest: cloneReleaseManifest(staged.manifest), ChangedFiles: changed,
+		RequiredAPTPackages: releaseAPTPackagesForRole(staged.manifest, role),
+	}, nil
+}
+
+func (installer *ReleaseBundleInstaller) RemoveV1MigrationComponents(ctx context.Context, bundlePath string, role model.Role, snapshotRoot, binaryPath string) (ReleaseManifest, error) {
+	manifest, nonBinary, cleanup, err := installer.prepareV1MigrationRemoval(ctx, bundlePath, role, snapshotRoot, binaryPath)
+	if err != nil {
+		return ReleaseManifest{}, err
+	}
+	defer cleanup()
+	for _, candidate := range nonBinary {
+		if _, err := os.Lstat(candidate.target); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return ReleaseManifest{}, err
+		}
+		equal, err := equalReleaseFiles(candidate.target, candidate.source)
+		if err != nil || !equal {
+			return ReleaseManifest{}, fmt.Errorf("%w: migration component changed during removal", ErrReleaseInstallConflict)
+		}
+		if err := os.Remove(candidate.target); err != nil {
+			return ReleaseManifest{}, err
+		}
+		if err := syncLifecycleDirectory(filepath.Dir(candidate.target)); err != nil {
+			return ReleaseManifest{}, err
+		}
+	}
+	return manifest, nil
+}
+
+// PreflightV1MigrationRemoval verifies the complete signed component set and
+// every present target before rollback mutates a service or filesystem path.
+func (installer *ReleaseBundleInstaller) PreflightV1MigrationRemoval(ctx context.Context, bundlePath string, role model.Role, snapshotRoot, binaryPath string) (ReleaseManifest, error) {
+	manifest, _, cleanup, err := installer.prepareV1MigrationRemoval(ctx, bundlePath, role, snapshotRoot, binaryPath)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	return manifest, err
+}
+
+func (installer *ReleaseBundleInstaller) prepareV1MigrationRemoval(ctx context.Context, bundlePath string, role model.Role, snapshotRoot, binaryPath string) (ReleaseManifest, []releaseInstallCandidate, func(), error) {
+	if ctx == nil || installer == nil || role != model.RoleGateway {
+		return ReleaseManifest{}, nil, nil, fmt.Errorf("v1 migration release removal is incomplete")
+	}
+	if binaryPath == "" {
+		binaryPath = linuxplatform.DefaultVPNCTLBinaryPath
+	}
+	previous, previousMode, err := loadV1MaintenanceSnapshotFile(snapshotRoot, filepath.ToSlash(filepath.Join("v1-system", strings.TrimPrefix(binaryPath, "/"))))
+	if err != nil {
+		return ReleaseManifest{}, nil, nil, err
+	}
+	cleanup := func() { clear(previous) }
+	staged, err := installer.stage(ctx, bundlePath)
+	if err != nil {
+		cleanup()
+		return ReleaseManifest{}, nil, nil, err
+	}
+	cleanup = func() {
+		clear(previous)
+		_ = os.RemoveAll(staged.root)
+	}
+	candidates, err := installer.prepareCandidates(ctx, staged, role)
+	if err != nil {
+		cleanup()
+		return ReleaseManifest{}, nil, nil, err
+	}
+	physicalBinary := filepath.Join(installer.root, strings.TrimPrefix(binaryPath, "/"))
+	nonBinary := make([]releaseInstallCandidate, 0, len(candidates)-1)
+	binaryFound := false
+	for _, candidate := range candidates {
+		if candidate.target == physicalBinary {
+			binaryFound = true
+			if err := preflightV1MigrationBinary(candidate, previous, previousMode); err != nil {
+				cleanup()
+				return ReleaseManifest{}, nil, nil, err
+			}
+			continue
+		}
+		nonBinary = append(nonBinary, candidate)
+	}
+	if !binaryFound {
+		cleanup()
+		return ReleaseManifest{}, nil, nil, fmt.Errorf("verified release has no vpnctl migration binary")
+	}
+	if err := preflightReleaseCandidates(nonBinary); err != nil {
+		cleanup()
+		return ReleaseManifest{}, nil, nil, err
+	}
+	return cloneReleaseManifest(staged.manifest), nonBinary, cleanup, nil
+}
+
+func preflightV1MigrationBinary(candidate releaseInstallCandidate, previous []byte, previousMode os.FileMode) error {
+	info, err := os.Lstat(candidate.target)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
+		return fmt.Errorf("%w: installed vpnctl is not the captured v1 or selected v2 binary", ErrReleaseInstallConflict)
+	}
+	current, err := os.ReadFile(candidate.target)
+	if err != nil {
+		return err
+	}
+	selected, err := os.ReadFile(candidate.source)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(current, selected) || info.Mode().Perm() == previousMode && bytes.Equal(current, previous) {
+		return nil
+	}
+	return fmt.Errorf("%w: installed vpnctl differs from the captured v1 and selected v2 binaries", ErrReleaseInstallConflict)
+}
+
+func replaceV1MigrationBinary(candidate releaseInstallCandidate, previous []byte, previousMode os.FileMode) (bool, error) {
+	if err := preflightV1MigrationBinary(candidate, previous, previousMode); err != nil {
+		return false, err
+	}
+	equal, err := equalReleaseFiles(candidate.target, candidate.source)
+	if err != nil {
+		return false, err
+	}
+	if equal {
+		return false, nil
+	}
+	input, err := os.Open(candidate.source)
+	if err != nil {
+		return false, err
+	}
+	defer input.Close()
+	temporary, err := os.CreateTemp(filepath.Dir(candidate.target), ".vpnctl-v1-migration-*.tmp")
+	if err != nil {
+		return false, err
+	}
+	temporaryPath := temporary.Name()
+	keep := false
+	defer func() {
+		_ = temporary.Close()
+		if !keep {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o755); err != nil {
+		return false, err
+	}
+	if _, err := io.Copy(temporary, input); err != nil {
+		return false, err
+	}
+	if err := temporary.Sync(); err != nil {
+		return false, err
+	}
+	if err := temporary.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Rename(temporaryPath, candidate.target); err != nil {
+		return false, err
+	}
+	keep = true
+	if err := syncLifecycleDirectory(filepath.Dir(candidate.target)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func preflightV1MigrationRetainedBundle(source, target string) (bool, error) {
+	info, err := os.Lstat(target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return false, fmt.Errorf("%w: retained migration bundle target is unsafe", ErrReleaseInstallConflict)
+	}
+	equal, compareErr := equalReleaseFiles(source, target)
+	if compareErr != nil || !equal {
+		return false, fmt.Errorf("%w: retained migration bundle differs", ErrReleaseInstallConflict)
+	}
+	return true, nil
+}
+
+func loadV1MaintenanceSnapshotFile(root, logicalPath string) ([]byte, os.FileMode, error) {
+	if _, err := loadAndVerifyV1MaintenanceSnapshot(root); err != nil {
+		return nil, 0, err
+	}
+	manifestData, _, err := readV1RegularFile(context.Background(), filepath.Join(root, v1MigrationSnapshotManifestName), 64<<10)
+	if err != nil {
+		return nil, 0, err
+	}
+	var manifest v1MaintenanceSnapshotManifest
+	decoder := json.NewDecoder(bytes.NewReader(manifestData))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, 0, err
+	}
+	for _, entry := range manifest.Entries {
+		if entry.Path != logicalPath {
+			continue
+		}
+		data, _, err := readV1RegularFile(context.Background(), filepath.Join(root, filepath.FromSlash(logicalPath)), v1MigrationMaximumSnapshotBytes)
+		return data, os.FileMode(entry.Mode), err
+	}
+	return nil, 0, fmt.Errorf("%w: maintenance snapshot omits %s", ErrV1MigrationConflict, logicalPath)
+}
+
 func (driver *SystemV1MigrationDriver) SelectHandshakeHost(ctx context.Context, manifest ReleaseManifest, selectedAt time.Time) (model.HandshakeHost, error) {
 	if driver == nil || driver.handshake == nil {
 		return model.HandshakeHost{}, fmt.Errorf("system v1 migration driver is incomplete")
@@ -138,10 +453,13 @@ func (driver *SystemV1MigrationDriver) SelectHandshakeHost(ctx context.Context, 
 }
 
 func (driver *SystemV1MigrationDriver) CreateMaintenanceSnapshot(ctx context.Context, root string, inspection *V1Inspection) (V1MaintenanceSnapshot, error) {
-	if ctx == nil || driver == nil || inspection == nil || inspection.destroyed {
+	if ctx == nil || driver == nil || driver.runner == nil || inspection == nil || inspection.destroyed || inspection.state.Server == nil {
 		return V1MaintenanceSnapshot{}, fmt.Errorf("maintenance snapshot input is incomplete")
 	}
 	if existing, err := loadAndVerifyV1MaintenanceSnapshot(root); err == nil {
+		if err := driver.retainVerifiedV1MigrationBundle(root); err != nil {
+			return V1MaintenanceSnapshot{}, err
+		}
 		return existing, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return V1MaintenanceSnapshot{}, err
@@ -166,7 +484,11 @@ func (driver *SystemV1MigrationDriver) CreateMaintenanceSnapshot(ctx context.Con
 		return V1MaintenanceSnapshot{}, err
 	}
 
-	entries, err := collectV1MaintenanceFiles(ctx, inspection)
+	unit, err := inspectV1MigrationWireGuardUnit(ctx, driver.runner, inspection.state.Server.WireGuardInterface)
+	if err != nil {
+		return V1MaintenanceSnapshot{}, err
+	}
+	entries, err := collectV1MaintenanceFiles(ctx, inspection, driver.binaryPath)
 	if err != nil {
 		return V1MaintenanceSnapshot{}, err
 	}
@@ -193,9 +515,11 @@ func (driver *SystemV1MigrationDriver) CreateMaintenanceSnapshot(ctx context.Con
 			SHA256: hex.EncodeToString(contentHash[:]),
 		})
 	}
+	writeV1MigrationUnitDigest(digest, unit)
 	result := V1MaintenanceSnapshot{
 		SchemaVersion: V1MigrationSchemaVersion, Files: len(entries), Bytes: bytesTotal,
 		LogicalRoots: []string{"v1-system", "v1-workspace"}, SHA256: hex.EncodeToString(digest.Sum(nil)),
+		WireGuardUnit: unit,
 	}
 	manifest, err := json.MarshalIndent(v1MaintenanceSnapshotManifest{Summary: result, Entries: snapshotEntries}, "", "  ")
 	if err != nil {
@@ -214,10 +538,30 @@ func (driver *SystemV1MigrationDriver) CreateMaintenanceSnapshot(ctx context.Con
 	if err := syncLifecycleDirectory(filepath.Dir(root)); err != nil {
 		return V1MaintenanceSnapshot{}, err
 	}
-	return loadAndVerifyV1MaintenanceSnapshot(root)
+	verified, err := loadAndVerifyV1MaintenanceSnapshot(root)
+	if err != nil {
+		return V1MaintenanceSnapshot{}, err
+	}
+	if err := driver.retainVerifiedV1MigrationBundle(root); err != nil {
+		return V1MaintenanceSnapshot{}, err
+	}
+	return verified, nil
+}
+
+func (driver *SystemV1MigrationDriver) retainVerifiedV1MigrationBundle(snapshotRoot string) error {
+	if driver == nil || driver.bundlePath == "" {
+		return nil
+	}
+	target := filepath.Join(filepath.Dir(snapshotRoot), v1MigrationRecoveryBundleName)
+	return retainV1MigrationBundleForRecovery(driver.bundlePath, target)
 }
 
 func (driver *SystemV1MigrationDriver) EnsureConvertedStage(ctx context.Context, input V1ConversionInput) (V1ConversionResult, error) {
+	if driver != nil && driver.bundlePath != "" {
+		if err := retainV1MigrationBundleForRecovery(driver.bundlePath, filepath.Join(filepath.Dir(input.StageRoot), v1MigrationRecoveryBundleName)); err != nil {
+			return V1ConversionResult{}, err
+		}
+	}
 	if _, err := os.Lstat(input.StageRoot); errors.Is(err, fs.ErrNotExist) {
 		return ConvertV1ToV2Stage(ctx, input)
 	} else if err != nil {
@@ -245,6 +589,18 @@ func (driver *SystemV1MigrationDriver) EnsureConvertedStage(ctx context.Context,
 	return plan.result, nil
 }
 
+func retainV1MigrationBundleForRecovery(source, target string) error {
+	if present, err := preflightV1MigrationRetainedBundle(source, target); err != nil {
+		return err
+	} else if present {
+		return nil
+	}
+	if err := copyRegularReleaseFile(source, target, 0o600); err != nil {
+		return fmt.Errorf("retain verified recovery bundle: %w", err)
+	}
+	return syncLifecycleDirectory(filepath.Dir(target))
+}
+
 func (driver *SystemV1MigrationDriver) SetupGatewayRole(ctx context.Context, stageRoot string, manifest ReleaseManifest, inspection *V1Inspection) error {
 	if ctx == nil || driver == nil || driver.bundles == nil || driver.runner == nil || driver.network == nil || driver.keyRunner == nil || driver.entropy == nil || driver.bundlePath == "" || inspection == nil || inspection.destroyed || inspection.state.Server == nil {
 		return fmt.Errorf("system v1 migration driver is incomplete")
@@ -256,7 +612,10 @@ func (driver *SystemV1MigrationDriver) SetupGatewayRole(ctx context.Context, sta
 	if err != nil {
 		return err
 	}
-	installed, err := driver.bundles.Install(ctx, driver.bundlePath, model.RoleGateway)
+	installed, err := driver.bundles.InstallV1Migration(
+		ctx, driver.bundlePath, model.RoleGateway,
+		filepath.Join(filepath.Dir(stageRoot), v1MigrationSnapshotName), driver.binaryPath,
+	)
 	if err != nil {
 		return fmt.Errorf("install verified gateway bundle: %w", err)
 	}
@@ -302,6 +661,36 @@ func (driver *SystemV1MigrationDriver) quiesceV1WireGuard(ctx context.Context, i
 		}
 	}
 	return nil
+}
+
+func inspectV1MigrationWireGuardUnit(ctx context.Context, runner linuxplatform.ProbeRunner, interfaceName string) (V1MigrationUnitSnapshot, error) {
+	if ctx == nil || runner == nil || !v1InterfacePattern.MatchString(interfaceName) {
+		return V1MigrationUnitSnapshot{}, fmt.Errorf("inspect v1 WireGuard unit input is incomplete")
+	}
+	unit := "wg-quick@" + interfaceName + ".service"
+	enabledResult, err := runner.Run(ctx, linuxplatform.ProbeCommand{Name: "systemctl", Args: []string{"is-enabled", unit}})
+	if err != nil {
+		return V1MigrationUnitSnapshot{}, err
+	}
+	enabledText := strings.TrimSpace(string(enabledResult.Stdout))
+	enabled := enabledResult.ExitCode == 0 && enabledText == "enabled"
+	if !enabled && !(enabledResult.ExitCode != 0 && enabledText == "disabled") {
+		return V1MigrationUnitSnapshot{}, fmt.Errorf("v1 WireGuard unit enabled state is not recognizable")
+	}
+	activeResult, err := runner.Run(ctx, linuxplatform.ProbeCommand{Name: "systemctl", Args: []string{"is-active", unit}})
+	if err != nil {
+		return V1MigrationUnitSnapshot{}, err
+	}
+	activeText := strings.TrimSpace(string(activeResult.Stdout))
+	active := activeResult.ExitCode == 0 && activeText == "active"
+	if !active && !(activeResult.ExitCode != 0 && activeText == "inactive") {
+		return V1MigrationUnitSnapshot{}, fmt.Errorf("v1 WireGuard unit active state is not recognizable")
+	}
+	return V1MigrationUnitSnapshot{Name: unit, Enabled: enabled, Active: active}, nil
+}
+
+func writeV1MigrationUnitDigest(writer io.Writer, unit V1MigrationUnitSnapshot) {
+	_, _ = fmt.Fprintf(writer, "unit:%d:%s:%t:%t", len(unit.Name), unit.Name, unit.Enabled, unit.Active)
 }
 
 func (driver *SystemV1MigrationDriver) prepareGatewayStage(ctx context.Context, stageRoot string, manifest ReleaseManifest) (linuxplatform.RoleInstallationRequest, error) {
@@ -856,8 +1245,9 @@ type v1MaintenanceSnapshotManifest struct {
 	Entries []v1MaintenanceSnapshotEntry `json:"entries"`
 }
 
-func collectV1MaintenanceFiles(ctx context.Context, inspection *V1Inspection) ([]v1MaintenanceFile, error) {
+func collectV1MaintenanceFiles(ctx context.Context, inspection *V1Inspection, binaryPath string) ([]v1MaintenanceFile, error) {
 	entries := []v1MaintenanceFile{}
+	var total int64
 	stateRoot := filepath.Join(inspection.workspaceRoot, v1StateDirectoryName)
 	err := filepath.WalkDir(stateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -876,9 +1266,15 @@ func collectV1MaintenanceFiles(ctx context.Context, inspection *V1Inspection) ([
 		if info.IsDir() {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		if len(entries) >= v1MigrationMaximumSnapshotFiles || info.Size() < 0 || info.Size() > v1MigrationMaximumSnapshotBytes-total {
+			return fmt.Errorf("v1 maintenance snapshot exceeds bounded file or byte limits")
+		}
+		data, metadata, err := readV1RegularFile(ctx, path, v1MigrationMaximumSnapshotBytes-total)
 		if err != nil {
 			return err
+		}
+		if metadata.Mode.Perm() != info.Mode().Perm() {
+			return fmt.Errorf("v1 snapshot source changed while reading")
 		}
 		relative, err := filepath.Rel(stateRoot, path)
 		if err != nil {
@@ -888,6 +1284,7 @@ func collectV1MaintenanceFiles(ctx context.Context, inspection *V1Inspection) ([
 			relative: filepath.ToSlash(filepath.Join("v1-workspace", ".vpnctl", relative)),
 			mode:     info.Mode().Perm(), content: data,
 		})
+		total += int64(len(data))
 		return nil
 	})
 	if err != nil {
@@ -905,31 +1302,41 @@ func collectV1MaintenanceFiles(ctx context.Context, inspection *V1Inspection) ([
 	if len(inspection.Report.UFW.Rules) != 0 {
 		logical = append(logical, "/etc/ufw/user.rules", "/etc/ufw/user6.rules")
 	}
+	if binaryPath == "" {
+		binaryPath = linuxplatform.DefaultVPNCTLBinaryPath
+	}
+	logical = append(logical, binaryPath)
 	sort.Strings(logical)
 	logical = compactStrings(logical)
 	for _, source := range logical {
 		path := filepath.Join(inspection.systemRoot, strings.TrimPrefix(source, "/"))
 		info, err := os.Lstat(path)
 		if errors.Is(err, fs.ErrNotExist) {
+			if source == binaryPath {
+				return nil, fmt.Errorf("v1 binary is required for the maintenance rollback package")
+			}
 			continue
 		}
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("v1 snapshot system source %s is unsafe", source)
 		}
-		data, err := os.ReadFile(path)
+		if len(entries) >= v1MigrationMaximumSnapshotFiles || info.Size() < 0 || info.Size() > v1MigrationMaximumSnapshotBytes-total {
+			return nil, fmt.Errorf("v1 maintenance snapshot exceeds bounded file or byte limits")
+		}
+		data, metadata, err := readV1SystemRegularFile(ctx, inspection.systemRoot, source, v1MigrationMaximumSnapshotBytes-total)
 		if err != nil {
 			return nil, err
+		}
+		if metadata.Mode.Perm() != info.Mode().Perm() {
+			return nil, fmt.Errorf("v1 snapshot system source %s changed while reading", source)
 		}
 		entries = append(entries, v1MaintenanceFile{
 			relative: filepath.ToSlash(filepath.Join("v1-system", strings.TrimPrefix(source, "/"))),
 			mode:     info.Mode().Perm(), content: data,
 		})
+		total += int64(len(data))
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].relative < entries[j].relative })
-	var total int64
-	for _, entry := range entries {
-		total += int64(len(entry.content))
-	}
 	if len(entries) == 0 || len(entries) > v1MigrationMaximumSnapshotFiles || total > v1MigrationMaximumSnapshotBytes {
 		return nil, fmt.Errorf("v1 maintenance snapshot exceeds bounded file or byte limits")
 	}
@@ -964,7 +1371,7 @@ func loadAndVerifyV1MaintenanceSnapshot(root string) (V1MaintenanceSnapshot, err
 		return V1MaintenanceSnapshot{}, fmt.Errorf("%w: maintenance snapshot manifest has trailing data", ErrV1MigrationConflict)
 	}
 	result := manifest.Summary
-	if result.SchemaVersion != V1MigrationSchemaVersion || result.Files <= 0 || result.Bytes < 0 || len(result.SHA256) != sha256.Size*2 || !reflect.DeepEqual(result.LogicalRoots, []string{"v1-system", "v1-workspace"}) {
+	if err := validateV1MaintenanceSnapshot(result); err != nil {
 		return V1MaintenanceSnapshot{}, fmt.Errorf("%w: maintenance snapshot metadata is invalid", ErrV1MigrationConflict)
 	}
 	if len(manifest.Entries) != result.Files {
@@ -973,7 +1380,7 @@ func loadAndVerifyV1MaintenanceSnapshot(root string) (V1MaintenanceSnapshot, err
 	entryByPath := make(map[string]v1MaintenanceSnapshotEntry, len(manifest.Entries))
 	for _, entry := range manifest.Entries {
 		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(entry.Path)))
-		if clean != entry.Path || strings.HasPrefix(clean, "../") || clean == "." || entry.Mode == 0 || entry.Mode > 0o777 || entry.Bytes < 0 || len(entry.SHA256) != sha256.Size*2 {
+		if clean != entry.Path || strings.HasPrefix(clean, "../") || clean == "." || entry.Mode == 0 || entry.Mode > 0o777 || entry.Bytes < 0 || entry.Bytes > v1MigrationMaximumSnapshotBytes || len(entry.SHA256) != sha256.Size*2 {
 			return V1MaintenanceSnapshot{}, fmt.Errorf("%w: maintenance snapshot entry is invalid", ErrV1MigrationConflict)
 		}
 		if _, duplicate := entryByPath[entry.Path]; duplicate {
@@ -1004,15 +1411,18 @@ func loadAndVerifyV1MaintenanceSnapshot(root string) (V1MaintenanceSnapshot, err
 		if info.Mode().Perm() != 0o600 {
 			return fmt.Errorf("snapshot file is not root-only")
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
 		relative, _ := filepath.Rel(root, path)
 		relative = filepath.ToSlash(relative)
 		source, found := entryByPath[relative]
+		if !found || info.Size() != source.Bytes || bytesTotal > v1MigrationMaximumSnapshotBytes-source.Bytes {
+			return fmt.Errorf("snapshot file differs from its manifest")
+		}
+		content, _, err := readV1RegularFile(context.Background(), path, source.Bytes)
+		if err != nil {
+			return err
+		}
 		contentHash := sha256.Sum256(content)
-		if !found || source.Bytes != int64(len(content)) || source.SHA256 != hex.EncodeToString(contentHash[:]) {
+		if source.Bytes != int64(len(content)) || source.SHA256 != hex.EncodeToString(contentHash[:]) {
 			return fmt.Errorf("snapshot file differs from its manifest")
 		}
 		delete(entryByPath, relative)
@@ -1022,6 +1432,7 @@ func loadAndVerifyV1MaintenanceSnapshot(root string) (V1MaintenanceSnapshot, err
 		bytesTotal += int64(len(content))
 		return nil
 	})
+	writeV1MigrationUnitDigest(digest, result.WireGuardUnit)
 	if err != nil || files != result.Files || bytesTotal != result.Bytes || len(entryByPath) != 0 || hex.EncodeToString(digest.Sum(nil)) != result.SHA256 {
 		return V1MaintenanceSnapshot{}, fmt.Errorf("%w: maintenance snapshot contents differ from manifest", ErrV1MigrationConflict)
 	}

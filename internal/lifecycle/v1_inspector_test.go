@@ -278,6 +278,7 @@ func completeV1InspectionFixture(t *testing.T) (string, string, string, string) 
 	}, "\n"))
 	writeV1FixtureFile(t, filepath.Join(systemRoot, "etc", "ufw", "user.rules"), rules, 0o640)
 	writeV1FixtureFile(t, filepath.Join(systemRoot, "etc", "ufw", "user6.rules"), rules, 0o640)
+	writeV1FixtureFile(t, filepath.Join(systemRoot, "usr", "local", "bin", "vpnctl"), []byte("vpnctl-v1-test-binary\n"), 0o755)
 	return workspace, systemRoot, serverPrivate, clientPrivate
 }
 

@@ -99,4 +99,6 @@ created.
 
 The older unsigned v1 artifact flow is retained only as
 `scripts/install-v1.sh` and `scripts/release-v1.sh` for migration/regression;
-it is not the v2 installation path.
+it is not the v2 installation path. The separate maintenance workflow,
+including its explicit rollback/acceptance boundary, is documented in
+[`V1_MIGRATION.md`](V1_MIGRATION.md).

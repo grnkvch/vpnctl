@@ -2,6 +2,83 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned bounded v1 migration rollback and acceptance
+
+### Planned reversible implementation
+
+- Task 15.5 remains source-only on this development host. It will extend the
+  private maintenance package with the exact pre-migration v1 binary,
+  workspace/system artifacts, UFW state, and WireGuard unit state needed for a
+  bounded rollback; no real `/usr/local/bin/vpnctl`, service, firewall,
+  WireGuard interface, vpnctl state, VPS, gateway, node, or client will be
+  changed by development tests.
+- Rollback will be available only for the matching unaccepted migration. It
+  will validate the complete snapshot and ownership manifest before mutation,
+  stop only the migrated v2 units, restore only captured v1 files/modes and
+  binary, restore the known UFW enabled state, restore the captured v1
+  `wg-quick@<interface>` enable/running state, and remove only explicitly
+  recorded v2-owned artifacts. Every phase will be journaled and idempotent so
+  an interruption resumes without widening deletion scope.
+- Acceptance will be an explicit documented action after successful client
+  verification. It will irreversibly disable rollback for that migration and
+  remove only the bounded private rollback payload after an additional exact
+  ownership/integrity check; the small non-secret acceptance/audit record will
+  remain. Rollback and acceptance will be mutually exclusive terminal states.
+- Fault-injection tests will use temporary roots and fake service/UFW/network
+  adapters to prove failures before acceptance restore exact v1 bytes, modes,
+  unit behavior, and known UFW behavior, while foreign files and services stay
+  untouched. Source rollback will be the future task 15.5 commit.
+
+### Result
+
+- The maintenance snapshot now captures the exact v1 `/usr/local/bin/vpnctl`
+  bytes/mode and the enabled/active state of the inspected
+  `wg-quick@<interface>.service`, includes both in its bounded aggregate
+  integrity contract, and retains the already verified signed v2 bundle beside
+  the snapshot before the first host-role mutation. Snapshot collection checks
+  the 4096-file/256-MiB limits before reading or publishing oversized input.
+- Migration installation now uses a dedicated narrow release path: all signed
+  gateway components and the standard retained bundle are verified and
+  installed first, while only a byte-identical captured-v1 or selected-v2
+  vpnctl target may be atomically replaced, last. Ordinary release installation
+  retains its no-overwrite behavior.
+- Added explicit standalone `--rollback --yes` and `--accept --yes` modes.
+  Their root-only recovery journal selects exactly one action through an atomic
+  no-replace publication, binds recovery to the original workspace/system
+  roots, rejects mixed migration arguments, and resumes a strict phase prefix
+  after interruption. The forward migrator refuses to resume after either
+  terminal action is selected.
+- Rollback validates the complete snapshot, signed bundle, current binary and
+  component bytes, role/watchdog templates, and bounded vpnctl-owned trees
+  before the first service/network mutation. It stops only verified v2 units,
+  restores the watchdog network snapshot, removes verified v2 resources,
+  restores all captured v1 files/modes with the binary last, then restores and
+  verifies the original UFW and WireGuard unit behavior. Acceptance requires a
+  completed client-validation phase and exact rollback-payload/installed-bundle
+  integrity, preserves v2, and removes only the private snapshot, stage, and
+  recovery bundle; the operation and terminal audit journals remain.
+- Fault injection after every rollback phase and after acceptance payload
+  removal resumed successfully. Tests also covered atomic competing
+  rollback/accept selection, repeated idempotence, opposite-action rejection,
+  missing/changed components and bundles, changed units, symlinked owned roots,
+  wrong source roots/permissions, foreign-resource preservation, oversized
+  source refusal, and all four enabled/active WireGuard combinations with both
+  known UFW states. The focused suite passed ten repeated runs and the key race
+  suite passed three repeated runs.
+- Added `docs/v2/V1_MIGRATION.md` with the scp/local-bundle, dry-run, apply,
+  new-SSH confirmation, validation, rollback, acceptance, downtime, and
+  terminal-state workflow. Full ordinary and race `go test ./...`, `go vet
+  ./...`, `go list ./...`, strict OpenSpec validation, shell syntax, formatting,
+  and diff checks passed.
+- A static Linux/amd64 migrator including recovery modes was built at the exact
+  temporary path
+  `/private/tmp/vpnctl-v1-migrate-recovery-linux-amd64.check`, verified as a
+  11,746,748-byte x86-64 ELF with SHA-256
+  `84d90e8e29e05617a402e6e036e5c4324e74d10401d8a5860aaffbc5b0b322c9`,
+  and removed. No production package, binary, path, unit, process, firewall,
+  route, WireGuard interface, UFW state, VPS, gateway, node, or client was
+  changed; repository rollback is limited to reverting the task 15.5 commit.
+
 ## 2026-09-04 — planned standalone v1 migration orchestration
 
 ### Planned reversible implementation

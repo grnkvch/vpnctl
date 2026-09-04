@@ -225,6 +225,7 @@ func (driver *v1MigrationTestDriver) CreateMaintenanceSnapshot(_ context.Context
 	result := V1MaintenanceSnapshot{
 		SchemaVersion: 1, Files: 7, Bytes: 4096,
 		LogicalRoots: []string{"v1-system", "v1-workspace"}, SHA256: strings.Repeat("a", 64),
+		WireGuardUnit: V1MigrationUnitSnapshot{Name: "wg-quick@wg0.service", Enabled: true, Active: true},
 	}
 	if driver.snapshotDone {
 		return result, nil

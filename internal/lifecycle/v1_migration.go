@@ -76,11 +76,18 @@ type V1MigrationInput struct {
 }
 
 type V1MaintenanceSnapshot struct {
-	SchemaVersion int      `json:"schema_version"`
-	Files         int      `json:"files"`
-	Bytes         int64    `json:"bytes"`
-	LogicalRoots  []string `json:"logical_roots"`
-	SHA256        string   `json:"sha256"`
+	SchemaVersion int                     `json:"schema_version"`
+	Files         int                     `json:"files"`
+	Bytes         int64                   `json:"bytes"`
+	LogicalRoots  []string                `json:"logical_roots"`
+	SHA256        string                  `json:"sha256"`
+	WireGuardUnit V1MigrationUnitSnapshot `json:"wireguard_unit"`
+}
+
+type V1MigrationUnitSnapshot struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Active  bool   `json:"active"`
 }
 
 type V1MigrationClientValidation struct {
@@ -252,6 +259,11 @@ func (migrator *V1Migrator) prepare(ctx context.Context, input V1MigrationInput)
 			return fail(err)
 		}
 		if journal != nil {
+			if recovery, recoveryErr := loadV1MigrationRecoveryJournal(input.MaintenanceRoot); recoveryErr == nil && recovery != nil {
+				return fail(fmt.Errorf("%w: %s is already selected", ErrV1MigrationTerminal, recovery.Action))
+			} else if recoveryErr != nil && !errors.Is(recoveryErr, fs.ErrNotExist) {
+				return fail(recoveryErr)
+			}
 			if journal.MigrationID != id || journal.InputSHA256 != fingerprint || journal.ReleaseVersion != manifest.ComponentManifest.VPNCTLVersion {
 				return fail(fmt.Errorf("%w: maintenance journal belongs to different source or target inputs", ErrV1MigrationConflict))
 			}
@@ -309,6 +321,7 @@ func (migrator *V1Migrator) apply(ctx context.Context, prepared preparedV1Migrat
 			SchemaVersion: V1MigrationSchemaVersion, MigrationID: prepared.id,
 			InputSHA256: prepared.fingerprint, ReleaseVersion: prepared.manifest.ComponentManifest.VPNCTLVersion,
 			StartedAt: prepared.convertedAt, HandshakeHost: prepared.handshake,
+			SourceWorkspace: prepared.inspection.workspaceRoot, SourceSystemRoot: prepared.inspection.systemRoot,
 			SourceUFW:        cloneV1UFWReport(prepared.inspection.Report.UFW),
 			CompletedPhases:  []V1MigrationPhase{V1MigrationBundleVerified},
 			ClientValidation: []V1MigrationClientValidation{},
@@ -444,6 +457,8 @@ type v1MigrationJournal struct {
 	InputSHA256           string                        `json:"input_sha256"`
 	ReleaseVersion        string                        `json:"release_version"`
 	StartedAt             time.Time                     `json:"started_at"`
+	SourceWorkspace       string                        `json:"source_workspace"`
+	SourceSystemRoot      string                        `json:"source_system_root"`
 	HandshakeHost         model.HandshakeHost           `json:"handshake_host"`
 	SourceUFW             V1UFWReport                   `json:"source_ufw"`
 	CompletedPhases       []V1MigrationPhase            `json:"completed_phases"`
@@ -635,6 +650,10 @@ func validateV1MigrationJournal(journal v1MigrationJournal) error {
 		journal.CompletedPhases == nil || journal.ClientValidation == nil || journal.HandshakeHost.Validate() != nil {
 		return fmt.Errorf("%w: migration journal metadata is invalid", ErrV1MigrationConflict)
 	}
+	if !filepath.IsAbs(journal.SourceWorkspace) || filepath.Clean(journal.SourceWorkspace) != journal.SourceWorkspace || journal.SourceWorkspace == string(filepath.Separator) ||
+		!filepath.IsAbs(journal.SourceSystemRoot) || filepath.Clean(journal.SourceSystemRoot) != journal.SourceSystemRoot {
+		return fmt.Errorf("%w: migration journal source roots are invalid", ErrV1MigrationConflict)
+	}
 	if journal.SourceUFW.Enabled == nil || !journal.SourceUFW.ConfigPresent {
 		return fmt.Errorf("%w: migration journal lacks the original UFW state", ErrV1MigrationConflict)
 	}
@@ -642,19 +661,23 @@ func validateV1MigrationJournal(journal v1MigrationJournal) error {
 	for index, phase := range v1MigrationPhaseOrder {
 		positions[phase] = index
 	}
-	previous := -1
-	for _, phase := range journal.CompletedPhases {
+	for completedIndex, phase := range journal.CompletedPhases {
 		position, ok := positions[phase]
-		if !ok || position <= previous {
+		if !ok || position != completedIndex {
 			return fmt.Errorf("%w: migration journal phases are invalid", ErrV1MigrationConflict)
 		}
-		previous = position
 	}
 	if v1MigrationPhaseDone(journal.CompletedPhases, V1MigrationNetworkActivated) && journal.WatchdogTransactionID == "" {
 		return fmt.Errorf("%w: activated migration has no watchdog transaction", ErrV1MigrationConflict)
 	}
 	if v1MigrationPhaseDone(journal.CompletedPhases, V1MigrationConversionStaged) && journal.Conversion == nil {
 		return fmt.Errorf("%w: staged migration has no conversion result", ErrV1MigrationConflict)
+	}
+	if v1MigrationPhaseDone(journal.CompletedPhases, V1MigrationSnapshotCreated) && (journal.Snapshot == nil || validateV1MaintenanceSnapshot(*journal.Snapshot) != nil) {
+		return fmt.Errorf("%w: snapshotted migration has no valid maintenance snapshot", ErrV1MigrationConflict)
+	}
+	if v1MigrationPhaseDone(journal.CompletedPhases, V1MigrationClientsValidated) && (journal.Conversion == nil || validateV1MigrationClients(journal.ClientValidation, *journal.Conversion) != nil) {
+		return fmt.Errorf("%w: completed migration has no valid client acceptance result", ErrV1MigrationConflict)
 	}
 	return nil
 }
@@ -684,8 +707,10 @@ func cloneV1UFWReport(source V1UFWReport) V1UFWReport {
 }
 
 func validateV1MaintenanceSnapshot(snapshot V1MaintenanceSnapshot) error {
-	if snapshot.SchemaVersion != V1MigrationSchemaVersion || snapshot.Files <= 0 || snapshot.Bytes < 0 ||
-		len(snapshot.SHA256) != sha256.Size*2 || !reflectStringSlices(snapshot.LogicalRoots, []string{"v1-system", "v1-workspace"}) {
+	if snapshot.SchemaVersion != V1MigrationSchemaVersion || snapshot.Files <= 0 || snapshot.Files > v1MigrationMaximumSnapshotFiles || snapshot.Bytes < 0 || snapshot.Bytes > v1MigrationMaximumSnapshotBytes ||
+		len(snapshot.SHA256) != sha256.Size*2 || !reflectStringSlices(snapshot.LogicalRoots, []string{"v1-system", "v1-workspace"}) ||
+		!v1InterfacePattern.MatchString(strings.TrimSuffix(strings.TrimPrefix(snapshot.WireGuardUnit.Name, "wg-quick@"), ".service")) ||
+		!strings.HasPrefix(snapshot.WireGuardUnit.Name, "wg-quick@") || !strings.HasSuffix(snapshot.WireGuardUnit.Name, ".service") {
 		return fmt.Errorf("maintenance snapshot result is invalid")
 	}
 	if _, err := hex.DecodeString(snapshot.SHA256); err != nil {
