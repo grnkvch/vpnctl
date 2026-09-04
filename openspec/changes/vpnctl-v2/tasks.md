@@ -139,7 +139,7 @@
 ## 12. Managed HTTPS Ingress
 
 - [x] 12.1 Implement stable public RSA-2048/SHA-256 certificate generation with IP SAN/CN, five-year default, root-only key, metadata, expiry warnings, show, and public-only export; verify OpenSSL plus Telegram compatibility fixtures and no private-key export.
-- [ ] 12.2 Implement expose identity, unique node-local names, port shorthand normalization, loopback default, non-loopback opt-in, exact/prefix paths, high-entropy generation, reserved namespace, and overlap validation; verify parser/property tests.
+- [x] 12.2 Implement expose identity, unique node-local names, port shorthand normalization, loopback default, non-loopback opt-in, exact/prefix paths, high-entropy generation, reserved namespace, and overlap validation; verify parser/property tests.
 - [ ] 12.3 Implement implementation-neutral gateway hard limits and safe per-expose body/timeout overrides from measured defaults; verify impossible values and raw proxy directives are rejected before render.
 - [ ] 12.4 Implement the selected reverse-proxy renderer with TLS 1.2/1.3, HTTP/1.1+bounded HTTP/2, internal HTTP/1.1, trusted forwarding headers, no WebSocket/HTTP3, streaming, no disk body buffering, and loopback tunnel upstreams; verify config validation and directive tests.
 - [ ] 12.5 Implement complete generated proxy-tree staging, validation, atomic activation, graceful reload, hash drift detection, and rollback; verify invalid config and failed reload preserve the prior serving generation.

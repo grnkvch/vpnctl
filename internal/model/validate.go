@@ -277,7 +277,9 @@ func (state State) Validate() error {
 	}
 
 	exposeIDs := make(map[string]struct{}, len(state.Exposes))
-	exposeRoutes := make(map[string]string, len(state.Exposes))
+	exposeNames := make(map[string]map[string]string)
+	activeExposeRoutes := NewExposeRouteIndex()
+	activeExposeRouteKeys := make(map[string]string, len(state.Exposes))
 	exposeTunnelPorts := make(map[int]string, len(state.Exposes))
 	for index, expose := range state.Exposes {
 		if err := expose.Validate(); err != nil {
@@ -299,10 +301,29 @@ func (state State) Validate() error {
 		exposeTunnelPorts[expose.TunnelPort] = expose.ID
 		if expose.State != ExposeDisabled {
 			key := string(expose.RouteMode) + ":" + expose.Path
-			if prior, duplicate := exposeRoutes[key]; duplicate {
+			if prior, duplicate := activeExposeRouteKeys[key]; duplicate {
 				return invalid(indexPath("exposes", index)+".path", "duplicates active route owned by %s", prior)
 			}
-			exposeRoutes[key] = expose.ID
+			prior, routeErr := activeExposeRoutes.Add(expose.RouteMode, expose.Path, expose.ID)
+			if routeErr != nil {
+				return wrap(indexPath("exposes", index)+".path", routeErr)
+			}
+			if prior != "" {
+				return invalid(indexPath("exposes", index)+".path", "overlaps active route owned by %s", prior)
+			}
+			activeExposeRouteKeys[key] = expose.ID
+		}
+		if expose.Name != "" {
+			names := exposeNames[expose.NodeID]
+			if names == nil {
+				names = make(map[string]string)
+				exposeNames[expose.NodeID] = names
+			}
+			key := strings.ToLower(expose.Name)
+			if prior, duplicate := names[key]; duplicate {
+				return invalid(indexPath("exposes", index)+".name", "duplicates node-local expose name owned by %s", prior)
+			}
+			names[key] = expose.ID
 		}
 	}
 
@@ -841,10 +862,7 @@ func (expose Expose) Validate() error {
 	if err := validateUpstream("upstream", expose.Upstream); err != nil {
 		return err
 	}
-	if expose.RouteMode != RouteExact && expose.RouteMode != RoutePrefix {
-		return invalid("route_mode", "unsupported value %q", expose.RouteMode)
-	}
-	if err := validateHTTPPath("path", expose.Path); err != nil {
+	if err := ValidateExposePath(expose.Path, expose.RouteMode); err != nil {
 		return err
 	}
 	if expose.BodyLimitBytes < 1 || expose.BodyLimitBytes > 8*1024*1024 {
@@ -1539,10 +1557,29 @@ func validateUpstream(path, value string) error {
 }
 
 func validateHTTPPath(path, value string) error {
-	if value == "" || value[0] != '/' || len(value) > 512 || strings.ContainsAny(value, "?#\r\n\x00") || strings.Contains(value, "//") {
-		return invalid(path, "must be an absolute normalized HTTP path without query or fragment")
+	if value == "" || value[0] != '/' || len(value) > 512 || strings.ContainsAny(value, "?#%\\\r\n\x00") || strings.Contains(value, "//") {
+		return invalid(path, "must be an absolute normalized HTTP path without escaping, query, or fragment")
+	}
+	for _, segment := range strings.Split(value[1:], "/") {
+		if segment == "." || segment == ".." {
+			return invalid(path, "must not contain dot segments")
+		}
+	}
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		if character == '/' || exposePathCharacter(character) {
+			continue
+		}
+		return invalid(path, "contains unsupported byte 0x%02x", character)
 	}
 	return nil
+}
+
+func exposePathCharacter(value byte) bool {
+	if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' {
+		return true
+	}
+	return strings.ContainsRune("-._~!$&'()*+,;=:@", rune(value))
 }
 
 func validateTime(path string, value time.Time) error {

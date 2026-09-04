@@ -18,6 +18,12 @@ This journal records development-host mutations made while implementing and vali
 - Cleanup removed only `/private/tmp/vpnctl-ingress-certificate-task-12.1.test`, `/tmp/vpnctl-ingress-certificate-task-12.1.test`, and `/tmp/telegram-webhook-gate-task-12.1.py`. Exact path checks and `/proc/*/exe` target inspection proved all three files and the test process absent; no persistent host or VM resource changed and no manual rollback remains.
 - Twenty focused repeats, three focused race-detector repeats, the complete ordinary and race-detector suites, vet, dependency listing, formatting/diff checks, and strict OpenSpec validation passed at `106/156`; `go list` emitted only the known non-fatal global module stat-cache warning. Source rollback is the single task 12.1 commit; no ignored evidence or secret-bearing artifact was retained.
 
+## 2026-09-04 — expose normalization and route namespace
+
+- Task 12.2 is source-only. It adds collision-safe expose identity planning, node-local name ownership, upstream/path normalization, explicit non-loopback opt-in, 256-bit generated exact paths, reserved-namespace protection, and symmetric exact/prefix overlap validation. It does not run or install a provider, mutate either lab VM, open a listener, persist a route, or create ignored evidence.
+- The normalized plan is deliberately pre-activation: tunnel port allocation, hard limits, gateway persistence, and node/gateway saga work remain owned by tasks 12.3 and 12.7. Repository rollback is limited to the task 12.2 commit; no host rollback is required.
+- Acceptance covers canonical port/host parsing, loopback and explicit non-loopback behavior, immutable UUID collision handling, case-insensitive node-local names with cross-node reuse, global active-route conflicts, reserved/ambiguous path rejection, 256-bit generated-path shape/collision exhaustion, plan tamper rejection, and symmetric segment-aware overlap properties. Twenty focused repeats, three race-detector repeats, complete ordinary and race suites, vet, dependency listing, formatting/diff checks, and strict OpenSpec validation passed at `107/156`; `go list` emitted only the known non-fatal module stat-cache warning.
+
 ## Operating rules
 
 1. Never modify, start, stop, or delete a host VM, service, package, network, or file that is not explicitly owned by the `vpnctl-v2` lab.
