@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-04",
+  "scope": "automated-linux-clients",
+  "actual_ios_clash_mi": "deferred-to-task-16.11",
+  "delivery": "scp-only",
+  "mihomo": {
+    "version": "v1.19.30",
+    "archive_sha256": "cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84"
+  },
+  "profiles": {
+    "clash_sha256": "e706d2e79de5ec115cec9e19d11da05968db1e1d9bd01809197c2db9680015a8",
+    "wireguard_sha256": "116dbc538281d20cc950ea01c6954b7f2ebb3506252033898da730a334a4ac15"
+  },
+  "selective_clash": {
+    "selected_destination_source": "10.66.0.2",
+    "unmatched_destination_source": "192.0.2.2",
+    "default_manual_choice": "standard"
+  },
+  "full_tunnel_wireguard": {
+    "selected_destination_source": "10.66.0.3",
+    "unmatched_destination_source": "10.66.0.3",
+    "handshake": true
+  },
+  "cleanup": {
+    "owner_scoped": true,
+    "namespaces_absent": true,
+    "runtime_absent": true
+  }
+}

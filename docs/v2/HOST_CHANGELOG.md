@@ -2,6 +2,95 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned personal-client happy-path E2E
+
+### Planned reversible implementation
+
+- Task 16.1 will add a deterministic fixture generator that uses the v2 client
+  manager and exporter to create one selective Clash profile and one
+  no-preset/full-tunnel WireGuard profile under an injected temporary root. It
+  will assert managed `0600` files, secret-free scp hints, exact explicit
+  assignments, and full-tunnel policy before any Linux data-plane test.
+- A Linux/amd64 harness will create only owner-marked namespaces prefixed
+  `vpnctl-v2-pc-`, veth links prefixed `pce2e-`, and the private runtime tree
+  `/run/vpnctl-v2-personal-e2e`. It will run one real kernel WireGuard gateway,
+  one pinned Mihomo client from the delivered Clash profile, one kernel
+  WireGuard client from the delivered full-tunnel profile, and local HTTP
+  observation endpoints. Source-address evidence will distinguish selected
+  gateway traffic from unmatched direct traffic without reaching the public
+  Internet.
+- The checked-in pinned Mihomo archive will be checksum-verified, decompressed
+  to a uniquely allocated local temporary file, and copied with the harness,
+  backend, server key, and both client profiles through Lima's SCP backend to
+  `/tmp/vpnctl-v2-personal-client-e2e` in the owned
+  `vpnctl-v2-gateway` fixture. SHA-256 equality before and after copying will
+  prove the profile delivery boundary; no profile content or private key will
+  be printed. Mihomo may add a loopback mixed listener only to a separate
+  runtime copy, modeling client-application settings while leaving the
+  delivered artifact byte-identical.
+- Validation may start `vpnctl-v2-gateway` only after revalidating its pinned
+  QEMU/amd64, Ubuntu 24.04, 1-vCPU/512-MiB/10-GiB, image-digest, and rootless
+  network contract. The fixture is currently stopped. Cleanup will terminate
+  only recorded E2E PIDs, remove only the owner-marked namespaces/links/runtime
+  and exact guest/local temporary trees, assert their absence, and return the
+  VM to `Stopped`. `vpnctl-v2-node`, unrelated VMs, host services/network,
+  external VPSs, devices, and providers remain untouched.
+- Repository rollback will be `git revert <task-16.1-commit>`; all lab changes
+  are temporary and will be reversed in the same verification run.
+
+### Result
+
+- Added `test/v2lab/personal/generate.go`, which builds a gateway fixture
+  through the production v2 `ClientManager` and `ClientExporter`: `iphone`
+  receives exactly the explicit `selected-e2e` IP-CIDR preset and exports
+  Clash, while `steamdeck` receives no presets and exports full-tunnel
+  WireGuard. The generator rejects non-managed/non-`0600` results, unsafe or
+  absent scp hints, missing manual standard/restricted alternatives, a missing
+  selected/MATCH-direct policy, or a WireGuard profile without
+  `AllowedIPs = 0.0.0.0/0`. Its public fixture manifest contains hashes and
+  public keys only; profile/private-key bytes are never printed.
+- Added the owner-scoped `scripts/v2personal-client-test.sh` orchestrator and
+  `test/v2lab/personal/happy_path.sh` Linux harness. The orchestrator verifies
+  the pinned Mihomo archive, uses Lima's `--backend=scp` for both profile
+  files, and requires local/guest SHA-256 equality before execution. The
+  harness validates the unmodified Clash export with Mihomo v1.19.30, models
+  the app-owned loopback listener only in a private runtime copy, and loads the
+  unmodified WireGuard export through a short `sd.conf` runtime copy because
+  `wg-quick` otherwise interprets vpnctl's descriptive managed filename as an
+  overlong interface name.
+- The isolated gateway and HTTP observer proved route selection by peer source
+  address. For Clash, selected `198.51.100.10/32` arrived from overlay
+  `10.66.0.2`, while unmatched `198.51.100.20` arrived directly from underlay
+  `192.0.2.2`. For WireGuard, both destinations arrived from overlay
+  `10.66.0.3`, and the kernel client recorded a real gateway handshake.
+- Two consecutive accepted runs produced identical Clash profile SHA-256
+  `e706d2e79de5ec115cec9e19d11da05968db1e1d9bd01809197c2db9680015a8`
+  and WireGuard profile SHA-256
+  `116dbc538281d20cc950ea01c6954b7f2ebb3506252033898da730a334a4ac15`.
+  The accepted automated-Linux boundary, pinned archive checksum, path
+  evidence, cleanup state, and explicit deferral of actual iOS/Clash Mi to
+  task 16.11 are recorded in `test/v2lab/personal/manifest.json` and guarded
+  by a source-level regression contract.
+- The first lab attempt stopped only because `wg-quick strip` requires its
+  input basename to be a valid Linux interface name. Its trap removed all
+  owned resources, verified by `status`, before the runtime-copy correction
+  and clean rerun. No product profile format or delivered bytes were changed.
+- Revalidated and temporarily started only the existing
+  `vpnctl-v2-gateway` QEMU/amd64 fixture with Ubuntu 24.04, 1 vCPU, 512 MiB
+  RAM, 10 GiB disk, rootless `user-v2`, and image digest
+  `sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7`.
+  Final checks found `/tmp/vpnctl-v2-personal-client-e2e`,
+  `/run/vpnctl-v2-personal-e2e`, all `vpnctl-v2-pc-*` namespaces, recorded
+  processes, and local `vpnctl-v2-personal-profiles.*` trees absent. The VM
+  was returned to verified `Stopped`; `vpnctl-v2-node`, unrelated VMs, host
+  services/network, external VPSs, devices, and providers were untouched.
+- Verification passed: generator/contract tests five times, focused race
+  tests, shell syntax, Python compilation, manifest JSON parsing, actual E2E
+  twice, `openspec validate vpnctl-v2 --strict`, and `git diff --check`.
+- Repository rollback is `git revert <task-16.1-commit>`. No host rollback is
+  pending because all temporary resources were removed and the lab VM was
+  restored to its prior stopped state.
+
 ## 2026-09-04 — planned v1 migration end-to-end acceptance
 
 ### Planned reversible implementation
