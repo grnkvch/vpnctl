@@ -6,8 +6,11 @@ import (
 	"fmt"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
+	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -82,7 +85,35 @@ func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore
 	if err != nil {
 		return nil, err
 	}
-	handler := systemRPCMux{update: preflight, uninstall: uninstall}
+	exporter, err := operations.NewPublicCertificateExportEnsurer(secrets)
+	if err != nil {
+		return nil, err
+	}
+	runner := linuxplatform.OSProbeRunner{}
+	ports, err := operations.NewSystemGatewayExposeUnavailablePorts(runner)
+	if err != nil {
+		return nil, err
+	}
+	publisher, err := operations.NewSystemGatewayExposeIngressPublisher(paths, runner)
+	if err != nil {
+		return nil, err
+	}
+	deferred, err := operations.NewGatewayExposeStateDeferredWriter(stateStore, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	exposeService, err := operations.NewGatewayExposeCoordinatorService(
+		stateStore, exporter, ports, publisher, deferred, ingress.NewExposeNormalizer(ingress.ExposeNormalizerRuntime{}),
+		ingress.DefaultPublicCertificateExportPath(paths.ExportsDir),
+	)
+	if err != nil {
+		return nil, err
+	}
+	expose, err := operations.NewExposeGatewayRPCHandler(&controller.mutationMu, exposeService)
+	if err != nil {
+		return nil, err
+	}
+	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose}
 	handlers := make(map[int]control.RPCHandler, len(state.Components.ControlProtocols))
 	for _, rawVersion := range state.Components.ControlProtocols {
 		version, parseErr := control.ParseRPCProtocolVersion(rawVersion)

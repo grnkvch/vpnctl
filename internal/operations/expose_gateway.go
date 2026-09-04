@@ -46,6 +46,7 @@ func (GatewayExposeIngressActivation) MarshalJSON() ([]byte, error) {
 // supplies the reusable filesystem/service transaction adapter beneath it.
 type GatewayExposeIngressPublisher interface {
 	Activate(context.Context, model.State, model.State) (GatewayExposeIngressActivation, error)
+	Commit(context.Context, GatewayExposeIngressActivation) error
 	Rollback(context.Context, GatewayExposeIngressActivation) error
 }
 
@@ -106,6 +107,21 @@ func (service *GatewayExposeCoordinatorService) Plan(
 	if unavailable == nil {
 		unavailable = []int{}
 	}
+	// Active FRP mappings legitimately listen on their persisted ports. The
+	// kernel listener view cannot attribute them, so only unassigned listeners
+	// are treated as foreign allocation conflicts here; drift is handled by the
+	// dedicated convergence/repair path.
+	ownedPorts := make(map[int]struct{}, len(state.Exposes))
+	for _, existing := range state.Exposes {
+		ownedPorts[existing.TunnelPort] = struct{}{}
+	}
+	foreign := unavailable[:0]
+	for _, port := range unavailable {
+		if _, owned := ownedPorts[port]; !owned {
+			foreign = append(foreign, port)
+		}
+	}
+	unavailable = foreign
 	normalized, err := service.normalizer.Normalize(ingress.ExposeNamespace{
 		NodeID: node.ID, StateGeneration: state.Generation, Existing: state.Exposes,
 	}, request)
@@ -274,6 +290,9 @@ func (service *GatewayExposeCoordinatorService) Publish(
 			return ExposeGatewayPublication{}, &gatewayExposeCommitError{cause: errors.Join(err, rollbackErr), possible: true}
 		}
 		return ExposeGatewayPublication{}, err
+	}
+	if err := service.publisher.Commit(ctx, activation); err != nil {
+		return ExposeGatewayPublication{}, &gatewayExposeCommitError{cause: err, possible: true}
 	}
 	return ExposeGatewayPublication{ExposeID: reservation.ExposeID, Generation: candidate.Generation}, nil
 }

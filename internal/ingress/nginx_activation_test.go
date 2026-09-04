@@ -99,6 +99,54 @@ func TestNginxActivationChangedTreeSwitchesBeforeGracefulReloadAndPrunesPrior(t 
 	assertNoStagedNginxTrees(t, paths)
 }
 
+func TestNginxRetainedActivationRollsBackBeforeStateCommitAndPrunesOnlyAfterCommit(t *testing.T) {
+	t.Parallel()
+	manager, paths, _, reloader := nginxActivationFixture(t)
+	before := nginxActivationCandidate(t, paths, 1, 1)
+	if _, err := manager.Apply(context.Background(), before); err != nil {
+		t.Fatal(err)
+	}
+	old, _, _ := inspectCurrentNginxTree(paths)
+	after := nginxActivationCandidate(t, paths, 2, 2)
+
+	result, retained, err := manager.ActivateRetained(context.Background(), after)
+	if err != nil || retained == nil || !result.Changed || !result.Reloaded {
+		t.Fatalf("retained activation = %+v, %v, %v", result, retained, err)
+	}
+	if _, err := os.Stat(old.root); err != nil {
+		t.Fatalf("prior generation was removed before state commit: %v", err)
+	}
+	if err := manager.RollbackRetained(context.Background(), retained); err != nil {
+		t.Fatal(err)
+	}
+	active, present, err := inspectCurrentNginxTree(paths)
+	if err != nil || !present || active != old {
+		t.Fatalf("retained rollback active = %+v, present=%t, err=%v", active, present, err)
+	}
+	assertOnlyNginxGeneration(t, paths, old.name)
+
+	_, retained, err = manager.ActivateRetained(context.Background(), after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.CommitRetained(context.Background(), retained); err != nil {
+		t.Fatal(err)
+	}
+	active, present, err = inspectCurrentNginxTree(paths)
+	if err != nil || !present || active.generation != 2 || active.hash != after.ConfigHash() {
+		t.Fatalf("retained commit active = %+v, present=%t, err=%v", active, present, err)
+	}
+	if _, err := os.Lstat(old.root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("prior generation remains after retained commit: %v", err)
+	}
+	if len(reloader.calls) != 3 {
+		t.Fatalf("retained activation/recovery reloads = %v", reloader.calls)
+	}
+	if err := manager.RollbackRetained(context.Background(), retained); err == nil {
+		t.Fatal("finished retained activation was rolled back twice")
+	}
+}
+
 func TestNginxActivationSameContentAdvancesGenerationWithoutReload(t *testing.T) {
 	t.Parallel()
 	manager, paths, probe, reloader := nginxActivationFixture(t)

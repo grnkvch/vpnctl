@@ -47,6 +47,15 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isDNSInvocation(args) {
 		return executeDNS(args, stdout, stderr)
 	}
+	if isInviteInvocation(args) {
+		return executeInvite(args, stdout, stderr)
+	}
+	if isJoinInvocation(args) {
+		return executeJoin(args, stdout, stderr)
+	}
+	if isExposeInvocation(args) {
+		return executeExpose(args, stdout, stderr)
+	}
 	if isCertificateInvocation(args) {
 		return executeCertificate(args, stdout, stderr)
 	}

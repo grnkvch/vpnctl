@@ -62,7 +62,7 @@ func TestExposeRemoveSagaUnpublishesDrainsAndRemovesOnlyTargetBeforePortRelease(
 		"ingress_unpublish", "gateway_save_12", "node_save_8", "drain_10s",
 		"tunnel_remove", "gateway_save_13", "node_save_9",
 	})
-	if publisher.activeExposeCount != 1 || publisher.retainedID != exposeRemoveSecondID ||
+	if publisher.activeExposeCount != 1 || publisher.retainedID != exposeRemoveSecondID || publisher.commitCalls != 1 ||
 		waiter.duration != ExposeRemovalDrain || tunnelRuntime.mappingCount != 1 {
 		t.Fatalf("isolated removal evidence = publisher:%+v waiter:%s tunnel:%+v", publisher, waiter.duration, tunnelRuntime)
 	}
@@ -206,6 +206,7 @@ type recordingRemovalPublisher struct {
 	trace             *[]string
 	activeExposeCount int
 	retainedID        string
+	commitCalls       int
 }
 
 func (publisher *recordingRemovalPublisher) Activate(_ context.Context, before, candidate model.State) (GatewayExposeIngressActivation, error) {
@@ -238,6 +239,11 @@ func (publisher *recordingRemovalPublisher) Activate(_ context.Context, before, 
 
 func (publisher *recordingRemovalPublisher) Rollback(context.Context, GatewayExposeIngressActivation) error {
 	*publisher.trace = append(*publisher.trace, "ingress_rollback")
+	return nil
+}
+
+func (publisher *recordingRemovalPublisher) Commit(context.Context, GatewayExposeIngressActivation) error {
+	publisher.commitCalls++
 	return nil
 }
 

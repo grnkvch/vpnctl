@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,21 @@ type NginxActivationResult struct {
 	ActiveExposeCount  int
 }
 
+// NginxRetainedActivation keeps the previous generated tree available until
+// the caller has durably committed the matching authoritative state. Its
+// fields are deliberately private: only the manager that created the receipt
+// may finalize or roll it back.
+type NginxRetainedActivation struct {
+	mu              sync.Mutex
+	managerRoot     string
+	result          NginxActivationResult
+	previous        nginxGeneration
+	next            nginxGeneration
+	previousPresent bool
+	reloadRequired  bool
+	finished        bool
+}
+
 type NginxActivationManager struct {
 	paths    store.Paths
 	probe    linuxplatform.ProbeRunner
@@ -108,43 +124,58 @@ func NginxBinaryPath(paths store.Paths) string {
 }
 
 func (manager *NginxActivationManager) Apply(ctx context.Context, candidate NginxCandidate) (NginxActivationResult, error) {
+	result, activation, err := manager.ActivateRetained(ctx, candidate)
+	if err != nil || activation == nil {
+		return result, err
+	}
+	if err := manager.CommitRetained(ctx, activation); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// ActivateRetained validates, publishes, and (when necessary) reloads the
+// candidate while retaining the exact previous tree. Callers must finish with
+// CommitRetained after authoritative state is durable or RollbackRetained if
+// that write fails.
+func (manager *NginxActivationManager) ActivateRetained(ctx context.Context, candidate NginxCandidate) (NginxActivationResult, *NginxRetainedActivation, error) {
 	result := NginxActivationResult{
 		StateGeneration: candidate.StateGeneration(), ConfigHash: candidate.ConfigHash(), ActiveExposeCount: candidate.ActiveExposeCount(),
 	}
 	if ctx == nil {
-		return NginxActivationResult{}, fmt.Errorf("context is required")
+		return NginxActivationResult{}, nil, fmt.Errorf("context is required")
 	}
 	if manager == nil || manager.probe == nil || manager.reloader == nil {
-		return NginxActivationResult{}, fmt.Errorf("nginx activation manager is incomplete")
+		return NginxActivationResult{}, nil, fmt.Errorf("nginx activation manager is incomplete")
 	}
 	if err := candidate.Validate(); err != nil {
-		return NginxActivationResult{}, fmt.Errorf("validate nginx activation candidate: %w", err)
+		return NginxActivationResult{}, nil, fmt.Errorf("validate nginx activation candidate: %w", err)
 	}
 	if candidate.runtimeDirectory != NginxRuntimeDirectory(manager.paths) {
-		return NginxActivationResult{}, fmt.Errorf("nginx candidate runtime directory differs from the owned path")
+		return NginxActivationResult{}, nil, fmt.Errorf("nginx candidate runtime directory differs from the owned path")
 	}
 	if err := ctx.Err(); err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	if err := ensureNginxActivationDirectories(manager.paths); err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	lock, err := acquireNginxActivationLock(ctx, manager.paths)
 	if err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	defer releaseNginxActivationLock(lock)
 
 	if err := validateNginxActivationBase(manager.paths); err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	current, present, err := inspectCurrentNginxTree(manager.paths)
 	if err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	generations, err := inspectNginxGenerationNamespace(manager.paths)
 	if err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	inactive := make([]nginxGeneration, 0, len(generations))
 	foundCurrent := !present
@@ -156,29 +187,29 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 		inactive = append(inactive, generation)
 	}
 	if !foundCurrent {
-		return NginxActivationResult{}, fmt.Errorf("%w: active generation is absent from the owned namespace", ErrNginxTreeDrift)
+		return NginxActivationResult{}, nil, fmt.Errorf("%w: active generation is absent from the owned namespace", ErrNginxTreeDrift)
 	}
 	if len(inactive) != 0 {
 		matchesRecovery := len(inactive) == 1 && inactive[0].generation == candidate.StateGeneration() && inactive[0].hash == candidate.ConfigHash() &&
 			(!present || candidate.StateGeneration() > current.generation)
 		if !matchesRecovery {
-			return NginxActivationResult{}, fmt.Errorf("%w: an inactive generation requires explicit reconciliation", ErrNginxTreeConflict)
+			return NginxActivationResult{}, nil, fmt.Errorf("%w: an inactive generation requires explicit reconciliation", ErrNginxTreeConflict)
 		}
 	}
 	if present {
 		result.PreviousGeneration = current.generation
 		if candidate.StateGeneration() < current.generation ||
 			(candidate.StateGeneration() == current.generation && candidate.ConfigHash() != current.hash) {
-			return NginxActivationResult{}, fmt.Errorf("%w: candidate generation does not advance the active tree", ErrNginxTreeConflict)
+			return NginxActivationResult{}, nil, fmt.Errorf("%w: candidate generation does not advance the active tree", ErrNginxTreeConflict)
 		}
 		if candidate.StateGeneration() == current.generation && candidate.ConfigHash() == current.hash {
-			return result, nil
+			return result, nil, nil
 		}
 	}
 
 	stageRoot, err := stageNginxCandidate(manager.paths, candidate)
 	if err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	defer func() {
 		if stageRoot != "" {
@@ -186,18 +217,18 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 		}
 	}()
 	if err := validateNginxTree(stageRoot, candidate.ConfigHash()); err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	if err := ValidatePinnedNginxConfig(ctx, manager.probe, NginxBinaryPath(manager.paths), stageRoot); err != nil {
-		return NginxActivationResult{}, errors.Join(ErrNginxValidation, err)
+		return NginxActivationResult{}, nil, errors.Join(ErrNginxValidation, err)
 	}
 	if err := validateNginxTree(stageRoot, candidate.ConfigHash()); err != nil {
-		return NginxActivationResult{}, fmt.Errorf("%w: staged tree changed during parser validation", ErrNginxTreeDrift)
+		return NginxActivationResult{}, nil, fmt.Errorf("%w: staged tree changed during parser validation", ErrNginxTreeDrift)
 	}
 
 	next, reused, err := publishNginxGeneration(manager.paths, stageRoot, candidate.StateGeneration(), candidate.ConfigHash())
 	if err != nil {
-		return NginxActivationResult{}, err
+		return NginxActivationResult{}, nil, err
 	}
 	stageRoot = ""
 	cleanupNext := !reused
@@ -212,33 +243,36 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 		oldLink = current.link
 	}
 	if err := replaceNginxCurrentLink(manager.paths, oldLink, next.link); err != nil {
-		return NginxActivationResult{}, errors.Join(ErrNginxActivation, err)
+		return NginxActivationResult{}, nil, errors.Join(ErrNginxActivation, err)
 	}
 	observed, active, inspectErr := inspectCurrentNginxTree(manager.paths)
 	if inspectErr != nil || !active || observed != next {
 		rollbackErr := replaceNginxCurrentLink(manager.paths, next.link, oldLink)
 		if rollbackErr != nil {
-			return NginxActivationResult{}, errors.Join(ErrNginxActivation, ErrNginxRollback)
+			return NginxActivationResult{}, nil, errors.Join(ErrNginxActivation, ErrNginxRollback)
 		}
 		if inspectErr == nil {
 			inspectErr = fmt.Errorf("active nginx generation differs from the published candidate")
 		}
-		return NginxActivationResult{}, errors.Join(ErrNginxActivation, inspectErr)
+		return NginxActivationResult{}, nil, errors.Join(ErrNginxActivation, inspectErr)
 	}
 
+	activation := &NginxRetainedActivation{
+		managerRoot: manager.paths.Root, result: result, previous: current, next: next,
+		previousPresent: present, reloadRequired: present && current.hash != next.hash,
+	}
 	if !present {
 		cleanupNext = false
 		result.Changed = true
 		result.Initial = true
-		return result, nil
+		activation.result = result
+		return result, activation, nil
 	}
 	if current.hash == next.hash {
 		cleanupNext = false
-		if err := removeNginxGeneration(manager.paths, current); err != nil {
-			return NginxActivationResult{}, fmt.Errorf("finalize nginx provenance activation: %w", err)
-		}
 		result.Changed = true
-		return result, nil
+		activation.result = result
+		return result, activation, nil
 	}
 
 	_ = observability.EmitGenerationSHA256(ctx, observability.IngressReloadStarted, candidate.StateGeneration(), candidate.ConfigHash())
@@ -247,20 +281,92 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 		_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadFailed, candidate.StateGeneration(), candidate.ConfigHash())
 		if rollbackErr != nil {
 			cleanupNext = false
-			return NginxActivationResult{}, errors.Join(ErrNginxReload, ErrNginxRollback)
+			return NginxActivationResult{}, nil, errors.Join(ErrNginxReload, ErrNginxRollback)
 		}
 		cleanupNext = false
-		return NginxActivationResult{}, ErrNginxReload
+		return NginxActivationResult{}, nil, ErrNginxReload
 	}
 	cleanupNext = false
-	if err := removeNginxGeneration(manager.paths, current); err != nil {
-		_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadFailed, candidate.StateGeneration(), candidate.ConfigHash())
-		return NginxActivationResult{}, fmt.Errorf("finalize nginx reload: %w", err)
-	}
 	result.Changed = true
 	result.Reloaded = true
+	activation.result = result
 	_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadCompleted, candidate.StateGeneration(), candidate.ConfigHash())
-	return result, nil
+	return result, activation, nil
+}
+
+// CommitRetained removes only the prior generation after the matching state
+// generation is authoritative. Cleanup failure keeps the desired tree active
+// and can be reconciled later.
+func (manager *NginxActivationManager) CommitRetained(ctx context.Context, activation *NginxRetainedActivation) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	if manager == nil || activation == nil || activation.managerRoot != manager.paths.Root {
+		return fmt.Errorf("nginx retained activation is invalid")
+	}
+	activation.mu.Lock()
+	defer activation.mu.Unlock()
+	if activation.finished {
+		return fmt.Errorf("nginx retained activation is already finished")
+	}
+	lock, err := acquireNginxActivationLock(ctx, manager.paths)
+	if err != nil {
+		return err
+	}
+	defer releaseNginxActivationLock(lock)
+	current, present, err := inspectCurrentNginxTree(manager.paths)
+	if err != nil || !present || current != activation.next {
+		return fmt.Errorf("%w: active nginx generation changed before commit", ErrNginxTreeConflict)
+	}
+	if activation.previousPresent {
+		if err := removeNginxGeneration(manager.paths, activation.previous); err != nil {
+			return fmt.Errorf("finalize nginx activation: %w", err)
+		}
+	}
+	activation.finished = true
+	return nil
+}
+
+// RollbackRetained restores the exact prior tree and reloads it when content
+// changed. An initial activation is removed without inventing a generation.
+func (manager *NginxActivationManager) RollbackRetained(ctx context.Context, activation *NginxRetainedActivation) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	if manager == nil || activation == nil || activation.managerRoot != manager.paths.Root {
+		return fmt.Errorf("nginx retained activation is invalid")
+	}
+	activation.mu.Lock()
+	defer activation.mu.Unlock()
+	if activation.finished {
+		return fmt.Errorf("nginx retained activation is already finished")
+	}
+	lock, err := acquireNginxActivationLock(ctx, manager.paths)
+	if err != nil {
+		return err
+	}
+	defer releaseNginxActivationLock(lock)
+	current, present, err := inspectCurrentNginxTree(manager.paths)
+	if err != nil || !present || current != activation.next {
+		return fmt.Errorf("%w: active nginx generation changed before rollback", ErrNginxTreeConflict)
+	}
+	previousLink := ""
+	if activation.previousPresent {
+		previousLink = activation.previous.link
+	}
+	if err := replaceNginxCurrentLink(manager.paths, activation.next.link, previousLink); err != nil {
+		return errors.Join(ErrNginxRollback, err)
+	}
+	if activation.reloadRequired {
+		if err := manager.reloader.Reload(ctx, NginxBinaryPath(manager.paths), NginxActiveRoot(manager.paths)); err != nil {
+			return errors.Join(ErrNginxRollback, err)
+		}
+	}
+	if err := removeNginxGeneration(manager.paths, activation.next); err != nil {
+		return errors.Join(ErrNginxRollback, err)
+	}
+	activation.finished = true
+	return nil
 }
 
 func (manager *NginxActivationManager) rollback(previous, failed nginxGeneration) error {

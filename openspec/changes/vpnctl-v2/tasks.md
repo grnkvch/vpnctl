@@ -191,7 +191,7 @@
 ## 16. End-to-End, Security, Capacity, and Release Gate
 
 - [x] 16.1 Automate the one-gateway personal VPN happy paths for a selective Clash-compatible profile and full-tunnel WireGuard, including scp-only delivery; verify pinned Mihomo and WireGuard clients reach expected direct/proxied destinations, deferring actual iOS/Clash Mi execution to task 16.11.
-- [ ] 16.2 Automate gateway init plus new-SSH watchdog confirmation, invite, node init, restricted join with Telegram preset, and first expose happy path; verify the accepted minimal commands work without hidden defaults.
+- [x] 16.2 Automate gateway init plus new-SSH watchdog confirmation, invite, node init, restricted join with Telegram preset, and first expose happy path; verify the accepted minimal commands work without hidden defaults.
 - [ ] 16.3 Run equivalent standard-node and manual standard↔restricted test/switch/defer flows; verify no automatic fallback, one active steady-state transport, selected TCP/UDP fail-closed, and unrelated direct continuity.
 - [ ] 16.4 Run multi-node, multi-client, multi-expose isolation and authorization tests; verify no lateral networking, credential reuse, mapping impersonation, or cross-resource removal.
 - [ ] 16.5 Run credential lifecycle E2E for client rotation/revoke/delete and node rotation/revoke/delete/expired-certificate recovery; verify old generations fail and logical IDs/IPs/policies/exposes follow their contracts.

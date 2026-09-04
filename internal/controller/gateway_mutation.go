@@ -14,13 +14,21 @@ import (
 type GatewayMutationDispatcher struct {
 	dns     *GatewayDNSMutationDispatcher
 	logging *GatewayLoggingMutationDispatcher
+	invites *GatewayInviteMutationDispatcher
 }
 
-func NewGatewayMutationDispatcher(dns *GatewayDNSMutationDispatcher, logging *GatewayLoggingMutationDispatcher) (*GatewayMutationDispatcher, error) {
+func NewGatewayMutationDispatcher(dns *GatewayDNSMutationDispatcher, logging *GatewayLoggingMutationDispatcher, invites ...*GatewayInviteMutationDispatcher) (*GatewayMutationDispatcher, error) {
 	if dns == nil || logging == nil {
 		return nil, fmt.Errorf("gateway mutation dispatcher dependencies are incomplete")
 	}
-	return &GatewayMutationDispatcher{dns: dns, logging: logging}, nil
+	var inviteDispatcher *GatewayInviteMutationDispatcher
+	if len(invites) > 1 {
+		return nil, fmt.Errorf("gateway mutation dispatcher accepts at most one invite dispatcher")
+	}
+	if len(invites) == 1 {
+		inviteDispatcher = invites[0]
+	}
+	return &GatewayMutationDispatcher{dns: dns, logging: logging, invites: inviteDispatcher}, nil
 }
 
 func (dispatcher *GatewayMutationDispatcher) Dispatch(context.Context, model.State, string, json.RawMessage) (model.State, json.RawMessage, error) {
@@ -36,6 +44,8 @@ func (dispatcher *GatewayMutationDispatcher) Prepare(ctx context.Context, state 
 		return dispatcher.dns.Prepare(ctx, state, operation, payload)
 	case strings.HasPrefix(operation, "log."):
 		return dispatcher.logging.Prepare(ctx, state, operation, payload)
+	case strings.HasPrefix(operation, "invite.") && dispatcher.invites != nil:
+		return dispatcher.invites.Prepare(ctx, state, operation, payload)
 	default:
 		return PreparedMutation{}, fmt.Errorf("unsupported gateway mutation operation")
 	}

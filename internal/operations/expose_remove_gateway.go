@@ -122,6 +122,9 @@ func (service *GatewayExposeRemovalService) Unpublish(
 		}
 		return ExposeGatewayUnpublication{}, err
 	}
+	if err := service.publisher.Commit(ctx, activation); err != nil {
+		return ExposeGatewayUnpublication{}, &gatewayExposeCommitError{cause: err, possible: true}
+	}
 	return ExposeGatewayUnpublication{
 		ExposeID: target.ID, PreviousGeneration: state.Generation, Generation: candidate.Generation,
 		Drain: ExposeRemovalDrain,

@@ -31,6 +31,8 @@ const (
 	InviteSecretBytes        = 32
 	InviteTokenPrefix        = "vpnctl-invite-v1"
 	InviteEnrollmentPath     = model.ReservedEnrollmentPath
+	InviteIssueOperation     = "invite.issue"
+	InviteCancelOperation    = "invite.cancel"
 	invitePurpose            = string(PurposeEnroll)
 	inviteIDCharacters       = 6
 	inviteIDCollisionRetries = 32

@@ -273,7 +273,7 @@ func TestGatewayExposeCoordinatorCommitsIngressBetweenPendingAndFinalState(t *te
 		t.Fatal(err)
 	}
 	if created.State != model.ExposeReady || len(gatewayStore.state.Exposes) != 1 ||
-		gatewayStore.state.Exposes[0].State != model.ExposeReady || publisher.rollbackCalls != 0 {
+		gatewayStore.state.Exposes[0].State != model.ExposeReady || publisher.rollbackCalls != 0 || publisher.commitCalls != 1 {
 		t.Fatalf("gateway result = %+v, state=%+v", created, gatewayStore.state.Exposes)
 	}
 	assertTraceSubsequence(t, *trace, []string{
@@ -477,6 +477,8 @@ func (memoryGatewayDeferredWriter) Register(_ context.Context, plan ExposeCreate
 type memoryGatewayIngressPublisher struct {
 	trace         *[]string
 	rollbackCalls int
+	commitCalls   int
+	commitErr     error
 }
 
 func (publisher *memoryGatewayIngressPublisher) Activate(_ context.Context, before, candidate model.State) (GatewayExposeIngressActivation, error) {
@@ -495,6 +497,11 @@ func (publisher *memoryGatewayIngressPublisher) Rollback(_ context.Context, _ Ga
 	publisher.rollbackCalls++
 	*publisher.trace = append(*publisher.trace, "ingress_rollback")
 	return nil
+}
+
+func (publisher *memoryGatewayIngressPublisher) Commit(context.Context, GatewayExposeIngressActivation) error {
+	publisher.commitCalls++
+	return publisher.commitErr
 }
 
 func (prober *readyExposeFRPProber) Probe(_ context.Context, candidate tunnel.FRPCandidate) (tunnel.TunnelReadinessResult, error) {

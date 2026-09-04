@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 )
 
 type gatewayNodeUninstallManager interface {
@@ -102,6 +103,7 @@ func uninstallRPCFailure(request control.RPCRequest, status int, category string
 type systemRPCMux struct {
 	update    control.RPCHandler
 	uninstall control.RPCHandler
+	expose    control.RPCHandler
 }
 
 func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, request control.RPCRequest) (control.RPCHandlerResult, error) {
@@ -110,6 +112,9 @@ func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, req
 		return mux.update.HandleRPC(ctx, peer, request)
 	case lifecycle.NodeUninstallOperation:
 		return mux.uninstall.HandleRPC(ctx, peer, request)
+	case operations.ExposePlanRPCOperation, operations.ExposeReserveRPCOperation, operations.ExposePublishRPCOperation,
+		operations.ExposeAbortRPCOperation, operations.ExposeDeferRPCOperation:
+		return mux.expose.HandleRPC(ctx, peer, request)
 	default:
 		return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil
 	}

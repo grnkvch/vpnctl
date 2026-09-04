@@ -2,6 +2,72 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned gateway-to-node first-expose happy-path E2E
+
+### Planned reversible implementation
+
+- Task 16.2 will exercise the accepted public command sequence through
+  `cli.Execute`: minimal gateway init with an explicit public IPv4, the
+  resulting new-SSH watchdog confirmation, `invite bot-server`, minimal node
+  init, `join restricted telegram`, and `expose 3000 --path
+  /telegram/webhook`. The test will fail if any accepted command is routed to
+  the legacy v1 grammar or needs an undocumented role, endpoint, preset,
+  transport, or upstream default.
+- The missing public `invite`, `join`, and `expose` dispatch/parsing boundaries
+  will be added with the frozen CLI contract. Invite output will remain
+  controlling-TTY-only, join will accept the token only through hidden TTY
+  input and require ordinary availability consent, and expose JSON will keep
+  the sensitive path/public URL out of serializable fields. Role validation
+  will precede state/network construction for every command.
+- The source-level E2E will use separate injected temporary gateway and node
+  system roots. It will reuse the production invite codec/manager, enrollment
+  handler, gateway/node join workflows, node-owned credential generation, and
+  expose saga. Only bounded in-process HTTP plus deterministic readiness,
+  tunnel, and ingress adapters will replace external networking and systemd;
+  authoritative generation, one-time invite consumption, explicit Telegram
+  assignment, restricted-active/standard-standby state, tunnel-before-ingress
+  ordering, certificate export metadata, and the exact public URL will be
+  asserted from persisted state and human-only output.
+- No development-host network namespace, route, firewall, listener, service,
+  VM, external VPS, Telegram registration, or client device will be changed by
+  this source-level test. If Linux lab execution becomes necessary, a separate
+  pre-mutation journal entry will name the exact VM, temporary paths, owned
+  network objects, cleanup assertions, and prior/final VM state first.
+- Repository rollback will be `git revert <task-16.2-commit>`. All test state
+  will live below Go-managed temporary roots and be removed by the test
+  process; no host rollback is expected.
+
+### Acceptance and completed rollback
+
+- The public-command vertical slice now passes the exact minimal sequence:
+  gateway init with manually supplied public IPv4 and network inputs, proof
+  from a distinct SSH session, one-time invite display, node init, restricted
+  join with only the explicit `telegram` preset, and `expose 3000 --path
+  /telegram/webhook`. It verifies restricted-active/standard-standby state,
+  invite consumption, node-local private keys, tunnel-before-ingress order,
+  stable certificate export metadata, and absence of the invite token and
+  webhook path from JSON.
+- The same command path is no longer backed by an unavailable placeholder in
+  production. A joined node constructs its FRP mapping transaction and one
+  short-lived internal-overlay mTLS request per expose phase; the gateway
+  authorizes the certificate-bound node, serializes every phase through the
+  controller writer, preserves global route/port allocation, and supports an
+  authoritative deferred registration without an implicit retry or fallback.
+- Gateway nginx activation now retains the exact prior generated tree until
+  the matching state generation is durable. A failed state write restores the
+  prior symlink/runtime and a successful write alone permits old-generation
+  cleanup. Tests cover retained rollback/commit, strict listener discovery,
+  deferred desired state, RPC phase/generation binding, and the full CLI
+  sequence.
+- Twenty repeated focused runs, focused race-detector runs, the complete Go
+  suite, `go vet ./...`, formatting/diff checks, and strict OpenSpec validation
+  pass at `147/156`. The checks created only automatically removed test roots
+  below `/tmp` and the existing disposable Go cache below
+  `/private/tmp/vpnctl-go-cache`; no VM, service, route, firewall, public
+  endpoint, Telegram registration, or client device was changed, so no host
+  rollback is outstanding. Deployed Clash Mi and Telegram-provider execution
+  remain explicitly assigned to task 16.11.
+
 ## 2026-09-04 — planned personal-client happy-path E2E
 
 ### Planned reversible implementation
