@@ -41,6 +41,38 @@ This journal records development-host mutations made while implementing and vali
   owner-checked spike `uninstall`; repository rollback for the harness-prep
   commit and final task commit will be ordinary `git revert` operations.
 
+### Acceptance and completed rollback
+
+- The first wrapper attempt stopped during source preflight before either VM
+  started: a process-wide `umask 077` made a Go-managed nginx test parent
+  directory non-traversable. The harness now scopes that umask to evidence
+  directory creation only; the focused reload rollback test and the complete
+  wrapper then passed. Both fixtures remained `Stopped` after the failed
+  preflight, so no host rollback was required for that attempt.
+- The successful run used source commit
+  `a462a682437cdabda0e219500a8552773b6c30b2`. Pinned FRP 0.69.0 native tests
+  proved reconnect without client restart, controller-unavailable rejection,
+  revoked-session close plus rejected reconnect, and isolated dynamic mapping
+  removal. Source acceptance additionally proved the already-applied data
+  plane continues during controller outage, tunnel and nginx reload failures
+  restore their prior runtime/config, and expose removal drains and removes
+  only its target.
+- Pinned nginx 1.24.0 native tests proved unknown path `404`, body limit `413`,
+  unavailable application `503`, upstream timeout `504`, connection close
+  after a partial response, and exactly one upstream attempt for every
+  non-idempotent request. HTTP/1.1 and HTTP/2 paths passed, request replay was
+  false, no request-body temp files remained, and measured native peak RSS was
+  20,217,856 bytes.
+- Owner-checked uninstall removed every tunnel, restricted-transport, ingress,
+  test-binary, runtime, nftables, and unit target. The temporarily owned
+  `nginx` and `nginx-common` packages were purged, final absence/inactive checks
+  passed, and both exact fixtures returned to their prior `Stopped` state. No
+  Telegram/provider/public-VPS/device state was touched. Stable acceptance is
+  in `test/v2lab/failure-e2e/manifest.json`; raw ignored evidence is at
+  `artifacts/v2lab/failure-e2e/run-20260904T231429Z/summary.json`. Repository
+  rollback is `git revert <task-16.6-commit>`; completed host rollback requires
+  no further action.
+
 ## 2026-09-05 — planned credential-lifecycle E2E
 
 ### Source-only execution boundary

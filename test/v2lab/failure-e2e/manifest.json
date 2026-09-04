@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "automated-linux-production-native",
+  "actual_deployment": "deferred-to-task-16.11",
+  "target": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64",
+    "vcpu": 1,
+    "memory_bytes": 536870912,
+    "disk_bytes": 10737418240
+  },
+  "providers": {
+    "frp_native": true,
+    "frp_version": "0.69.0",
+    "nginx_native": true,
+    "nginx_version": "1.24.0"
+  },
+  "failures": {
+    "application_down_503": true,
+    "tunnel_reconnect": true,
+    "gateway_controller_down_data_plane_preserved": true,
+    "gateway_controller_down_new_auth_rejected": true,
+    "proxy_reload_rollback": true,
+    "partial_response_connection_close": true,
+    "node_revoke_connection_close": true,
+    "expose_removal_isolated": true
+  },
+  "http": {
+    "unknown": 404,
+    "body_limit": 413,
+    "unavailable": 503,
+    "timeout": 504,
+    "request_replay": false
+  },
+  "cleanup": {
+    "owner_scoped": true,
+    "temporary_resources_absent": true,
+    "owned_packages_removed": true,
+    "fixtures_restored_stopped": true
+  }
+}
