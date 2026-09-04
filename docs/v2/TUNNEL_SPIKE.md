@@ -78,3 +78,11 @@ own transport cleanup contract rather than deleted.
 This is the tunnel capability's development release gate. It does not replace
 the sustained several-hundred-user capacity gate in task 16.9, deployed Clash
 Mi behavior, or the real Telegram webhook gate in task 16.11.
+
+The accepted clean-tree run is recorded in
+`artifacts/v2lab/tunnel-release-gate/task-11.9-6089016/summary.json` and binds
+source commit `60890165f934a610fe8e365d0a7bc071d9be96c2`. Six production native
+tests passed; the spike retained one control connection for 24 concurrent
+streams, reconnected in 7 seconds, revoked in 3 seconds, observed 50 standard
+direct and 19 restricted ShadowTLS packets, retained 278996/304908 KiB
+available on gateway/node, and recorded zero OOM kills.

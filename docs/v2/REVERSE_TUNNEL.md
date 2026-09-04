@@ -305,8 +305,17 @@ case. A live sentinel on an unconfigured standby TCP `17001` accepted zero
 connections, and the full pinned config/Login/NewProxy/reload suite remained
 green.
 
-## Remaining provider gate
+## Provider acceptance
 
-Task 11.9 supplies the release resource regression gate. It must preserve this
-topology, identity, allocation, credential, lifecycle, atomic configuration,
-readiness, and fail-closed authorization contract.
+Task 11.9's clean-tree release harness passed all six production native cases
+and the complete two-host spike regression on Ubuntu 24.04/amd64 fixtures with
+1 vCPU, 512 MiB, and 10 GiB each. It retained one persistent connection for two
+exposes and 24 concurrent streams, rejected malicious/stale/controller-down
+authorization, reconnected without frpc restart, closed revoke within the
+bound, preserved identity through the restricted switch, retained 279/305 MiB
+available on gateway/node, and recorded zero OOM kills. The development tunnel
+provider capability is complete at this contract.
+
+Section 16 still owns deployed ingress/tunnel failure E2E and sustained
+several-hundred-user whole-system capacity. Those product release gates do not
+change the provider topology or reopen its implementation choice.
