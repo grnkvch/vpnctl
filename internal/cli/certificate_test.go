@@ -15,6 +15,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -131,6 +132,142 @@ func TestExecuteCertificateRejectsNodeAndExistingDifferentExport(t *testing.T) {
 	if string(content) != "operator-owned\n" {
 		t.Fatalf("occupied export changed to %q", content)
 	}
+}
+
+func TestPublicCertificateRotationWorkflowRequiresConfirmationAndRejectsDefer(t *testing.T) {
+	t.Parallel()
+
+	paths, source, secrets, _ := cliPublicCertificateFixture(t)
+	certificate := source.state.Certificates[0]
+	manager, err := operations.NewPublicCertificateRotationManager(
+		&cliCertificateRotationState{source: source}, secrets, cliCertificateRotationRuntime{},
+		ingress.DefaultPublicCertificateExportPath(paths.ExportsDir),
+		operations.PublicCertificateRotationRuntimeOptions{Now: func() time.Time { return certificate.NotBefore.Add(time.Hour) }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := manager.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotator := &recordingCLICertificateRotator{plan: plan, result: operations.PublicCertificateRotationResult{
+		GatewayID: source.state.Host.ID, StateGeneration: plan.NextStateGeneration,
+		CertificateID: certificate.ID, CertificateGeneration: plan.NextCertificateGeneration,
+		PreviousCertificateGeneration: certificate.Generation,
+		PreviousFingerprint:           certificate.Fingerprint, CurrentFingerprint: "sha256:" + strings.Repeat("f", 64),
+		PublicIPv4: source.state.Host.PublicIPv4, CertificateExportPath: plan.CertificateExportPath,
+		AffectedExposes: []operations.PublicCertificateAffectedExpose{{
+			ID: "84000000-0000-4000-8000-000000000001", NodeID: "84000000-0000-4000-8000-000000000002",
+			Name: "telegram", State: model.ExposeReady,
+		}},
+	}}
+
+	workflow, _ := NewPublicCertificateRotationWorkflow(rotator)
+	dryRun, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
+		CommandID: "cert.rotate", Role: RoleGateway, DryRun: true,
+	}, nil, workflow, nil)
+	if err != nil || dryRun.Mode != MutationDryRun || rotator.planCalls != 1 || rotator.applyCalls != 0 ||
+		dryRun.Result.Data["changed"] != false || dryRun.Result.Data["next_certificate_generation"] != uint64(2) {
+		t.Fatalf("cert rotate dry-run=%+v error=%v calls=%d/%d", dryRun, err, rotator.planCalls, rotator.applyCalls)
+	}
+
+	workflow, _ = NewPublicCertificateRotationWorkflow(rotator)
+	if _, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
+		CommandID: "cert.rotate", Role: RoleGateway,
+	}, nil, workflow, nil); !errors.Is(err, ErrInteractionRefused) || rotator.applyCalls != 0 {
+		t.Fatalf("unconfirmed cert rotate error=%v apply calls=%d", err, rotator.applyCalls)
+	}
+
+	workflow, _ = NewPublicCertificateRotationWorkflow(rotator)
+	applied, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
+		CommandID: "cert.rotate", Role: RoleGateway, Yes: true,
+	}, nil, workflow, nil)
+	if err != nil || applied.Mode != MutationImmediate || rotator.applyCalls != 1 ||
+		applied.Result.Data["changed"] != true || applied.Result.Data["certificate_generation"] != uint64(2) {
+		t.Fatalf("confirmed cert rotate=%+v error=%v calls=%d", applied, err, rotator.applyCalls)
+	}
+	if len(applied.Result.RequiresAction) != 1 || applied.Result.RequiresAction[0].Code != "reregister_external_webhook" ||
+		applied.Result.RequiresAction[0].Command != "" || applied.Result.RequiresAction[0].ResourceIDs["expose_id"] == "" ||
+		!strings.Contains(applied.Result.Data["scp_command"].(string), source.state.Host.PublicIPv4+":"+plan.CertificateExportPath) {
+		t.Fatalf("cert rotate action/output = %+v", applied.Result)
+	}
+	encoded, err := json.Marshal(applied.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private_key")) || bytes.Contains(encoded, []byte("certificate_ref")) ||
+		bytes.Contains(encoded, []byte("/telegram")) {
+		t.Fatalf("cert rotate output exposed private or webhook-path data: %s", encoded)
+	}
+
+	workflow, _ = NewPublicCertificateRotationWorkflow(rotator)
+	planCalls := rotator.planCalls
+	if _, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
+		CommandID: "cert.rotate", Role: RoleGateway, Defer: true,
+	}, nil, workflow, nil); !errors.Is(err, ErrMutationFlags) || rotator.planCalls != planCalls {
+		t.Fatalf("deferred cert rotate error=%v plan calls=%d/%d", err, planCalls, rotator.planCalls)
+	}
+	if _, err := V2CommandRegistry().RunMutation(context.Background(), MutationRequest{
+		CommandID: "cert.rotate", Role: RoleNode, DryRun: true,
+	}, nil, workflow, nil); !errors.Is(err, ErrUnsupportedRole) {
+		t.Fatalf("node cert rotate error=%v", err)
+	}
+}
+
+type cliCertificateRotationState struct{ source *cliCertificateState }
+
+func (state *cliCertificateRotationState) Load() (model.State, error) {
+	encoded, err := model.EncodeState(state.source.state)
+	if err != nil {
+		return model.State{}, err
+	}
+	return model.DecodeState(encoded)
+}
+
+func (state *cliCertificateRotationState) Save(expectedGeneration uint64, candidate model.State) error {
+	if state.source.state.Generation != expectedGeneration {
+		return errors.New("stale certificate state")
+	}
+	state.source.state = candidate
+	return nil
+}
+
+type cliCertificateRotationRuntime struct{}
+
+func (cliCertificateRotationRuntime) Activate(
+	context.Context,
+	model.State,
+	model.State,
+) (operations.PublicCertificateIngressActivation, error) {
+	return operations.PublicCertificateIngressActivation{}, errors.New("unexpected activation")
+}
+
+func (cliCertificateRotationRuntime) Rollback(context.Context, operations.PublicCertificateIngressActivation) error {
+	return errors.New("unexpected rollback")
+}
+
+type recordingCLICertificateRotator struct {
+	plan       operations.PublicCertificateRotationPlan
+	result     operations.PublicCertificateRotationResult
+	planCalls  int
+	applyCalls int
+}
+
+func (rotator *recordingCLICertificateRotator) Plan(context.Context) (operations.PublicCertificateRotationPlan, error) {
+	rotator.planCalls++
+	return rotator.plan, nil
+}
+
+func (rotator *recordingCLICertificateRotator) Apply(
+	_ context.Context,
+	plan operations.PublicCertificateRotationPlan,
+) (operations.PublicCertificateRotationResult, error) {
+	rotator.applyCalls++
+	if !reflect.DeepEqual(plan, rotator.plan) {
+		return operations.PublicCertificateRotationResult{}, errors.New("workflow changed retained certificate plan")
+	}
+	return rotator.result, nil
 }
 
 type cliCertificateState struct{ state model.State }

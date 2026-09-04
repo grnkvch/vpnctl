@@ -219,7 +219,9 @@ func validateNginxRenderRequest(request NginxRenderRequest) ([]model.Expose, err
 			return nil, fmt.Errorf("nginx tunnel port %d is shared by exposes %s and %s", expose.TunnelPort, owner, expose.ID)
 		}
 		ports[expose.TunnelPort] = expose.ID
-		if expose.State == model.ExposeDisabled {
+		// Pending is an authoritative reservation, not a published route. Only
+		// readiness-finalized exposes may enter a serving nginx generation.
+		if expose.State == model.ExposeDisabled || expose.State == model.ExposePending {
 			continue
 		}
 		if owner, routeErr := routes.Add(expose.RouteMode, expose.Path, expose.ID); routeErr != nil {

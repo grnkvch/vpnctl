@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -220,6 +222,99 @@ func TestPublicCertificateExportWritesOnlyPublicPEMWithoutReplacement(t *testing
 	}
 }
 
+func TestPublicCertificateGenerationReferencesAndExportRotationRollback(t *testing.T) {
+	t.Parallel()
+
+	certificateRef, keyRef, err := PublicCertificateReferences(1)
+	if err != nil || certificateRef != PublicCertificateRef || keyRef != PublicCertificatePrivateKeyRef {
+		t.Fatalf("generation-one refs = %q, %q, %v", certificateRef, keyRef, err)
+	}
+	if _, _, err := PublicCertificateReferences(0); err == nil {
+		t.Fatal("zero certificate generation was accepted")
+	}
+	paths, secrets, installation := provisionPublicCertificateFixture(t)
+	before := publicCertificateState(installation.Certificate)
+	destination := DefaultPublicCertificateExportPath(paths.ExportsDir)
+	if _, err := ExportPublicCertificate(before, secrets, destination); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, candidatePEM := rotatedPublicCertificateStateFixture(t, before, secrets)
+	rotation, err := PreparePublicCertificateExportRotation(before, candidate, secrets, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(rotation); !errors.Is(err, output.ErrSensitiveSerialization) {
+		t.Fatalf("rotation serialization error = %v", err)
+	}
+	if err := rotation.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	active, err := os.ReadFile(destination)
+	if err != nil || !bytes.Equal(active, candidatePEM) {
+		t.Fatalf("active export differs from candidate: %v", err)
+	}
+	if err := rotation.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(destination)
+	if err != nil || !bytes.Equal(restored, previous) {
+		t.Fatalf("restored export differs from previous: %v", err)
+	}
+	if err := rotation.Rollback(); err != nil {
+		t.Fatalf("idempotent rollback error = %v", err)
+	}
+}
+
+func TestPublicCertificateExportRotationRefusesDriftAndRestoresAbsentExport(t *testing.T) {
+	t.Parallel()
+
+	paths, secrets, installation := provisionPublicCertificateFixture(t)
+	before := publicCertificateState(installation.Certificate)
+	candidate, candidatePEM := rotatedPublicCertificateStateFixture(t, before, secrets)
+	destination := DefaultPublicCertificateExportPath(paths.ExportsDir)
+	rotation, err := PreparePublicCertificateExportRotation(before, candidate, secrets, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("foreign\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rotation.Activate(); !errors.Is(err, ErrPublicCertificateExported) {
+		t.Fatalf("drift activation error = %v", err)
+	}
+	if err := rotation.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	foreign, _ := os.ReadFile(destination)
+	if string(foreign) != "foreign\n" {
+		t.Fatalf("drift file changed to %q", foreign)
+	}
+	if err := os.Remove(destination); err != nil {
+		t.Fatal(err)
+	}
+	rotation, err = PreparePublicCertificateExportRotation(before, candidate, secrets, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rotation.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := os.ReadFile(destination)
+	if !bytes.Equal(active, candidatePEM) {
+		t.Fatal("absent export did not activate candidate")
+	}
+	if err := rotation.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback retained newly created export: %v", err)
+	}
+}
+
 func TestPublicCertificateOpenSSLAndTelegramFixtureCompatibility(t *testing.T) {
 	openssl, err := exec.LookPath("openssl")
 	if err != nil {
@@ -315,6 +410,48 @@ func provisionPublicCertificateFixture(t *testing.T) (store.Paths, *store.Secret
 		t.Fatal(err)
 	}
 	return paths, secrets, installation
+}
+
+func rotatedPublicCertificateStateFixture(
+	t *testing.T,
+	before model.State,
+	secrets *store.SecretStore,
+) (model.State, []byte) {
+	t.Helper()
+	material, err := GeneratePublicCertificate(rand.Reader, before.Host.PublicIPv4, before.Certificates[0].NotBefore.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(material.PrivateKeyPEM)
+	certificateRef, privateKeyRef, err := PublicCertificateReferences(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(material.Certificate.Raw)
+	record := before.Certificates[0]
+	record.Fingerprint = "sha256:" + hex.EncodeToString(digest[:])
+	record.SerialHex = material.Certificate.SerialNumber.Text(16)
+	record.Subject = material.Certificate.Subject.String()
+	record.SANs = []string{"IP:" + before.Host.PublicIPv4}
+	record.NotBefore = material.Certificate.NotBefore.UTC()
+	record.NotAfter = material.Certificate.NotAfter.UTC()
+	record.Generation = 2
+	record.CertificateRef = certificateRef
+	record.PrivateKeyRef = privateKeyRef
+	if err := secrets.PutIfAbsent(model.SecretRef(certificateRef), material.CertificatePEM); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.PutIfAbsent(privateKeyRef, material.PrivateKeyPEM); err != nil {
+		t.Fatal(err)
+	}
+	candidate := before
+	candidate.Generation++
+	candidate.Certificates = append([]model.Certificate(nil), before.Certificates...)
+	candidate.Certificates[0] = record
+	if err := model.ValidateTransition(before, candidate); err != nil {
+		t.Fatal(err)
+	}
+	return candidate, append([]byte(nil), material.CertificatePEM...)
 }
 
 func publicCertificateTestStore(t *testing.T) (store.Paths, *store.SecretStore) {

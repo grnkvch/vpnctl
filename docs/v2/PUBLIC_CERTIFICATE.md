@@ -21,8 +21,31 @@ no-op and does not replace it.
 `vpnctl cert show [--json]` is gateway-only and returns public metadata. It is
 healthy before the warning boundary, expiring from the exact 180-day boundary,
 and unavailable after expiry. Expiring and expired results identify manual
-rotation as the next action; rotation itself belongs to task 12.10 and never
-contacts an external webhook provider.
+rotation as the next action.
+
+`vpnctl cert rotate [--dry-run] [--yes]` is gateway-only and manual-only. Its
+read-only plan lists every ready or degraded expose affected by the new public
+identity without exposing webhook paths. Immediate application requires the
+ordinary availability-impact confirmation; `--defer` is rejected. The command
+creates the next generation under new opaque secret references, validates and
+activates the complete ingress generation, atomically replaces the public
+export, and then commits state. Short ingress downtime is permitted during the
+runtime activation.
+
+The successful state keeps the current generation and exactly one previous
+public certificate/key generation as its bounded rollback snapshot. Starting a
+later explicit rotation removes the superseded older snapshot before creating
+the next candidate. A known pre-commit failure restores the prior runtime and
+public export and removes the candidate secrets. An ambiguous state-persistence
+outcome is reported as uncertain and is not blindly rolled back. Rotation
+changes neither the logical public-certificate ID nor the control CA, control
+server identity, enrollment signer, node records, transports, or node trust.
+There is no schedule or automatic rotation.
+
+After success, one `reregister_external_webhook` action is returned for every
+affected expose. vpnctl never registers or updates a provider webhook itself;
+the application owner uses the unchanged public URL and the newly exported
+certificate with its provider.
 
 `vpnctl cert export [absolute-output-path] [--json]` validates the stored PEM
 against authoritative metadata and writes exactly one public certificate. The

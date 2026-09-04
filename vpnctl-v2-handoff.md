@@ -12,12 +12,13 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 12.9 выполнено `114/156`
+и проходят strict validation. После завершения task 12.10 выполнено `115/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
 reverse tunnel и managed HTTPS ingress, включая stateless request/error
-semantics и isolated expose inspection/removal.
+semantics, isolated expose inspection/removal и confirmed manual public
+certificate rotation.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -38,7 +39,11 @@ readiness. Expose creation резервирует authoritative state, прим�
 unpublish-ит только выбранный route, выдерживает 10-секундный drain, удаляет
 его FRP mapping и лишь затем освобождает port. nginx выполняет ровно одну upstream-попытку,
 выдаёт `413`/`503`/`504` до начала ответа и закрывает partial response без
-replay. Следующая задача — 12.10 (manual public certificate rotation).
+replay. Public certificate rotation выполняется только вручную, сразу и с
+подтверждением; plan перечисляет затронутые serving exposes, control/enrollment
+identity и node trust не меняются, public export обновляется атомарно, а в
+secret store остаются только active и previous поколения. Следующая задача —
+12.11 (production ingress regression and token-safe Telegram harness).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract

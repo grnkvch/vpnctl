@@ -31,6 +31,7 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 		nginxExposeFixture(nginxTestExposeB, "/api", model.RoutePrefix, 20001, model.ExposeDegraded),
 		nginxExposeFixture(nginxTestExposeA, "/telegram/webhook", model.RouteExact, 20000, model.ExposeReady),
 		nginxExposeFixture(nginxTestExposeC, "/disabled", model.RouteExact, 20002, model.ExposeDisabled),
+		nginxExposeFixture("10000000-0000-4000-8000-000000000004", "/pending", model.RouteExact, 20003, model.ExposePending),
 	}
 	request.Exposes[0].Upstream = "192.0.2.50:4100"
 	request.Exposes[0].BodyLimitBytes = 2 * 1024 * 1024
@@ -74,8 +75,9 @@ func TestNginxRendererEmitsBoundedStreamingLoopbackProxyTree(t *testing.T) {
 			t.Errorf("routes config lacks %q:\n%s", directive, routes)
 		}
 	}
-	if strings.Contains(routes, "/disabled") || strings.Contains(routes, "127.0.0.1:20002") || strings.Contains(routes, "192.0.2.50") || strings.Contains(routes, ":4100") {
-		t.Fatalf("routes exposed a disabled route or node application endpoint:\n%s", routes)
+	if strings.Contains(routes, "/disabled") || strings.Contains(routes, "/pending") || strings.Contains(routes, "127.0.0.1:20002") ||
+		strings.Contains(routes, "127.0.0.1:20003") || strings.Contains(routes, "192.0.2.50") || strings.Contains(routes, ":4100") {
+		t.Fatalf("routes exposed a disabled/pending route or node application endpoint:\n%s", routes)
 	}
 	if strings.Count(routes, "limit_conn vpnctl_gateway 64;") != 5 || strings.Count(routes, "limit_conn vpnctl_expose 40;") != 3 {
 		t.Fatalf("every reserved/user proxy location must carry its applicable limits:\n%s", routes)

@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,13 +177,17 @@ func (provisioner *PublicCertificateProvisioner) Provision(ctx context.Context, 
 	if err != nil {
 		return PublicCertificateInstallation{}, fmt.Errorf("allocate public ingress certificate identity: %w", err)
 	}
+	certificateRef, privateKeyRef, err := PublicCertificateReferences(1)
+	if err != nil {
+		return PublicCertificateInstallation{}, err
+	}
 	installation := PublicCertificateInstallation{OwnedReferences: []model.SecretRef{}}
 	entries := []struct {
 		reference model.SecretRef
 		content   []byte
 	}{
-		{reference: model.SecretRef(PublicCertificateRef), content: material.CertificatePEM},
-		{reference: PublicCertificatePrivateKeyRef, content: material.PrivateKeyPEM},
+		{reference: model.SecretRef(certificateRef), content: material.CertificatePEM},
+		{reference: privateKeyRef, content: material.PrivateKeyPEM},
 	}
 	for _, entry := range entries {
 		if err := provisioner.secrets.PutIfAbsent(entry.reference, entry.content); err != nil {
@@ -202,7 +207,7 @@ func (provisioner *PublicCertificateProvisioner) Provision(ctx context.Context, 
 		SANs:      []string{"IP:" + request.PublicIPv4},
 		NotBefore: certificate.NotBefore.UTC(), NotAfter: certificate.NotAfter.UTC(),
 		WarningDays: PublicCertificateWarningDays, Generation: 1,
-		CertificateRef: PublicCertificateRef, PrivateKeyRef: PublicCertificatePrivateKeyRef,
+		CertificateRef: certificateRef, PrivateKeyRef: privateKeyRef,
 	}
 	if err := installation.Certificate.Validate(); err != nil {
 		rollbackErr := provisioner.Rollback(context.Background(), installation)
@@ -222,13 +227,9 @@ func (provisioner *PublicCertificateProvisioner) Rollback(ctx context.Context, i
 	if provisioner == nil || provisioner.secrets == nil {
 		return fmt.Errorf("public certificate provisioner is incomplete")
 	}
-	allowed := map[model.SecretRef]struct{}{
-		model.SecretRef(PublicCertificateRef): {},
-		PublicCertificatePrivateKeyRef:        {},
-	}
 	seen := make(map[model.SecretRef]struct{}, len(installation.OwnedReferences))
 	for _, reference := range installation.OwnedReferences {
-		if _, ok := allowed[reference]; !ok {
+		if !isPublicCertificateGenerationReference(reference) {
 			return fmt.Errorf("refuse rollback of non-ingress identity reference %s", reference)
 		}
 		if _, duplicate := seen[reference]; duplicate {
@@ -310,6 +311,25 @@ type PublicCertificateExport struct {
 
 func DefaultPublicCertificateExportPath(exportsDirectory string) string {
 	return filepath.Join(exportsDirectory, PublicCertificateExportName)
+}
+
+// PublicCertificateReferences binds public ingress material to its logical
+// certificate generation. Generation one preserves the v2 bootstrap paths;
+// later rotations can be staged without overwriting the active identity.
+func PublicCertificateReferences(generation uint64) (string, model.SecretRef, error) {
+	if generation == 0 {
+		return "", "", fmt.Errorf("public certificate generation must be positive")
+	}
+	suffix := strconv.FormatUint(generation, 10)
+	certificate := "ingress-cert:public-g" + suffix
+	privateKey := model.SecretRef("ingress-key:public-g" + suffix)
+	if _, _, err := model.SecretRef(certificate).Parts(); err != nil {
+		return "", "", err
+	}
+	if _, _, err := privateKey.Parts(); err != nil {
+		return "", "", err
+	}
+	return certificate, privateKey, nil
 }
 
 func ExportPublicCertificate(state model.State, secrets PublicCertificateSecretStore, destination string) (PublicCertificateExport, error) {
@@ -455,13 +475,23 @@ func validatePublicCertificateRecord(record model.Certificate, gatewayID, public
 	if _, err := canonicalPublicCertificateIPv4(publicIPv4); err != nil {
 		return err
 	}
-	if record.Kind != model.CertificatePublicIngress || record.OwnerKind != "host" || record.OwnerID != gatewayID ||
+	certificateRef, privateKeyRef, referenceErr := PublicCertificateReferences(record.Generation)
+	if referenceErr != nil || record.Kind != model.CertificatePublicIngress || record.OwnerKind != "host" || record.OwnerID != gatewayID ||
 		record.Subject != "CN="+publicIPv4 || len(record.SANs) != 1 || record.SANs[0] != "IP:"+publicIPv4 ||
 		record.NotAfter.Sub(record.NotBefore) != PublicCertificateValidity || record.WarningDays != PublicCertificateWarningDays ||
-		record.Generation == 0 || record.CertificateRef != PublicCertificateRef || record.PrivateKeyRef != PublicCertificatePrivateKeyRef {
+		record.Generation == 0 || record.CertificateRef != certificateRef || record.PrivateKeyRef != privateKeyRef {
 		return fmt.Errorf("%w: authoritative metadata differs from ingress certificate contract", ErrPublicCertificateInvalid)
 	}
 	return nil
+}
+
+func isPublicCertificateGenerationReference(reference model.SecretRef) bool {
+	kind, id, err := reference.Parts()
+	if err != nil || kind != "ingress-cert" && kind != "ingress-key" || !strings.HasPrefix(id, "public-g") {
+		return false
+	}
+	generation, err := strconv.ParseUint(strings.TrimPrefix(id, "public-g"), 10, 64)
+	return err == nil && generation > 0 && strconv.FormatUint(generation, 10) == strings.TrimPrefix(id, "public-g")
 }
 
 func writePublicCertificateNoReplace(destination string, content []byte) (bool, error) {

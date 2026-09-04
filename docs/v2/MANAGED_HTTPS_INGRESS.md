@@ -84,10 +84,10 @@ request method, normalized path, query, headers, and streaming body.
 
 Exact paths compile to exact nginx locations. A segment-prefix `/api` compiles
 to an exact `/api` location plus a `^~ /api/` location, so `/apiv2` cannot
-match. Disabled exposes are absent; pending, ready, and degraded records remain
-publishable while later saga/readiness work controls their lifecycle. A root
-prefix replaces the ordinary `404` fallback without producing a duplicate
-location.
+match. Only readiness-finalized `ready` and `degraded` records are published.
+Both `pending` reservations and `disabled` records are absent from every
+serving generation. A root prefix replaces the ordinary `404` fallback without
+producing a duplicate location.
 
 The common proxy policy disables request/response buffering, response temp
 files, storage, caching, redirect rewriting, and upstream retries. It clears
@@ -258,3 +258,32 @@ port reuse while a mapping may still exist. Every successful or deferred
 removal returns `remove_external_webhook` without a command, because vpnctl has
 no provider token and cannot delete the Telegram/application registration.
 Other expose routes and mappings remain present in every generated candidate.
+
+## Manual public-certificate rotation
+
+Certificate rotation is a gateway-only, immediate mutation with a read-only
+`--dry-run` plan and ordinary confirmation. It lists all currently published
+`ready` and `degraded` exposes by safe identity/name/state only; webhook paths
+remain outside structured output. `--defer`, automatic schedules, and provider
+API calls are not supported.
+
+Apply generates a new RSA identity under generation-scoped secret references,
+renders and activates the complete ingress tree, atomically replaces the
+public-only `gateway.crt` export, and commits the next state generation. The
+logical certificate ID and public IPv4 remain stable. The control CA/server,
+enrollment signer, node records and trust, transports, and expose records are
+byte-for-byte unchanged. A short graceful-reload availability interruption is
+permitted.
+
+Exactly two public-ingress secret generations are retained after success: the
+active identity and its immediate predecessor. Before a later explicit
+rotation, the superseded older snapshot is deleted; after commit, the formerly
+active generation becomes the sole rollback snapshot. Known failures before
+state commit restore the prior runtime/export and remove the candidate. If the
+state commit cannot be authoritatively observed, the result is uncertain and
+vpnctl does not risk a blind rollback across runtime, export, and state.
+
+Success returns the new public certificate export path/fingerprint, an `scp`
+hint, and one command-free `reregister_external_webhook` action per affected
+expose. Re-registering the unchanged public URL with the new certificate is the
+application owner's responsibility.

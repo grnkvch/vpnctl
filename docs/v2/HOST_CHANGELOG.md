@@ -2,6 +2,42 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — manual public certificate rotation
+
+- Task 12.10 is source-only. It adds confirmed immediate public-ingress
+  certificate rotation, an affected-expose plan, an atomic public-certificate
+  export replacement, and a bounded active-plus-previous rollback snapshot. It
+  does not invoke or install nginx/frp, reload a service, bind a listener,
+  contact a gateway or webhook provider, mutate either lab VM, or rotate the
+  control CA, enrollment identity, node identity, or node trust.
+- Tests use in-memory state/runtime adapters and Go temporary directories only.
+  Generated RSA certificate/key generations live only in task-owned temporary
+  secret stores; export candidates are atomically activated and restored below
+  the same temporary roots. No private key is serialized into plans, command
+  output, logs, or retained evidence.
+- A successful rotation retains exactly the active and immediately previous
+  public-ingress generations. A later explicit rotation removes the older
+  snapshot before staging the next candidate. Known pre-commit failures restore
+  the previous runtime/export and delete the candidate generation; ambiguous
+  persistence outcomes are surfaced without blind rollback. Repository rollback
+  is the task-12.10 commit; no host rollback is required.
+- Acceptance covers a read-only affected-expose plan, explicit confirmation,
+  dry-run, hard rejection of defer and node role, generation-scoped material,
+  two consecutive rotations retaining exactly active plus previous, atomic
+  public-export replacement/restoration, known/committed/ambiguous state-write
+  dispositions, invalid activation receipts, and byte-for-byte preservation of
+  control certificates, enrollment signer, node records/trust, transports, and
+  expose records. It also proves pending/disabled records cannot enter a later
+  complete nginx render.
+- Twenty focused repetitions, three focused race-detector repetitions, complete
+  ordinary and race-detector suites, vet, uncached regression tests, dependency
+  listing, formatting/diff checks, and strict OpenSpec validation passed at
+  `115/156`. The first sandboxed full suite failed only its existing prohibited
+  loopback TCP/Unix binds and passed unchanged with local-socket permission;
+  the first dependency-list command was blocked by sandbox DNS and passed with
+  network permission. No native service, VM, webhook provider, or retained
+  private-key artifact was used, and no manual rollback is outstanding.
+
 ## 2026-09-04 — expose inspection and isolated removal
 
 - Task 12.9 is source-only. It adds bounded node/gateway catalog projections,
