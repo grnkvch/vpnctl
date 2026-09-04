@@ -2,6 +2,22 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — stable public ingress certificate
+
+### Planned reversible native validation
+
+- Task 12.1 creates the public ingress RSA identity only as part of fresh gateway initialization and keeps it independent from the Ed25519 control CA, gateway control leaf, and enrollment signing key. State receives only validated metadata plus opaque references; the public certificate and PKCS#8 private key are written by the existing root-only secret store. `cert show` exposes metadata, while `cert export` validates and copies only the public PEM with atomic no-replace semantics.
+- Native validation is limited to the already running owner-controlled `vpnctl-v2-gateway` fixture after read-only identity/platform/path checks. Build exactly `/private/tmp/vpnctl-ingress-certificate-task-12.1.test`, copy it only to guest `/tmp/vpnctl-ingress-certificate-task-12.1.test`, copy the versioned token-free fixture only to guest `/tmp/telegram-webhook-gate-task-12.1.py`, and run only `TestPublicCertificateOpenSSLAndTelegramFixtureCompatibility` under the Ubuntu 24.04 amd64 fixture's installed OpenSSL.
+- The selected test generates one short-lived in-test RSA key/certificate under Go `t.TempDir()`, invokes only local `openssl x509` and `openssl verify`, and reads the copied source fixture only to verify its public-certificate multipart boundary. It creates no listener, unit, package, firewall rule, route, interface, persistent state, external request, provider credential, or webhook registration.
+- An armed host/guest cleanup removes only the exact host test binary and two exact guest files. Follow-up must prove all paths absent and no matching process remains. No VM lifecycle or foreign resource is a target; complete rollback is deletion of only those exact files after the bounded test process exits.
+
+### Acceptance and completed rollback
+
+- Read-only preflight confirmed the exact owner-controlled `vpnctl-v2-gateway` fixture running Ubuntu 24.04/amd64 with 1 vCPU, 512 MiB, 10 GiB and OpenSSL 3.0.13. The guest test-binary path and exact host build path were absent before use; the task-unique copied fixture path was not separately checked before its first copy. That is a validation-process gap rather than a product mutation, and future native preflights must enumerate every copied path. The foreign VM was discovery-only.
+- `TestPublicCertificateOpenSSLAndTelegramFixtureCompatibility` passed natively in `0.67s`. OpenSSL parsed the generated RSA-2048/SHA-256 self-signed certificate, verified the exact IPv4 SAN against the certificate itself, and the versioned token-free Telegram fixture accepted only the public PEM multipart contract. No Telegram endpoint, credential, listener, or network mutation was involved.
+- Cleanup removed only `/private/tmp/vpnctl-ingress-certificate-task-12.1.test`, `/tmp/vpnctl-ingress-certificate-task-12.1.test`, and `/tmp/telegram-webhook-gate-task-12.1.py`. Exact path checks and `/proc/*/exe` target inspection proved all three files and the test process absent; no persistent host or VM resource changed and no manual rollback remains.
+- Twenty focused repeats, three focused race-detector repeats, the complete ordinary and race-detector suites, vet, dependency listing, formatting/diff checks, and strict OpenSpec validation passed at `106/156`; `go list` emitted only the known non-fatal global module stat-cache warning. Source rollback is the single task 12.1 commit; no ignored evidence or secret-bearing artifact was retained.
+
 ## Operating rules
 
 1. Never modify, start, stop, or delete a host VM, service, package, network, or file that is not explicitly owned by the `vpnctl-v2` lab.

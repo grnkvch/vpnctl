@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
@@ -72,6 +73,10 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway identity provisioner: %w", err)
 	}
+	publicCertificate, err := ingress.NewPublicCertificateProvisioner(secretStore, ingress.PublicCertificateRuntime{})
+	if err != nil {
+		return nil, fmt.Errorf("create public ingress certificate provisioner: %w", err)
+	}
 	handshakeHosts, err := transport.NewBundledHandshakeHostSelector()
 	if err != nil {
 		return nil, fmt.Errorf("create gateway handshake-host selector: %w", err)
@@ -88,6 +93,7 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 		Paths: paths, Snapshot: snapshot, Manifest: manifest, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
 		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
-		HandshakeHosts: handshakeHosts, Transports: listeners,
+		PublicCertificate: publicCertificate,
+		HandshakeHosts:    handshakeHosts, Transports: listeners,
 	})
 }

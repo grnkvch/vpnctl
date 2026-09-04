@@ -47,6 +47,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isDNSInvocation(args) {
 		return executeDNS(args, stdout, stderr)
 	}
+	if isCertificateInvocation(args) {
+		return executeCertificate(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -883,6 +886,7 @@ Commands:
   apply      Apply current server config to the local system
   confirm    Confirm a lockout-risk transaction from a new SSH session
   dns        Show or change role-owned IPv4 DNS upstreams
+  cert       Inspect or export the gateway public ingress certificate
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets

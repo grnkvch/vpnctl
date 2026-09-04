@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
@@ -81,6 +82,11 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if harness.identity.lastRequest.GatewayID != gatewayTestHostID || harness.identity.lastRequest.NodeCIDR != model.DefaultNodeCIDR ||
 		!harness.identity.lastRequest.Initialized.Equal(time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC)) {
 		t.Fatalf("identity provision request = %+v", harness.identity.lastRequest)
+	}
+	if harness.publicCertificate.provisionCalls != 1 || harness.publicCertificate.lastRequest.GatewayID != gatewayTestHostID ||
+		harness.publicCertificate.lastRequest.PublicIPv4 != "8.8.8.8" ||
+		!harness.publicCertificate.lastRequest.IssuedAt.Equal(time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC)) {
+		t.Fatalf("public certificate provision request = %+v", harness.publicCertificate.lastRequest)
 	}
 	if !reflect.DeepEqual(harness.watchdog.lastArm.NetworkScope, linuxplatform.GatewayInitNetworkScope()) {
 		t.Fatalf("watchdog scope = %+v", harness.watchdog.lastArm.NetworkScope)
@@ -230,6 +236,9 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	if harness.identity.rollbackCalls != 0 {
 		t.Fatalf("persisted control identity was rolled back: %d", harness.identity.rollbackCalls)
 	}
+	if harness.publicCertificate.rollbackCalls != 0 {
+		t.Fatalf("persisted public certificate was rolled back: %d", harness.publicCertificate.rollbackCalls)
+	}
 }
 
 func TestGatewayInitIdentityFailureStopsBeforeWatchdogAndState(t *testing.T) {
@@ -250,6 +259,28 @@ func TestGatewayInitIdentityFailureStopsBeforeWatchdogAndState(t *testing.T) {
 	}
 	if harness.watchdogUnits.applyCalls != 0 || harness.watchdog.armCalls != 0 || harness.state.saveCalls != 0 || harness.roles.applyCalls != 0 || harness.network.calls != 0 {
 		t.Fatal("identity failure crossed the state/network mutation boundary")
+	}
+}
+
+func TestGatewayInitPublicCertificateFailureRollsBackControlIdentityBeforeWatchdog(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.publicCertificate.err = errors.New("synthetic public certificate failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic public certificate failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !reflect.DeepEqual(harness.events.values, []string{"state-load", "identity-provision", "identity-rollback"}) {
+		t.Fatalf("public certificate failure events = %v", harness.events.values)
+	}
+	if harness.identity.rollbackCalls != 1 || harness.publicCertificate.rollbackCalls != 0 ||
+		harness.watchdogUnits.applyCalls != 0 || harness.watchdog.armCalls != 0 || harness.state.saveCalls != 0 {
+		t.Fatalf("public certificate failure crossed boundary: identity rollback=%d public rollback=%d", harness.identity.rollbackCalls, harness.publicCertificate.rollbackCalls)
 	}
 }
 
@@ -393,6 +424,9 @@ func TestGatewayInitStateFailurePurgesNewManagedSwap(t *testing.T) {
 	if harness.identity.rollbackCalls != 1 {
 		t.Fatalf("identity rollback calls = %d", harness.identity.rollbackCalls)
 	}
+	if harness.publicCertificate.rollbackCalls != 1 {
+		t.Fatalf("public certificate rollback calls = %d", harness.publicCertificate.rollbackCalls)
+	}
 }
 
 func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
@@ -406,6 +440,10 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity, err := control.NewGatewayIdentityProvisioner(secretStore, control.GatewayIdentityRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicCertificate, err := ingress.NewPublicCertificateProvisioner(secretStore, ingress.PublicCertificateRuntime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,10 +472,11 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: stateStore, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits,
 		Watchdog: watchdog, Network: network, Swap: &recordingGatewaySwap{}, Identity: identity,
-		HandshakeHosts: &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
-		Transports:     listenerProvisioner,
-		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
-		NewHostID:      func() (string, error) { return gatewayTestHostID, nil },
+		PublicCertificate: publicCertificate,
+		HandshakeHosts:    &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
+		Transports:        listenerProvisioner,
+		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
+		NewHostID:         func() (string, error) { return gatewayTestHostID, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -500,6 +539,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		model.SecretRef(control.ControlCACertificateRef), control.ControlCAPrivateKeyRef,
 		model.SecretRef(control.GatewayControlCertificateRef), control.GatewayControlPrivateKeyRef,
 		model.SecretRef(control.EnrollmentPublicKeyRef), control.EnrollmentPrivateKeyRef,
+		model.SecretRef(ingress.PublicCertificateRef), ingress.PublicCertificatePrivateKeyRef,
 	} {
 		content, err := secretStore.Get(reference)
 		if err != nil || len(content) == 0 {
@@ -518,14 +558,13 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Certificates) != 2 || state.EnrollmentIdentity == nil ||
+	if len(state.Certificates) != 3 || state.EnrollmentIdentity == nil ||
 		state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer {
 		t.Fatalf("gateway init identity state = certificates:%+v enrollment:%+v", state.Certificates, state.EnrollmentIdentity)
 	}
-	for _, certificate := range state.Certificates {
-		if certificate.Kind == model.CertificatePublicIngress {
-			t.Fatalf("gateway init conflated control and public ingress identities: %+v", certificate)
-		}
+	publicStatus, err := ingress.InspectPublicCertificate(state, state.Host.InitializedAt)
+	if err != nil || publicStatus.PublicIPv4 != state.Host.PublicIPv4 || publicStatus.Condition != ingress.PublicCertificateHealthy {
+		t.Fatalf("gateway public ingress identity = %+v, %v", publicStatus, err)
 	}
 	before := append([]string(nil), runner.calls...)
 	second, err := initializer.Plan(context.Background(), validGatewayInitInput())
@@ -635,19 +674,20 @@ func TestBuiltinPresetCatalogLookupDoesNotRestoreDeletedUserSource(t *testing.T)
 const gatewayTestHostID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 type gatewayInitHarness struct {
-	initializer    *GatewayInitializer
-	paths          store.Paths
-	state          *recordingGatewayState
-	roles          *recordingGatewayRoles
-	watchdogUnits  *recordingWatchdogUnits
-	watchdog       *recordingGatewayWatchdog
-	network        *recordingGatewayNetwork
-	swap           *recordingGatewaySwap
-	identity       *recordingGatewayIdentity
-	handshakeHosts *recordingGatewayHandshakeHosts
-	transports     *recordingGatewayTransports
-	events         *gatewayInitEvents
-	idCalls        int
+	initializer       *GatewayInitializer
+	paths             store.Paths
+	state             *recordingGatewayState
+	roles             *recordingGatewayRoles
+	watchdogUnits     *recordingWatchdogUnits
+	watchdog          *recordingGatewayWatchdog
+	network           *recordingGatewayNetwork
+	swap              *recordingGatewaySwap
+	identity          *recordingGatewayIdentity
+	publicCertificate *recordingGatewayPublicCertificate
+	handshakeHosts    *recordingGatewayHandshakeHosts
+	transports        *recordingGatewayTransports
+	events            *gatewayInitEvents
+	idCalls           int
 }
 
 func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
@@ -673,16 +713,18 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	network := &recordingGatewayNetwork{events: events}
 	swap := &recordingGatewaySwap{events: events}
 	identity := newRecordingGatewayIdentity(events)
+	publicCertificate := &recordingGatewayPublicCertificate{}
 	handshakeHosts := &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()}
 	transports := &recordingGatewayTransports{events: events}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, handshakeHosts: handshakeHosts, transports: transports, events: events}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
-		HandshakeHosts: handshakeHosts,
-		Transports:     transports,
-		Now:            func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
-		NewHostID:      func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
+		PublicCertificate: publicCertificate,
+		HandshakeHosts:    handshakeHosts,
+		Transports:        transports,
+		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
+		NewHostID:         func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
 	initializer, err := NewGatewayInitializer(runtime)
 	if err != nil {
@@ -781,10 +823,10 @@ func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 	if state.DNS == nil || state.DNS.Scope != model.DNSUpstreamGateway || !reflect.DeepEqual(state.DNS.IPv4, model.DefaultGatewayDNSUpstreams()) {
 		t.Fatalf("initial gateway DNS state = %+v", state.DNS)
 	}
-	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 2 || state.EnrollmentIdentity == nil {
+	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
 		t.Fatalf("initial PKI state = presets:%v certificates:%v enrollment:%v", state.Presets, state.Certificates, state.EnrollmentIdentity)
 	}
-	if state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer || state.EnrollmentIdentity.Algorithm != "Ed25519" {
+	if state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer || state.Certificates[2].Kind != model.CertificatePublicIngress || state.EnrollmentIdentity.Algorithm != "Ed25519" {
 		t.Fatalf("initial control identity metadata = certificates:%v enrollment:%v", state.Certificates, state.EnrollmentIdentity)
 	}
 }
@@ -869,7 +911,7 @@ func containsString(values []string, target string) bool {
 
 func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 	t.Helper()
-	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 || harness.transports.provisionCalls != 0 {
+	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 || harness.publicCertificate.provisionCalls != 0 || harness.transports.provisionCalls != 0 {
 		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d transports=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls, harness.transports.provisionCalls)
 	}
 	for _, path := range []string{harness.paths.ConfigDir, harness.paths.StateDir, harness.paths.RuntimeDir} {
@@ -1039,6 +1081,13 @@ type recordingGatewayIdentity struct {
 	err            error
 }
 
+type recordingGatewayPublicCertificate struct {
+	provisionCalls int
+	rollbackCalls  int
+	lastRequest    ingress.PublicCertificateRequest
+	err            error
+}
+
 type recordingGatewayHandshakeHosts struct {
 	selection model.HandshakeHost
 	calls     int
@@ -1098,6 +1147,30 @@ func (identity *recordingGatewayIdentity) Provision(_ context.Context, request c
 func (identity *recordingGatewayIdentity) Rollback(_ context.Context, _ control.GatewayIdentityInstallation) error {
 	identity.events.add("identity-rollback")
 	identity.rollbackCalls++
+	return nil
+}
+
+func (certificate *recordingGatewayPublicCertificate) Provision(_ context.Context, request ingress.PublicCertificateRequest) (ingress.PublicCertificateInstallation, error) {
+	certificate.provisionCalls++
+	certificate.lastRequest = request
+	if certificate.err != nil {
+		return ingress.PublicCertificateInstallation{}, certificate.err
+	}
+	return ingress.PublicCertificateInstallation{
+		Certificate: model.Certificate{
+			SchemaVersion: model.ResourceSchemaVersion, ID: "33333333-3333-4333-8333-333333333333",
+			Kind: model.CertificatePublicIngress, OwnerKind: "host", OwnerID: request.GatewayID,
+			Fingerprint: "sha256:" + strings.Repeat("4", 64), SerialHex: "03", Subject: "CN=" + request.PublicIPv4,
+			SANs: []string{"IP:" + request.PublicIPv4}, NotBefore: request.IssuedAt.UTC(), NotAfter: request.IssuedAt.UTC().Add(ingress.PublicCertificateValidity),
+			WarningDays: ingress.PublicCertificateWarningDays, Generation: 1,
+			CertificateRef: ingress.PublicCertificateRef, PrivateKeyRef: ingress.PublicCertificatePrivateKeyRef,
+		},
+		OwnedReferences: []model.SecretRef{model.SecretRef(ingress.PublicCertificateRef), ingress.PublicCertificatePrivateKeyRef},
+	}, nil
+}
+
+func (certificate *recordingGatewayPublicCertificate) Rollback(_ context.Context, _ ingress.PublicCertificateInstallation) error {
+	certificate.rollbackCalls++
 	return nil
 }
 

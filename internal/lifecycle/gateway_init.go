@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
@@ -112,6 +113,11 @@ type GatewayInitIdentityProvisioner interface {
 	Rollback(context.Context, control.GatewayIdentityInstallation) error
 }
 
+type GatewayInitPublicCertificateProvisioner interface {
+	Provision(context.Context, ingress.PublicCertificateRequest) (ingress.PublicCertificateInstallation, error)
+	Rollback(context.Context, ingress.PublicCertificateInstallation) error
+}
+
 type GatewayInitHandshakeHostSelector interface {
 	Select(context.Context, int, time.Time) (model.HandshakeHost, error)
 }
@@ -122,22 +128,23 @@ type GatewayInitTransportProvisioner interface {
 }
 
 type GatewayInitRuntime struct {
-	Paths          store.Paths
-	Snapshot       linuxplatform.HostSnapshot
-	Manifest       model.ComponentManifest
-	BinaryPath     string
-	State          GatewayInitStateStore
-	Layout         *GatewayLayoutInstaller
-	Roles          GatewayInitRoleInstaller
-	WatchdogUnits  GatewayInitWatchdogUnitInstaller
-	Watchdog       GatewayInitWatchdog
-	Network        GatewayInitNetworkActivator
-	Swap           GatewayInitSwapManager
-	Identity       GatewayInitIdentityProvisioner
-	HandshakeHosts GatewayInitHandshakeHostSelector
-	Transports     GatewayInitTransportProvisioner
-	Now            func() time.Time
-	NewHostID      model.UUIDGenerator
+	Paths             store.Paths
+	Snapshot          linuxplatform.HostSnapshot
+	Manifest          model.ComponentManifest
+	BinaryPath        string
+	State             GatewayInitStateStore
+	Layout            *GatewayLayoutInstaller
+	Roles             GatewayInitRoleInstaller
+	WatchdogUnits     GatewayInitWatchdogUnitInstaller
+	Watchdog          GatewayInitWatchdog
+	Network           GatewayInitNetworkActivator
+	Swap              GatewayInitSwapManager
+	Identity          GatewayInitIdentityProvisioner
+	PublicCertificate GatewayInitPublicCertificateProvisioner
+	HandshakeHosts    GatewayInitHandshakeHostSelector
+	Transports        GatewayInitTransportProvisioner
+	Now               func() time.Time
+	NewHostID         model.UUIDGenerator
 }
 
 type GatewayInitializer struct {
@@ -145,7 +152,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.HandshakeHosts == nil || runtime.Transports == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.PublicCertificate == nil || runtime.HandshakeHosts == nil || runtime.Transports == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -379,22 +386,36 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 	rollbackIdentity := func(applyErr error) (GatewayInitResult, error) {
 		return GatewayInitResult{}, errors.Join(applyErr, initializer.runtime.Identity.Rollback(context.Background(), identity))
 	}
+	publicCertificate, err := initializer.runtime.PublicCertificate.Provision(ctx, ingress.PublicCertificateRequest{
+		GatewayID: plan.HostID, PublicIPv4: plan.Network.PublicIPv4, IssuedAt: plan.desiredState.Host.InitializedAt,
+	})
+	if err != nil {
+		return rollbackIdentity(fmt.Errorf("provision public ingress certificate: %w", err))
+	}
+	rollbackIdentities := func(applyErr error) (GatewayInitResult, error) {
+		return GatewayInitResult{}, errors.Join(
+			applyErr,
+			initializer.runtime.PublicCertificate.Rollback(context.Background(), publicCertificate),
+			initializer.runtime.Identity.Rollback(context.Background(), identity),
+		)
+	}
 	candidate := plan.desiredState
 	candidate.Certificates = append([]model.Certificate(nil), identity.Certificates...)
+	candidate.Certificates = append(candidate.Certificates, publicCertificate.Certificate)
 	enrollmentIdentity := identity.EnrollmentIdentity
 	candidate.EnrollmentIdentity = &enrollmentIdentity
 	if err := candidate.Validate(); err != nil {
-		return rollbackIdentity(fmt.Errorf("validate provisioned gateway identity: %w", err))
+		return rollbackIdentities(fmt.Errorf("validate provisioned gateway identity: %w", err))
 	}
 	if _, err := initializer.runtime.WatchdogUnits.Apply(ctx, plan.watchdogUnits); err != nil {
-		return rollbackIdentity(fmt.Errorf("install gateway watchdog units: %w", err))
+		return rollbackIdentities(fmt.Errorf("install gateway watchdog units: %w", err))
 	}
 	transaction, err := initializer.runtime.Watchdog.Arm(ctx, GatewayInitWatchdogArm{
 		AllowedSSHPort: plan.SSH.Port, Origin: plan.SSH.Connection,
 		NetworkScope: linuxplatform.GatewayInitNetworkScope(),
 	})
 	if err != nil {
-		return rollbackIdentity(fmt.Errorf("arm gateway lockout watchdog: %w", err))
+		return rollbackIdentities(fmt.Errorf("arm gateway lockout watchdog: %w", err))
 	}
 	var createdSwap *model.ManagedSwap
 	var transportInstallation *transport.GatewayListenerInstallation
@@ -411,7 +432,10 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 			swapErr = initializer.runtime.Swap.Deactivate(ctx, *createdSwap, true)
 		}
 		if !statePersisted {
-			identityErr = initializer.runtime.Identity.Rollback(context.Background(), identity)
+			identityErr = errors.Join(
+				initializer.runtime.PublicCertificate.Rollback(context.Background(), publicCertificate),
+				initializer.runtime.Identity.Rollback(context.Background(), identity),
+			)
 		}
 		return GatewayInitResult{}, errors.Join(applyErr, rollbackErr, transportErr, swapErr, identityErr)
 	}
