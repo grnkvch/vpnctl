@@ -10,6 +10,10 @@ import (
 )
 
 func RunDoctor(ctx context.Context, role HostRole, scope operations.DoctorScope, doctor *operations.Doctor) (output.Result, error) {
+	return RunDoctorWithOptions(ctx, role, scope, operations.DoctorOptions{}, doctor)
+}
+
+func RunDoctorWithOptions(ctx context.Context, role HostRole, scope operations.DoctorScope, options operations.DoctorOptions, doctor *operations.Doctor) (output.Result, error) {
 	if ctx == nil {
 		return output.Result{}, fmt.Errorf("context is required")
 	}
@@ -18,7 +22,7 @@ func RunDoctor(ctx context.Context, role HostRole, scope operations.DoctorScope,
 	}
 	var result output.Result
 	err := V2CommandRegistry().Dispatch("doctor", role, func(CommandSpec) error {
-		report, err := doctor.Run(ctx, scope)
+		report, err := doctor.RunWithOptions(ctx, scope, options)
 		if err != nil {
 			return err
 		}
@@ -48,8 +52,11 @@ func doctorResult(report operations.DoctorReport) (output.Result, error) {
 			"resource_kind": check.ResourceKind, "resource_id": check.ResourceID, "status": string(check.Status),
 			"code": check.Code, "elapsed_ms": check.ElapsedMS,
 		}
+		if check.Detail != "" {
+			checks[index]["detail"] = check.Detail
+		}
 		rows[index] = []string{
-			check.Name, string(check.Protocol), string(check.Status), check.Code, strconv.FormatInt(check.ElapsedMS, 10),
+			check.Name, string(check.Protocol), string(check.Status), check.Code, strconv.FormatInt(check.ElapsedMS, 10), check.Detail,
 		}
 	}
 	result := output.NewResult("doctor", status, category, output.SafeObject{
@@ -65,7 +72,7 @@ func doctorResult(report operations.DoctorReport) (output.Result, error) {
 			ResourceIDs: map[string]string{check.ResourceKind + "_id": check.ResourceID},
 		})
 	}
-	if err := result.AddHumanTable("checks", []string{"name", "protocol", "status", "code", "elapsed_ms"}, rows); err != nil {
+	if err := result.AddHumanTable("checks", []string{"name", "protocol", "status", "code", "elapsed_ms", "detail"}, rows); err != nil {
 		return output.Result{}, err
 	}
 	return result, result.Validate()

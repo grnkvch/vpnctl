@@ -53,11 +53,11 @@
       "required": ["name", "status"],
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$", "maxLength": 128 },
-        "scope": { "enum": ["dns", "transport", "tunnel", "ingress"] },
+        "scope": { "enum": ["dns", "transport", "tunnel", "ingress", "external"] },
         "kind": {
           "enum": [
             "direct_dns", "gateway_dns", "active_transport", "tunnel_session",
-            "tunnel_mapping", "ingress_tls", "ingress_health", "local_upstream"
+            "tunnel_mapping", "ingress_tls", "ingress_health", "local_upstream", "external_https_get"
           ]
         },
         "protocol": { "enum": ["dns_udp", "dns_tcp", "tcp", "udp", "tls", "https"] },
@@ -77,6 +77,10 @@
             "name", "scope", "kind", "protocol", "resource_kind", "resource_id",
             "status", "code", "elapsed_ms"
           ]
+        },
+        {
+          "if": { "properties": { "status": { "const": "skipped" } }, "required": ["status"] },
+          "then": { "required": ["detail"] }
         }
       ]
     }

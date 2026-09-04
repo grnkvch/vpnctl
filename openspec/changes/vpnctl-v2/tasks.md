@@ -159,7 +159,7 @@
 - [x] 13.5 Implement previewed, confirmed `repair` for vpnctl-owned drift only; verify foreign resources remain unchanged and repaired hashes match desired generation.
 - [x] 13.6 Implement passive `status`, default problem-focused human view, `--all`, full JSON, invitations/log/cert/backup warnings, component versions, generations, hashes, pending/drift, and specified exit behavior; verify it emits no synthetic traffic.
 - [x] 13.7 Implement bounded role-aware `doctor` scopes for direct/gateway DNS, active transport, tunnel, ingress, local upstreams, TLS, TCP, and UDP; verify standby is skipped, real webhook paths are not called, deadlines hold, and failures map to degraded exit.
-- [ ] 13.8 Implement explicit safe `--probe-url` GET and `SKIPPED` outcomes for unknown external dependencies; verify no body, credentials, hidden provider endpoint, or configuration mutation.
+- [x] 13.8 Implement explicit safe `--probe-url` GET and `SKIPPED` outcomes for unknown external dependencies; verify no body, credentials, hidden provider endpoint, or configuration mutation.
 - [ ] 13.9 Implement persisted logging opt-ins for all scopes/levels with required duration capped at one hour, restart-safe expiry, journald default, optional `0600` bounded file, status, and disable; verify default-off and automatic expiry across restarts.
 - [ ] 13.10 Apply source-level redaction to controller, transports, routing, DNS, tunnel, and ingress and disable hidden telemetry/update checks; verify canary-secret E2E scans of stdout, stderr, journal, files, state, and network captures.
 - [ ] 13.11 Verify controller outage/restart leaves all applied data-plane processes and configs working while management returns unavailable; add this as a repeatable fault-injection suite.

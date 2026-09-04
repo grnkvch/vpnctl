@@ -23,11 +23,25 @@ Standby and disabled transports are structurally absent from the probe plan.
 Disabled exposes are also omitted. A role/resource that is legitimately not
 applicable is reported as `skipped`; missing configured DNS paths are failures.
 
-The request type has a closed kind/protocol matrix. Its only HTTP path is the
-constant reserved health path. User expose paths, webhook URLs, provider API
-endpoints, credentials, request bodies, and desired-state/mutation handles are
-not fields of a valid request. Execution endpoints are adapter-only and are
-not copied into human or JSON results.
+The request type has a closed kind/protocol matrix. Its only built-in HTTP path
+is the constant reserved health path. User expose paths, webhook URLs, provider
+API endpoints, credentials, request bodies, and desired-state/mutation handles
+are not fields of a built-in request. Execution endpoints are adapter-only and
+are not copied into human or JSON results.
+
+`--probe-url <https-url>` is the sole opt-in external target. The URL must be
+absolute HTTPS, must not contain userinfo or a fragment, and is held in a
+redacting, non-serializable value. It is exposed to the HTTP adapter through a
+narrow callback only while constructing the request. The adapter performs one
+direct `GET`: no request body, cookies, authorization, client certificate,
+environment proxy, or redirect following. Its only explicit header is a
+`User-Agent` carrying the synthetic probe ID. A 2xx response passes; a redirect
+is reported but never followed, and any other status fails the check.
+
+When ingress diagnostics have no explicit URL, the optional third-party check
+is `skipped` with `external_endpoint_unspecified` and a human explanation.
+This is successful, contacts nothing, and documents that vpnctl has no hidden
+telemetry or provider-operated fallback endpoint.
 
 ## Bounds and results
 

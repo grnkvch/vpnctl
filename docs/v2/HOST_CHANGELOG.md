@@ -2,6 +2,54 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — explicit external doctor probe
+
+### Planned reversible validation
+
+- Task 13.8 is source-only. `--probe-url` will be represented by a redacting,
+  non-serializable HTTPS URL value and will add exactly one bounded external
+  check. The concrete adapter will issue exactly one direct GET with no body,
+  userinfo, cookies, authorization, client credentials, proxy, or redirect
+  following; its only added header will carry the synthetic doctor probe ID.
+- The explicit URL and its path/query will be available only through a narrow
+  callback during request construction. They will not enter the doctor report,
+  warning text, JSON, human output, generic formatting, state, config, or logs.
+  Invalid/non-HTTPS URLs will fail before state read or any runner invocation.
+- When ingress diagnostics have no operator-supplied external target, doctor
+  will report a non-failing `skipped` check with a fixed explanation that
+  hidden vpnctl telemetry/provider endpoints are disabled. It will not invent,
+  discover, persist, or call a third-party address.
+- Tests use an in-memory HTTP round tripper and mutation-audited base runner;
+  they open no socket, send no packet/DNS/HTTP request, write no config/state,
+  and touch no host, VM, webhook, provider, proxy, or credential. Repository
+  rollback is limited to the task 13.8 commit; no host rollback is required.
+
+### Acceptance
+
+- `DoctorProbeURL` now accepts only an absolute HTTPS URL without userinfo or a
+  fragment, caps it at 2048 bytes, exposes it only through a callback, redacts
+  all string/Go formatting, and rejects JSON/text serialization. Invalid flag
+  input can therefore fail before state read, while the exact accepted
+  path/query is retained solely for the explicit network operation.
+- The concrete decorator delegates all built-in checks and handles only the
+  closed `external_https_get` kind. It calls `RoundTrip` once with `GET`, a nil
+  body, no GetBody/cookie/auth/client-certificate/proxy inputs, no redirect
+  machinery, and only a probe-ID User-Agent. It closes but never reads the
+  response body, accepts 2xx, reports 3xx without following it, and reduces
+  every other status/error to stable non-secret evidence.
+- Default/ingress doctor without an explicit URL emits an ordered successful
+  `skipped` check with `external_endpoint_unspecified` and a fixed explanation
+  that hidden telemetry/provider targets are disabled. Supplying the URL
+  replaces that check with one deadline-bound external result. Neither URL nor
+  endpoint is present in domain reports, human/JSON output, warnings, generic
+  formatting, state, or configuration.
+- Ten repeated focused suites, five focused race-detector suites, complete
+  uncached ordinary and race-detector suites, vet, full dependency listing,
+  Bash/JSON syntax, formatting/diff checks, strict diagnostic-schema regression,
+  and strict OpenSpec validation passed at `124/156`. All HTTP assertions used
+  an in-memory RoundTripper; no host/VM, socket, packet, DNS/HTTP, webhook,
+  provider, proxy, credential, state, or configuration mutation occurred.
+
 ## 2026-09-04 — bounded role-aware doctor
 
 ### Planned reversible validation

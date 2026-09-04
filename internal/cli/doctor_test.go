@@ -66,6 +66,35 @@ func TestDoctorFailureUsesDegradedUnavailableExit(t *testing.T) {
 	}
 }
 
+func TestDoctorSkippedExternalDependencyIsSuccessfulAndExplained(t *testing.T) {
+	t.Parallel()
+
+	report := operations.DoctorReport{
+		Role: model.RoleGateway, Scope: operations.DoctorScopeIngress, RunID: "11111111-1111-4111-8111-111111111111",
+		Overall: operations.StatusOverallHealthy,
+		Checks: []operations.DoctorCheck{{
+			Name: "external.explicit_https_get", Scope: operations.DoctorScopeExternal, Kind: operations.DoctorProbeExternalHTTPS,
+			Protocol: operations.DoctorProtocolHTTPS, ResourceKind: "external_dependency", ResourceID: "explicit",
+			Status: operations.DoctorCheckSkipped, Code: "external_endpoint_unspecified", ElapsedMS: 0,
+			Detail: "No explicit endpoint was supplied; hidden telemetry is disabled.",
+		}},
+	}
+	result, err := doctorResult(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != output.StatusOK || result.ExitCategory != output.CategorySuccess || len(result.Warnings) != 0 {
+		t.Fatalf("skipped external result = %+v", result)
+	}
+	var human bytes.Buffer
+	if err := output.RenderHuman(&human, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human.String(), "hidden telemetry is disabled") || !strings.Contains(human.String(), "status=skipped") {
+		t.Fatalf("skipped external explanation missing: %s", human.String())
+	}
+}
+
 func TestRunDoctorRejectsUnsupportedRoleBeforeExecution(t *testing.T) {
 	t.Parallel()
 

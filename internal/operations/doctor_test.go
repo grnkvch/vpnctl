@@ -36,11 +36,11 @@ func TestDoctorGatewayDefaultPlanIsRoleAwareActiveOnlyAndPathSafe(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Overall != StatusOverallHealthy || report.Scope != DoctorScopeDefault || len(report.Checks) != 15 || source.reads != 1 || source.writes != 0 {
+	if report.Overall != StatusOverallHealthy || report.Scope != DoctorScopeDefault || len(report.Checks) != 16 || source.reads != 1 || source.writes != 0 {
 		t.Fatalf("gateway doctor report = %+v; source=%+v", report, source)
 	}
 	requests := runner.Requests()
-	if len(requests) != len(report.Checks) {
+	if len(requests) != 15 {
 		t.Fatalf("gateway requests/checks = %d/%d", len(requests), len(report.Checks))
 	}
 	seenIDs := map[string]struct{}{}
@@ -88,7 +88,7 @@ func TestDoctorNodeUsesRestrictedSelectionAndKeepsTargetsOutOfReport(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Overall != StatusOverallHealthy || len(report.Checks) != 14 {
+	if report.Overall != StatusOverallHealthy || len(report.Checks) != 15 {
 		t.Fatalf("node doctor report = %+v", report)
 	}
 	requests := runner.Requests()
@@ -116,7 +116,7 @@ func TestDoctorNodeUsesRestrictedSelectionAndKeepsTargetsOutOfReport(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"127.0.0.1:3000", "203.0.113.10:443", doctorWebhookPathCanary, model.ReservedHealthPath, "endpoint", "health_path"} {
+	for _, forbidden := range []string{"127.0.0.1:3000", "203.0.113.10:443", doctorWebhookPathCanary, model.ReservedHealthPath, `"endpoint"`, `"health_path"`} {
 		if bytes.Contains(encoded, []byte(forbidden)) {
 			t.Fatalf("doctor report leaked execution target %q: %s", forbidden, encoded)
 		}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -42,6 +44,7 @@ const (
 	DoctorScopeTransport DoctorScope = "transport"
 	DoctorScopeTunnel    DoctorScope = "tunnel"
 	DoctorScopeIngress   DoctorScope = "ingress"
+	DoctorScopeExternal  DoctorScope = "external"
 )
 
 type DoctorProbeKind string
@@ -55,6 +58,7 @@ const (
 	DoctorProbeIngressTLS      DoctorProbeKind = "ingress_tls"
 	DoctorProbeIngressHealth   DoctorProbeKind = "ingress_health"
 	DoctorProbeLocalUpstream   DoctorProbeKind = "local_upstream"
+	DoctorProbeExternalHTTPS   DoctorProbeKind = "external_https_get"
 )
 
 type DoctorProtocol string
@@ -79,6 +83,66 @@ const (
 type DoctorLimits struct {
 	Overall time.Duration
 	Probe   time.Duration
+}
+
+var ErrDoctorProbeURLSerialization = errors.New("doctor probe URL must not be serialized")
+
+type DoctorProbeURL struct{ value string }
+
+func NewDoctorProbeURL(value string) (DoctorProbeURL, error) {
+	if value == "" || len(value) > 2048 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
+		return DoctorProbeURL{}, fmt.Errorf("doctor probe URL must be a non-empty trimmed single line of at most 2048 bytes")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.User != nil || parsed.Fragment != "" {
+		return DoctorProbeURL{}, fmt.Errorf("doctor probe URL must be an absolute credential-free HTTPS URL without a fragment")
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, parseErr := strconv.Atoi(port)
+		if parseErr != nil || portNumber < 1 || portNumber > 65535 {
+			return DoctorProbeURL{}, fmt.Errorf("doctor probe URL has an invalid port")
+		}
+	}
+	return DoctorProbeURL{value: value}, nil
+}
+
+func (probeURL DoctorProbeURL) Present() bool { return probeURL.value != "" }
+
+func (probeURL DoctorProbeURL) Use(callback func(string) error) error {
+	if !probeURL.Present() {
+		return fmt.Errorf("doctor probe URL is not initialized")
+	}
+	if callback == nil {
+		return fmt.Errorf("doctor probe URL callback is required")
+	}
+	return callback(probeURL.value)
+}
+
+func (DoctorProbeURL) String() string   { return "<sensitive-url>" }
+func (DoctorProbeURL) GoString() string { return "<sensitive-url>" }
+func (DoctorProbeURL) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, "<sensitive-url>")
+}
+func (DoctorProbeURL) MarshalJSON() ([]byte, error) { return nil, ErrDoctorProbeURLSerialization }
+func (DoctorProbeURL) MarshalText() ([]byte, error) { return nil, ErrDoctorProbeURLSerialization }
+
+type DoctorOptions struct {
+	ProbeURL DoctorProbeURL
+}
+
+func (options DoctorOptions) validate() error {
+	if !options.ProbeURL.Present() {
+		return nil
+	}
+	var value string
+	if err := options.ProbeURL.Use(func(candidate string) error { value = candidate; return nil }); err != nil {
+		return err
+	}
+	validated, err := NewDoctorProbeURL(value)
+	if err != nil || !validated.Present() {
+		return fmt.Errorf("doctor probe URL is invalid")
+	}
+	return nil
 }
 
 func (limits DoctorLimits) normalized() (DoctorLimits, error) {
@@ -107,24 +171,27 @@ func (limits DoctorLimits) normalized() (DoctorLimits, error) {
 // HealthPath can only be vpnctl's fixed reserved health path; an expose/webhook
 // path is therefore not representable as a valid doctor request.
 type DoctorProbeRequest struct {
-	ProbeID       string
-	Scope         DoctorScope
-	Name          string
-	Kind          DoctorProbeKind
-	Protocol      DoctorProtocol
-	ResourceKind  string
-	ResourceID    string
-	Endpoint      string
-	HealthPath    string
-	Transport     model.TransportKind
-	OuterProtocol model.NetworkProtocol
+	ProbeID         string
+	Scope           DoctorScope
+	Name            string
+	Kind            DoctorProbeKind
+	Protocol        DoctorProtocol
+	ResourceKind    string
+	ResourceID      string
+	Endpoint        string
+	HealthPath      string
+	Transport       model.TransportKind
+	OuterProtocol   model.NetworkProtocol
+	HTTPMethod      string
+	FollowRedirects bool
+	ProbeURL        DoctorProbeURL
 }
 
 func (request DoctorProbeRequest) Validate() error {
 	if !doctorProbeIDPattern.MatchString(request.ProbeID) {
 		return fmt.Errorf("doctor probe ID is invalid")
 	}
-	if request.Scope != DoctorScopeDNS && request.Scope != DoctorScopeTransport && request.Scope != DoctorScopeTunnel && request.Scope != DoctorScopeIngress {
+	if !validDoctorCheckScope(request.Scope) {
 		return fmt.Errorf("doctor probe scope is invalid")
 	}
 	if request.Name == "" || len(request.Name) > 128 || !doctorNamePattern.MatchString(request.Name) {
@@ -150,7 +217,7 @@ func (request DoctorProbeRequest) Validate() error {
 		if request.Protocol != DoctorProtocolDNSUDP && request.Protocol != DoctorProtocolDNSTCP {
 			return fmt.Errorf("DNS probe protocol is invalid")
 		}
-		if request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" {
+		if request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" || request.HTTPMethod != "" || request.FollowRedirects || request.ProbeURL.Present() {
 			return fmt.Errorf("DNS probe target is invalid")
 		}
 	case DoctorProbeActiveTransport:
@@ -163,20 +230,31 @@ func (request DoctorProbeRequest) Validate() error {
 		if request.OuterProtocol != model.ProtocolTCP && request.OuterProtocol != model.ProtocolUDP {
 			return fmt.Errorf("active transport outer protocol is invalid")
 		}
-		if request.Endpoint != "" || request.HealthPath != "" {
+		if request.Endpoint != "" || request.HealthPath != "" || request.HTTPMethod != "" || request.FollowRedirects || request.ProbeURL.Present() {
 			return fmt.Errorf("active transport probe cannot carry an arbitrary endpoint or path")
 		}
 	case DoctorProbeTunnelSession, DoctorProbeTunnelMapping, DoctorProbeLocalUpstream:
-		if request.Protocol != DoctorProtocolTCP || request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" {
+		if request.Protocol != DoctorProtocolTCP || request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" || request.HTTPMethod != "" || request.FollowRedirects || request.ProbeURL.Present() {
 			return fmt.Errorf("TCP probe target is invalid")
 		}
 	case DoctorProbeIngressTLS:
-		if request.Protocol != DoctorProtocolTLS || request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" {
+		if request.Protocol != DoctorProtocolTLS || request.Endpoint == "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" || request.HTTPMethod != "" || request.FollowRedirects || request.ProbeURL.Present() {
 			return fmt.Errorf("ingress TLS probe target is invalid")
 		}
 	case DoctorProbeIngressHealth:
-		if request.Protocol != DoctorProtocolHTTPS || request.Endpoint == "" || request.HealthPath != model.ReservedHealthPath || request.Transport != "" || request.OuterProtocol != "" {
+		if request.Protocol != DoctorProtocolHTTPS || request.Endpoint == "" || request.HealthPath != model.ReservedHealthPath || request.Transport != "" || request.OuterProtocol != "" || request.HTTPMethod != "" || request.FollowRedirects || request.ProbeURL.Present() {
 			return fmt.Errorf("ingress health probe target is invalid")
+		}
+	case DoctorProbeExternalHTTPS:
+		if request.Protocol != DoctorProtocolHTTPS || request.Endpoint != "" || request.HealthPath != "" || request.Transport != "" || request.OuterProtocol != "" ||
+			request.HTTPMethod != "GET" || request.FollowRedirects || !request.ProbeURL.Present() {
+			return fmt.Errorf("external HTTPS probe must be a credential-free non-redirecting GET")
+		}
+		if err := request.ProbeURL.Use(func(value string) error {
+			_, err := NewDoctorProbeURL(value)
+			return err
+		}); err != nil {
+			return fmt.Errorf("external HTTPS probe URL is invalid: %w", err)
 		}
 	default:
 		return fmt.Errorf("doctor probe kind is invalid")
@@ -213,6 +291,7 @@ type DoctorCheck struct {
 	Status       DoctorCheckStatus `json:"status"`
 	Code         string            `json:"code"`
 	ElapsedMS    int64             `json:"elapsed_ms"`
+	Detail       string            `json:"detail,omitempty"`
 }
 
 func (check DoctorCheck) validate() error {
@@ -220,7 +299,7 @@ func (check DoctorCheck) validate() error {
 		len(check.ResourceKind) > 64 || len(check.ResourceID) > 256 || strings.ContainsAny(check.ResourceKind+check.ResourceID, "\x00\t\r\n") {
 		return fmt.Errorf("doctor check identity is invalid")
 	}
-	if check.Scope != DoctorScopeDNS && check.Scope != DoctorScopeTransport && check.Scope != DoctorScopeTunnel && check.Scope != DoctorScopeIngress {
+	if !validDoctorCheckScope(check.Scope) {
 		return fmt.Errorf("doctor check scope is invalid")
 	}
 	switch check.Status {
@@ -236,6 +315,12 @@ func (check DoctorCheck) validate() error {
 	}
 	if !validDoctorKindScope(check.Kind, check.Scope) {
 		return fmt.Errorf("doctor check kind/scope is invalid")
+	}
+	if len(check.Detail) > 4096 || strings.ContainsAny(check.Detail, "\x00\r\n") || check.Detail != strings.TrimSpace(check.Detail) {
+		return fmt.Errorf("doctor check detail is invalid")
+	}
+	if check.Status == DoctorCheckSkipped && check.Detail == "" {
+		return fmt.Errorf("skipped doctor check requires an explanation")
 	}
 	return nil
 }
@@ -303,6 +388,10 @@ func NewDoctor(role model.Role, state StatusStateSource, runner DoctorProbeRunne
 }
 
 func (doctor *Doctor) Run(ctx context.Context, scope DoctorScope) (DoctorReport, error) {
+	return doctor.RunWithOptions(ctx, scope, DoctorOptions{})
+}
+
+func (doctor *Doctor) RunWithOptions(ctx context.Context, scope DoctorScope, options DoctorOptions) (DoctorReport, error) {
 	if ctx == nil {
 		return DoctorReport{}, fmt.Errorf("context is required")
 	}
@@ -311,6 +400,9 @@ func (doctor *Doctor) Run(ctx context.Context, scope DoctorScope) (DoctorReport,
 	}
 	if !validDoctorScope(scope) {
 		return DoctorReport{}, fmt.Errorf("doctor scope %q is invalid", scope)
+	}
+	if err := options.validate(); err != nil {
+		return DoctorReport{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return DoctorReport{}, err
@@ -329,7 +421,7 @@ func (doctor *Doctor) Run(ctx context.Context, scope DoctorScope) (DoctorReport,
 	if err != nil || model.ValidateResourceID(runID) != nil {
 		return DoctorReport{}, fmt.Errorf("generate doctor run ID")
 	}
-	requests, checks, err := planDoctorProbes(state, scope, runID)
+	requests, checks, err := planDoctorProbesWithOptions(state, scope, runID, options)
 	if err != nil {
 		return DoctorReport{}, err
 	}
@@ -382,6 +474,10 @@ func (doctor *Doctor) Run(ctx context.Context, scope DoctorScope) (DoctorReport,
 }
 
 func planDoctorProbes(state model.State, scope DoctorScope, runID string) ([]DoctorProbeRequest, []DoctorCheck, error) {
+	return planDoctorProbesWithOptions(state, scope, runID, DoctorOptions{})
+}
+
+func planDoctorProbesWithOptions(state model.State, scope DoctorScope, runID string, options DoctorOptions) ([]DoctorProbeRequest, []DoctorCheck, error) {
 	requests := []DoctorProbeRequest{}
 	checks := []DoctorCheck{}
 	include := func(candidate DoctorScope) bool { return scope == DoctorScopeDefault || scope == candidate }
@@ -410,6 +506,19 @@ func planDoctorProbes(state model.State, scope DoctorScope, runID string) ([]Doc
 		}
 		requests = append(requests, planned...)
 		checks = append(checks, skipped...)
+		if !options.ProbeURL.Present() {
+			checks = append(checks, DoctorCheck{
+				Name: "external.explicit_https_get", Scope: DoctorScopeExternal, Kind: DoctorProbeExternalHTTPS, Protocol: DoctorProtocolHTTPS,
+				ResourceKind: "external_dependency", ResourceID: "explicit", Status: DoctorCheckSkipped, Code: "external_endpoint_unspecified",
+				Detail: "No explicit third-party endpoint was supplied; hidden vpnctl telemetry and provider targets are disabled.",
+			})
+		}
+	}
+	if options.ProbeURL.Present() {
+		requests = append(requests, DoctorProbeRequest{
+			Scope: DoctorScopeExternal, Name: "external.explicit_https_get", Kind: DoctorProbeExternalHTTPS, Protocol: DoctorProtocolHTTPS,
+			ResourceKind: "external_dependency", ResourceID: "explicit", HTTPMethod: "GET", FollowRedirects: false, ProbeURL: options.ProbeURL,
+		})
 	}
 	sort.Slice(requests, func(left, right int) bool {
 		return doctorRequestOrder(requests[left]) < doctorRequestOrder(requests[right])
@@ -488,6 +597,7 @@ func planDoctorTransports(state model.State) ([]DoctorProbeRequest, []DoctorChec
 		return nil, []DoctorCheck{{
 			Name: "transport.active", Scope: DoctorScopeTransport, Kind: DoctorProbeActiveTransport, Protocol: DoctorProtocolTCP,
 			ResourceKind: "transport", ResourceID: "active", Status: DoctorCheckSkipped, Code: "no_active_transport",
+			Detail: "No active transport is assigned to a local or gateway-managed resource.",
 		}}
 	}
 	kinds := make([]model.TransportKind, 0, len(active))
@@ -523,6 +633,7 @@ func planDoctorTunnel(state model.State) ([]DoctorProbeRequest, []DoctorCheck) {
 		return nil, []DoctorCheck{{
 			Name: "tunnel.session", Scope: DoctorScopeTunnel, Kind: DoctorProbeTunnelSession, Protocol: DoctorProtocolTCP,
 			ResourceKind: "tunnel", ResourceID: "session", Status: DoctorCheckSkipped, Code: "node_not_joined",
+			Detail: "The private node is not joined, so no multiplexed tunnel session exists.",
 		}}
 	}
 	for _, expose := range activeDoctorExposes(state) {
@@ -547,6 +658,7 @@ func planDoctorIngress(state model.State) ([]DoctorProbeRequest, []DoctorCheck, 
 			return nil, []DoctorCheck{{
 				Name: "ingress.public", Scope: DoctorScopeIngress, Kind: DoctorProbeIngressTLS, Protocol: DoctorProtocolTLS,
 				ResourceKind: "ingress", ResourceID: "public", Status: DoctorCheckSkipped, Code: "node_not_joined",
+				Detail: "The private node is not joined, so no trusted gateway ingress endpoint is known.",
 			}}, nil
 		}
 	}
@@ -620,10 +732,14 @@ func doctorGatewayAddress(cidr string) (string, error) {
 }
 
 func doctorCheckFromRequest(request DoctorProbeRequest, status DoctorCheckStatus, code string, elapsedMS int64) DoctorCheck {
-	return DoctorCheck{
+	check := DoctorCheck{
 		Name: request.Name, Scope: request.Scope, Kind: request.Kind, Protocol: request.Protocol,
 		ResourceKind: request.ResourceKind, ResourceID: request.ResourceID, Status: status, Code: code, ElapsedMS: elapsedMS,
 	}
+	if status == DoctorCheckSkipped {
+		check.Detail = "The overall doctor deadline expired before this check could start."
+	}
+	return check
 }
 
 func doctorRequestOrder(request DoctorProbeRequest) string {
@@ -644,6 +760,8 @@ func doctorScopeOrder(scope DoctorScope) string {
 		return "3"
 	case DoctorScopeIngress:
 		return "4"
+	case DoctorScopeExternal:
+		return "5"
 	default:
 		return "9"
 	}
@@ -665,6 +783,8 @@ func validDoctorKindProtocol(kind DoctorProbeKind, protocol DoctorProtocol) bool
 		return protocol == DoctorProtocolTLS
 	case DoctorProbeIngressHealth:
 		return protocol == DoctorProtocolHTTPS
+	case DoctorProbeExternalHTTPS:
+		return protocol == DoctorProtocolHTTPS
 	default:
 		return false
 	}
@@ -682,9 +802,15 @@ func validDoctorKindScope(kind DoctorProbeKind, scope DoctorScope) bool {
 		return scope == DoctorScopeTunnel || scope == DoctorScopeIngress
 	case DoctorProbeIngressTLS, DoctorProbeIngressHealth, DoctorProbeLocalUpstream:
 		return scope == DoctorScopeIngress
+	case DoctorProbeExternalHTTPS:
+		return scope == DoctorScopeExternal
 	default:
 		return false
 	}
+}
+
+func validDoctorCheckScope(scope DoctorScope) bool {
+	return scope == DoctorScopeDNS || scope == DoctorScopeTransport || scope == DoctorScopeTunnel || scope == DoctorScopeIngress || scope == DoctorScopeExternal
 }
 
 var (

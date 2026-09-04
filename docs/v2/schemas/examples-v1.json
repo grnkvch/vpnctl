@@ -113,6 +113,18 @@
               "status": "passed",
               "code": "dns_response_valid",
               "elapsed_ms": 4
+            },
+            {
+              "name": "external.explicit_https_get",
+              "scope": "external",
+              "kind": "external_https_get",
+              "protocol": "https",
+              "resource_kind": "external_dependency",
+              "resource_id": "explicit",
+              "status": "skipped",
+              "code": "external_endpoint_unspecified",
+              "elapsed_ms": 0,
+              "detail": "No explicit third-party endpoint was supplied; hidden vpnctl telemetry and provider targets are disabled."
             }
           ]
         }
