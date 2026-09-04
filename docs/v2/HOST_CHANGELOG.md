@@ -2,6 +2,59 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned credential-lifecycle E2E
+
+### Source-only execution boundary
+
+- Task 16.5 will add stateful production-manager acceptance for one client
+  progressing through rotate, required re-export, revoke, and delete on one
+  authoritative state, plus one node progressing through full-set rotation,
+  gateway-side revoke, and gateway-side delete. Existing public recovery
+  workflow acceptance will cover expired-certificate issue/use/expiry,
+  same-node proof, stable resources, old-generation rejection, and one-time
+  consumption in the same release gate.
+- All state, root-only secret stores, generated exports, certificates, and
+  runtime adapters are test fixtures below Go-managed temporary directories.
+  The run will not start or mutate Lima VMs, host routes/firewall/DNS/listeners,
+  public VPSs, client devices, Telegram, or any external provider. Evidence is
+  limited to the ignored
+  `artifacts/v2lab/credential-lifecycle-e2e/run-*` directory; ordinary Go
+  cache use remains outside this journal by policy.
+- Verification must prove old client/node generations fail after replacement,
+  revoke immediately disables the current generation, delete requires prior
+  revoke, and logical IDs, names, overlay IPs, policies, presets, and exposes
+  are retained or removed exactly at their specified lifecycle boundary.
+  Repository rollback will be `git revert <task-16.5-commit>`; no development
+  host rollback is expected.
+
+### Acceptance
+
+- The stateful client path completed add/export, rotation to generation two,
+  mandatory re-export, revoke, and delete on one authoritative state. Rotation
+  preserved immutable ID, name, overlay IP, presets, and policy; rejected and
+  removed generation-one credentials; and made both copied profiles stale.
+  Re-export published generation-two profiles, revoke rejected that current
+  generation, and delete removed managed artifacts/state while retaining the
+  required warning that copies on external devices remain.
+- The stateful node path completed full-set generation-two rotation followed
+  by immediate gateway revoke and gateway-only delete. Rotation preserved ID,
+  name, overlay IP, active transport, policies, presets, and expose ownership;
+  old control/standard/restricted/tunnel material was rejected and removed.
+  Revoke disabled every current path and expose. Delete removed only remaining
+  gateway-owned resources and did not pretend to mutate the private node.
+- Expired-certificate recovery acceptance confirmed the exact expiry boundary,
+  15-minute one-time token, original-host-key proof, rejection of cloned,
+  revoked, or deleted identities, atomic full-generation replacement, stable
+  logical resources, old-generation removal, and replay rejection. CLI
+  workflow tests confirmed explicit availability-impact consent, TTY-only
+  gateway token output, and hidden node token input.
+- The accepted stable result is recorded in
+  `test/v2lab/credential-lifecycle/manifest.json`; raw ignored evidence is at
+  `artifacts/v2lab/credential-lifecycle-e2e/run-20260904T230550Z/summary.json`.
+  The gate made no VM, network, service, or external-system changes, so host
+  rollback is not applicable. Repository rollback is
+  `git revert <task-16.5-commit>`.
+
 ## 2026-09-05 — planned fleet isolation and authorization E2E
 
 ### Planned reversible lab mutations

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "source-production-workflows",
+  "actual_deployment": "deferred-to-task-16.11",
+  "client": {
+    "rotate_reexport_revoke_delete_sequence": true,
+    "stable_id_name_overlay_ip_policy_on_rotate": true,
+    "old_generation_rejected_after_rotate": true,
+    "current_generation_rejected_after_revoke": true,
+    "delete_requires_revoke": true,
+    "managed_exports_removed_on_delete": true,
+    "external_profile_removal_reported": true
+  },
+  "node": {
+    "rotate_revoke_delete_sequence": true,
+    "full_generation_atomic": true,
+    "precommit_failure_preserves_old_generation": true,
+    "stable_id_name_overlay_ip_policy_exposes_on_rotate": true,
+    "old_generation_rejected_after_rotate": true,
+    "current_generation_rejected_after_revoke": true,
+    "delete_requires_revoke": true,
+    "gateway_delete_does_not_assume_node_access": true
+  },
+  "recovery": {
+    "expired_certificate_only": true,
+    "ttl_minutes": 15,
+    "exact_expiry_fail_closed": true,
+    "original_host_key_required": true,
+    "stable_logical_resources": true,
+    "old_generation_rejected": true,
+    "token_one_time": true,
+    "revoked_deleted_rejected": true
+  },
+  "interaction": {
+    "explicit_confirmation": true,
+    "recovery_token_tty_only": true,
+    "node_token_hidden_input": true
+  },
+  "host_mutation": false
+}
