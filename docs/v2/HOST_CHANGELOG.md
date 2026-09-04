@@ -2,6 +2,52 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — persisted cross-host saga coordination
+
+### Planned reversible validation
+
+- Task 13.3 is source-only. It adds a generic persisted cross-host saga with a
+  unique operation ID and fixed
+  `validate → stage → activate-private → confirm-private → publish-public → drain → finalize`
+  phase order. Public route publication is structurally unavailable before
+  private activation and confirmation.
+- Every side-effect phase is resume-first: reconcile the stable operation ID
+  and gateway/node generations, execute only after positive `not_applied`
+  evidence, advance on positive `applied` evidence, and remain degraded on
+  `unknown`. Lost responses and phase-persistence acknowledgements must never
+  trigger blind retry or rollback.
+- The drain duration is capped at the accepted 10-second ingress bound and its
+  absolute deadline is persisted when public publication commits, so restart
+  cannot extend it. Fault tests use in-memory adapters/stores and injected
+  time; they create no real wait, file, unit, listener, route, firewall, VM, or
+  provider mutation. Repository rollback is limited to the task 13.3 commit;
+  no host rollback is required.
+
+### Acceptance
+
+- The coordinator now persists a distinct request/operation identity namespace,
+  monotonic CAS revision, exact gateway/node generation evidence, phase, state,
+  private/public readiness, and an absolute publication-derived drain deadline.
+  A normal run durably records all eight revisions from `validate` through
+  `complete`; public publication is rejected until private activation and
+  confirmation are both represented by a valid receipt.
+- Every side-effect reconciles operation ID, phase, and both generations before
+  execution. Positive `applied` advances without execution, positive
+  `not_applied` permits one execution, and `unknown`, malformed evidence, lost
+  action response, or lost persistence acknowledgement remains explicitly
+  uncertain/degraded. The adapter interface has no cross-host rollback action.
+- Fault injection at validation and every side-effect phase, plus lost CAS-save
+  acknowledgement at every phase, converged to both exact desired generations
+  with one execution per effect and no public-order violation. Duplicate IDs,
+  duplicate requests, cross-namespace collisions, invalid early publication,
+  expired drains, clock normalization, and terminal validation conflicts were
+  also rejected or converged as specified.
+- Ten repeated focused fault-matrix runs, five focused race-detector runs, the
+  complete uncached ordinary and complete race-detector suites, vet, dependency
+  listing, formatting/diff checks, and strict OpenSpec validation passed at
+  `119/156`. No VM or persistent host mutation occurred and no host rollback
+  remains.
+
 ## 2026-09-04 — reusable local component transactions
 
 ### Planned reversible validation
