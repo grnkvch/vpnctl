@@ -2,6 +2,53 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — explicit vpnctl-owned drift repair
+
+### Planned reversible validation
+
+- Task 13.5 is source-only. Repair derives actions exclusively from the strict
+  planner's `applied ↔ observed` vpnctl-owned drift. Missing and modified
+  resources target the last applied runtime hash; positively owned unexpected
+  resources target absence. Pending future desired changes remain untouched and
+  are never folded into repair.
+- The complete resource/action/hash/impact preview is retained for mandatory
+  confirmation (or returned without execution for `--dry-run`) and is rebuilt
+  immediately before execution. A changed observation, generation, pending
+  plan, scope, or ownership result makes the preview stale before mutation.
+- Gateway repair receives only gateway-local actions. Private-node repair is
+  limited to the immutable current node ID and explicitly requires the
+  authoritative gateway, including for no-op. Executors must return exact
+  target-generation runtime hashes or confirmed absence for every action;
+  otherwise repair cannot claim success.
+- Ownership and foreign-resource tests use in-memory discovery maps and
+  mutation-recording fakes. They create no real file, unit, listener, route,
+  firewall, VM, or provider mutation. Repository rollback is limited to the
+  task 13.5 commit; no host rollback is required.
+
+### Acceptance
+
+- Repair actions now correspond one-for-one with the strict planner's ordered
+  vpnctl-owned drift. Missing and modified resources restore the runtime hash
+  of the last applied generation; positively owned unexpected resources are
+  removed. A test-only foreign resource remains byte-identical, pending future
+  desired state and all authoritative snapshots remain unchanged, and injected
+  or stale actions are rejected before execution.
+- Role-specific coordinators prevent gateway-side node repair, partial mixed
+  batches, and repair of another node. Current-node repair requires gateway
+  reachability even for no-op. Executors must prove the exact target generation
+  plus each restored hash or removal; incorrect evidence cannot become a
+  successful result.
+- The CLI emits the complete non-secret resource/action/hash preview through
+  the extended `operation-v1` schema, retains an isolated exact copy across
+  consent, and re-plans before mutation. Dry-run invokes no executor, JSON does
+  not imply consent, and an explicitly consented execution receives only the
+  retained domain plan.
+- JSON-schema regression, ten repeated focused planner/CLI runs, five focused
+  race-detector runs, the complete uncached ordinary and race-detector suites,
+  vet, dependency listing, formatting/diff checks, and strict OpenSpec
+  validation passed at `121/156`. No VM or persistent host mutation occurred
+  and no host rollback remains.
+
 ## 2026-09-04 — registered pending apply and role scoping
 
 ### Planned reversible validation

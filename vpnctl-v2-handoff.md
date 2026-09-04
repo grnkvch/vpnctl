@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 13.4 выполнено `120/156`
+и проходят strict validation. После завершения task 13.5 выполнено `121/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
@@ -45,6 +45,14 @@ per-operation expected/desired generations до executor. Пересекающи
 Gateway executor структурно не имеет node method, а current-node executor
 проверяет gateway даже для no-op и отклоняет другой node/gateway scope.
 Non-overlapping drift не ремонтируется и возвращается как warning/action.
+Explicit `repair` строит полный preview только из vpnctl-owned
+`applied ↔ observed` drift, восстанавливает missing/modified ресурсы до runtime
+hash последней applied generation и удаляет только positively-owned unexpected
+ресурсы. Pending desired state остаётся отдельным от repair. `--dry-run` не
+вызывает executor, normal/JSON execution требует явного consent, а после него
+plan строится заново. Gateway и current-node используют раздельные executors;
+node проверяет authoritative gateway даже для no-op, а результат принимается
+только при точном target hash/absence для каждого действия.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -69,8 +77,8 @@ replay. Public certificate rotation выполняется только вруч
 подтверждением; plan перечисляет затронутые serving exposes, control/enrollment
 identity и node trust не меняются, public export обновляется атомарно, а в
 secret store остаются только active и previous поколения. Следующая задача —
-13.5 (previewed confirmed `repair` только для vpnctl-owned drift, без изменения
-foreign resources).
+13.6 (полностью passive `status`, problem-focused human view, `--all`, full JSON,
+versions/generations/hashes/pending/drift и обязательные warnings/exit semantics).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract

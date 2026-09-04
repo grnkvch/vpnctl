@@ -26,6 +26,25 @@
             "changed": { "type": "boolean" },
             "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
             "generation": { "type": "integer", "minimum": 0 },
+            "repair_count": { "type": "integer", "minimum": 0 },
+            "repairs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["component", "resource_kind", "resource_id", "drift_kind", "action", "impact"],
+                "properties": {
+                  "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "resource_kind": { "enum": ["file", "unit", "network", "state"] },
+                  "resource_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                  "drift_kind": { "enum": ["missing", "modified", "unexpected"] },
+                  "action": { "enum": ["restore", "remove"] },
+                  "impact": { "enum": ["none", "availability", "destructive"] },
+                  "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                  "observed_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            },
             "expose_state": { "enum": ["ready", "degraded"] },
             "fingerprint": { "type": "string", "minLength": 1, "maxLength": 128 },
             "output_path": { "type": "string", "minLength": 1, "maxLength": 4096 },

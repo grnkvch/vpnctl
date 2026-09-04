@@ -156,8 +156,21 @@
         "warnings": [],
         "requires_action": [],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 1,
+          "repair_count": 1,
+          "repairs": [
+            {
+              "component": "ingress",
+              "resource_kind": "file",
+              "resource_id": "/etc/vpnctl/ingress.conf",
+              "drift_kind": "modified",
+              "action": "restore",
+              "impact": "availability",
+              "target_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
         }
       }
     },
