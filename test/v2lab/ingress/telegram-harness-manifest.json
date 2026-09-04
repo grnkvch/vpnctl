@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "status": "release-gate-only",
+  "entrypoint": "telegram-webhook-gate.py",
+  "provider_gate": "task-16.11",
+  "token_input": "hidden-controlling-tty-only",
+  "token_forbidden_channels": ["argv", "environment", "file", "log", "json"],
+  "public_inputs": ["manual-global-ipv4", "absolute-public-certificate-path"],
+  "precondition": "telegram-getWebhookInfo-url-empty",
+  "registration": "setWebhook-with-public-certificate",
+  "success": ["matching-url", "custom-certificate", "incoming-request"],
+  "cleanup": "delete-only-when-current-url-matches-created-url",
+  "maximum_wait_seconds": 600,
+  "provider_calls_during_task_12_11": false
+}

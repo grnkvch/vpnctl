@@ -287,3 +287,17 @@ Success returns the new public certificate export path/fingerprint, an `scp`
 hint, and one command-free `reregister_external_webhook` action per affected
 expose. Re-registering the unchanged public URL with the new certificate is the
 application owner's responsibility.
+
+## Production development gate
+
+The task-12.11 gate runs the production renderer with the exact pinned Ubuntu
+nginx on the 1-vCPU/512-MiB fixture. It covers HTTP/1.1 and HTTP/2 forwarding,
+path/query/application headers/streamed body integrity, trusted proxy headers,
+HTTP/1.1 upstream, mixed protocol concurrency, exact per-expose and gateway
+overload behavior, error statuses, process/cgroup memory, zero OOM events, and
+zero body temp files. The complete procedure and token-safe offline-tested
+Telegram package are documented in `docs/v2/INGRESS_RELEASE_GATE.md`.
+
+This is still a development acceptance gate. It performs no Telegram request
+and explicitly leaves `production_ready=false`; actual provider registration,
+one incoming request, and owner-checked cleanup remain task 16.11.

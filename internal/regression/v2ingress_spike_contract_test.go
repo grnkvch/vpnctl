@@ -2,6 +2,7 @@ package regression
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,6 +155,7 @@ func TestV2IngressSpikeContract(t *testing.T) {
 	for _, required := range []string{
 		"getpass.getpass", "refusing to replace an existing Telegram webhook", "setWebhook", "getWebhookInfo",
 		"deleteWebhook", "receiver_count", "has_custom_certificate", "sensitive_values_emitted",
+		`open("/dev/tty"`, "cleanup_created_webhook", "current.get(\"url\") != expected_url",
 	} {
 		if !strings.Contains(telegramGate, required) {
 			t.Errorf("real Telegram webhook gate is missing %q", required)
@@ -179,5 +181,87 @@ func TestV2IngressSpikeContract(t *testing.T) {
 	limaTemplate := readContractFile(t, filepath.Join(repositoryRoot, "test", "v2lab", "lima.yaml"))
 	if !strings.Contains(limaTemplate, "guestPort: 443") {
 		t.Error("Lima template does not isolate guest port 443 from host forwarding")
+	}
+}
+
+func TestV2IngressReleaseGateContract(t *testing.T) {
+	t.Parallel()
+
+	repositoryRoot := filepath.Join("..", "..")
+	fixtureRoot := filepath.Join(repositoryRoot, "test", "v2lab", "ingress")
+	harnessPath := filepath.Join(repositoryRoot, "scripts", "v2ingress-release-gate.sh")
+	info, err := os.Stat(harnessPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatal("ingress release gate is not executable")
+	}
+	harness := readContractFile(t, harnessPath)
+	for _, required := range []string{
+		"ingress release gate requires a clean source tree", "assert_lab_instance", "assert_ingress_fixture_absent",
+		"TestNginxConfigParsesWithPinnedNginx", "TestNginxRuntimeDoesNotReplayNonIdempotentRequests",
+		"TestNginxProductionRuntimeRegression", "VPNCTL_NGINX_PRODUCTION_SUMMARY", "production-native.json",
+		"path_query_headers_body == true", ".safe_concurrent == 32", ".expose_accepted == 40",
+		".gateway_accepted == 64", ".maximum_rss_bytes < 134217728", ".body_temp_files == 0",
+		"v2ingress-spike.sh", "validate_spike_summaries", ".resources.oom_events == 0",
+		"run_offline_telegram_harness_tests", "provider_calls_executed: false", "deferred_gate: \"task 16.11\"",
+		"cleanup_native_guest", "ingress_cleanup", "ingress release gate refuses to replace evidence", "source_commit",
+	} {
+		if !strings.Contains(harness, required) {
+			t.Errorf("ingress release gate is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"VPNCTL_RELEASE_GATE_ALLOW_DIRTY", "--force", "rm -rf /etc", "setWebhook --token", "BOT_TOKEN=",
+	} {
+		if strings.Contains(harness, forbidden) {
+			t.Errorf("ingress release gate contains forbidden behavior %q", forbidden)
+		}
+	}
+
+	productionTest := readContractFile(t, filepath.Join(repositoryRoot, "internal", "ingress", "nginx_production_native_test.go"))
+	for _, required := range []string{
+		"RenderNginxConfig", "ValidatePinnedNginxConfig", "HTTP/1.1", "HTTP/2.0",
+		"X-Telegram-Bot-Api-Secret-Token", "X-Original-Forwarded-For", "RequestURI",
+		"DefaultExposeConcurrentRequests", "DefaultIngressGatewayConcurrentRequests",
+		"nginxProductionRSS", "regularFilesUnder", "request_replay",
+	} {
+		if !strings.Contains(productionTest, required) {
+			t.Errorf("production ingress native test is missing %q", required)
+		}
+	}
+
+	manifestData := readContractFile(t, filepath.Join(fixtureRoot, "telegram-harness-manifest.json"))
+	var manifest struct {
+		Status                      string   `json:"status"`
+		ProviderGate                string   `json:"provider_gate"`
+		TokenInput                  string   `json:"token_input"`
+		TokenForbiddenChannels      []string `json:"token_forbidden_channels"`
+		Cleanup                     string   `json:"cleanup"`
+		MaximumWaitSeconds          int      `json:"maximum_wait_seconds"`
+		ProviderCallsDuringTask1211 bool     `json:"provider_calls_during_task_12_11"`
+	}
+	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Status != "release-gate-only" || manifest.ProviderGate != "task-16.11" ||
+		manifest.TokenInput != "hidden-controlling-tty-only" || len(manifest.TokenForbiddenChannels) != 5 ||
+		manifest.Cleanup != "delete-only-when-current-url-matches-created-url" || manifest.MaximumWaitSeconds != 600 ||
+		manifest.ProviderCallsDuringTask1211 {
+		t.Fatalf("Telegram harness manifest = %+v", manifest)
+	}
+
+	offlineTests := readContractFile(t, filepath.Join(fixtureRoot, "test_telegram_webhook_gate.py"))
+	for _, required := range []string{
+		"test_success_registers_observes_and_removes_only_created_webhook",
+		"test_existing_webhook_is_never_replaced_or_deleted",
+		"test_concurrent_provider_change_is_not_deleted",
+		"test_public_certificate_reader_rejects_private_and_symlink_inputs",
+		"mock.patch.object", "self.assertNotIn(\"deleteWebhook\"",
+	} {
+		if !strings.Contains(offlineTests, required) {
+			t.Errorf("Telegram harness offline tests are missing %q", required)
+		}
 	}
 }

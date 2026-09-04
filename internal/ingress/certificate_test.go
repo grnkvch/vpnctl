@@ -349,7 +349,7 @@ func TestPublicCertificateOpenSSLAndTelegramFixtureCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"read_public_certificate", `b"BEGIN CERTIFICATE"`, `b"PRIVATE KEY"`, `name="certificate"`, `filename="gateway.crt"`} {
+	for _, required := range []string{"read_public_certificate", `b"-----BEGIN CERTIFICATE-----"`, `b"PRIVATE KEY"`, `name="certificate"`, `filename="gateway.crt"`, `"/dev/tty"`, "cleanup_created_webhook"} {
 		if !bytes.Contains(fixture, []byte(required)) {
 			t.Fatalf("Telegram upload fixture lacks %q", required)
 		}

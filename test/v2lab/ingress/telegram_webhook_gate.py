@@ -6,8 +6,10 @@ import getpass
 import http.client
 import ipaddress
 import json
+import os
 import re
 import secrets
+import stat
 import sys
 import time
 
@@ -94,18 +96,51 @@ def receiver_count() -> int:
 
 
 def read_public_certificate(path: str) -> bytes:
-    with open(path, "rb") as certificate_file:
-        certificate = certificate_file.read(64 * 1024 + 1)
-    if len(certificate) > 64 * 1024 or b"BEGIN CERTIFICATE" not in certificate or b"PRIVATE KEY" in certificate:
+    if not os.path.isabs(path) or os.path.normpath(path) != path:
+        raise RuntimeError("certificate path must be clean and absolute")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size < 1 or metadata.st_size > 64 * 1024:
+            raise RuntimeError("certificate file is not a bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as certificate_file:
+            certificate = certificate_file.read(64 * 1024 + 1)
+    finally:
+        os.close(descriptor)
+    stripped = certificate.strip()
+    if (
+        len(certificate) > 64 * 1024
+        or stripped.count(b"-----BEGIN CERTIFICATE-----") != 1
+        or stripped.count(b"-----END CERTIFICATE-----") != 1
+        or not stripped.startswith(b"-----BEGIN CERTIFICATE-----")
+        or not stripped.endswith(b"-----END CERTIFICATE-----")
+        or b"PRIVATE KEY" in certificate
+    ):
         raise RuntimeError("certificate file is not a bounded public PEM certificate")
     return certificate
+
+
+def read_hidden_token() -> str:
+    # getpass may fall back to visible stdin when /dev/tty is unavailable. Open
+    # the controlling terminal explicitly so a non-interactive invocation
+    # fails before a credential is accepted.
+    with open("/dev/tty", "r+", encoding="utf-8", buffering=1) as terminal:
+        return getpass.getpass("Telegram bot token: ", stream=terminal)
+
+
+def cleanup_created_webhook(token: str, expected_url: str) -> bool:
+    current = bot_api(token, "getWebhookInfo")
+    if not isinstance(current, dict) or current.get("url") != expected_url:
+        return False
+    return bot_api(token, "deleteWebhook") is True
 
 
 def run_gate(public_ip_text: str, certificate_path: str, timeout: int) -> dict[str, object]:
     public_ip = ipaddress.IPv4Address(public_ip_text)
     if not public_ip.is_global:
         raise RuntimeError("Telegram gate requires a global manually supplied IPv4 address")
-    token = getpass.getpass("Telegram bot token: ")
+    token = read_hidden_token()
     if not TOKEN_PATTERN.fullmatch(token):
         raise RuntimeError("Telegram bot token format is invalid")
     certificate = read_public_certificate(certificate_path)
@@ -139,7 +174,7 @@ def run_gate(public_ip_text: str, certificate_path: str, timeout: int) -> dict[s
     finally:
         if registered:
             try:
-                cleanup_succeeded = bot_api(token, "deleteWebhook") is True
+                cleanup_succeeded = cleanup_created_webhook(token, url)
             except RuntimeError:
                 cleanup_succeeded = False
         token = ""

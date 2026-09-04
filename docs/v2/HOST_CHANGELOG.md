@@ -2,6 +2,46 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — production ingress development gate
+
+### Planned reversible minimum-host validation
+
+- Task 12.11 may run only through
+  `scripts/v2ingress-release-gate.sh run` from a clean committed tree after
+  read-only verification of the two owner-controlled `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` fixtures (Ubuntu 24.04/amd64, 1 vCPU, 512 MiB, 10 GiB,
+  isolated `user-v2` network and pinned image digest). It must refuse an
+  existing nginx package, `/etc/vpnctl-v2-spike/ingress`, test/evidence path,
+  or foreign `443/TCP`/`18081/TCP` listener.
+- Host writes are bounded to one `mktemp` root matching
+  `/private/tmp/vpnctl-v2-ingress-release.*` and a new ignored evidence child
+  below `artifacts/v2lab/ingress-release-gate/`. The latter contains only
+  fixture/resource summaries, command logs, public certificate evidence,
+  production/spike JSON results, and a public token-free Telegram harness plus
+  checksums; it contains no private key or bot token.
+- Gateway-guest writes are the existing owner-marked ingress spike tree
+  `/etc/vpnctl-v2-spike/ingress`, its two exact
+  `vpnctl-v2-spike-{ingress,webhook}.service` units, bounded helper files below
+  `/usr/local/libexec/vpnctl-v2-spike`, runtime state below
+  `/run/vpnctl-v2-spike-ingress`, the exact test/summary paths
+  `/tmp/vpnctl-v2-ingress-production-task-12.11.{test,json}`, and exact
+  `/tmp/vpnctl-v2-telegram-harness-task-12.11`. The spike may temporarily
+  install only manifest-pinned Ubuntu `nginx`/`nginx-common`, with the distro
+  service masked/disabled as already journaled for the original ingress spike.
+- The owner-marked spike alone may bind gateway `443/TCP` and loopback
+  `18081/TCP`. The production native test starts one child nginx on a
+  kernel-selected loopback port plus test-owned loopback upstreams below its Go
+  temporary root; it changes only the public-listener address in the rendered
+  test copy. Node access remains inside the isolated lab. No host forwarding,
+  public endpoint, DNS, firewall, route, interface, provider credential, or
+  webhook is touched. Telegram tests replace every API/receiver call in-process.
+- Cleanup stops and removes only owner-marked spike services/files, purges only
+  nginx packages proven absent at preflight and installed by the spike, removes
+  the exact guest test/summary/harness paths, terminates exact child processes,
+  removes the `mktemp` tree, and proves those paths/package/listeners absent.
+  Evidence is deliberately retained; its exact directory is reported after the
+  run. On interruption the same ownership checks and cleanup trap apply.
+
 ## 2026-09-04 — manual public certificate rotation
 
 - Task 12.10 is source-only. It adds confirmed immediate public-ingress
