@@ -16,14 +16,214 @@
             "role": { "enum": ["gateway", "node"] },
             "overall": { "enum": ["healthy", "degraded", "failed"] },
             "generation": { "type": "integer", "minimum": 0 },
-            "counts": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" },
-            "resources": {
+            "desired_generation": { "type": "integer", "minimum": 0 },
+            "applied_generation": { "type": "integer", "minimum": 0 },
+            "binary_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "manifest_binary_version": { "type": "string", "maxLength": 128 },
+            "control_protocols": {
               "type": "array",
-              "items": { "$ref": "../common-result-v1.schema.json#/$defs/safe_object" }
-            }
+              "items": { "type": "string", "pattern": "^[1-9][0-9]*\\.(?:0|[1-9][0-9]*)$" },
+              "maxItems": 2,
+              "uniqueItems": true
+            },
+            "components": { "type": "array", "items": { "$ref": "#/$defs/component" } },
+            "counts": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "resources": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
+            "runtime": { "type": "array", "items": { "$ref": "#/$defs/runtime" } },
+            "pending": { "type": "array", "items": { "$ref": "#/$defs/pending" } },
+            "drift": { "type": "array", "items": { "$ref": "#/$defs/drift" } },
+            "active_invites": { "type": "array", "items": { "$ref": "#/$defs/invite" } },
+            "log_opt_ins": { "type": "array", "items": { "$ref": "#/$defs/log_opt_in" } },
+            "certificates": { "type": "array", "items": { "$ref": "#/$defs/certificate" } },
+            "backups": { "type": "array", "items": { "$ref": "#/$defs/backup" } },
+            "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "command": { "const": "status" } }, "required": ["command"] },
+      "then": {
+        "properties": {
+          "data": {
+            "required": [
+              "role", "overall", "generation", "desired_generation", "applied_generation",
+              "binary_version", "manifest_binary_version", "control_protocols", "components",
+              "counts", "resources", "runtime", "pending", "drift", "active_invites",
+              "log_opt_ins", "certificates", "backups", "problems"
+            ]
           }
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "bundled", "sha256", "capabilities"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 63 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "bundled": { "type": "boolean" },
+        "sha256": { "type": "string", "pattern": "^(?:|[0-9a-f]{64})$" },
+        "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 63 }, "uniqueItems": true }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["node", "client", "preset", "policy", "transport", "expose", "operation"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "owner_kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "active_transport": { "enum": ["standard", "restricted"] },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation_type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "protocol": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "expected_generation": { "type": "integer", "minimum": 1 },
+        "desired_generation": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "presets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 63 }, "uniqueItems": true }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "component", "resource_kind", "resource_id", "condition", "mandatory", "active", "code"],
+      "properties": {
+        "class": { "enum": ["connectivity", "active_transport", "data_plane"] },
+        "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resource_kind": { "enum": ["file", "unit", "network", "state"] },
+        "resource_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "condition": { "enum": ["healthy", "degraded", "unavailable"] },
+        "mandatory": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "protocol": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "runtime_sha256": { "$ref": "#/$defs/sha256" },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id", "operation_type", "operation_expected_generation", "operation_desired_generation",
+        "component", "resource_kind", "resource_id", "kind", "impact"
+      ],
+      "properties": {
+        "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation_type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation_expected_generation": { "type": "integer", "minimum": 1 },
+        "operation_desired_generation": { "type": "integer", "minimum": 1 },
+        "target_kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "target_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resource_kind": { "enum": ["file", "unit", "network", "state"] },
+        "resource_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "enum": ["create", "update", "delete"] },
+        "impact": { "enum": ["none", "availability", "destructive"] },
+        "from_sha256": { "$ref": "#/$defs/sha256" },
+        "to_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "resource_kind", "resource_id", "kind", "impact"],
+      "properties": {
+        "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resource_kind": { "enum": ["file", "unit", "network", "state"] },
+        "resource_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "enum": ["missing", "modified", "unexpected"] },
+        "impact": { "enum": ["none", "availability", "destructive"] },
+        "expected_sha256": { "$ref": "#/$defs/sha256" },
+        "actual_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "invite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "node_name", "issued_at", "expires_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "purpose": { "enum": ["enroll", "recover"] },
+        "node_name": { "type": "string", "minLength": 1, "maxLength": 63 },
+        "node_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "log_opt_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scope", "level", "destination", "started_at", "expires_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "scope": { "enum": ["control", "transport", "routing", "dns", "tunnel", "ingress", "all"] },
+        "level": { "enum": ["error", "info", "debug", "trace"] },
+        "destination": { "enum": ["journald", "file"] },
+        "started_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "owner_kind", "owner_id", "fingerprint", "generation",
+        "credential_generation", "not_after", "warning_starts_at", "condition"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "enum": ["public-ingress", "control-ca", "control-server", "control-node", "tunnel-server"] },
+        "owner_kind": { "enum": ["host", "node"] },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "credential_generation": { "type": "integer", "minimum": 1 },
+        "not_after": { "type": "string", "format": "date-time" },
+        "warning_starts_at": { "type": "string", "format": "date-time" },
+        "condition": { "enum": ["healthy", "expiring", "expired"] }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "format", "sha256", "size_bytes", "state_generation", "created_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "const": "complete" },
+        "format": { "const": "vpnctl-backup-v1" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "state_generation": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "condition", "code"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "condition": { "enum": ["degraded", "unavailable"] },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+      }
+    }
+  }
 }

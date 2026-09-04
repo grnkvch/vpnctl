@@ -44,6 +44,7 @@ func RenderHuman(writer io.Writer, result Result) error {
 	if err := writeHumanOnly(&output, result.humanOnly); err != nil {
 		return err
 	}
+	writeHumanTables(&output, result.humanTables)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(&output, "warning %s: %s\n", warning.Code, warning.Message)
 		writeIdentifiers(&output, warning.ResourceIDs, "  ")
@@ -59,6 +60,25 @@ func RenderHuman(writer io.Writer, result Result) error {
 		return fmt.Errorf("write human result: %w", err)
 	}
 	return nil
+}
+
+func writeHumanTables(writer *strings.Builder, tables []humanTable) {
+	for _, table := range tables {
+		if len(table.rows) == 0 {
+			continue
+		}
+		fmt.Fprintf(writer, "%s:\n", humanLabel(table.title))
+		for _, row := range table.rows {
+			writer.WriteString("  ")
+			for index, cell := range row {
+				if index != 0 {
+					writer.WriteString("; ")
+				}
+				fmt.Fprintf(writer, "%s=%s", humanLabel(table.columns[index]), cell)
+			}
+			writer.WriteByte('\n')
+		}
+	}
 }
 
 func writeHumanOnly(writer *strings.Builder, fields []humanOnlyField) error {

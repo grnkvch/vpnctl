@@ -168,3 +168,34 @@ func TestSafeResultAcceptsTypedJSONCollections(t *testing.T) {
 		t.Fatalf("Result.Validate() error = %v", err)
 	}
 }
+
+func TestHumanTableIsValidatedRenderedAndAbsentFromJSON(t *testing.T) {
+	t.Parallel()
+
+	result := NewResult("status", StatusOK, CategorySuccess, SafeObject{
+		"role": "gateway", "overall": "healthy", "generation": 1,
+	})
+	if err := result.AddHumanTable("components", []string{"name", "version"}, [][]string{{"mihomo", "v1.19.30"}}); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("mihomo")) || bytes.Contains(encoded, []byte("humanTables")) {
+		t.Fatalf("human table leaked into JSON: %s", encoded)
+	}
+	var rendered bytes.Buffer
+	if err := RenderHuman(&rendered, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered.String(), "components:\n  name=mihomo; version=v1.19.30\n") {
+		t.Fatalf("human table output = %q", rendered.String())
+	}
+	if err := result.AddHumanTable("components", []string{"name"}, [][]string{}); err == nil {
+		t.Fatal("duplicate human table was accepted")
+	}
+	if err := result.AddHumanTable("unsafe title", []string{"name"}, [][]string{}); err == nil {
+		t.Fatal("unsafe human table title was accepted")
+	}
+}

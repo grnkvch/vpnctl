@@ -2,6 +2,62 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — passive comprehensive status
+
+### Planned reversible validation
+
+- Task 13.6 is source-only. Status will load validated authoritative state,
+  invoke the existing read-only convergence planner, and consume cached/process
+  metadata through a passive observation interface that exposes no probe or
+  mutation method. It will not open a network connection, send a DNS query,
+  call a webhook/provider path, change state, inspect secret material, start a
+  unit, or reconcile pending/drift.
+- Full JSON will always contain the same non-secret versions, protocols,
+  generations, hashes, resource counts and tables, connectivity/data-plane
+  observations, pending changes, drift, active invites and temporary logging,
+  certificates, and backup metadata. Human output will attach a non-JSON table
+  projection: problems and required follow-up by default, or every table only
+  after explicit `--all`.
+- Expiring certificates, active invites/logging, missing or at-least-30-day-old
+  gateway backup, and deliberate pending changes remain successful warnings.
+  Runtime degradation or an unavailable mandatory passive dependency maps to
+  unavailable/degraded; owned drift maps to conflict/degraded; invalid state or
+  convergence metadata maps to validation/failed with deterministic precedence.
+- Tests will use immutable in-memory state, a passive-call audit, and forbidden
+  synthetic/mutation counters plus canary secrets. They create no real file,
+  unit, listener, route, firewall, VM, DNS, HTTP, webhook, or provider mutation.
+  Repository rollback is limited to the task 13.6 commit; no host rollback is
+  required.
+
+### Acceptance
+
+- `status` now combines validated authoritative state, the existing read-only
+  convergence plan, and cached/process observations through a deliberately
+  probe-free interface. Isolated state copies prevent an observer from
+  changing the source; audit fakes prove zero DNS, HTTP, webhook, runtime, or
+  state mutation while still enforcing mandatory control, gateway, selected
+  transport, and active data-plane coverage.
+- JSON always carries the complete closed non-secret projection, including
+  binary/protocol/component versions, generations and hashes, counts,
+  resources, runtime, pending and drift, active invites/logging, certificates,
+  backups, and problems. The schema rejects unknown credential references and
+  the `--all` flag changes only unexported human tables, leaving JSON bytes
+  identical. Default human output shows only summary, problems, warnings, and
+  required actions.
+- Active invites/logging, deliberate pending changes, expiring certificates,
+  and missing or stale gateway backups remain healthy warnings. Owned drift is
+  conflict/degraded, unavailable or degraded mandatory runtime is
+  unavailable/degraded, and invalid authoritative/convergence state is
+  validation/failed; unavailable state deterministically outranks simultaneous
+  drift. Boundary tests cover absent backup, the exact 30-day age, the
+  certificate warning window, and an expired certificate.
+- Ten repeated focused suites, five focused race-detector suites, complete
+  uncached ordinary and race-detector suites, vet, full dependency listing,
+  Bash/JSON syntax, formatting/diff checks, schema regression, and strict
+  OpenSpec validation passed at `122/156`. No host, VM, service, listener,
+  route, DNS, HTTP, webhook, or provider mutation occurred; no runtime rollback
+  remains.
+
 ## 2026-09-04 — explicit vpnctl-owned drift repair
 
 ### Planned reversible validation

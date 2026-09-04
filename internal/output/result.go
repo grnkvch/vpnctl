@@ -49,11 +49,18 @@ type Result struct {
 	RequiresAction []Action          `json:"requires_action"`
 	Data           SafeObject        `json:"data"`
 	humanOnly      []humanOnlyField
+	humanTables    []humanTable
 }
 
 type humanOnlyField struct {
 	key   string
 	value SensitivePath
+}
+
+type humanTable struct {
+	title   string
+	columns []string
+	rows    [][]string
 }
 
 // Format keeps human-only sensitive fields out of generic log/debug output.
@@ -127,6 +134,51 @@ func (result *Result) AddHumanSensitivePath(key string, value SensitivePath) err
 	return nil
 }
 
+// AddHumanTable attaches a non-JSON projection used by concise human output.
+// It lets status keep one complete JSON document while showing only problems
+// by default and expanding tables after an explicit --all.
+func (result *Result) AddHumanTable(title string, columns []string, rows [][]string) error {
+	if result == nil {
+		return fmt.Errorf("result is required")
+	}
+	if !safeKeyPattern.MatchString(title) {
+		return fmt.Errorf("human table title must be a stable lower-case identifier")
+	}
+	if len(columns) == 0 || len(columns) > MaximumSafeItems || len(rows) > MaximumSafeItems {
+		return fmt.Errorf("human table dimensions are invalid")
+	}
+	for _, existing := range result.humanTables {
+		if existing.title == title {
+			return fmt.Errorf("human table %q is duplicated", title)
+		}
+	}
+	clonedColumns := append([]string{}, columns...)
+	seen := make(map[string]struct{}, len(clonedColumns))
+	for _, column := range clonedColumns {
+		if !safeKeyPattern.MatchString(column) {
+			return fmt.Errorf("human table column must be a stable lower-case identifier")
+		}
+		if _, duplicate := seen[column]; duplicate {
+			return fmt.Errorf("human table column %q is duplicated", column)
+		}
+		seen[column] = struct{}{}
+	}
+	clonedRows := make([][]string, len(rows))
+	for rowIndex, row := range rows {
+		if len(row) != len(clonedColumns) {
+			return fmt.Errorf("human table row %d has %d cells, want %d", rowIndex, len(row), len(clonedColumns))
+		}
+		clonedRows[rowIndex] = append([]string{}, row...)
+		for columnIndex, cell := range clonedRows[rowIndex] {
+			if len(cell) > MaximumSafeString || strings.ContainsAny(cell, "\x00\t\r\n") {
+				return fmt.Errorf("human table cell %d/%d must be a single line of at most %d bytes", rowIndex, columnIndex, MaximumSafeString)
+			}
+		}
+	}
+	result.humanTables = append(result.humanTables, humanTable{title: title, columns: clonedColumns, rows: clonedRows})
+	return nil
+}
+
 func (result Result) Validate() error {
 	if result.SchemaVersion != ResultSchemaVersion {
 		return fmt.Errorf("schema_version must be %d", ResultSchemaVersion)
@@ -179,6 +231,36 @@ func (result Result) Validate() error {
 		seenHumanOnly[field.key] = struct{}{}
 		if err := field.value.Use(func(string) error { return nil }); err != nil {
 			return fmt.Errorf("human-only field %q: %w", field.key, err)
+		}
+	}
+	seenTables := make(map[string]struct{}, len(result.humanTables))
+	for index, table := range result.humanTables {
+		if !safeKeyPattern.MatchString(table.title) || len(table.columns) == 0 || len(table.columns) > MaximumSafeItems || len(table.rows) > MaximumSafeItems {
+			return fmt.Errorf("human table %d is invalid", index)
+		}
+		if _, duplicate := seenTables[table.title]; duplicate {
+			return fmt.Errorf("human table %q is duplicated", table.title)
+		}
+		seenTables[table.title] = struct{}{}
+		seenColumns := make(map[string]struct{}, len(table.columns))
+		for _, column := range table.columns {
+			if !safeKeyPattern.MatchString(column) {
+				return fmt.Errorf("human table %q column is invalid", table.title)
+			}
+			if _, duplicate := seenColumns[column]; duplicate {
+				return fmt.Errorf("human table %q column %q is duplicated", table.title, column)
+			}
+			seenColumns[column] = struct{}{}
+		}
+		for rowIndex, row := range table.rows {
+			if len(row) != len(table.columns) {
+				return fmt.Errorf("human table %q row %d has invalid width", table.title, rowIndex)
+			}
+			for _, cell := range row {
+				if len(cell) > MaximumSafeString || strings.ContainsAny(cell, "\x00\t\r\n") {
+					return fmt.Errorf("human table %q row %d has an invalid cell", table.title, rowIndex)
+				}
+			}
 		}
 	}
 	return nil
@@ -348,8 +430,8 @@ func validateStatusCategory(status Status, category ExitCategory) error {
 			return fmt.Errorf("status %s requires success exit_category", status)
 		}
 	case StatusDegraded:
-		if category != CategoryUnavailable {
-			return fmt.Errorf("degraded status requires unavailable exit_category")
+		if category != CategoryUnavailable && category != CategoryConflict {
+			return fmt.Errorf("degraded status requires unavailable or conflict exit_category")
 		}
 	case StatusFailed:
 		if category == CategorySuccess {

@@ -3,6 +3,7 @@ package regression
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,9 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/vgrinkevich/vpnctl/internal/cli"
+	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 )
 
@@ -199,6 +203,74 @@ func TestV2CommonResultSchemaForbidsSensitiveFields(t *testing.T) {
 	}
 }
 
+func TestV2StatusSchemaAcceptsFullProjectionAndRejectsCredentialReferences(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	state := regressionStatusState(now)
+	key := operations.ManagedResourceKey{Component: "control", Kind: operations.ManagedResourceState, ID: "fleet"}
+	resource := operations.ManagedResource{
+		Key: key, RevisionSHA256: operations.ManagedFingerprint([]byte("state")), RuntimeSHA256: operations.ManagedFingerprint([]byte("runtime")),
+		ApplyImpact: operations.ConvergenceImpactNone, RemoveImpact: operations.ConvergenceImpactNone,
+	}
+	manifest, err := operations.NewConvergenceManifest(1, []operations.ManagedResource{resource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := operations.NewConvergencePlanner(
+		regressionStatusConvergenceSource{snapshot: operations.ConvergenceSnapshot{Desired: manifest, Applied: manifest, Pending: []operations.PendingOperation{}}},
+		regressionStatusDiscovery{observed: []operations.OwnedResourceObservation{{Key: key, RuntimeSHA256: resource.RuntimeSHA256, RemoveImpact: resource.RemoveImpact}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector, err := operations.NewStatusCollector(
+		model.RoleNode, "v2.0.0", func() time.Time { return now }, regressionStatusStateSource{state: state}, planner,
+		regressionStatusObserver{snapshot: operations.PassiveStatusSnapshot{Resources: []operations.PassiveStatusResource{
+			{
+				Class:     operations.PassiveStatusConnectivity,
+				Resource:  operations.ManagedResourceKey{Component: "control", Kind: operations.ManagedResourceState, ID: "control"},
+				Condition: operations.PassiveHealthy, Mandatory: true, Active: true, Version: "v2.0.0", Protocol: "1.0",
+				Generation: 1, RuntimeSHA256: operations.ManagedFingerprint([]byte("control")), Code: "control_socket_ready",
+			},
+			{
+				Class:     operations.PassiveStatusDataPlane,
+				Resource:  operations.ManagedResourceKey{Component: "routing", Kind: operations.ManagedResourceUnit, ID: "vpnctl-routing.service"},
+				Condition: operations.PassiveHealthy, Mandatory: true, Active: true, Version: "v1.19.30",
+				Generation: 1, RuntimeSHA256: operations.ManagedFingerprint([]byte("routing")), Code: "process_ready",
+			},
+		}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := cli.RunStatus(context.Background(), cli.RoleNode, false, collector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	schema := resolveV2ResultSchema(t, "status-v1")
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("full status projection does not validate: %v\n%s", err, encoded)
+	}
+
+	unsafe := cloneJSONValue(t, document)
+	data := unsafe["data"].(map[string]any)
+	data["resources"] = []any{map[string]any{
+		"kind": "transport", "id": "node:id:restricted", "credential_ref": "secret:must-never-appear",
+	}}
+	if err := schema.Validate(unsafe); err == nil {
+		t.Fatal("status schema accepted a credential reference")
+	}
+}
+
 type v2JSONExample struct {
 	RegistryCommand string         `json:"registry_command"`
 	ResultSchema    string         `json:"result_schema"`
@@ -319,4 +391,56 @@ func cloneJSONValue(t *testing.T, value map[string]any) map[string]any {
 		t.Fatalf("unmarshal JSON clone: %v", err)
 	}
 	return clone
+}
+
+type regressionStatusStateSource struct{ state model.State }
+
+func (source regressionStatusStateSource) ReadStatusState(context.Context) (model.State, error) {
+	return source.state, nil
+}
+
+type regressionStatusConvergenceSource struct {
+	snapshot operations.ConvergenceSnapshot
+}
+
+func (source regressionStatusConvergenceSource) ReadConvergenceSnapshot(context.Context) (operations.ConvergenceSnapshot, error) {
+	return source.snapshot, nil
+}
+
+type regressionStatusDiscovery struct {
+	observed []operations.OwnedResourceObservation
+}
+
+func (source regressionStatusDiscovery) DiscoverOwnedResources(context.Context, operations.ConvergenceManifest) ([]operations.OwnedResourceObservation, error) {
+	return append([]operations.OwnedResourceObservation{}, source.observed...), nil
+}
+
+type regressionStatusObserver struct {
+	snapshot operations.PassiveStatusSnapshot
+}
+
+func (source regressionStatusObserver) ReadPassiveStatus(context.Context, model.State) (operations.PassiveStatusSnapshot, error) {
+	return source.snapshot, nil
+}
+
+func regressionStatusState(now time.Time) model.State {
+	return model.State{
+		SchemaVersion: model.StateSchemaVersion, Generation: 1,
+		Host: model.Host{
+			SchemaVersion: model.ResourceSchemaVersion, ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			Role: model.RoleNode, OS: "ubuntu", OSVersion: "24.04", Architecture: "amd64", InitializedAt: now,
+		},
+		Invites: []model.Invite{}, Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{},
+		Policies: []model.Policy{}, Transports: []model.Transport{}, Exposes: []model.Expose{},
+		Certificates: []model.Certificate{}, Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{},
+		Components: model.ComponentManifest{
+			SchemaVersion: model.ComponentManifestSchemaVersion, ManifestVersion: 1, VPNCTLVersion: "v2.0.0",
+			ControlProtocols: []string{"1.0"}, StateSchemaMinimum: model.StateSchemaVersion, StateSchemaMaximum: model.StateSchemaVersion,
+			TargetOS: "ubuntu 24.04", TargetArchitecture: "amd64", HandshakeHostListVersion: 1, MigrationReversible: true,
+			Components: []model.ComponentPin{{
+				Name: "vpnctl", Version: "v2.0.0", Source: "bundle:vpnctl", Bundled: true,
+				SHA256: strings.Repeat("a", 64), Capabilities: []string{"cli", "controller"},
+			}},
+		},
+	}
 }
