@@ -355,7 +355,7 @@ func nginxRenderFixture() NginxRenderRequest {
 		PublicIPv4:       "192.0.2.10",
 		CertificatePath:  "/etc/vpnctl/secrets/public-ingress.crt",
 		PrivateKeyPath:   "/etc/vpnctl/secrets/public-ingress.key",
-		RuntimeDirectory: "/run/vpnctl/ingress",
+		RuntimeDirectory: "/run/vpnctl-ingress",
 		Limits:           DefaultGatewayHardLimits(),
 		Exposes:          []model.Expose{},
 	}

@@ -106,6 +106,38 @@ routes exist.
 
 Provider validation first requires the exact runtime version `1.24.0`, then
 runs only `nginx -t -p <candidate-root>/ -c nginx.conf` against an already
-staged tree. Staging, symlink/tree activation, graceful reload, drift handling,
-and rollback belong to task 12.5. The Ubuntu native parser accepted the task
-12.4 tree; deployed Telegram compatibility remains deferred to task 16.11.
+staged tree. The activation transaction below owns staging, graceful reload,
+drift handling, and rollback. The Ubuntu native parser accepted the task 12.4
+tree; deployed Telegram compatibility remains deferred to task 16.11.
+
+## Atomic tree activation
+
+The gateway owns `/etc/vpnctl/generated/gateway/ingress`. Immutable complete
+trees live under `generations/g<state-generation>-<tree-hash>` and the only
+live selector is a relative `current` symlink. The state generation is
+provenance; the hash covers every relative file path, mode, and byte. The
+runtime path is the separate `/run/vpnctl-ingress`, keeping nginx worker paths
+out of the controller's root-only `/run/vpnctl` namespace. Activation itself is
+serialized by a root-only lock in `/run/vpnctl`.
+
+Apply rejects an unsafe current link, a missing/unexpected entry, a symlink or
+mode change inside the active tree, content/hash drift, a stale generation, or
+different content at the same state generation before invoking nginx. It then
+creates a same-filesystem private staging directory, writes every artifact with
+no-follow/exclusive creation, fsyncs files and directories, verifies the tree
+hash, runs pinned `nginx -t`, and verifies the hash again. Only after those
+checks does one atomic symlink rename publish the complete generation.
+
+An initial tree is left for the service lifecycle to start. A later changed
+tree is already selected when `nginx -p <current>/ -c nginx.conf -s reload`
+requests nginx's graceful worker handoff. A content-identical state-generation
+advance switches provenance without an unnecessary reload. Successful change
+removes only the previously validated owned tree.
+
+If reload fails, vpnctl atomically restores the prior link and performs an
+independent 15-second rollback reload of that exact tree. A successful rollback
+removes the failed generation. If the rollback reload itself fails, both exact
+trees remain and normal idempotence is disabled: the sole inactive newer tree
+is a recovery snapshot, and only an explicit retry of that same generation and
+hash may reconcile it. Stale staging entries, multiple inactive generations,
+or a different requested candidate fail closed for later reconciliation.

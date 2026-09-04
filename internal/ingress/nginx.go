@@ -58,11 +58,12 @@ func (artifact NginxArtifact) Mode() fs.FileMode    { return artifact.mode }
 func (artifact NginxArtifact) Bytes() []byte        { return append([]byte(nil), artifact.content...) }
 
 type NginxCandidate struct {
-	stateGeneration uint64
-	publicIPv4      string
-	configHash      string
-	activeExposes   int
-	artifacts       []NginxArtifact
+	stateGeneration  uint64
+	publicIPv4       string
+	runtimeDirectory string
+	configHash       string
+	activeExposes    int
+	artifacts        []NginxArtifact
 }
 
 func (NginxCandidate) MarshalJSON() ([]byte, error) {
@@ -108,11 +109,12 @@ func RenderNginxConfig(request NginxRenderRequest) (NginxCandidate, error) {
 		return NginxCandidate{}, fmt.Errorf("nginx configuration tree exceeds %d bytes", nginxMaximumTreeBytes)
 	}
 	candidate := NginxCandidate{
-		stateGeneration: request.StateGeneration,
-		publicIPv4:      request.PublicIPv4,
-		configHash:      hashNginxArtifacts(artifacts),
-		activeExposes:   len(active),
-		artifacts:       artifacts,
+		stateGeneration:  request.StateGeneration,
+		publicIPv4:       request.PublicIPv4,
+		runtimeDirectory: request.RuntimeDirectory,
+		configHash:       hashNginxArtifacts(artifacts),
+		activeExposes:    len(active),
+		artifacts:        artifacts,
 	}
 	if err := candidate.Validate(); err != nil {
 		return NginxCandidate{}, fmt.Errorf("validate rendered nginx candidate: %w", err)
@@ -126,6 +128,10 @@ func (candidate NginxCandidate) Validate() error {
 	}
 	if _, err := canonicalPublicCertificateIPv4(candidate.publicIPv4); err != nil {
 		return err
+	}
+	if !filepath.IsAbs(candidate.runtimeDirectory) || filepath.Clean(candidate.runtimeDirectory) != candidate.runtimeDirectory ||
+		candidate.runtimeDirectory == string(filepath.Separator) || hasNginxPathControl(candidate.runtimeDirectory) {
+		return fmt.Errorf("nginx candidate runtime directory is invalid")
 	}
 	wantPaths := []string{NginxProxyCommonPath, NginxRoutesConfigPath, NginxMainConfigPath}
 	if len(candidate.artifacts) != len(wantPaths) {
