@@ -2,6 +2,57 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — registered pending apply and role scoping
+
+### Planned reversible validation
+
+- Task 13.4 is source-only. It composes the read-only convergence planner with
+  an apply coordinator that can execute only changes already bound to persisted
+  pending operation IDs. A desired-generation gap without registered resource
+  changes, invalid operation grouping, or stale preview is rejected before an
+  executor is called.
+- Apply rejects any vpnctl-owned drift whose exact resource is also in the
+  pending change set and never invokes repair. Non-overlapping drift remains
+  visible but outside the apply batch. The plan is read again immediately
+  before execution so consent cannot authorize a changed operation/resource
+  set or a newly conflicting observation.
+- Gateway construction receives only a gateway-local batch executor. Node
+  construction receives only a current-node executor with an explicit gateway
+  reachability check; a gateway cannot call a node method or simulate an absent
+  node agent, and a node cannot apply another node or a gateway-only batch.
+  Scope mismatch rejects the complete batch before any partial application.
+- Tests use in-memory snapshot/discovery/resolver/executor fakes and temporary
+  source state only. They create no file, unit, listener, route, firewall, VM,
+  or provider mutation. Repository rollback is limited to the task 13.4
+  commit; no host rollback is required.
+
+### Acceptance
+
+- Apply now accepts only the concrete strict convergence planner, so every
+  executable change is bound to one registered pending operation. Grouped
+  batches preserve operation type/target, exact per-operation expected/desired
+  generations, stable resource IDs and hashes, and change-only impact. An
+  unregistered diff, stale pending generation, or generation-only desired gap
+  reaches neither scope resolution nor an executor.
+- Exact overlap between a pending resource and missing/modified/unexpected
+  vpnctl-owned drift returns a typed conflict before all mutation. Unrelated
+  drift remains outside the batch and is returned as a warning plus explicit
+  `vpnctl repair` action. Apply re-plans after consent and rejects any changed
+  generation, operation set, scope, resource hash, or drift observation.
+- Separate constructors expose only `ApplyGateway` on gateway and
+  `RequireGateway` plus `ApplyCurrentNode` on the current private node. A mixed
+  gateway/node batch is rejected whole, gateway node-scope reports that apply
+  must run on that node, foreign-node/gateway scope is refused locally, and a
+  node verifies gateway reachability even for a no-op. Executor results must
+  return the exact ordered operation IDs and desired applied generation.
+- The CLI workflow binds the domain role to the command host, retains the exact
+  plan across conditional consent, keeps `operation-v1` output minimal, and
+  proves JSON mode cannot grant availability/destructive consent. Ten repeated
+  planner/apply focused runs, five focused race-detector runs, the complete
+  uncached ordinary and complete race-detector suites, vet, dependency listing,
+  formatting/diff checks, and strict OpenSpec validation passed at `120/156`.
+  No VM or persistent host mutation occurred and no host rollback remains.
+
 ## 2026-09-04 — persisted cross-host saga coordination
 
 ### Planned reversible validation

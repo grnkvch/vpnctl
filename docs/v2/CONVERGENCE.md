@@ -14,6 +14,12 @@ version is still drift from the applied baseline. A later `apply` can therefore
 refuse the overlap and direct the operator to explicit repair instead of
 silently adopting an unrecorded change.
 
+Each emitted desired change retains the registered operation's exact
+expected/desired generation pair. The expected generation cannot precede the
+current applied manifest, and the desired generation cannot exceed the
+authoritative desired manifest. This gives later apply executors a per-operation
+CAS guard instead of only a batch-level generation.
+
 ## Managed resource contract
 
 Every state, file, systemd unit, and network resource has a stable tuple of

@@ -155,7 +155,7 @@
 - [x] 13.1 Implement deterministic discovery and planning that separates pending desired diff from vpnctl-owned drift and lists availability/destructive impact; verify no plan mutates files, state, units, or network.
 - [x] 13.2 Implement local validate-stage-activate-health-rollback transactions reusable by component adapters; verify failure injection before/after activation restores the correct generation.
 - [x] 13.3 Implement cross-host saga coordinator with unique IDs, persisted phases, public-route-last ordering, bounded drains, and generation reconciliation; verify connection loss at every phase converges without blind retry or rollback.
-- [ ] 13.4 Implement `apply` for registered pending changes only and role-scoped gateway/node behavior; verify it refuses conflicting drift and does not simulate an absent node agent.
+- [x] 13.4 Implement `apply` for registered pending changes only and role-scoped gateway/node behavior; verify it refuses conflicting drift and does not simulate an absent node agent.
 - [ ] 13.5 Implement previewed, confirmed `repair` for vpnctl-owned drift only; verify foreign resources remain unchanged and repaired hashes match desired generation.
 - [ ] 13.6 Implement passive `status`, default problem-focused human view, `--all`, full JSON, invitations/log/cert/backup warnings, component versions, generations, hashes, pending/drift, and specified exit behavior; verify it emits no synthetic traffic.
 - [ ] 13.7 Implement bounded role-aware `doctor` scopes for direct/gateway DNS, active transport, tunnel, ingress, local upstreams, TLS, TCP, and UDP; verify standby is skipped, real webhook paths are not called, deadlines hold, and failures map to degraded exit.

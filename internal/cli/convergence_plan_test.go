@@ -22,6 +22,7 @@ func TestConvergencePlanOutputMatchesPlanV1AndKeepsDriftSeparate(t *testing.T) {
 		DesiredGeneration: 5, AppliedGeneration: 4, Impact: operations.ConvergenceImpactAvailability,
 		Changes: []operations.DesiredChange{{
 			OperationID: "operation-1", OperationType: "apply", TargetKind: "expose", TargetID: "telegram",
+			OperationExpectedGeneration: 4, OperationDesiredGeneration: 5,
 			Resource: key, Kind: operations.DesiredUpdate, Impact: operations.ConvergenceImpactAvailability,
 			FromSHA256: before, ToSHA256: after,
 		}},

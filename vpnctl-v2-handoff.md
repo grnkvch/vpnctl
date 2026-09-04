@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 13.3 выполнено `119/156`
+и проходят strict validation. После завершения task 13.4 выполнено `120/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
@@ -38,6 +38,13 @@ revision, фиксированную phase sequence и gateway/node generations.
 outcome и никогда не делает blind replay/rollback. Private activation и
 confirmation всегда предшествуют public route; абсолютный drain deadline
 переживает restart и ограничен десятью секундами.
+General `apply` принимает executable plan только от strict convergence planner,
+группирует ресурсы по зарегистрированным pending operation ID и переносит
+per-operation expected/desired generations до executor. Пересекающийся drift
+является conflict до side-effect; после consent весь plan читается заново.
+Gateway executor структурно не имеет node method, а current-node executor
+проверяет gateway даже для no-op и отклоняет другой node/gateway scope.
+Non-overlapping drift не ремонтируется и возвращается как warning/action.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -62,8 +69,8 @@ replay. Public certificate rotation выполняется только вруч
 подтверждением; plan перечисляет затронутые serving exposes, control/enrollment
 identity и node trust не меняются, public export обновляется атомарно, а в
 secret store остаются только active и previous поколения. Следующая задача —
-13.4 (`apply` только для зарегистрированных pending changes с role-scoped
-gateway/node execution и отказом при conflicting drift).
+13.5 (previewed confirmed `repair` только для vpnctl-owned drift, без изменения
+foreign resources).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract

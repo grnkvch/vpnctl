@@ -126,15 +126,17 @@ const (
 )
 
 type DesiredChange struct {
-	OperationID   string             `json:"operation_id"`
-	OperationType string             `json:"operation_type"`
-	TargetKind    string             `json:"target_kind,omitempty"`
-	TargetID      string             `json:"target_id,omitempty"`
-	Resource      ManagedResourceKey `json:"resource"`
-	Kind          DesiredChangeKind  `json:"kind"`
-	Impact        ConvergenceImpact  `json:"impact"`
-	FromSHA256    string             `json:"from_sha256,omitempty"`
-	ToSHA256      string             `json:"to_sha256,omitempty"`
+	OperationID                 string             `json:"operation_id"`
+	OperationType               string             `json:"operation_type"`
+	OperationExpectedGeneration uint64             `json:"operation_expected_generation"`
+	OperationDesiredGeneration  uint64             `json:"operation_desired_generation"`
+	TargetKind                  string             `json:"target_kind,omitempty"`
+	TargetID                    string             `json:"target_id,omitempty"`
+	Resource                    ManagedResourceKey `json:"resource"`
+	Kind                        DesiredChangeKind  `json:"kind"`
+	Impact                      ConvergenceImpact  `json:"impact"`
+	FromSHA256                  string             `json:"from_sha256,omitempty"`
+	ToSHA256                    string             `json:"to_sha256,omitempty"`
 }
 
 type OwnedDriftKind string
@@ -260,7 +262,7 @@ func BindPendingOperation(operation model.Operation, resources []ManagedResource
 		ExpectedGeneration: operation.ExpectedGeneration, DesiredGeneration: operation.DesiredGeneration,
 		Resources: append([]ManagedResourceKey(nil), resources...),
 	}
-	if err := pending.validate(operation.DesiredGeneration); err != nil {
+	if err := pending.validate(operation.ExpectedGeneration, operation.DesiredGeneration); err != nil {
 		return PendingOperation{}, fmt.Errorf("%w: bind operation %s: %v", ErrConvergencePlanInvalid, operation.ID, err)
 	}
 	sort.Slice(pending.Resources, func(left, right int) bool {
@@ -344,6 +346,10 @@ func (plan ConvergencePlan) Validate() error {
 		if err := change.validate(); err != nil {
 			return fmt.Errorf("change %d: %w", index, err)
 		}
+		if change.OperationExpectedGeneration < plan.AppliedGeneration ||
+			change.OperationDesiredGeneration > plan.DesiredGeneration {
+			return fmt.Errorf("change %d operation generations are outside the plan range", index)
+		}
 		order := resourceOrder(change.Resource)
 		if index > 0 && order <= previous {
 			return fmt.Errorf("changes must have unique resources in ascending order")
@@ -393,7 +399,7 @@ func canonicalSnapshot(snapshot ConvergenceSnapshot) (ConvergenceSnapshot, error
 	pending := append([]PendingOperation(nil), snapshot.Pending...)
 	for index := range pending {
 		pending[index].Resources = append([]ManagedResourceKey(nil), pending[index].Resources...)
-		if err := pending[index].validate(desired.Generation); err != nil {
+		if err := pending[index].validate(applied.Generation, desired.Generation); err != nil {
 			return ConvergenceSnapshot{}, fmt.Errorf("%w: pending operation %d: %v", ErrConvergencePlanInvalid, index, err)
 		}
 		sort.Slice(pending[index].Resources, func(left, right int) bool {
@@ -460,7 +466,9 @@ func desiredChanges(snapshot ConvergenceSnapshot) ([]DesiredChange, error) {
 		after, hasAfter := desired[key]
 		change := DesiredChange{
 			OperationID: operation.ID, OperationType: operation.Type,
-			TargetKind: operation.TargetKind, TargetID: operation.TargetID,
+			OperationExpectedGeneration: operation.ExpectedGeneration,
+			OperationDesiredGeneration:  operation.DesiredGeneration,
+			TargetKind:                  operation.TargetKind, TargetID: operation.TargetID,
 			Kind: kind,
 		}
 		switch kind {
@@ -590,7 +598,7 @@ func (key ManagedResourceKey) validate() error {
 	return nil
 }
 
-func (operation PendingOperation) validate(maximumGeneration uint64) error {
+func (operation PendingOperation) validate(minimumGeneration, maximumGeneration uint64) error {
 	if err := validateOperationID(operation.ID); err != nil {
 		return err
 	}
@@ -600,7 +608,8 @@ func (operation PendingOperation) validate(maximumGeneration uint64) error {
 	if err := validateOperationTarget(operation.TargetKind, operation.TargetID); err != nil {
 		return err
 	}
-	if operation.ExpectedGeneration == 0 || operation.DesiredGeneration < operation.ExpectedGeneration || operation.DesiredGeneration > maximumGeneration {
+	if operation.ExpectedGeneration < minimumGeneration || operation.DesiredGeneration <= operation.ExpectedGeneration ||
+		operation.DesiredGeneration > maximumGeneration {
 		return fmt.Errorf("operation generations are invalid")
 	}
 	if operation.Resources == nil || len(operation.Resources) == 0 {
@@ -623,6 +632,9 @@ func (operation PendingOperation) validate(maximumGeneration uint64) error {
 func (change DesiredChange) validate() error {
 	if validateOperationID(change.OperationID) != nil || !operationTypePattern.MatchString(change.OperationType) {
 		return fmt.Errorf("operation identity is invalid")
+	}
+	if change.OperationExpectedGeneration == 0 || change.OperationDesiredGeneration <= change.OperationExpectedGeneration {
+		return fmt.Errorf("operation generations are invalid")
 	}
 	if err := validateOperationTarget(change.TargetKind, change.TargetID); err != nil {
 		return err
