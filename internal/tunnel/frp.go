@@ -19,17 +19,20 @@ import (
 )
 
 const (
-	FRPProviderName        = "frp"
-	FRPProviderVersion     = "0.69.0"
-	FRPProviderAsset       = "frp_0.69.0_linux_amd64.tar.gz"
-	FRPProviderSHA256      = "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e"
-	FRPServerPort          = 17000
-	FRPClientAdminPort     = 17400
-	FRPAuthorizationPort   = 19091
-	FRPTLSServerName       = "vpnctl-tunnel-gateway"
-	FRPTCPMuxKeepaliveSec  = 5
-	FRPHeartbeatSec        = 1
-	FRPHeartbeatTimeoutSec = 4
+	FRPProviderName           = "frp"
+	FRPProviderVersion        = "0.69.0"
+	FRPProviderAsset          = "frp_0.69.0_linux_amd64.tar.gz"
+	FRPProviderSHA256         = "6b90d1cd28fc661f170c0de90dde03d2c63e4fd7ce0ae2da2ca1c28014b8146e"
+	FRPServerPort             = 17000
+	FRPClientAdminPort        = 17400
+	FRPAuthorizationPort      = 19091
+	FRPTLSServerName          = "vpnctl-tunnel-gateway"
+	FRPTCPMuxKeepaliveSec     = 5
+	FRPHeartbeatSec           = 1
+	FRPHeartbeatTimeoutSec    = 4
+	FRPHealthCheckTimeoutSec  = 1
+	FRPHealthCheckMaxFailed   = 1
+	FRPHealthCheckIntervalSec = 3
 
 	FRPServerConfigFileName     = "tunnel-server.toml"
 	FRPClientConfigFileName     = "tunnel-client.toml"
@@ -265,6 +268,10 @@ func renderFRPClientConfig(endpoint netip.AddrPort, session NodeSession, tunnelC
 		fmt.Fprintf(&config, "localPort = %d\n", localPort)
 		fmt.Fprintf(&config, "remotePort = %d\n", mapping.GatewayEndpoint.Port())
 		fmt.Fprintf(&config, "metadatas.generation = %s\n", strconv.Quote(strconv.FormatUint(mapping.Generation, 10)))
+		config.WriteString("healthCheck.type = \"tcp\"\n")
+		fmt.Fprintf(&config, "healthCheck.timeoutSeconds = %d\n", FRPHealthCheckTimeoutSec)
+		fmt.Fprintf(&config, "healthCheck.maxFailed = %d\n", FRPHealthCheckMaxFailed)
+		fmt.Fprintf(&config, "healthCheck.intervalSeconds = %d\n", FRPHealthCheckIntervalSec)
 	}
 	return []byte(config.String())
 }
@@ -482,6 +489,16 @@ func parseFRPClientConfig(content []byte) (frpClientDocument, error) {
 		mappingGeneration, err := strconv.ParseUint(mappingGenerationText, 10, 64)
 		if err != nil || mappingGeneration == 0 || strconv.FormatUint(mappingGeneration, 10) != mappingGenerationText {
 			return frpClientDocument{}, fmt.Errorf("frp mapping generation must be canonical and positive")
+		}
+		for _, expected := range []string{
+			"healthCheck.type = \"tcp\"",
+			fmt.Sprintf("healthCheck.timeoutSeconds = %d", FRPHealthCheckTimeoutSec),
+			fmt.Sprintf("healthCheck.maxFailed = %d", FRPHealthCheckMaxFailed),
+			fmt.Sprintf("healthCheck.intervalSeconds = %d", FRPHealthCheckIntervalSec),
+		} {
+			if err := cursor.expect(expected); err != nil {
+				return frpClientDocument{}, err
+			}
 		}
 		mappings = append(mappings, Mapping{
 			ExposeID: exposeID, NodeID: nodeID, Name: name, Protocol: model.ProtocolTCP,

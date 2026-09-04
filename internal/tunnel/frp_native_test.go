@@ -8,16 +8,19 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -195,6 +198,11 @@ func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	backend, err := net.Listen("tcp4", "127.0.0.1:3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go serveNativeEcho(ctx, backend)
 	authorizationResult := make(chan error, 1)
 	go func() { authorizationResult <- authorizer.Serve(ctx) }()
 	waitForNativeTCPListener(t, FRPAuthorizationAddress)
@@ -244,6 +252,7 @@ func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
 	go func() { clientResult <- clientCommand.Wait() }()
 	t.Cleanup(func() {
 		cancel()
+		_ = backend.Close()
 		for _, result := range []<-chan error{clientResult, serverResult, authorizationResult} {
 			select {
 			case <-result:
@@ -258,6 +267,213 @@ func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
 	})
 	waitForNativeTCPListener(t, "127.0.0.1:20000")
 	waitForNativeEstablishedTunnel(t, 17000, 2)
+}
+
+func TestFRPNativeReadinessRecoversWithoutStandbyAfterGatewayUpstreamAndClientRestarts(t *testing.T) {
+	frpsBinary := os.Getenv("VPNCTL_FRPS")
+	frpcBinary := os.Getenv("VPNCTL_FRPC")
+	if frpsBinary == "" || frpcBinary == "" {
+		t.Skip("set VPNCTL_FRPS and VPNCTL_FRPC to pinned Linux binaries")
+	}
+	root := t.TempDir()
+	paths, err := store.NewPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{
+		paths.ConfigDir, paths.RuntimeDir,
+		filepath.Join(paths.ConfigDir, "generated", "node"),
+		filepath.Join(root, "usr", "local", "libexec", "vpnctl"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, installedFRPC := frpServicePaths(paths, model.RoleNode)
+	copyNativeExecutable(t, frpcBinary, installedFRPC)
+	certificatePEM, privateKeyPEM := nativeFRPTLSIdentity(t)
+	trustedCertificatePath := filepath.Join(paths.ConfigDir, "generated", "node", FRPServerCertificateName)
+	serverCertificatePath := filepath.Join(root, "server.crt")
+	serverPrivateKeyPath := filepath.Join(root, "server.key")
+	for path, content := range map[string][]byte{
+		trustedCertificatePath: certificatePEM,
+		serverCertificatePath:  certificatePEM,
+		serverPrivateKeyPath:   privateKeyPEM,
+	} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endpoint := netip.AddrPortFrom(nativePrivateIPv4(t), FRPServerPort)
+	provider, err := NewFRPProvider(root, testFRPComponent(), staticFRPCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := testFRPSession(t)
+	session.Mappings = session.Mappings[:1]
+	candidateValue, err := provider.Render(context.Background(), nativeFRPClientRenderRequest(endpoint, session, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := candidateValue.(FRPCandidate)
+	clientConfigPath, _ := frpServicePaths(paths, model.RoleNode)
+	if err := os.WriteFile(clientConfigPath, candidate.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	serverConfigPath := filepath.Join(root, "frps.toml")
+	serverConfig := renderFRPServerConfig(endpoint, serverCertificatePath, serverPrivateKeyPath)
+	serverConfig = bytes.Replace(serverConfig, []byte(`ops = ["Login", "NewProxy", "Ping"]`), []byte(`ops = ["Login", "NewProxy"]`), 1)
+	if err := os.WriteFile(serverConfigPath, serverConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend, err := net.Listen("tcp4", "127.0.0.1:3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go serveNativeEcho(ctx, backend)
+	standbyAddress := net.JoinHostPort(endpoint.Addr().String(), "17001")
+	standby, err := net.Listen("tcp4", standbyAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var standbyConnections atomic.Int64
+	go func() {
+		go func() {
+			<-ctx.Done()
+			_ = standby.Close()
+		}()
+		for {
+			connection, acceptErr := standby.Accept()
+			if acceptErr != nil {
+				return
+			}
+			standbyConnections.Add(1)
+			_ = connection.Close()
+		}
+	}()
+
+	authorizer, _, _ := loginAuthorizationFixture(t)
+	authorizationResult := make(chan error, 1)
+	go func() { authorizationResult <- authorizer.Serve(ctx) }()
+	waitForNativeTCPListener(t, FRPAuthorizationAddress)
+
+	var serverCommand *exec.Cmd
+	var serverResult chan error
+	startServer := func() {
+		serverCommand = exec.CommandContext(ctx, frpsBinary, "-c", serverConfigPath)
+		serverCommand.Stdout = io.Discard
+		serverCommand.Stderr = io.Discard
+		if startErr := serverCommand.Start(); startErr != nil {
+			t.Fatal(startErr)
+		}
+		serverResult = make(chan error, 1)
+		go func(command *exec.Cmd, result chan<- error) { result <- command.Wait() }(serverCommand, serverResult)
+		waitForNativeTCPListener(t, endpoint.String())
+	}
+	stopServer := func() {
+		if serverCommand == nil {
+			return
+		}
+		_ = serverCommand.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-serverResult:
+		case <-time.After(5 * time.Second):
+			t.Fatal("native frps did not stop")
+		}
+		serverCommand = nil
+		serverResult = nil
+	}
+	startServer()
+
+	var clientCommand *exec.Cmd
+	var clientResult chan error
+	startClient := func() int {
+		clientCommand = exec.CommandContext(ctx, installedFRPC, "-c", clientConfigPath)
+		clientCommand.Stdout = io.Discard
+		clientCommand.Stderr = io.Discard
+		if startErr := clientCommand.Start(); startErr != nil {
+			t.Fatal(startErr)
+		}
+		clientResult = make(chan error, 1)
+		go func(command *exec.Cmd, result chan<- error) { result <- command.Wait() }(clientCommand, clientResult)
+		waitForNativeTCPListener(t, FRPClientStatusAddress)
+		return clientCommand.Process.Pid
+	}
+	stopClient := func() {
+		if clientCommand == nil {
+			return
+		}
+		_ = clientCommand.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-clientResult:
+		case <-time.After(5 * time.Second):
+			t.Fatal("native frpc did not stop")
+		}
+		clientCommand = nil
+		clientResult = nil
+	}
+	clientPID := startClient()
+	t.Cleanup(func() {
+		stopClient()
+		stopServer()
+		cancel()
+		_ = backend.Close()
+		_ = standby.Close()
+		select {
+		case <-authorizationResult:
+		case <-time.After(5 * time.Second):
+			t.Error("native readiness authorizer did not stop")
+		}
+	})
+
+	readinessProber, err := NewFRPClientSystemReadinessProber(paths, NewFRPHTTPStatusSource(), NewNetTunnelUpstreamProber())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := NewTunnelReadinessGate(readinessProber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expose := testExpose(testExposeA, testNodeA, "first", 20000, model.ExposeReady)
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 30*time.Second)
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+
+	stopServer()
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, false, 10*time.Second)
+	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
+	startServer()
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 30*time.Second)
+	if clientCommand.Process.Pid != clientPID || clientCommand.Process.Signal(syscall.Signal(0)) != nil {
+		t.Fatal("gateway restart replaced or stopped frpc")
+	}
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, false, 5*time.Second)
+	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
+	backend, err = net.Listen("tcp4", "127.0.0.1:3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go serveNativeEcho(ctx, backend)
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 15*time.Second)
+
+	stopClient()
+	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
+	restartedClientPID := startClient()
+	if restartedClientPID == clientPID {
+		t.Fatal("explicit client restart unexpectedly reused PID")
+	}
+	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 30*time.Second)
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+	if standbyConnections.Load() != 0 {
+		t.Fatalf("frpc attempted %d standby connections to %s", standbyConnections.Load(), standbyAddress)
+	}
 }
 
 func TestFRPNativeDynamicMappingReloadKeepsProcessConnectionAndStream(t *testing.T) {
@@ -554,6 +770,35 @@ func waitForNativeTCPListener(t *testing.T, address string) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("native listener %s did not become ready", address)
+}
+
+func waitForNativeTunnelReadiness(
+	t *testing.T,
+	gate *TunnelReadinessGate,
+	candidate FRPCandidate,
+	expose model.Expose,
+	wantReady bool,
+	timeout time.Duration,
+) TunnelReadinessResult {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last TunnelReadinessResult
+	var lastErr error
+	for time.Now().Before(deadline) {
+		_, observed, err := gate.Check(context.Background(), candidate)
+		last = observed
+		lastErr = err
+		status := observed.IngressHTTPStatus(candidate.Descriptor(), expose)
+		if wantReady && err == nil && observed.Ready() && status == 0 {
+			return observed
+		}
+		if !wantReady && errors.Is(err, ErrTunnelNotReady) && status == http.StatusServiceUnavailable {
+			return observed
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("native tunnel readiness did not become ready=%t: result=%+v err=%v", wantReady, last, lastErr)
+	return TunnelReadinessResult{}
 }
 
 func waitForNativeEstablishedTunnel(t *testing.T, port, wantEntries int) {

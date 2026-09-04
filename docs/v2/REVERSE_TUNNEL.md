@@ -209,12 +209,62 @@ further updates fail closed.
 Official-frp acceptance held an active stream on mapping `20000` while adding
 and removing mapping `20001`. Both reloads kept the same frpc PID, the original
 stream remained usable, and TCP `17000` retained exactly one multiplexed
-control connection. Mapping readiness and automatic reconnect are added by
-task 11.7; a successful reload alone is not advertised as upstream readiness.
+control connection. A successful reload alone is not advertised as upstream
+readiness.
+
+## Reconnect and readiness
+
+Reconnect remains inside the pinned frpc process and never becomes a second
+vpnctl transport selector. The canonical configuration has exactly one
+`serverAddr`/`serverPort`, keeps `loginFailExit=false`, and contains no proxy or
+standby endpoint. The version-locked retry contract follows the official
+[`v0.69.0` client loop](https://github.com/fatedier/frp/blob/v0.69.0/client/service.go):
+one-second initial delay, factor two, 10 percent jitter, a 10-second initial
+maximum and 20-second reconnect maximum. Rapidly failing established controls
+receive three bounded 200-millisecond retries in a one-minute window before the
+same exponential limit. A provider upgrade must revalidate these values rather
+than silently retaining stale constants.
+
+Every mapping uses frpc's TCP health monitor against its exact configured node
+upstream with a one-second timeout, one failed attempt before withdrawal, and a
+three-second interval. frpc does not announce a new mapping before the first
+successful check. After failure it withdraws only that mapping from frps; its
+gateway loopback endpoint therefore closes while unrelated healthy mappings
+remain available. The ingress provider treats that unavailable loopback
+upstream as `503`, and frpc republishes the same authorized mapping
+automatically after the application returns.
+
+The provider-neutral readiness gate is stricter than process health. It first
+byte-compares the installed root-only configuration with the desired candidate
+and binds evidence to the exact descriptor generation, active transport, hash,
+node identity, credential generation, and ordered mapping generations. It then
+reads the official authenticated [`GET /api/status`](https://github.com/fatedier/frp/blob/v0.69.0/client/api_router.go)
+only from `127.0.0.1:17400`, using the credential-derived admin password and a
+two-second bound. The response is limited to 64 KiB and accepts only the
+official TCP status shape, exact mapping names/types/local and remote
+endpoints, known phases, no store source, no duplicate fields, and no other
+proxy types. Status errors and bodies are never propagated.
+
+Fresh TCP probes of the exact node upstreams run with a one-second bound and at
+most eight concurrent probes. A readiness result contains only safe
+identity/generation and passed/failed codes. Stale evidence, configuration or
+mapping drift, a disconnected tunnel, failed authorization, and an unavailable
+upstream all produce a degraded expose decision and `503`; no observation can
+change the manually selected active transport. A healthy mapping may resume
+without waiting for an unrelated failed application, while connection-wide or
+generation failure closes every mapping.
+
+Native acceptance on the minimum Ubuntu 24.04/amd64 fixture stopped and
+restarted frps while keeping the original frpc PID, withdrew and recovered a
+mapping across application stop/start, and restarted frpc from the same
+candidate. Readiness moved through degraded/`503` and back to ready in every
+case. A live sentinel on an unconfigured standby TCP `17001` accepted zero
+connections, and the full pinned config/Login/NewProxy/reload suite remained
+green.
 
 ## Deferred provider work
 
-Tasks 11.7-11.9 supply readiness/reconnect behavior, authenticated revoke
-handling, and the release resource gate. Those additions must preserve this
-topology, identity, allocation, credential, atomic configuration, and
-fail-closed authorization contract.
+Tasks 11.8-11.9 supply authenticated revoke handling, rotation/switch
+integration, and the release resource gate. Those additions must preserve this
+topology, identity, allocation, credential, atomic configuration, readiness,
+and fail-closed authorization contract.
