@@ -9,7 +9,11 @@ if [ -z "$version" ]; then
 	exit 2
 fi
 case "$version" in
-	v[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]*) ;;
+	v?*)
+		case "$version" in
+			*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]*) echo "version must be a safe v-prefixed tag, for example v2.0.0" >&2; exit 2 ;;
+		esac
+		;;
 	*) echo "version must be a safe v-prefixed tag, for example v2.0.0" >&2; exit 2 ;;
 esac
 
