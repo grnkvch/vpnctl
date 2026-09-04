@@ -59,6 +59,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isBackupInvocation(args) {
 		return executeBackup(args, stdout, stderr)
 	}
+	if isRestoreInvocation(args) {
+		return executeRestore(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {

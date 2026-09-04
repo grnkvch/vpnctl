@@ -2,6 +2,70 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — validated non-merging gateway restore
+
+### Planned reversible implementation
+
+- Task 14.9 is source-only on this development host. Restore will accept one
+  explicit regular encrypted archive and explicit current public IPv4, decrypt
+  through the bounded authenticated streaming codec into a private temporary
+  file, and validate the complete manifest, state, allowlisted paths, entry
+  sizes/hashes, exact EOF, release compatibility, host preflight, and runtime
+  convergence plan before any destination or service mutation.
+- A clean installed host may establish gateway state without prior init. An
+  initialized gateway must use `--replace`; role mismatch, partial/foreign
+  layout, missing replacement consent, and every merge-shaped state are
+  conflicts. Replacement will first create a durable emergency snapshot of the
+  exact vpnctl-owned state, secrets, config, exports, and runtime metadata that
+  it is authorized to replace.
+- Apply will stage a complete restored root with owner-only sensitive files,
+  preserve the archived gateway/node/client trust material, activate through a
+  single replace/converge boundary, health-check the restored gateway, and
+  restore the emergency snapshot on failure. Same-public-IP results will state
+  that existing node trust and client profiles are preserved, without claiming
+  that in-flight sessions survive the accepted downtime.
+- Invalid archive/passphrase/schema/host/preflight cases will be tested against
+  mutation counters and filesystem canaries and must leave the host byte-for-
+  byte unchanged. No production archive, secret, state, service, listener,
+  firewall, route, gateway, node, client, or external endpoint will change;
+  tests use temporary roots and rollback is limited to the future task 14.9
+  commit.
+
+### Result
+
+- Added the public `vpnctl restore <archive-path> --public-ip <IPv4>
+  [--replace]` workflow with a mandatory one-time hidden passphrase prompt,
+  confirmation semantics, dry-run authentication/preflight, gateway/clean-host
+  role gating, and redacted human/JSON results. The current iteration accepts
+  only the archive endpoint; changed-IP action planning remains task 14.10.
+- Added a bounded restore loader that authenticates the complete encrypted
+  stream before extraction, enforces canonical manifest/tar metadata and exact
+  EOF, stages only structural allowlist entries as mode-`0600` files, and
+  rejects missing, extra, oversized, reordered, linked, corrupt, or
+  schema-incompatible content without reaching the host mutation boundary.
+- Added compatible release inspection/install checks and a dedicated-host
+  system transaction. It distinguishes a genuinely clean host from partial
+  state, preflights current networking/SSH/listener ownership, remaps only
+  conflicting loopback expose ports, validates certificates, private keys,
+  enrollment identity, presets, transport/tunnel/DNS/ingress renderings, then
+  stages complete non-merging config and state roots before activation.
+- Replacement creates a durable emergency snapshot outside the live state
+  root. Config/state swaps, vpnctl units, services, firewall, routes, rules, and
+  sysctls are tracked in one rollback handle; activation or health failure
+  restores the prior roots, unit files, network snapshot, and services. Clean
+  restore never adopts an existing partial root, and transaction-path
+  collisions fail before any service is stopped.
+- Tests cover invalid authentication/archives with zero mutation, explicit and
+  canonical public IPv4, `--replace`, stale plans, release drift, emergency
+  snapshots, activation/health rollback, exact node trust/client-profile
+  payload preservation, revoked-node secret exclusion, listener ownership,
+  enrollment key/fingerprint verification, safe tree copying, and owned-root
+  rollback. Targeted and complete ordinary/race suites, `go vet`, shell syntax,
+  JSON parsing, `git diff --check`, and strict OpenSpec validation passed; the
+  socket-based suites ran outside the sandbox because local binds are blocked.
+  No production host resource was changed; tests used temporary roots and
+  `/tmp/vpnctl-go-cache` only.
+
 ## 2026-09-04 — structural gateway backup allowlist
 
 ### Planned reversible implementation
