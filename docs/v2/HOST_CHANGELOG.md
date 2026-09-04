@@ -2,6 +2,60 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned read-only v1 installation inspector
+
+### Planned reversible implementation
+
+- Task 15.1 is source-only on this development host. The migration layer will
+  inspect the exact cwd-owned `.vpnctl` tree and an injectable system root
+  without initializing state, repairing permissions, invoking mutating
+  commands, or writing a report beside the installation.
+- Inspection will bound and validate v1 schema/state, server/client identities,
+  addresses and public/private WireGuard key presence without exposing private
+  bytes; enumerate and validate rulesets and generated artifacts without
+  following symlinks; compare the applied WireGuard/sysctl artifacts; and parse
+  only the persisted UFW configuration needed to identify the known v1
+  WireGuard rule and otherwise ambiguous allow rules.
+- Absent, partial, malformed, unsafe, drifted, and unsupported installations
+  will return a deterministic no-mutation report with stable issue codes rather
+  than attempting recovery. A private in-memory snapshot may retain validated
+  inputs for the following conversion task, but its string/JSON projections
+  will be redacted and it will support explicit destruction.
+- Tests will use only `t.TempDir()` workspace/system roots, synthetic keys,
+  and filesystem canaries. No production cwd state, `/etc/wireguard`, sysctl,
+  UFW rule, service, process, network setting, gateway, node, or client will be
+  read or changed; rollback is limited to the future task 15.1 commit.
+
+### Result
+
+- Added a versioned read-only v1 inspection boundary that resolves the cwd and
+  injectable system root once, opens bounded regular files and directories
+  with no-follow semantics, rejects unsafe interface/client paths, and never
+  invokes a command or state writer. Reports distinguish `absent`, `ready`,
+  `partial`, `invalid`, and `unsupported` installations with deterministic
+  issue ordering and logical paths rather than physical host roots.
+- The inspector strictly validates v1 state/schema, server and client
+  lifecycle, unique IDs and usable in-subnet addresses, public/private
+  WireGuard key shape and key-pair correspondence, ruleset filenames/content,
+  and the fixed generated-artifact tree. It compares the exact applied
+  WireGuard and forwarding files with inspected state, parses persisted UFW
+  enabled state and tuple rules, recognizes the WireGuard allow rule, and
+  explicitly leaves TCP/SSH rule ownership ambiguous because v1 did not
+  persist its selected SSH port.
+- Private keys, generated profiles, and applied WireGuard bytes remain only in
+  an unexported in-memory snapshot for the next conversion step. JSON,
+  `String`, and `GoString` expose only the redacted report; profile
+  fingerprints are deliberately omitted, and `Destroy` clears every retained
+  secret-bearing byte slice.
+- Tests prove complete inspection, clients/addresses/keys/rulesets/artifacts,
+  exact WireGuard/sysctl comparison, UFW classification, malformed/partial/
+  unsupported/absent reporting, reserved-address and key mismatch rejection,
+  parent/final symlink refusal, private-data redaction/destruction, and
+  byte/mode/modtime no-mutation canaries. Full ordinary Go tests, focused
+  lifecycle race tests, `go vet`, formatting, `git diff --check`, and strict
+  OpenSpec validation passed. Existing socket tests ran outside the sandbox;
+  no production host artifact was inspected or changed.
+
 ## 2026-09-04 — planned irreversible purge
 
 ### Planned reversible implementation
