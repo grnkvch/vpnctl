@@ -64,3 +64,48 @@ or zero values, overflow, shell/directive separators, and names such as
 `--proxy-read-timeout` or `--nginx-directive` fail before identity entropy,
 state mutation, or provider rendering. A future limit change requires a new
 versioned measured contract rather than an untracked configuration edit.
+
+## Selected nginx renderer
+
+The first provider pins Ubuntu nginx `1.24.0-2ubuntu7.17` and its accepted
+`listen ... ssl http2` syntax. Rendering is pure and deterministic: canonical
+state, expose records, public certificate/key paths, and an owned runtime path
+produce one complete three-file candidate tree. All files are root-only and
+the candidate hash covers relative path, mode, and content. The candidate is
+not JSON-serializable because route and filesystem paths can be sensitive.
+
+The public listener is IPv4 `443/TCP` only. It accepts TLS 1.2/1.3 and
+HTTP/1.1 plus at most 64 concurrent HTTP/2 streams; there is no UDP, QUIC,
+HTTP/3, WebSocket upgrade, client mTLS, domain, or ACME configuration. Every
+published route proxies over HTTP/1.1 to its persisted
+`127.0.0.1:<TunnelPort>` endpoint. The node application's upstream address is
+never rendered on the gateway. `proxy_pass` has no URI suffix, preserving the
+request method, normalized path, query, headers, and streaming body.
+
+Exact paths compile to exact nginx locations. A segment-prefix `/api` compiles
+to an exact `/api` location plus a `^~ /api/` location, so `/apiv2` cannot
+match. Disabled exposes are absent; pending, ready, and degraded records remain
+publishable while later saga/readiness work controls their lifecycle. A root
+prefix replaces the ordinary `404` fallback without producing a duplicate
+location.
+
+The common proxy policy disables request/response buffering, response temp
+files, storage, caching, redirect rewriting, and upstream retries. It clears
+`Forwarded`, non-authoritative `X-Forwarded-*`, Upgrade, Connection, and TE,
+then derives trusted address/protocol/host/port fields from the accepted
+connection. Authorization and ordinary application/provider headers continue
+to the application, while access and error logging remain off by default.
+
+Both gateway and expose limits are repeated in every proxy location to avoid
+nginx's child-limit inheritance trap. One 64 KiB expose zone is keyed by the
+immutable expose UUID assigned inside the selected location; this enforces one
+cap across both locations of a prefix route without allocating a fixed zone
+per possible expose. Since the gateway admits at most 64 concurrent requests,
+the shared zone contains only a bounded active-key set even when many inactive
+routes exist.
+
+Provider validation first requires the exact runtime version `1.24.0`, then
+runs only `nginx -t -p <candidate-root>/ -c nginx.conf` against an already
+staged tree. Staging, symlink/tree activation, graceful reload, drift handling,
+and rollback belong to task 12.5. The Ubuntu native parser accepted the task
+12.4 tree; deployed Telegram compatibility remains deferred to task 16.11.
