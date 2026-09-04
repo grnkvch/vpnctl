@@ -12,12 +12,12 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 12.8 выполнено `113/156`
+и проходят strict validation. После завершения task 12.9 выполнено `114/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
-reverse tunnel и managed HTTPS ingress вплоть до stateless request/error
-semantics включительно.
+reverse tunnel и managed HTTPS ingress, включая stateless request/error
+semantics и isolated expose inspection/removal.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -33,9 +33,12 @@ Shadowsocks 2022 AES-256-GCM и ShadowTLS v3 strict на `8443/TCP`: gateway и 
 frpc/tcpMux session на node, generation-scoped authorization и exact mapping
 readiness. Expose creation резервирует authoritative state, применяет tunnel,
 принимает stopped app как `degraded`, публикует HTTPS path последним и не
-выводит sensitive path в JSON. nginx выполняет ровно одну upstream-попытку,
+выводит sensitive path в JSON. `expose list` проверяет certificate availability
+без записи, `show` обновляет public-only export, а confirmed remove сначала
+unpublish-ит только выбранный route, выдерживает 10-секундный drain, удаляет
+его FRP mapping и лишь затем освобождает port. nginx выполняет ровно одну upstream-попытку,
 выдаёт `413`/`503`/`504` до начала ответа и закрывает partial response без
-replay. Следующая задача — 12.9 (expose list/show/remove и bounded drain).
+replay. Следующая задача — 12.10 (manual public certificate rotation).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract
@@ -190,6 +193,10 @@ vpnctl cert rotate
   Старый private key сохраняется только в ограниченном rollback snapshot.
 - `expose show` на private node может получить через gateway актуальную public
   certificate copy для последующего `scp`.
+- `expose list` остаётся read-only: он сообщает наличие точной текущей public
+  certificate copy на gateway, но не создаёт её. При недоступном gateway
+  локальные non-secret expose records остаются видимыми как degraded result с
+  неизвестной certificate availability.
 - Gateway-side node management grammar:
 
 ```text
@@ -1157,6 +1164,11 @@ https://PUBLIC_GATEWAY_IP/telegram/webhook
   streams получают bounded drain period, затем frp mapping удаляется и port
   возвращается allocator. Restore сохраняет allocation, если она свободна, или
   атомарно переназначает endpoint вместе с reverse-proxy config до публикации.
+- Production removal order зафиксирован как gateway unpublish выбранного route,
+  local disabled state, 10-секундный nginx worker drain, complete FRP topology
+  без выбранного mapping, gateway allocation release и local record deletion.
+  После unpublish ошибки обрабатываются forward-only: route автоматически не
+  возвращается, disabled record удерживает port до explicit convergence.
 - Создание expose не открывает входящий порт на private node: reverse tunnel
   устанавливается исходящим соединением node к gateway.
 - По умолчанию local upstream expose должен быть доступен через loopback,

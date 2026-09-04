@@ -339,6 +339,52 @@ func ExportPublicCertificate(state model.State, secrets PublicCertificateSecretS
 	return PublicCertificateExport{Path: destination, Fingerprint: status.Fingerprint, Changed: changed}, nil
 }
 
+// PublicCertificateExportAvailable performs the read-only half of export. It
+// reports true only when the exact current public certificate already exists
+// at the requested regular-file destination. A missing file is normal; an
+// unsafe or stale file is surfaced as drift instead of being overwritten.
+func PublicCertificateExportAvailable(state model.State, secrets PublicCertificateSecretStore, destination string) (bool, error) {
+	if secrets == nil {
+		return false, fmt.Errorf("public certificate source is required")
+	}
+	if destination == "" || !filepath.IsAbs(destination) || filepath.Clean(destination) != destination {
+		return false, fmt.Errorf("%w: destination must be a clean absolute path", ErrPublicCertificateUnsafePath)
+	}
+	record, err := publicCertificateRecord(state)
+	if err != nil {
+		return false, err
+	}
+	certificatePEM, err := secrets.Get(model.SecretRef(record.CertificateRef))
+	if err != nil {
+		return false, fmt.Errorf("read public ingress certificate: %w", err)
+	}
+	defer clear(certificatePEM)
+	if _, err := ValidatePublicCertificatePEM(certificatePEM, record, state.Host.PublicIPv4); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(destination)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect public certificate export: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%w: destination is not a regular file", ErrPublicCertificateUnsafePath)
+	}
+	if info.Size() < 1 || info.Size() > publicCertificateMaximumBytes {
+		return false, fmt.Errorf("%w: destination has an invalid size", ErrPublicCertificateExported)
+	}
+	existing, err := os.ReadFile(destination)
+	if err != nil {
+		return false, fmt.Errorf("read existing public certificate export: %w", err)
+	}
+	if !bytes.Equal(existing, certificatePEM) {
+		return false, fmt.Errorf("%w: %s", ErrPublicCertificateExported, destination)
+	}
+	return true, nil
+}
+
 func ValidatePublicCertificatePEM(certificatePEM []byte, record model.Certificate, publicIPv4 string) (*x509.Certificate, error) {
 	if len(certificatePEM) == 0 || len(certificatePEM) > publicCertificateMaximumBytes || bytes.Contains(certificatePEM, []byte("PRIVATE KEY")) {
 		return nil, fmt.Errorf("%w: public PEM shape is invalid", ErrPublicCertificateInvalid)

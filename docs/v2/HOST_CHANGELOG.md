@@ -2,6 +2,40 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — expose inspection and isolated removal
+
+- Task 12.9 is source-only. It adds bounded node/gateway catalog projections,
+  read-only current-certificate-export inspection, idempotent public-only
+  certificate refresh for `show`, confirmed immediate/deferred removal, fixed
+  ten-second drain coordination, complete FRP topology removal, and
+  authoritative allocation release. It does not install or invoke nginx/frp,
+  start or reload a host service, bind a listener, contact a gateway or webhook
+  provider, mutate either lab VM, or create retained evidence.
+- Tests use in-memory state/gateway/tunnel/publisher adapters and ordinary Go
+  temporary directories only. Generated candidate validation remains
+  in-process; no real webhook path is requested and no Telegram registration or
+  credential exists. `/private/tmp/vpnctl-go-cache` is a disposable Go build
+  cache excluded by the journal policy, not deployed state.
+- The failure contract is forward-only after public unpublish: a disabled
+  authoritative record retains the port until the node mapping removal is
+  confirmed. Successful removal proves one-of-many nginx and FRP candidates
+  retain the unrelated expose, then releases only the selected assignment.
+  Repository rollback is the single task-12.9 commit; no host rollback is
+  required.
+- Acceptance covers read-only list availability, show-only public certificate
+  refresh, gateway-unavailable local views, sensitive-path serialization
+  barriers, exact name/ID resolution, confirmed dry-run/immediate/deferred CLI
+  modes, public-route-first disable, fixed drain, interrupted-drain reservation,
+  complete one-of-many nginx/FRP candidates, exact allocator reuse, and the
+  external-webhook action. Twenty focused repetitions, three focused race
+  repetitions, complete ordinary and race-detector suites, vet,
+  regression/schema/traceability checks, dependency listing, formatting/diff,
+  and strict OpenSpec validation passed at `114/156`. The first sandboxed full
+  suite failed only its existing local TCP/Unix binds plus the intentionally
+  changed CLI-contract pin; the pin was updated and the unchanged suite passed
+  with local-socket permission. `go list` emitted only its known non-fatal
+  global module stat-cache warning. No manual rollback is outstanding.
+
 ## 2026-09-04 — stateless ingress request semantics
 
 ### Planned reversible native validation

@@ -229,3 +229,32 @@ and fingerprint, and a copy-ready `scp` command. The URL is held in a dedicated
 human-only sensitive-path field: JSON and generic result formatting contain no
 webhook path or derived URL. JSON receives only safe identities, generations,
 effective state, certificate metadata, and the SCP hint.
+
+## Inspection and removal
+
+`expose list` reads local non-secret records and asks the authenticated gateway
+whether its exact current public-certificate export already exists. It never
+creates that file. If the gateway cannot be reached, local records remain
+visible as degraded output with certificate availability unknown. `expose
+show` additionally performs an idempotent refresh of the public-only gateway
+export and returns a copy-ready `scp` command. Both structured projections omit
+the webhook path, derived URL, tunnel port, and opaque references; only the
+human `show` view may render the URL through the sensitive-path boundary.
+
+Confirmed immediate removal is deliberately forward-only after the public
+route disappears:
+
+1. the gateway changes only the selected expose to `disabled`, renders the
+   complete nginx tree, and gracefully reloads it, so no new request can enter;
+2. the node records the same disabled generation and waits the fixed ten-second
+   nginx worker-shutdown bound;
+3. the node atomically applies the complete FRP topology without that mapping;
+4. the gateway verifies and removes only the disabled allocation, releasing its
+   loopback port, and the node removes its local record.
+
+A failure after step 1 never republishes the route automatically. The disabled
+record and allocation remain for explicit convergence, preventing accidental
+port reuse while a mapping may still exist. Every successful or deferred
+removal returns `remove_external_webhook` without a command, because vpnctl has
+no provider token and cannot delete the Telegram/application registration.
+Other expose routes and mappings remain present in every generated candidate.

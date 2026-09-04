@@ -157,6 +157,10 @@ func TestPublicCertificateExportWritesOnlyPublicPEMWithoutReplacement(t *testing
 	paths, secrets, installation := provisionPublicCertificateFixture(t)
 	state := publicCertificateState(installation.Certificate)
 	destination := DefaultPublicCertificateExportPath(paths.ExportsDir)
+	available, err := PublicCertificateExportAvailable(state, secrets, destination)
+	if err != nil || available {
+		t.Fatalf("missing export availability = %t, %v", available, err)
+	}
 	result, err := ExportPublicCertificate(state, secrets, destination)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +182,10 @@ func TestPublicCertificateExportWritesOnlyPublicPEMWithoutReplacement(t *testing
 	if err != nil || second.Changed {
 		t.Fatalf("idempotent export = %+v, %v", second, err)
 	}
+	available, err = PublicCertificateExportAvailable(state, secrets, destination)
+	if err != nil || !available {
+		t.Fatalf("current export availability = %t, %v", available, err)
+	}
 
 	occupied := filepath.Join(paths.ExportsDir, "occupied.crt")
 	if err := os.WriteFile(occupied, []byte("operator-owned\n"), 0o600); err != nil {
@@ -185,6 +193,9 @@ func TestPublicCertificateExportWritesOnlyPublicPEMWithoutReplacement(t *testing
 	}
 	if _, err := ExportPublicCertificate(state, secrets, occupied); !errors.Is(err, ErrPublicCertificateExported) {
 		t.Fatalf("occupied export error = %v", err)
+	}
+	if available, err := PublicCertificateExportAvailable(state, secrets, occupied); available || !errors.Is(err, ErrPublicCertificateExported) {
+		t.Fatalf("stale export availability = %t, %v", available, err)
 	}
 	content, _ := os.ReadFile(occupied)
 	if string(content) != "operator-owned\n" {
@@ -200,6 +211,9 @@ func TestPublicCertificateExportWritesOnlyPublicPEMWithoutReplacement(t *testing
 	}
 	if _, err := ExportPublicCertificate(state, secrets, symlink); !errors.Is(err, ErrPublicCertificateUnsafePath) {
 		t.Fatalf("symlink export error = %v", err)
+	}
+	if available, err := PublicCertificateExportAvailable(state, secrets, symlink); available || !errors.Is(err, ErrPublicCertificateUnsafePath) {
+		t.Fatalf("symlink export availability = %t, %v", available, err)
 	}
 	if content, _ := os.ReadFile(target); string(content) != "target\n" {
 		t.Fatalf("symlink target changed to %q", content)

@@ -23,6 +23,10 @@ type GatewayExposeCertificateExporter interface {
 	Ensure(model.State, string) error
 }
 
+type gatewayExposeCertificateAvailability interface {
+	Available(model.State, string) (bool, error)
+}
+
 type GatewayExposeUnavailablePorts interface {
 	Unavailable(context.Context) ([]int, error)
 }
@@ -128,6 +132,48 @@ func (service *GatewayExposeCoordinatorService) Plan(
 		return ExposeGatewaySnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// Inspect implements the bounded gateway half of node-side expose list/show.
+// refreshCertificate is reserved for show: list remains a read-only operation.
+func (service *GatewayExposeCoordinatorService) Inspect(
+	ctx context.Context,
+	nodeID string,
+	refreshCertificate bool,
+) (GatewayExposeCatalogSnapshot, error) {
+	if ctx == nil || service == nil || service.state == nil || service.exporter == nil {
+		return GatewayExposeCatalogSnapshot{}, fmt.Errorf("gateway expose coordinator is incomplete")
+	}
+	if err := ctx.Err(); err != nil {
+		return GatewayExposeCatalogSnapshot{}, err
+	}
+	state, node, certificate, err := service.loadGatewayResources(nodeID)
+	if err != nil {
+		return GatewayExposeCatalogSnapshot{}, err
+	}
+	available := false
+	if refreshCertificate {
+		if err := service.exporter.Ensure(state, service.exportPath); err != nil {
+			return GatewayExposeCatalogSnapshot{}, fmt.Errorf("refresh public ingress certificate export: %w", err)
+		}
+		available = true
+	} else if inspector, ok := service.exporter.(gatewayExposeCertificateAvailability); ok {
+		available, err = inspector.Available(state, service.exportPath)
+		if err != nil {
+			return GatewayExposeCatalogSnapshot{}, fmt.Errorf("inspect public ingress certificate export: %w", err)
+		}
+	}
+	exposes := make([]model.Expose, 0)
+	for _, expose := range state.Exposes {
+		if expose.NodeID == node.ID {
+			exposes = append(exposes, expose)
+		}
+	}
+	return GatewayExposeCatalogSnapshot{
+		GatewayID: state.Host.ID, Generation: state.Generation, PublicIPv4: state.Host.PublicIPv4,
+		NodeID: node.ID, Exposes: exposes, Certificate: certificate,
+		CertificateExportPath: service.exportPath, CertificateAvailable: available,
+	}, nil
 }
 
 func (service *GatewayExposeCoordinatorService) Reserve(ctx context.Context, plan ExposeCreatePlan) (ExposeGatewayReservation, error) {
@@ -362,6 +408,13 @@ func (exporter *PublicCertificateExportEnsurer) Ensure(state model.State, path s
 	return err
 }
 
+func (exporter *PublicCertificateExportEnsurer) Available(state model.State, path string) (bool, error) {
+	if exporter == nil || exporter.secrets == nil {
+		return false, fmt.Errorf("public certificate exporter is incomplete")
+	}
+	return ingress.PublicCertificateExportAvailable(state, exporter.secrets, path)
+}
+
 type gatewayExposeCommitError struct {
 	cause    error
 	possible bool
@@ -385,3 +438,4 @@ func validateGatewayExposeReservationShape(reservation ExposeGatewayReservation)
 }
 
 var _ ExposeGatewayCoordinator = (*GatewayExposeCoordinatorService)(nil)
+var _ ExposeGatewayCatalog = (*GatewayExposeCoordinatorService)(nil)

@@ -121,6 +121,70 @@ func (runtime *FRPExposeNodeTunnel) Rollback(ctx context.Context, activation Exp
 	return nil
 }
 
+// Deactivate applies the complete disabled topology. It never issues a
+// provider-specific incremental delete, so all unrelated mappings remain in
+// the same deterministic candidate and on the existing multiplexed session.
+func (runtime *FRPExposeNodeTunnel) Deactivate(
+	ctx context.Context,
+	disabled model.State,
+	expose model.Expose,
+) (ExposeTunnelDeactivation, error) {
+	if ctx == nil || runtime == nil || runtime.provider == nil || runtime.config == nil {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("frp expose tunnel is incomplete")
+	}
+	if err := disabled.Validate(); err != nil {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("validate disabled tunnel state: %w", err)
+	}
+	if err := expose.Validate(); err != nil {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("validate tunnel removal target: %w", err)
+	}
+	foundDisabled := false
+	for _, candidate := range disabled.Exposes {
+		if candidate.ID == expose.ID {
+			foundDisabled = candidate.State == model.ExposeDisabled && candidate.NodeID == expose.NodeID
+			break
+		}
+	}
+	if !foundDisabled {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("tunnel removal target is not disabled")
+	}
+	plan, err := tunnel.PlanFromState(disabled)
+	if err != nil {
+		return ExposeTunnelDeactivation{}, err
+	}
+	for _, session := range plan.Nodes {
+		for _, mapping := range session.Mappings {
+			name, nameErr := tunnel.MappingName(expose.NodeID, expose.ID)
+			if nameErr != nil {
+				return ExposeTunnelDeactivation{}, nameErr
+			}
+			if mapping.Name == name {
+				return ExposeTunnelDeactivation{}, fmt.Errorf("disabled expose remained in tunnel candidate")
+			}
+		}
+	}
+	request := tunnel.RenderRequest{Plan: plan}
+	candidate, err := runtime.provider.Render(ctx, request)
+	if err != nil {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("render tunnel removal candidate: %w", err)
+	}
+	frpCandidate, ok := candidate.(tunnel.FRPCandidate)
+	if !ok {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("expose tunnel provider returned an incompatible removal candidate")
+	}
+	if err := runtime.provider.Validate(ctx, frpCandidate); err != nil {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("validate tunnel removal candidate: %w", err)
+	}
+	applied, err := runtime.config.Apply(ctx, request)
+	if err != nil {
+		return ExposeTunnelDeactivation{}, err
+	}
+	if applied.ConfigHash != frpCandidate.Descriptor().ConfigHash || applied.MappingCount != exposeMappingCount(plan) {
+		return ExposeTunnelDeactivation{}, fmt.Errorf("removed frp candidate differs from the requested topology")
+	}
+	return ExposeTunnelDeactivation{ExposeID: expose.ID, Candidate: frpCandidate.Descriptor()}, nil
+}
+
 func exposeMappingCount(plan tunnel.Plan) int {
 	count := 0
 	for _, node := range plan.Nodes {
@@ -130,3 +194,4 @@ func exposeMappingCount(plan tunnel.Plan) int {
 }
 
 var _ ExposeNodeTunnel = (*FRPExposeNodeTunnel)(nil)
+var _ ExposeNodeTunnelRemovalRuntime = (*FRPExposeNodeTunnel)(nil)

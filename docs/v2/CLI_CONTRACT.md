@@ -116,5 +116,7 @@ The options column excludes the applicable global flags described above. `node o
 - There is no repeated `--gateway`, `--node`, node target, DNS scope, or transport status argument after initialization. Host role and current node identity supply that context.
 - There is no `invite list`, `node status`, `transport status`, incremental `policy add/remove`, transport enable/disable, or automatic fallback command. Their behavior is covered by `status`, full policy replacement, and explicit test/switch operations.
 - Public certificate commands use `cert`; internal control-CA lifecycle uses `trust`, so rotating webhook trust cannot accidentally rotate node identity trust.
+- `expose list` never creates a certificate export; `expose show` idempotently refreshes the public-only gateway copy when reachable. Offline inspection keeps local non-secret expose state visible with unknown certificate availability.
+- `expose remove` stops the selected public route, waits the fixed ten-second drain bound, removes only its tunnel mapping, and releases its port. Its `remove_external_webhook` action intentionally has no command because external registration remains application/operator-owned.
 - Handshake-host replacement is nested under `transport host` because it is restricted-transport state, not a general DNS or certificate setting.
 - v1 migration remains a standalone one-time script and therefore is not part of this command registry.
