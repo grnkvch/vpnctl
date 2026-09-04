@@ -2,6 +2,62 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — authenticated streaming gateway backup
+
+### Planned reversible implementation
+
+- Task 14.7 is source-only on this development host. Production code will
+  implement the accepted `vpnctl-backup-v1` streaming envelope with bounded
+  Argon2id v19 (`65536 KiB`, `t=3`, `p=4`) and authenticated 1 MiB
+  XChaCha20-Poly1305 records, including the mandatory final record and strict
+  rejection of truncation, reordering, append data, and unsupported headers.
+- Gateway backup will read its new passphrase twice through the existing
+  hidden controlling-terminal flow, never accept or persist it through argv,
+  create a timestamped default below `/var/lib/vpnctl/backups`, and publish an
+  owner-only mode-`0600` archive atomically without overwriting an existing
+  target. A fully written archive hash/size and source state generation will
+  be committed to authoritative backup metadata only after publication.
+- Fault tests will use injectable randomness/readers and temporary roots to
+  cover mismatch/refusal, wrong passphrase, authenticated corruption,
+  partial-write cleanup, exact permissions, no overwrite, and absence of
+  plaintext/passphrases from archive and output. Task 14.7 will package a
+  minimal authenticated payload; the complete structural allowlist and node
+  secret exclusion remain the immediately following task 14.8.
+- No production archive, passphrase, state, binary, package, systemd unit,
+  service, listener, firewall, route, gateway, node, or external endpoint will
+  change. Repository rollback is limited to the future task 14.7 commit; test
+  artifacts live only in temporary directories.
+
+### Result
+
+- Added the production `vpnctl-backup-v1` 64-byte header and authenticated
+  record codec. Restore-side parsing bounds Argon2 memory/time/lanes and chunk
+  size before key derivation; every record binds the header hash, exact index,
+  final flag, and lengths, and exact EOF after the authenticated empty final
+  record is mandatory.
+- Added a deterministic tar payload with `manifest.json`, source generation,
+  public IPv4, and per-entry size/SHA-256. Task 14.7 includes authoritative
+  `state/state.json`; task 14.8 owns expansion to the complete structural
+  gateway allowlist.
+- Added gateway-only planning/application and the public `vpnctl backup
+  [archive-path]` command. Immediate execution requires two matching hidden
+  TTY entries even with `--yes`; dry-run requests no passphrase. Output uses a
+  timestamped `.v2b` default, mode `0600`, same-filesystem create-only link
+  publication plus directory fsync, and commits immutable backup metadata only
+  after the archive is durable. Any later metadata failure removes the newly
+  published archive.
+- Tests cover streaming multi-record round trip, production Argon2id binding,
+  wrong passphrase, header/order/ciphertext corruption, truncation, append,
+  pre-KDF resource bounds, path races/no overwrite, partial payload cleanup,
+  state-write cleanup, state-generation conflict, role gating, hidden
+  confirmation, TTY refusal, JSON output, and passphrase wiping.
+- The first parallel ordinary/race full-gate run overloaded the existing
+  time-sensitive controller-outage fixture; all new backup packages passed.
+  That fixture then passed 10/10 isolated repetitions, followed by successful
+  sequential complete ordinary and race suites. `go vet`, `go list`, all shell
+  syntax checks, all JSON parses, and strict OpenSpec validation also passed.
+  No production host resource was changed.
+
 ## 2026-09-04 — update restart isolation and forwarding continuity
 
 ### Planned reversible validation

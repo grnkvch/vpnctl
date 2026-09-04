@@ -56,6 +56,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isUpdateInvocation(args) {
 		return executeUpdate(args, stdout, stderr)
 	}
+	if isBackupInvocation(args) {
+		return executeBackup(args, stdout, stderr)
+	}
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -894,6 +897,8 @@ Commands:
   dns        Show or change role-owned IPv4 DNS upstreams
   cert       Inspect or export the gateway public ingress certificate
   log        Inspect or temporarily enable expanded local logging
+  backup     Create an encrypted portable gateway backup
+  update     Update or roll back the local vpnctl release
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets
