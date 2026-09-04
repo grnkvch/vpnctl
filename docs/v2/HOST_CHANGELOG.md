@@ -2,6 +2,45 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned ingress and tunnel failure E2E
+
+### Planned reversible lab mutations
+
+- Task 16.6 will run the existing production-native FRP and nginx release gates
+  at one clean source commit, augmented by source tests for controller outage,
+  proxy/config reload rollback, ingress reload rollback, exact expose removal,
+  and non-idempotent partial-response handling. The combined evidence must
+  cover application down, tunnel reconnect, gateway controller down, proxy
+  reload, partial response, node revoke, expose removal, `404`, `413`, `503`,
+  `504`, connection close, and zero request replay.
+- The only mutable machines are the exact existing `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` Lima fixtures after revalidating their QEMU/amd64, Ubuntu
+  24.04, 1-vCPU/512-MiB/10-GiB, pinned image digest, and rootless `user-v2`
+  network contract. Both currently are `Stopped`; the wrapper records their
+  prior states and restores those exact states. The unrelated
+  `realty-front-docker-vm`, macOS routes/firewall/DNS, public VPSs, devices,
+  Telegram, and provider state remain outside scope.
+- Tunnel mutation is limited to owner values `vpnctl-v2-tunnel-spike-v1` and
+  `vpnctl-v2-restricted-spike-v1`, their exact config/state/unit/binary paths,
+  fixed lab ports, and `inet/vpnctl_v2_spike_{tunnel,uot}_capture`. Pinned FRP
+  and Mihomo archives must already exist with matching hashes. The child gate
+  copies production-native binaries only to three named `/tmp` paths and
+  removes them through its armed trap.
+- Ingress mutation is limited to owner value `vpnctl-v2-ingress-spike-v1`,
+  `/etc/vpnctl-v2-spike/ingress`, `/run/vpnctl-v2-spike-ingress`, its exact
+  systemd units/binaries and lab ports. It temporarily installs the pinned
+  Ubuntu `nginx`/`nginx-common` packages after recording package ownership,
+  then purges only those owned packages and removes the exact fixture paths.
+  Its production test and offline Telegram harness use named `/tmp` paths that
+  are removed by the child trap; no Telegram call is made.
+- Interrupted-run recovery may invoke uninstall only for complete fixtures
+  carrying exact owner markers; partial, foreign, or unmarked state is left
+  unchanged and rejected. Final checks require all named paths, tables,
+  services, guest test binaries, and owned nginx packages absent or inactive,
+  then both VM states restored. Manual recovery is only the matching
+  owner-checked spike `uninstall`; repository rollback for the harness-prep
+  commit and final task commit will be ordinary `git revert` operations.
+
 ## 2026-09-05 — planned credential-lifecycle E2E
 
 ### Source-only execution boundary
