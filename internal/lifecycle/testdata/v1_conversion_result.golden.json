@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "status": "staged",
+  "gateway": {
+    "source_id": "main",
+    "target_id": "d68771d9-bc3b-89ef-8fc0-14dd09998b13",
+    "id_preserved": false
+  },
+  "state_generation": 1,
+  "clients": [
+    {
+      "source_id": "iphone",
+      "target_id": "c0bea6cc-84a2-8b13-8f4f-40a4c215d824",
+      "id_preserved": false,
+      "name": "iPhone",
+      "lifecycle": "active",
+      "overlay_ipv4": "10.66.0.2",
+      "assigned_presets": [
+        "default"
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "source_id": "default",
+      "target_name": "default",
+      "selectors": 4
+    }
+  ],
+  "preserved_artifacts": [
+    {
+      "source_path": ".vpnctl/generated/delivery/iphone.clash.yaml",
+      "staged_path": "/var/lib/vpnctl/exports/v1-preserved/generated/delivery/iphone.clash.yaml",
+      "kind": "delivery",
+      "source_client_id": "iphone",
+      "target_client_id": "c0bea6cc-84a2-8b13-8f4f-40a4c215d824",
+      "bytes": 603
+    },
+    {
+      "source_path": ".vpnctl/generated/delivery/iphone.conf",
+      "staged_path": "/var/lib/vpnctl/exports/v1-preserved/generated/delivery/iphone.conf",
+      "kind": "delivery",
+      "source_client_id": "iphone",
+      "target_client_id": "c0bea6cc-84a2-8b13-8f4f-40a4c215d824",
+      "bytes": 58
+    }
+  ]
+}

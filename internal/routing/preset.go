@@ -2,11 +2,14 @@ package routing
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"go.yaml.in/yaml/v3"
@@ -37,6 +40,33 @@ type PresetAST struct {
 	SchemaVersion int
 	Name          string
 	Selectors     []model.Selector
+}
+
+// CompilePresetSource converts one validated, provider-neutral source document
+// into the effective state record committed by vpnctl. Callers retain the
+// exact source bytes separately; SourceHash binds the record to those bytes.
+func CompilePresetSource(data []byte, appliedAt time.Time) (model.Preset, error) {
+	if appliedAt.IsZero() {
+		return model.Preset{}, fmt.Errorf("preset apply time is required")
+	}
+	ast, err := DecodePresetDocument(data)
+	if err != nil {
+		return model.Preset{}, err
+	}
+	digest := sha256.Sum256(data)
+	preset := model.Preset{
+		SchemaVersion: model.ResourceSchemaVersion,
+		Name:          ast.Name,
+		SourceHash:    hex.EncodeToString(digest[:]),
+		EffectiveHash: effectivePresetHash(ast),
+		Selectors:     append([]model.Selector(nil), ast.Selectors...),
+		Generation:    1,
+		AppliedAt:     appliedAt.UTC(),
+	}
+	if err := preset.Validate(); err != nil {
+		return model.Preset{}, fmt.Errorf("validate compiled preset: %w", err)
+	}
+	return preset, nil
 }
 
 func DecodePresetDocument(data []byte) (PresetAST, error) {

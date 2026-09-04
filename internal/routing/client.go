@@ -539,6 +539,43 @@ func clientStandardCredentialReference(clientID string, generation uint64) (mode
 	return model.NewSecretRef(clientStandardCredentialKind, fmt.Sprintf("%s-standard-g%d", clientID, generation))
 }
 
+// BuildImportedStandardClientTransport creates the canonical v2 WireGuard
+// transport record for a retained client identity. Credential publication is
+// deliberately left to the migration transaction so state cannot reference a
+// key before it has been staged.
+func BuildImportedStandardClientTransport(client model.Client, publicKey string) (model.Transport, error) {
+	if err := client.Validate(); err != nil {
+		return model.Transport{}, fmt.Errorf("validate imported client: %w", err)
+	}
+	if client.Lifecycle == model.LifecycleDeleted {
+		return model.Transport{}, fmt.Errorf("deleted imported client cannot retain a transport")
+	}
+	if client.ActiveTransport != model.TransportStandard {
+		return model.Transport{}, fmt.Errorf("imported client must select the standard transport")
+	}
+	if err := wireguard.ValidateKey(publicKey); err != nil {
+		return model.Transport{}, fmt.Errorf("validate imported client public key: %w", err)
+	}
+	reference, err := clientStandardCredentialReference(client.ID, client.CredentialGeneration)
+	if err != nil {
+		return model.Transport{}, err
+	}
+	state := model.TransportActive
+	if client.Lifecycle == model.LifecycleRevoked {
+		state = model.TransportDisabled
+	}
+	transport := model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: client.ID,
+		Kind: model.TransportStandard, State: state, Provider: "wireguard", Protocol: model.ProtocolUDP, Port: 51820,
+		CredentialGeneration: client.CredentialGeneration, CredentialRef: reference, PublicKey: publicKey,
+		ConfigHash: clientTransportHash(client.ID, client.CredentialGeneration, publicKey, reference),
+	}
+	if err := transport.Validate(); err != nil {
+		return model.Transport{}, fmt.Errorf("validate imported client transport: %w", err)
+	}
+	return transport, nil
+}
+
 func clientRestrictedCredentialReference(clientID string, generation uint64) (model.SecretRef, error) {
 	if generation == 0 {
 		return "", fmt.Errorf("client credential generation must be positive")
