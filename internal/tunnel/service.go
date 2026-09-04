@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -119,10 +120,13 @@ func (service *FRPService) Run(ctx context.Context) error {
 	if err := ValidatePinnedFRPConfig(ctx, service.probe, binaryPath, configPath); err != nil {
 		return err
 	}
+	_ = observability.EmitCode(ctx, observability.TunnelServiceStarted)
 	err = service.process.Run(ctx, binaryPath, []string{"-c", configPath})
 	if ctx.Err() != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelServiceStopped)
 		return nil
 	}
+	_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelRuntimeFailed)
 	if err != nil {
 		return fmt.Errorf("frp %s process failed", frpRoleName(service.role))
 	}

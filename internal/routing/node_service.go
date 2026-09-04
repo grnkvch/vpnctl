@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -97,10 +98,13 @@ func (service *NodeRoutingService) Run(ctx context.Context) error {
 	if err := ValidatePinnedNodeRoutingMihomo(ctx, service.probe, binaryPath, stateDirectory, configPath); err != nil {
 		return err
 	}
+	_ = observability.EmitCode(ctx, observability.RoutingServiceStarted)
 	err = service.process.Run(ctx, binaryPath, []string{"-d", stateDirectory, "-f", configPath})
 	if ctx.Err() != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.RoutingServiceStopped)
 		return nil
 	}
+	_ = observability.EmitCode(context.WithoutCancel(ctx), observability.RoutingRuntimeFailed)
 	if err != nil {
 		return fmt.Errorf("node routing process failed")
 	}

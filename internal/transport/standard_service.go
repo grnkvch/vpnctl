@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
@@ -72,6 +73,11 @@ func (service *StandardService) Run(ctx context.Context) error {
 	if err := service.success(ctx, "wg-quick", "strip", configPath); err != nil {
 		return fmt.Errorf("validate standard WireGuard config: %w", err)
 	}
+	_ = observability.EmitCode(ctx, observability.TransportServiceStarted)
+	terminalEvent := observability.TransportRuntimeFailed
+	defer func() {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), terminalEvent)
+	}()
 	present, err := service.interfacePresent(ctx)
 	if err != nil {
 		return err
@@ -118,8 +124,13 @@ func (service *StandardService) Run(ctx context.Context) error {
 			return errors.Join(fmt.Errorf("gateway standard interface is not listening on UDP/%d", StandardUDPPort), cleanup())
 		}
 	}
+	_ = observability.EmitCode(ctx, observability.TransportServiceReady)
 	<-ctx.Done()
-	return cleanup()
+	if err := cleanup(); err != nil {
+		return err
+	}
+	terminalEvent = observability.TransportServiceStopped
+	return nil
 }
 
 func readStandardServicePrivateKey(path string) (string, error) {

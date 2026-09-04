@@ -2,6 +2,70 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — source-redacted component logging and no hidden calls
+
+### Planned reversible validation
+
+- Task 13.10 is source-only. A closed operational-event API will accept only
+  stable event codes, component scope, level, resource IDs, generations,
+  counters, durations, and hashes. Secrets, authorization/cookie
+  headers, request or response bodies, raw RPC payloads, arbitrary error text,
+  URLs, endpoints, and expose/webhook paths will have no representable field
+  and will be rejected before formatting or destination selection.
+- Controller, standard/restricted transport, routing and DNS, reverse tunnel,
+  and ingress service boundaries will obtain logging only through that API.
+  Without an effective task-13.9 opt-in, events are discarded before record
+  construction. Journald and bounded-file destinations receive the same
+  already-redacted canonical record; subprocess stdout/stderr remain discarded
+  and cannot bypass the source boundary.
+- A repository-wide no-hidden-call audit will combine an empty packet-capture
+  recorder with static capability and endpoint checks. Idle/startup logging
+  code will have no telemetry, analytics, update-check, provider, DNS, HTTP, or
+  socket target; only an explicit operator operation may inject a documented
+  network action.
+- Canary E2E tests use in-memory stdout, stderr, journal and packet-capture
+  recorders plus files under `t.TempDir()`. They create no real journal entry,
+  service action, network request/socket/packet, host logging file, VM change,
+  provider call, webhook registration, or credential. Repository rollback is
+  limited to the task 13.10 commit; no host rollback is required.
+
+### Acceptance
+
+- Every in-scope component now emits through one closed typed event API. Its
+  event value has no exported fields and accepts only registered code/scope/
+  level combinations plus validated UUID, generation, counter, bounded
+  duration, and SHA-256 metadata. Arbitrary strings, errors, paths, URLs,
+  headers, bodies, and request payloads cannot be represented. Policy lookup
+  occurs before JSON construction; both local destinations receive the same
+  canonical newline-delimited record.
+- The internal-service entry point injects the authoritative, restart-safe
+  logging policy into controller, standard/restricted transport, routing/DNS,
+  tunnel/authorization, and ingress contexts. Source events cover lifecycle,
+  readiness/failure, committed generations, authorization outcome, and nginx
+  reload generation/hash only. Provider stdout/stderr, nginx access/error
+  content logs, and Go HTTP server error logs remain discarded, so raw provider
+  or request data has no parallel logging path.
+- The canary E2E exercised the real internal-service entry point with a token,
+  Authorization marker, body marker, and webhook path embedded in a returned
+  error. Scans of stdout, sanitized stderr, simulated journal capture, bounded
+  mode-`0600` file, authoritative state, and empty packet capture found none of
+  the markers. Default-off avoided formatting/file creation; exact expiry,
+  scope/level filtering, restart behavior, identical destinations, unsafe
+  metadata rejection, sanitized failures, and concurrent writes passed.
+- Static source checks require every component boundary to use the shared API,
+  pin provider/server discard settings, deny network/process imports in the
+  logging layer, and reject baked non-loopback HTTP(S) hosts across production
+  Go source. Five repeated focused suites and three repeated race-detector
+  suites passed using only in-memory adapters and auto-removed temporary files
+  and loopback sockets. No host journal, service, network, provider, webhook,
+  credential, VM, or application resource was changed; no host rollback
+  remains.
+- The complete uncached ordinary and race-detector suites, vet, dependency
+  listing/direction, Bash and JSON syntax, formatting/diff checks, and strict
+  OpenSpec validation passed at `126/156`. Dependency listing emitted only the
+  known non-fatal sandbox warning while attempting to update Go's global module
+  stat cache; the complete dependency graph was still produced successfully.
+
 ## 2026-09-04 — persisted temporary logging opt-ins
 
 ### Planned reversible validation

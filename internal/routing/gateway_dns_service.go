@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"golang.org/x/sys/unix"
 )
@@ -82,7 +83,13 @@ func RunGatewayDNSService(ctx context.Context, paths store.Paths) error {
 	if err != nil {
 		return err
 	}
-	return forwarder.Serve(ctx)
+	_ = observability.EmitCode(ctx, observability.DNSServiceStarted)
+	if err := forwarder.Serve(ctx); err != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.DNSRuntimeFailed)
+		return err
+	}
+	_ = observability.EmitCode(context.WithoutCancel(ctx), observability.DNSServiceStopped)
+	return nil
 }
 
 func (forwarder *gatewayDNSForwarder) Serve(ctx context.Context) error {

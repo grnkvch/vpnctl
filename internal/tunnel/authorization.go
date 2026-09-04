@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 )
 
 const (
@@ -224,6 +225,7 @@ func (server *AuthorizationServer) Serve(ctx context.Context) error {
 		_ = listener.Close()
 		return err
 	}
+	_ = observability.EmitCode(ctx, observability.TunnelServiceStarted)
 
 	httpServer := &http.Server{
 		Handler:           server,
@@ -248,11 +250,14 @@ func (server *AuthorizationServer) Serve(ctx context.Context) error {
 	err = httpServer.Serve(listener)
 	close(stopped)
 	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelServiceStopped)
 		return nil
 	}
 	if err != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelRuntimeFailed)
 		return fmt.Errorf("serve local tunnel authorization: %w", err)
 	}
+	_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelServiceStopped)
 	return nil
 }
 
@@ -308,6 +313,11 @@ func (server *AuthorizationServer) ServeHTTP(writer http.ResponseWriter, request
 	defer clearRawMessageMap(decision.content)
 	if server.observe != nil {
 		server.observe(operation, decision.allowed, decision.unavailable, decision.reason)
+	}
+	if decision.allowed {
+		_ = observability.EmitCode(request.Context(), observability.TunnelAuthorizationAccepted)
+	} else {
+		_ = observability.EmitCode(request.Context(), observability.TunnelAuthorizationRejected)
 	}
 	switch {
 	case decision.allowed:

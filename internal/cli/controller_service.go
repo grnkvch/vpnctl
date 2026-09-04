@@ -10,6 +10,8 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/observability"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -55,6 +57,13 @@ func executeInternalService(args []string, stderr io.Writer) int {
 	ctx, stop := internalServiceContext()
 	defer stop()
 	paths := gatewayControllerServicePaths()
+	if state, stateErr := store.NewStateStore(paths); stateErr == nil {
+		logger, loggerErr := operations.NewComponentLogger(state, operations.ComponentLoggerOptions{Journal: stderr})
+		if loggerErr == nil {
+			ctx = observability.WithEmitter(ctx, logger)
+			defer func() { _ = logger.Close() }()
+		}
+	}
 	var serviceName string
 	var err error
 	switch args[0] {

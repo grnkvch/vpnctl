@@ -34,6 +34,17 @@ only when an opted-in component first emits a permitted record.
 
 Source-level redaction is mandatory regardless of level or destination:
 secrets, authorization headers, bodies, and webhook paths are never eligible
-log fields. The component integrations and their cross-destination canary scans
-are implemented by task 13.10; the lifecycle and destination boundaries above
-are already enforced by task 13.9.
+log fields. Controller, standard/restricted transport, routing, DNS, tunnel,
+and ingress adapters can emit only a closed set of versioned event codes plus
+validated UUIDs, generations, counters, bounded durations, and SHA-256 hashes.
+There is no arbitrary string, error, URL, path, header, or body field in that
+API. Policy is checked before a record is formatted, and journald and file
+destinations receive the same canonical JSON line.
+
+Provider output cannot bypass this boundary: Mihomo is rendered with silent
+logging and background geodata updates disabled, nginx access/error content
+logs are disabled, HTTP server error logs are discarded, and Mihomo, frp, and
+nginx subprocess stdout/stderr are discarded. vpnctl does not support a remote
+logging destination, telemetry, an automatic update check, or a baked project
+endpoint. Network activity remains limited to separately documented data-plane
+and explicit operator-requested operations.

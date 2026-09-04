@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"golang.org/x/sys/unix"
@@ -240,8 +241,10 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 		return result, nil
 	}
 
+	_ = observability.EmitGenerationSHA256(ctx, observability.IngressReloadStarted, candidate.StateGeneration(), candidate.ConfigHash())
 	if err := manager.reloader.Reload(ctx, NginxBinaryPath(manager.paths), NginxActiveRoot(manager.paths)); err != nil {
 		rollbackErr := manager.rollback(current, next)
+		_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadFailed, candidate.StateGeneration(), candidate.ConfigHash())
 		if rollbackErr != nil {
 			cleanupNext = false
 			return NginxActivationResult{}, errors.Join(ErrNginxReload, ErrNginxRollback)
@@ -251,10 +254,12 @@ func (manager *NginxActivationManager) Apply(ctx context.Context, candidate Ngin
 	}
 	cleanupNext = false
 	if err := removeNginxGeneration(manager.paths, current); err != nil {
+		_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadFailed, candidate.StateGeneration(), candidate.ConfigHash())
 		return NginxActivationResult{}, fmt.Errorf("finalize nginx reload: %w", err)
 	}
 	result.Changed = true
 	result.Reloaded = true
+	_ = observability.EmitGenerationSHA256(context.WithoutCancel(ctx), observability.IngressReloadCompleted, candidate.StateGeneration(), candidate.ConfigHash())
 	return result, nil
 }
 

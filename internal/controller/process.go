@@ -16,6 +16,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"golang.org/x/sys/unix"
 )
@@ -79,6 +80,7 @@ type ControllerRuntime struct {
 
 type Controller struct {
 	runtime ControllerRuntime
+	events  observability.Emitter
 
 	mutationMu  sync.Mutex
 	observation sync.RWMutex
@@ -97,7 +99,7 @@ func NewController(runtime ControllerRuntime) (*Controller, error) {
 	if runtime.Now == nil {
 		runtime.Now = time.Now
 	}
-	return &Controller{runtime: runtime}, nil
+	return &Controller{runtime: runtime, events: observability.FromContext(nil)}, nil
 }
 
 // Serve owns only the local Unix listener. Cancellation closes admission,
@@ -121,6 +123,7 @@ func (controller *Controller) Serve(ctx context.Context) error {
 		_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 		_ = lock.Close()
 	}()
+	controller.events = observability.FromContext(ctx)
 
 	state, err := controller.runtime.State.Load()
 	if err != nil {
@@ -135,6 +138,8 @@ func (controller *Controller) Serve(ctx context.Context) error {
 		return err
 	}
 	defer controller.removeOwnedSocket(socketInfo)
+	controller.emitGeneration(observability.ControlServiceStarted, state.Generation)
+	defer controller.emitCode(observability.ControlServiceStopped)
 
 	closed := make(chan struct{})
 	go func() {
@@ -193,6 +198,9 @@ func (controller *Controller) handleConnection(connection *net.UnixConn) {
 	default:
 		response = localFailure("unsupported_method", "local request method is unsupported")
 	}
+	if !response.OK {
+		controller.emitCode(observability.ControlRequestRejected)
+	}
 	controller.writeResponse(connection, response)
 }
 
@@ -244,6 +252,7 @@ func (controller *Controller) mutateResponse(request control.LocalRequest) contr
 		return localFailureWithGeneration("state_write_failed", "authoritative state could not be committed", state.Generation)
 	}
 	controller.recordObservation(context.Background(), candidate)
+	controller.emitGeneration(observability.ControlMutationCommitted, candidate.Generation)
 	if len(data) == 0 {
 		data = json.RawMessage(`{}`)
 	}
@@ -274,6 +283,7 @@ func (controller *Controller) applyPreparedMutation(state model.State, request c
 		observed, loadErr := controller.runtime.State.Load()
 		if loadErr == nil && reflect.DeepEqual(observed, prepared.Candidate) {
 			controller.recordObservation(context.Background(), observed)
+			controller.emitGeneration(observability.ControlMutationCommitted, observed.Generation)
 			return localFailureWithGeneration("state_write_failed", "authoritative state activation completed without a durable success acknowledgement", observed.Generation)
 		}
 		if loadErr != nil || !reflect.DeepEqual(observed, state) {
@@ -291,7 +301,30 @@ func (controller *Controller) applyPreparedMutation(state model.State, request c
 		return localFailureWithGeneration("state_write_failed", "authoritative state could not be committed", state.Generation)
 	}
 	controller.recordObservation(context.Background(), prepared.Candidate)
+	controller.emitGeneration(observability.ControlMutationCommitted, prepared.Candidate.Generation)
 	return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: prepared.Candidate.Generation, Data: prepared.Data}
+}
+
+func (controller *Controller) emitGeneration(code observability.EventCode, generation uint64) {
+	if controller == nil || controller.events == nil {
+		return
+	}
+	event, err := observability.NewEvent(code)
+	if err != nil {
+		return
+	}
+	_ = controller.events.Emit(context.Background(), event.WithGeneration(generation))
+}
+
+func (controller *Controller) emitCode(code observability.EventCode) {
+	if controller == nil || controller.events == nil {
+		return
+	}
+	event, err := observability.NewEvent(code)
+	if err != nil {
+		return
+	}
+	_ = controller.events.Emit(context.Background(), event)
 }
 
 func (controller *Controller) recordObservation(ctx context.Context, state model.State) {

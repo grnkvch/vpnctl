@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/observability"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -93,10 +94,13 @@ func (service *RestrictedGatewayService) Run(ctx context.Context) error {
 	if err := ValidatePinnedMihomoConfig(ctx, service.probe, binaryPath, stateDirectory, configPath); err != nil {
 		return err
 	}
+	_ = observability.EmitCode(ctx, observability.TransportServiceStarted)
 	err = service.process.Run(ctx, binaryPath, []string{"-d", stateDirectory, "-f", configPath})
 	if ctx.Err() != nil {
+		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TransportServiceStopped)
 		return nil
 	}
+	_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TransportRuntimeFailed)
 	if err != nil {
 		return fmt.Errorf("restricted gateway process failed")
 	}
