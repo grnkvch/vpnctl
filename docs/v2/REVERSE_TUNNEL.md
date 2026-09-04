@@ -181,9 +181,40 @@ bound only `127.0.0.1:20000` and retained one persistent control connection.
 Authenticated heartbeat/revocation handling remains a later provider task;
 until implemented, `Ping` is denied rather than admitted provisionally.
 
+## Atomic node mapping configuration
+
+The node configuration manager renders and validates the complete canonical
+frpc candidate before creating any transaction resource. Initial installation
+writes one `0600` file with file and directory `fsync` followed by an atomic
+same-filesystem rename; starting the service and publishing readiness are
+separate lifecycle steps. Reapplying byte-identical content is a no-op.
+
+Mapping changes are serialized across processes by the root-only empty
+`/run/vpnctl/tunnel-client.lock`. Before dynamic activation, the manager
+requires the current and candidate configurations to have the same immutable
+node ID, credential generation and value, server endpoint, and TLS trust path.
+Transport or credential changes therefore cannot accidentally use frpc's
+mapping-only reload path. Both current and candidate files must remain
+canonical and keep the admin listener fixed to `127.0.0.1:17400`.
+
+For a change, vpnctl stages and fsyncs the candidate, validates that staged
+path with the pinned frpc binary, persists one root-only `.previous` snapshot,
+atomically replaces the live file, and runs the exact bounded command
+`frpc reload -c <canonical-config>`. Success removes and fsyncs the snapshot.
+Failure atomically restores the prior file and reloads it with a fresh bounded
+rollback context, even if the caller context was canceled. If runtime rollback
+also fails, the prior file and snapshot remain for explicit reconciliation and
+further updates fail closed.
+
+Official-frp acceptance held an active stream on mapping `20000` while adding
+and removing mapping `20001`. Both reloads kept the same frpc PID, the original
+stream remained usable, and TCP `17000` retained exactly one multiplexed
+control connection. Mapping readiness and automatic reconnect are added by
+task 11.7; a successful reload alone is not advertised as upstream readiness.
+
 ## Deferred provider work
 
-Tasks 11.6-11.9 supply atomic dynamic reload, readiness/reconnect behavior,
-authenticated revoke handling, and the release resource gate. Those additions
-must preserve this topology, identity, allocation, credential, and fail-closed
-authorization contract.
+Tasks 11.7-11.9 supply readiness/reconnect behavior, authenticated revoke
+handling, and the release resource gate. Those additions must preserve this
+topology, identity, allocation, credential, atomic configuration, and
+fail-closed authorization contract.

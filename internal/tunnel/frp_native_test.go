@@ -18,11 +18,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 func TestFRPNativeConfigsWithPinnedBinaries(t *testing.T) {
@@ -256,6 +258,257 @@ func TestFRPNativeNewProxyUsesProductionAuthoritativeMapping(t *testing.T) {
 	})
 	waitForNativeTCPListener(t, "127.0.0.1:20000")
 	waitForNativeEstablishedTunnel(t, 17000, 2)
+}
+
+func TestFRPNativeDynamicMappingReloadKeepsProcessConnectionAndStream(t *testing.T) {
+	frpsBinary := os.Getenv("VPNCTL_FRPS")
+	frpcBinary := os.Getenv("VPNCTL_FRPC")
+	if frpsBinary == "" || frpcBinary == "" {
+		t.Skip("set VPNCTL_FRPS and VPNCTL_FRPC to pinned Linux binaries")
+	}
+	root := t.TempDir()
+	paths, err := store.NewPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{
+		paths.ConfigDir, paths.RuntimeDir,
+		filepath.Join(paths.ConfigDir, "generated", "node"),
+		filepath.Join(root, "usr", "local", "libexec", "vpnctl"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, installedFRPC := frpServicePaths(paths, model.RoleNode)
+	copyNativeExecutable(t, frpcBinary, installedFRPC)
+	certificatePEM, privateKeyPEM := nativeFRPTLSIdentity(t)
+	trustedCertificatePath := filepath.Join(paths.ConfigDir, "generated", "node", FRPServerCertificateName)
+	serverCertificatePath := filepath.Join(root, "server.crt")
+	serverPrivateKeyPath := filepath.Join(root, "server.key")
+	for path, content := range map[string][]byte{
+		trustedCertificatePath: certificatePEM,
+		serverCertificatePath:  certificatePEM,
+		serverPrivateKeyPath:   privateKeyPEM,
+	} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endpoint := netip.AddrPortFrom(nativePrivateIPv4(t), FRPServerPort)
+	provider, err := NewFRPProvider(root, testFRPComponent(), staticFRPCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewFRPClientConfigurationManager(
+		paths, provider, linuxplatform.OSProbeRunner{}, OSFRPClientReloadRunner{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := testFRPSession(t)
+	oneMapping := session
+	oneMapping.Mappings = oneMapping.Mappings[:1]
+	if result, err := manager.Apply(context.Background(), nativeFRPClientRenderRequest(endpoint, oneMapping, 1)); err != nil || !result.Initial {
+		t.Fatalf("initial native client config = result:%+v err:%v", result, err)
+	}
+	clientConfigPath, _ := frpServicePaths(paths, model.RoleNode)
+	serverConfigPath := filepath.Join(root, "frps.toml")
+	serverConfig := renderFRPServerConfig(endpoint, serverCertificatePath, serverPrivateKeyPath)
+	serverConfig = bytes.Replace(serverConfig, []byte(`ops = ["Login", "NewProxy", "Ping"]`), []byte(`ops = ["Login", "NewProxy"]`), 1)
+	if err := os.WriteFile(serverConfigPath, serverConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	authorizer, authoritative, _ := loginAuthorizationFixture(t)
+	authoritative.state.Exposes[1] = testExpose(testExposeB, testNodeA, "second", 20001, model.ExposeReady)
+	decisions := make(chan string, 32)
+	authorizer.observe = func(operation string, allowed, unavailable bool, reason string) {
+		decisions <- fmt.Sprintf("%s/%t/%t/%s", operation, allowed, unavailable, reason)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend, err := net.Listen("tcp4", "127.0.0.1:3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go serveNativeEcho(ctx, backend)
+	authorizationResult := make(chan error, 1)
+	go func() { authorizationResult <- authorizer.Serve(ctx) }()
+	waitForNativeTCPListener(t, FRPAuthorizationAddress)
+
+	serverCommand := exec.CommandContext(ctx, frpsBinary, "-c", serverConfigPath)
+	serverCommand.Stdout = io.Discard
+	serverCommand.Stderr = io.Discard
+	if err := serverCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	serverResult := make(chan error, 1)
+	go func() { serverResult <- serverCommand.Wait() }()
+	waitForNativeTCPListener(t, endpoint.String())
+
+	clientCommand := exec.CommandContext(ctx, installedFRPC, "-c", clientConfigPath)
+	clientCommand.Stdout = io.Discard
+	clientCommand.Stderr = io.Discard
+	if err := clientCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	clientPID := clientCommand.Process.Pid
+	clientResult := make(chan error, 1)
+	go func() { clientResult <- clientCommand.Wait() }()
+	t.Cleanup(func() {
+		cancel()
+		_ = backend.Close()
+		for _, result := range []<-chan error{clientResult, serverResult, authorizationResult} {
+			select {
+			case <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("native dynamic reload fixture did not stop")
+			}
+		}
+	})
+	waitForNativeAuthorizationDecisions(t, decisions, map[string]bool{
+		"Login/true/false/identity_valid":   false,
+		"NewProxy/true/false/mapping_valid": false,
+	})
+	waitForNativeTCPListener(t, "127.0.0.1:20000")
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+	persistent, err := net.DialTimeout("tcp4", "127.0.0.1:20000", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer persistent.Close()
+	nativePersistentRoundTrip(t, persistent, "before-add")
+
+	if result, err := manager.Apply(ctx, nativeFRPClientRenderRequest(endpoint, session, 2)); err != nil || !result.Reloaded || result.MappingCount != 2 {
+		t.Fatalf("native add mapping = result:%+v err:%v", result, err)
+	}
+	waitForNativeTCPListener(t, "127.0.0.1:20001")
+	nativePersistentRoundTrip(t, persistent, "after-add")
+	second, err := net.DialTimeout("tcp4", "127.0.0.1:20001", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativePersistentRoundTrip(t, second, "second-mapping")
+	_ = second.Close()
+	if clientCommand.Process.Pid != clientPID || clientCommand.Process.Signal(syscall.Signal(0)) != nil {
+		t.Fatal("dynamic add replaced or stopped the persistent frpc process")
+	}
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+
+	if result, err := manager.Apply(ctx, nativeFRPClientRenderRequest(endpoint, oneMapping, 3)); err != nil || !result.Reloaded || result.MappingCount != 1 {
+		t.Fatalf("native remove mapping = result:%+v err:%v", result, err)
+	}
+	waitForNativeTCPListenerClosed(t, "127.0.0.1:20001")
+	nativePersistentRoundTrip(t, persistent, "after-remove")
+	if clientCommand.Process.Pid != clientPID || clientCommand.Process.Signal(syscall.Signal(0)) != nil {
+		t.Fatal("dynamic remove replaced or stopped the persistent frpc process")
+	}
+	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
+}
+
+func nativeFRPClientRenderRequest(endpoint netip.AddrPort, session NodeSession, generation uint64) RenderRequest {
+	return RenderRequest{Plan: Plan{
+		HostRole: model.RoleNode, HostID: testNodeHostID, Generation: generation,
+		ServerEndpoint: endpoint, Nodes: []NodeSession{session},
+	}}
+}
+
+func nativePrivateIPv4(t *testing.T) netip.Addr {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, networkInterface := range interfaces {
+		addresses, err := networkInterface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			prefix, err := netip.ParsePrefix(address.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsPrivate() && !prefix.Addr().IsLoopback() {
+				return prefix.Addr()
+			}
+		}
+	}
+	t.Fatal("native fixture has no private non-loopback IPv4 address")
+	return netip.Addr{}
+}
+
+func copyNativeExecutable(t *testing.T, sourcePath, targetPath string) {
+	t.Helper()
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	target, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		t.Fatal(err)
+	}
+	if err := target.Sync(); err != nil {
+		_ = target.Close()
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serveNativeEcho(ctx context.Context, listener net.Listener) {
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer connection.Close()
+			_, _ = io.Copy(connection, connection)
+		}()
+	}
+}
+
+func nativePersistentRoundTrip(t *testing.T, connection net.Conn, value string) {
+	t.Helper()
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(value)
+	if _, err := connection.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	received := make([]byte, len(payload))
+	if _, err := io.ReadFull(connection, received); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(received, payload) {
+		t.Fatalf("native echo = %q, want %q", received, payload)
+	}
+	clear(received)
+	clear(payload)
+}
+
+func waitForNativeTCPListenerClosed(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("native listener %s remained reachable", address)
 }
 
 func waitForNativeAuthorizationDecisions(t *testing.T, decisions <-chan string, wanted map[string]bool) {
