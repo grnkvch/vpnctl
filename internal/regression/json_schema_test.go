@@ -271,6 +271,47 @@ func TestV2StatusSchemaAcceptsFullProjectionAndRejectsCredentialReferences(t *te
 	}
 }
 
+func TestV2DoctorSchemaAcceptsFullProjectionAndRejectsExecutionTargets(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	state := regressionStatusState(now)
+	state.DNS = &model.DNSUpstreamState{
+		SchemaVersion: model.ResourceSchemaVersion, Scope: model.DNSUpstreamDirect, IPv4: []string{"1.1.1.1"},
+	}
+	doctor, err := operations.NewDoctor(
+		model.RoleNode, regressionStatusStateSource{state: state}, regressionDoctorRunner{}, operations.DoctorLimits{},
+		func() (string, error) { return "11111111-1111-4111-8111-111111111111", nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := cli.RunDoctor(context.Background(), cli.RoleNode, operations.DoctorScopeDefault, doctor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	schema := resolveV2ResultSchema(t, "diagnostic-v1")
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("full doctor projection does not validate: %v\n%s", err, encoded)
+	}
+
+	unsafe := cloneJSONValue(t, document)
+	data := unsafe["data"].(map[string]any)
+	checks := data["checks"].([]any)
+	checks[0].(map[string]any)["endpoint"] = "127.0.0.1:3000"
+	if err := schema.Validate(unsafe); err == nil {
+		t.Fatal("doctor schema accepted an execution endpoint")
+	}
+}
+
 type v2JSONExample struct {
 	RegistryCommand string         `json:"registry_command"`
 	ResultSchema    string         `json:"result_schema"`
@@ -417,6 +458,12 @@ func (source regressionStatusDiscovery) DiscoverOwnedResources(context.Context, 
 
 type regressionStatusObserver struct {
 	snapshot operations.PassiveStatusSnapshot
+}
+
+type regressionDoctorRunner struct{}
+
+func (regressionDoctorRunner) Probe(context.Context, operations.DoctorProbeRequest) (operations.DoctorProbeObservation, error) {
+	return operations.DoctorProbeObservation{Passed: true, Code: "probe_passed"}, nil
 }
 
 func (source regressionStatusObserver) ReadPassiveStatus(context.Context, model.State) (operations.PassiveStatusSnapshot, error) {

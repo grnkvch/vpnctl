@@ -2,6 +2,59 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — bounded role-aware doctor
+
+### Planned reversible validation
+
+- Task 13.7 is source-only. A role-aware doctor planner will derive a fixed
+  allowlist of DNS, active-transport, tunnel, ingress-TLS/reserved-health, and
+  node-local-upstream checks from validated authoritative state. It will never
+  select a standby transport, pass a user expose/webhook path to a probe, call
+  an external provider API, or expose a switch/apply/repair mutation method.
+- Every generated request will carry a synthetic probe identifier, a bounded
+  protocol/kind pair, and internal target metadata omitted from result JSON.
+  The runner will receive a child context with a fixed per-probe timeout inside
+  one fixed overall deadline. Caller cancellation remains distinct from a
+  diagnostic timeout; an internal timeout degrades the report without hanging
+  the CLI.
+- Gateway and node fixtures will audit their exact role-specific probe plans,
+  TCP/UDP DNS separation, end-to-end TCP/UDP checks over only selected
+  transports, internal tunnel coverage, public-IP TLS and the reserved health
+  path, and node-local upstream coverage. Slow/error fakes will verify deadline
+  enforcement, stable degraded exit, no standby attempts, no real webhook
+  path, and no state or runtime mutation.
+- Tests use only in-memory runners and contexts; they create no socket, packet,
+  DNS query, HTTP request, file, unit, route, firewall rule, VM, webhook, or
+  provider mutation. Repository rollback is limited to the task 13.7 commit;
+  no host rollback is required.
+
+### Acceptance
+
+- Doctor now builds a deterministic role-aware allowlist from validated state.
+  Gateway and node DNS paths are separate UDP/TCP checks; selected data paths
+  receive end-to-end TCP/UDP checks; tunnel server/session and active mappings
+  are covered; ingress checks public-IP TLS, only the reserved health path,
+  mapping readiness, and node-local upstreams where applicable. Active kinds
+  are deduplicated on a gateway and standby/disabled resources never reach the
+  runner.
+- Every executable request has a unique synthetic run/sequence ID and passes a
+  closed kind/scope/protocol/target validator. The sole representable HTTP path
+  is `/.well-known/vpnctl/health`; expose paths, webhook/provider URLs,
+  credentials, desired state, and mutation handles do not enter the adapter.
+  Execution endpoints are omitted from reports and rejected by the closed JSON
+  schema.
+- Fixed 30-second overall and 5-second per-probe defaults are enforced through
+  nested contexts with bounded construction-time overrides. Probe timeouts
+  degrade the current check, overall expiry skips work not started, and caller
+  cancellation remains cancellation. Independent failures do not suppress the
+  other DNS path; adapter errors are reduced to stable non-secret codes.
+- Ten repeated focused suites, five focused race-detector suites, complete
+  uncached ordinary and race-detector suites, vet, full dependency listing,
+  Bash/JSON syntax, formatting/diff checks, diagnostic-schema regression, and
+  strict OpenSpec validation passed at `123/156`. No real probe, host/VM
+  mutation, service action, socket, packet, DNS/HTTP request, webhook, or
+  provider operation occurred; no runtime rollback remains.
+
 ## 2026-09-04 — passive comprehensive status
 
 ### Planned reversible validation

@@ -13,23 +13,72 @@
           "additionalProperties": false,
           "required": ["scope", "checks"],
           "properties": {
+            "role": { "enum": ["gateway", "node"] },
             "scope": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "run_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "overall": { "enum": ["healthy", "degraded"] },
             "checks": {
               "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["name", "status"],
-                "properties": {
-                  "name": { "type": "string", "minLength": 1, "maxLength": 128 },
-                  "status": { "enum": ["passed", "failed", "skipped"] },
-                  "detail": { "type": "string", "maxLength": 4096 }
-                }
+              "items": { "$ref": "#/$defs/check" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "command": { "const": "doctor" } }, "required": ["command"] },
+      "then": {
+        "properties": {
+          "data": {
+            "required": ["role", "scope", "run_id", "overall", "checks"],
+            "properties": {
+              "scope": { "enum": ["default", "dns", "transport", "tunnel", "ingress"] },
+              "checks": {
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/doctor_check" }
               }
             }
           }
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$", "maxLength": 128 },
+        "scope": { "enum": ["dns", "transport", "tunnel", "ingress"] },
+        "kind": {
+          "enum": [
+            "direct_dns", "gateway_dns", "active_transport", "tunnel_session",
+            "tunnel_mapping", "ingress_tls", "ingress_health", "local_upstream"
+          ]
+        },
+        "protocol": { "enum": ["dns_udp", "dns_tcp", "tcp", "udp", "tls", "https"] },
+        "resource_kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "resource_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "enum": ["passed", "failed", "skipped"] },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 128 },
+        "elapsed_ms": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "doctor_check": {
+      "allOf": [
+        { "$ref": "#/$defs/check" },
+        {
+          "required": [
+            "name", "scope", "kind", "protocol", "resource_kind", "resource_id",
+            "status", "code", "elapsed_ms"
+          ]
+        }
+      ]
+    }
+  }
 }
