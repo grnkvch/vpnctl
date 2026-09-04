@@ -2,6 +2,50 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — reusable local component transactions
+
+### Planned reversible validation
+
+- Task 13.2 is source-only. It adds a common local transaction coordinator with
+  explicit `validate → stage → activate → health` phases. Successful activation
+  remains rollback-capable until an outer authoritative state commit calls
+  `Commit`; pre-commit failure restores the exact previous generation.
+- Component adapters retain ownership of opaque candidates, staged resources,
+  atomic activation receipts, health checks, finalization, and rollback. The
+  coordinator exposes only non-secret component/generation/hash descriptors,
+  validates every phase handoff, and uses an independent bounded context for
+  discard/rollback even when the initiating context is cancelled.
+- Fault-injection tests will cover validation, staging, activation before and
+  after an actual switch, post-activation generation verification, health,
+  commit, rollback, cancellation, stale expected generation, and no-op paths.
+  Validation will not touch either lab VM, packages, units, listeners,
+  firewall/routes, provider APIs, or persistent host resources. Repository
+  rollback is limited to the task 13.2 commit; no host rollback is required.
+
+### Acceptance
+
+- The common coordinator now validates exact expected/candidate descriptors,
+  stages through opaque component handles, verifies the activated generation,
+  checks component health, and retains the previous generation until the outer
+  authoritative writer explicitly finalizes the transaction. No candidate,
+  staged bytes, activation receipt, or secret enters generic errors/results.
+- Fault injection before staging, with a partially staged handle, before an
+  activation switch, after a real switch, with invalid stage/activation
+  descriptors, after wrong-generation observation, and during health all left
+  or restored the exact previous presence/generation/revision/runtime tuple.
+  A simulated failed authoritative commit was explicitly rolled back before
+  finalization; exact no-op and managed-deletion paths also passed.
+- Rollback and discard use an independent bounded context after initiating
+  cancellation. A failed rollback returns both rollback and uncertain
+  sentinels without claiming restoration. Final cleanup runs only after the
+  caller declares authoritative commit; its failure correctly retains desired
+  active and reports `cleanup_pending` instead of contradicting durable state.
+- Ten repeated focused fault-matrix runs, five focused race-detector runs, the
+  complete uncached ordinary and complete race-detector suites, vet, dependency
+  listing, formatting/diff checks, and strict OpenSpec validation passed at
+  `118/156`. No VM or persistent host mutation occurred and no host rollback
+  remains.
+
 ## 2026-09-04 — deterministic convergence planning
 
 ### Planned reversible validation

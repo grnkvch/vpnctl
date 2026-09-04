@@ -12,7 +12,7 @@
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 13.1 выполнено `117/156`
+и проходят strict validation. После завершения task 13.2 выполнено `118/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production
@@ -26,6 +26,11 @@ read-only convergence planner детерминированно разделяе�
 `desired ↔ applied` diff и vpnctl-owned `applied ↔ observed` drift, использует
 отдельные revision/runtime hashes и перечисляет availability/destructive impact
 без state/file/unit/network mutations.
+Reusable local transaction coordinator выполняет
+`inspect → validate → stage → activate → verify → health`, сохраняет exact
+previous generation до authoritative commit и использует независимый bounded
+rollback. Finalize failure после durable commit оставляет desired active и
+отмечает cleanup pending.
 Единый provider lifecycle фиксирует opaque
 render/prepare/validate/test/activate/health/drain/rollback contract, ровно одну
 явную active/standby пару и отсутствие health-driven переключения. Standard
@@ -50,7 +55,7 @@ replay. Public certificate rotation выполняется только вруч
 подтверждением; plan перечисляет затронутые serving exposes, control/enrollment
 identity и node trust не меняются, public export обновляется атомарно, а в
 secret store остаются только active и previous поколения. Следующая задача —
-13.2 (reusable local validate-stage-activate-health-rollback transactions).
+13.3 (cross-host saga coordinator and generation reconciliation).
 Фактические Clash Mi и Telegram остаются deployed-service release-gate 16.11.
 
 ### 1. Product contract
