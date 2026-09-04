@@ -2,6 +2,41 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned adversarial security E2E
+
+### Planned reversible lab mutations
+
+- Task 16.7 will compose focused production source tests with the existing
+  control, backup, firewall, routing, and DNS live gates at one clean source
+  commit. It must prove fail-closed invite/recovery replay, mTLS identity and
+  credential-generation binding, stale/malicious tunnel mapping rejection,
+  symlink/permission defenses, secret redaction, firewall conflict handling,
+  IPv6/UDP/DNS leak prevention, and corrupt release/backup rejection without
+  damage to foreign resources.
+- The only mutable machines are the exact existing `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` Lima fixtures after revalidating their QEMU/amd64, Ubuntu
+  24.04, 1-vCPU/512-MiB/10-GiB, pinned image digest, and rootless `user-v2`
+  network contract. Both currently are `Stopped`; the wrapper records and
+  restores their exact prior states. The unrelated `realty-front-docker-vm`,
+  macOS routes/firewall/DNS, public VPSs, devices, Telegram, and provider state
+  remain outside scope.
+- Gateway mutation is limited to owner values
+  `vpnctl-v2-control-spike-v1` and `vpnctl-v2-backup-spike-v1`, their exact
+  `/var/lib/vpnctl-v2-spike-{control,backup}` roots, test binaries/processes,
+  and owner-checked uninstall. Node mutation is limited to owner values
+  `vpnctl-v2-firewall-test-v1`, `vpnctl-v2-routing-spike-v1`, and
+  `vpnctl-v2-dns-spike-v1`, their exact paths/namespaces/units/nftables tables,
+  and the DNS integration snapshot/restore boundary.
+- Pinned Mihomo archives must already exist and match both routing and DNS
+  manifests before either VM starts; no live gate may fetch during this run.
+  Each child gate captures foreign nftables/rules/routes/resolved state where
+  applicable and rejects conflicts before mutation. Interrupted-run cleanup
+  invokes only the corresponding uninstall/cleanup when the exact owner marker
+  is present, then restores VM states; partial, foreign, or unmarked state is
+  left unchanged and rejected. Manual recovery is the same owner-checked child
+  cleanup. Repository rollback for the harness-prep and final task commits is
+  ordinary `git revert`.
+
 ## 2026-09-05 — planned ingress and tunnel failure E2E
 
 ### Planned reversible lab mutations
