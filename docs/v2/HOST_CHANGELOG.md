@@ -42,6 +42,45 @@ This journal records development-host mutations made while implementing and vali
   Evidence is deliberately retained; its exact directory is reported after the
   run. On interruption the same ownership checks and cleanup trap apply.
 
+### Acceptance and completed rollback
+
+- The first invocation used a relative evidence path and was rejected by the
+  path-containment preflight before creating evidence or touching either VM.
+  The accepted clean source commit was
+  `774c46e16b5197cddd2f2be2aef1133a6a01778c`; the successful run retained
+  token-free evidence only at
+  `artifacts/v2lab/ingress-release-gate/task-12.11-20260904/`.
+- The production renderer passed the exact pinned nginx `1.24.0` parser and
+  live runtime. Both HTTP/1.1 and HTTP/2 preserved method, prefix-selected path,
+  raw query, authorization/provider header, and body bytes/hash; spoofed
+  forwarding headers were replaced with connection-derived values and the
+  upstream hop was HTTP/1.1. Mixed safe concurrency was `32/32`; per-expose
+  overload accepted/rejected `40/5`; gateway overload accepted/rejected `64/8`.
+  Outcomes were exactly `404`, `413`, `503`, and `504`, non-idempotent attempts
+  were not replayed, no body temp file remained, and nginx master+worker RSS
+  peaked at `19,869,696` bytes.
+- The complete minimum-host regression independently observed a streamed
+  3 MiB request before upload completion with zero monitored body files, exact
+  `40/5` and `64/8` overload results, a stable-master graceful generation
+  handoff, nginx cgroup peak `6,135,808` bytes, test receiver peak `16,076,800`
+  bytes, and zero OOM events. TLS 1.2/1.3 and HTTP/1.1/2 verification also
+  passed on the isolated gateway/node path.
+- Four offline target-Python tests covered success, refusal to replace an
+  existing webhook, refusal to delete a concurrently changed URL, and
+  private/symlink certificate rejection. The packaged harness SHA-256 is
+  `3c172406f861687040272214b6fc0ce7d6e90ac9e4e26ee042bede2755269b47`;
+  provider calls remained false and no bot token was supplied or retained.
+- The gate's cleanup and an independent postflight proved `nginx` and
+  `nginx-common`, both spike units/listeners, `/etc/vpnctl-v2-spike/ingress`,
+  all exact guest test/summary/harness and node probe paths, matching nginx test
+  processes, and `/private/tmp/vpnctl-v2-ingress-release.*` absent. The ignored
+  evidence directory is the sole retained resource; no manual rollback remains.
+- Four local offline Python checks, twenty focused Go repetitions, three focused
+  race-detector repetitions, complete uncached ordinary and complete race suites,
+  vet, dependency listing, shell/JSON/format/diff checks, regression contracts,
+  and strict OpenSpec validation passed at `116/156`. Actual Clash Mi and
+  Telegram remain exclusively in the deployed-service release gate at 16.11.
+
 ## 2026-09-04 — manual public certificate rotation
 
 - Task 12.10 is source-only. It adds confirmed immediate public-ingress

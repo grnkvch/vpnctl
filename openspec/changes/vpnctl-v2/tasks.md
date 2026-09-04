@@ -148,7 +148,7 @@
 - [x] 12.8 Implement stateless request handling with hard limits and `413`/`503`/`504`, no queue/retry/body persistence, and downstream close after partial-response failure; verify fault-injected non-idempotent request tests show no replay.
 - [x] 12.9 Implement expose list/show/remove with certificate retrieval, new-request stop, bounded drain, isolated mapping removal, port release, and webhook-removal `requires_action`; verify one-of-many removal leaves others serving.
 - [x] 12.10 Implement confirmed manual certificate rotation with affected-expose plan, bounded rollback snapshot, short downtime, no defer, and re-registration actions; verify control/enrollment identity and node trust remain unchanged.
-- [ ] 12.11 Run the production ingress HTTP/1.1/2 concurrency and minimum-host proxy regression and package the token-safe Telegram registration harness; verify path/query/header/body forwarding, error statuses, memory, no body files, and readiness for the deferred real-provider gate in task 16.11.
+- [x] 12.11 Run the production ingress HTTP/1.1/2 concurrency and minimum-host proxy regression and package the token-safe Telegram registration harness; verify path/query/header/body forwarding, error statuses, memory, no body files, and readiness for the deferred real-provider gate in task 16.11.
 
 ## 13. Convergence, Diagnostics, and Temporary Logging
 

@@ -65,3 +65,20 @@ operator must inspect/remove the test webhook manually. Passing task 12.11 does
 not claim Telegram compatibility or production readiness; only the real
 registration, incoming request, and owner-checked cleanup in task 16.11 can do
 that.
+
+## Accepted task-12.11 run
+
+The gate passed on source commit
+`774c46e16b5197cddd2f2be2aef1133a6a01778c`. Production nginx master+worker RSS
+peaked at `19,869,696` bytes; the independent systemd ingress cgroup peaked at
+`6,135,808` bytes with zero OOM events. Both exact overload boundaries were
+observed (`40 + 5 rejected`, `64 + 8 rejected`), all four error statuses
+matched, and both body-file checks were zero. The packaged Telegram harness
+SHA-256 is
+`3c172406f861687040272214b6fc0ce7d6e90ac9e4e26ee042bede2755269b47`.
+
+The retained evidence is
+`artifacts/v2lab/ingress-release-gate/task-12.11-20260904/summary.json` (ignored
+from release source). Postflight found no task-owned package, unit, listener,
+process, guest path, or host temporary root. `production_ready` remains false
+until task 16.11.
