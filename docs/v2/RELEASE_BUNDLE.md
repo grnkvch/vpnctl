@@ -1,9 +1,10 @@
 # Self-contained release bundle
 
 Task 14.2 defines the reproducible local delivery unit consumed by gateway and
-node installation. The official download flow is added separately in task
-14.3; the boundary here accepts only an explicit absolute path to a regular,
-non-symlink local file.
+node installation. The signed online/offline bootstrap and standard retained
+bundle path are defined in [`INSTALLATION.md`](INSTALLATION.md); the role
+boundary accepts only an explicit absolute path to a regular, non-symlink
+local file.
 
 ## Deterministic format
 
@@ -73,7 +74,7 @@ gateway never installs `frpc`, and a node never installs `frps`. Normal
 `init`, `apply`, and `repair` have no upstream-download path for these bundled
 components; replacement is a release/update concern.
 
-For offline transfer, the operator downloads and verifies the release on a
-connected machine, copies the unchanged bundle with `scp`, and supplies that
-local path to the role installer. The public command exposed by the standard
-installer is intentionally specified in task 14.3 rather than frozen here.
+For offline transfer, the operator copies the four signed release assets and
+installer with `scp`. The bootstrap stores the verified bundle at
+`/usr/local/lib/vpnctl/release/vpnctl.bundle`; the subsequent role init consumes
+that exact local file.

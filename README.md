@@ -36,23 +36,28 @@ system files and run `systemctl`, `ufw`, `sysctl`, and WireGuard commands.
 After a GitHub release has been published, install on the server with:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo sh
 ```
 
 Install a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | VPNCTL_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo VPNCTL_VERSION=v2.0.0 sh
 ```
 
 Useful installer environment variables:
 
 ```text
-VPNCTL_VERSION      Release tag to install. Default: latest
-VPNCTL_REPO         GitHub repo. Default: vgrinkevich/vpnctl
-VPNCTL_INSTALL_DIR  Install directory. Default: /usr/local/bin
-VPNCTL_BINARY       Installed binary name. Default: vpnctl
+VPNCTL_VERSION            Signed release tag to install. Default: latest
+VPNCTL_REPO               GitHub repo. Default: vgrinkevich/vpnctl
+VPNCTL_RELEASE_ASSET_DIR  Absolute local directory containing all four signed assets
 ```
+
+The v2 installer verifies Ed25519-signed version/size/SHA-256 metadata before
+changing the standard binary or retained bundle paths. See
+[`docs/v2/INSTALLATION.md`](docs/v2/INSTALLATION.md) for the online and offline
+`scp` flows. The preserved v1 scripts are named `install-v1.sh` and
+`release-v1.sh`.
 
 ## Build From Source
 
@@ -61,11 +66,9 @@ go test ./...
 GOOS=linux GOARCH=amd64 go build -o vpnctl ./cmd/vpnctl
 ```
 
-Manual copy flow:
-
-```sh
-scp vpnctl root@SERVER_IP:/usr/local/bin/vpnctl
-```
+For a manual/offline installation, copy the four signed v2 release assets and
+run the installer with `VPNCTL_RELEASE_ASSET_DIR`; copying an unverified binary
+alone is not a v2 installation.
 
 ## First Server Setup
 
@@ -168,21 +171,28 @@ Non-matching Clash traffic stays direct via the final `MATCH,DIRECT` rule.
 
 ## Release Artifacts
 
-Create release artifacts locally:
+Create signed v2 release artifacts locally from the already downloaded pinned
+provider archives and an external mode-`0600` release signing key:
 
 ```sh
-scripts/release.sh v0.1.0
+VPNCTL_RELEASE_SIGNING_KEY=/secure/vpnctl-release-key.pem \
+VPNCTL_MIHOMO_ARCHIVE=/cache/mihomo-linux-amd64-v1.19.30.gz \
+VPNCTL_FRP_ARCHIVE=/cache/frp_0.69.0_linux_amd64.tar.gz \
+scripts/release.sh v2.0.0
 ```
 
-The script runs tests, builds `linux/amd64`, and writes:
+The script runs tests, reproducibly builds `linux/amd64`, verifies pinned
+provider bytes, and writes:
 
 ```text
-dist/vpnctl_linux_amd64.tar.gz
-dist/checksums.txt
+dist/vpnctl-linux-amd64
+dist/vpnctl-v2-linux-amd64.bundle
+dist/release-checksums.txt
+dist/release-checksums.txt.sig
 ```
 
-Upload both files to the matching GitHub release. The install script downloads
-these assets and verifies the archive checksum before installing the binary.
+Upload all four files to the matching GitHub release. Private signing material
+is never copied into `dist/` or stored in the repository.
 
 ## State Layout
 

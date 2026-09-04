@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
@@ -52,6 +53,7 @@ type GatewayInitPlan struct {
 	HandshakeHost        model.HandshakeHost
 
 	desiredState     model.State
+	releaseManifest  ReleaseManifest
 	layout           GatewayLayoutPlan
 	roleRequest      linuxplatform.RoleInstallationRequest
 	watchdogUnits    linuxplatform.WatchdogUnitInstallationPlan
@@ -131,6 +133,7 @@ type GatewayInitRuntime struct {
 	Paths             store.Paths
 	Snapshot          linuxplatform.HostSnapshot
 	Manifest          model.ComponentManifest
+	Release           InitReleaseSource
 	BinaryPath        string
 	State             GatewayInitStateStore
 	Layout            *GatewayLayoutInstaller
@@ -164,7 +167,7 @@ func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, err
 	if runtime.BinaryPath == "" {
 		runtime.BinaryPath = linuxplatform.DefaultVPNCTLBinaryPath
 	}
-	if err := runtime.Manifest.Validate(); err != nil {
+	if err := runtime.Manifest.Validate(); err != nil && runtime.Release == nil {
 		return nil, fmt.Errorf("gateway component manifest: %w", err)
 	}
 	wantPaths, err := store.NewPaths(runtime.Paths.Root)
@@ -191,14 +194,32 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err := snapshot.ValidateMandatoryCapabilities(); err != nil {
 		return GatewayInitPlan{}, err
 	}
+	manifest := initializer.runtime.Manifest
+	var releaseManifest ReleaseManifest
+	if initializer.runtime.Release != nil {
+		verified, err := initializer.runtime.Release.Inspect(ctx)
+		if err != nil {
+			return GatewayInitPlan{}, fmt.Errorf("verify local gateway release bundle: %w", err)
+		}
+		if err := verified.Validate(); err != nil {
+			return GatewayInitPlan{}, fmt.Errorf("validate local gateway release bundle: %w", err)
+		}
+		releaseManifest = verified
+		manifest = verified.ComponentManifest
+	}
 
 	existing, loadErr := initializer.runtime.State.Load()
 	if loadErr == nil {
 		if existing.Host.Role != model.RoleGateway {
 			return GatewayInitPlan{}, fmt.Errorf("%w: current role is %s", ErrGatewayRoleConflict, existing.Host.Role)
 		}
+		if !reflect.DeepEqual(existing.Components, manifest) {
+			return GatewayInitPlan{}, fmt.Errorf("%w: installed release differs from authoritative state; use vpnctl update", ErrGatewayInitConflict)
+		}
 		snapshot = withoutOwnedGatewayNetwork(snapshot)
-		return initializer.planExisting(input, snapshot, existing)
+		plan, err := initializer.planExisting(input, snapshot, existing)
+		plan.releaseManifest = releaseManifest
+		return plan, err
 	}
 	if !errors.Is(loadErr, store.ErrStateNotFound) {
 		return GatewayInitPlan{}, fmt.Errorf("load authoritative state: %w", loadErr)
@@ -229,7 +250,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 		return GatewayInitPlan{}, fmt.Errorf("plan managed swap: %w", err)
 	}
 	initializedAt := initializer.runtime.Now().UTC()
-	handshakeHost, err := initializer.runtime.HandshakeHosts.Select(ctx, initializer.runtime.Manifest.HandshakeHostListVersion, initializedAt)
+	handshakeHost, err := initializer.runtime.HandshakeHosts.Select(ctx, manifest.HandshakeHostListVersion, initializedAt)
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("select restricted handshake host: %w", err)
 	}
@@ -237,7 +258,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 	if err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("allocate gateway host identity: %w", err)
 	}
-	desired := initialGatewayState(hostID, initializedAt, network, ssh.Port, initializer.runtime.Manifest, handshakeHost)
+	desired := initialGatewayState(hostID, initializedAt, network, ssh.Port, manifest, handshakeHost)
 	if err := desired.Validate(); err != nil {
 		return GatewayInitPlan{}, fmt.Errorf("build initial gateway state: %w", err)
 	}
@@ -282,7 +303,7 @@ func (initializer *GatewayInitializer) Plan(ctx context.Context, input GatewayIn
 		WatchdogUnitFiles:    append([]string(nil), watchdogUnits.UnitFiles...),
 		ManagedSwap:          managedSwap,
 		HandshakeHost:        handshakeHost,
-		desiredState:         desired, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
+		desiredState:         desired, releaseManifest: releaseManifest, layout: layout, roleRequest: roleRequest, watchdogUnits: watchdogUnits, firewall: firewall,
 		swapDecisionMade: !managedSwap.Offered,
 	}, nil
 }
@@ -373,6 +394,18 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 			return GatewayInitResult{}, fmt.Errorf("gateway initialization plan is stale: state now exists")
 		}
 		return GatewayInitResult{}, fmt.Errorf("recheck authoritative state: %w", err)
+	}
+	if plan.releaseManifest.SchemaVersion != 0 {
+		if initializer.runtime.Release == nil {
+			return GatewayInitResult{}, fmt.Errorf("invalid gateway initialization release plan")
+		}
+		installed, err := initializer.runtime.Release.Install(ctx, model.RoleGateway)
+		if err != nil {
+			return GatewayInitResult{}, fmt.Errorf("install gateway release components: %w", err)
+		}
+		if !reflect.DeepEqual(installed.Manifest, plan.releaseManifest) {
+			return GatewayInitResult{}, fmt.Errorf("installed gateway release differs from the verified plan")
+		}
 	}
 	if _, err := initializer.runtime.Layout.Apply(plan.layout); err != nil {
 		return GatewayInitResult{}, fmt.Errorf("apply gateway layout: %w", err)

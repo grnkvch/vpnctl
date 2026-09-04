@@ -2,6 +2,69 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — signed curl bootstrap and standard release layout
+
+### Planned reversible validation
+
+- Task 14.3 is source-only. The existing v1 installer/release scripts will be
+  retained under explicit `*-v1.sh` names for their frozen regression contract;
+  the standard scripts will move to signed v2 assets without changing this
+  development host.
+- The curl bootstrap will download a standalone Linux/amd64 vpnctl binary, the
+  complete v2 bundle, canonical checksums, and a detached Ed25519 signature
+  into a mode-`0700` temporary directory. It will trust the same already-pinned
+  release public key as the signed handshake-host list, require HTTPS/TLS 1.2,
+  verify the signed metadata and both payload sizes/checksums, and complete all
+  verification before creating or replacing an install target.
+- The standard root-owned layout will keep the regular mode-`0755` binary at
+  `/usr/local/bin/vpnctl` and the mode-`0600` bundle/checksum/signature under
+  `/usr/local/lib/vpnctl/release/`. Replacement will stage on the destination
+  filesystem, preserve exact previous files, publish the binary last, and
+  restore every prior target after an injected post-verification failure.
+- Installer integration tests will use ephemeral keys, fake local downloads,
+  and isolated temporary install roots. They will verify successful bootstrap,
+  repeatability, signature/checksum/size/download corruption, symlink and
+  destination conflicts, and rollback without contacting GitHub, running apt,
+  writing system paths, or executing a downloaded binary. All temporary keys,
+  assets, roots, and command shims are test-owned and automatically removed;
+  repository rollback is limited to the future task 14.3 commit.
+
+### Result
+
+- The v2 bootstrap now accepts exactly four release assets: the standalone
+  Linux/amd64 binary, the complete role bundle, canonical checksum metadata,
+  and its raw Ed25519 signature. The metadata binds the requested release
+  version plus both payload names, byte sizes, and SHA-256 values; OpenSSL
+  verifies it against the embedded shared trust anchor before any install
+  directory is created. HTTPS with TLS 1.2 is mandatory for remote downloads,
+  while `VPNCTL_RELEASE_ASSET_DIR` provides the documented offline `scp`
+  boundary without requiring curl.
+- A verified install writes `/usr/local/bin/vpnctl` as mode `0755` and retains
+  the bundle, metadata, and signature under the mode-`0700`
+  `/usr/local/lib/vpnctl/release` directory as mode `0600`. All four targets
+  are staged on their destination filesystem, previous regular files are
+  preserved, support files are published first, and the runnable binary is
+  published last. Corrupt/missing inputs and path conflicts fail before
+  mutation; injected failures after publication restore the exact previous
+  tree. The frozen v1 behavior remains available only through the explicitly
+  named `install-v1.sh` and `release-v1.sh` scripts.
+- Production `vpnctl init --gateway` and `vpnctl init --node` now inspect the
+  stored signed bundle while planning, repeat complete verification while
+  applying, install only their selected role's bundled executables, and
+  persist the component manifest taken from that signed bundle. The maintainer
+  release builder consumes only explicit local pinned inputs and a private
+  mode-restricted PKCS#8 key; two native builds using the accepted Mihomo
+  `v1.19.30` and frp `0.69.0` archives produced identical copies of all four
+  assets.
+- Ten repeated focused runs, three repeated focused race runs, successful
+  OpenSSL/Go signature interoperability, and corruption/version/symlink/
+  rollback/offline-init integration cases passed. Full ordinary and race
+  suites, `go vet ./...`, dependency listing, Bash syntax, all JSON parsing,
+  diff checks, and strict OpenSpec validation pass. No real host install path,
+  package, service, VM, listener, network rule, public endpoint, or deployed
+  gateway/node state changed; only disposable test roots and Go build-cache
+  entries were used, so no host rollback is required.
+
 ## 2026-09-04 — reproducible self-contained role bundle
 
 ### Planned reversible validation

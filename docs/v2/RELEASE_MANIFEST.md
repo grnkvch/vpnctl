@@ -56,3 +56,5 @@ repository; tests generate ephemeral keys and retain no key files.
 The deterministic framing, verification order, local-only boundary, and
 role-specific filesystem layout are defined in
 [`RELEASE_BUNDLE.md`](RELEASE_BUNDLE.md).
+The outer bootstrap version/size/checksum signature and curl/offline installer
+transaction are defined in [`INSTALLATION.md`](INSTALLATION.md).

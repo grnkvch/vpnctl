@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -23,9 +24,10 @@ type NodeInitPlan struct {
 	Enrolled           bool
 	ActiveTunnel       bool
 
-	desiredState model.State
-	layout       NodeLayoutPlan
-	roleRequest  linuxplatform.RoleInstallationRequest
+	desiredState    model.State
+	releaseManifest ReleaseManifest
+	layout          NodeLayoutPlan
+	roleRequest     linuxplatform.RoleInstallationRequest
 }
 
 type NodeInitResult struct {
@@ -48,6 +50,7 @@ type NodeInitRuntime struct {
 	Paths      store.Paths
 	Snapshot   linuxplatform.HostSnapshot
 	Manifest   model.ComponentManifest
+	Release    InitReleaseSource
 	BinaryPath string
 	State      NodeInitStateStore
 	Layout     *NodeLayoutInstaller
@@ -73,7 +76,7 @@ func NewNodeInitializer(runtime NodeInitRuntime) (*NodeInitializer, error) {
 	if runtime.BinaryPath == "" {
 		runtime.BinaryPath = linuxplatform.DefaultVPNCTLBinaryPath
 	}
-	if err := runtime.Manifest.Validate(); err != nil {
+	if err := runtime.Manifest.Validate(); err != nil && runtime.Release == nil {
 		return nil, fmt.Errorf("node component manifest: %w", err)
 	}
 	wantPaths, err := store.NewPaths(runtime.Paths.Root)
@@ -99,15 +102,31 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	if err := snapshot.ValidateMandatoryCapabilities(); err != nil {
 		return NodeInitPlan{}, err
 	}
+	manifest := initializer.runtime.Manifest
+	var releaseManifest ReleaseManifest
+	if initializer.runtime.Release != nil {
+		verified, err := initializer.runtime.Release.Inspect(ctx)
+		if err != nil {
+			return NodeInitPlan{}, fmt.Errorf("verify local node release bundle: %w", err)
+		}
+		if err := verified.Validate(); err != nil {
+			return NodeInitPlan{}, fmt.Errorf("validate local node release bundle: %w", err)
+		}
+		releaseManifest = verified
+		manifest = verified.ComponentManifest
+	}
 
 	existing, loadErr := initializer.runtime.State.Load()
 	if loadErr == nil {
 		if existing.Host.Role != model.RoleNode {
 			return NodeInitPlan{}, fmt.Errorf("%w: current role is %s", ErrNodeRoleConflict, existing.Host.Role)
 		}
+		if !reflect.DeepEqual(existing.Components, manifest) {
+			return NodeInitPlan{}, fmt.Errorf("node release differs from authoritative state; use vpnctl update")
+		}
 		return NodeInitPlan{
 			AlreadyInitialized: true, HostID: existing.Host.ID, desiredState: existing, Units: []string{},
-			Enrolled: len(existing.Nodes) == 1, ActiveTunnel: nodeHasActiveTunnel(existing),
+			Enrolled: len(existing.Nodes) == 1, ActiveTunnel: nodeHasActiveTunnel(existing), releaseManifest: releaseManifest,
 		}, nil
 	}
 	if !errors.Is(loadErr, store.ErrStateNotFound) {
@@ -137,7 +156,7 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	if err != nil {
 		return NodeInitPlan{}, fmt.Errorf("allocate node host identity: %w", err)
 	}
-	desired := initialNodeState(hostID, initializer.runtime.Now().UTC(), initializer.runtime.Manifest, directDNS.IPv4)
+	desired := initialNodeState(hostID, initializer.runtime.Now().UTC(), manifest, directDNS.IPv4)
 	if err := desired.Validate(); err != nil {
 		return NodeInitPlan{}, fmt.Errorf("build initial node state: %w", err)
 	}
@@ -152,7 +171,7 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	sort.Strings(units)
 	return NodeInitPlan{
 		Changed: true, HostID: hostID, Directories: directories, Units: units,
-		desiredState: desired, layout: layout, roleRequest: roleRequest,
+		desiredState: desired, releaseManifest: releaseManifest, layout: layout, roleRequest: roleRequest,
 	}, nil
 }
 
@@ -178,6 +197,18 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 			return NodeInitResult{}, fmt.Errorf("node initialization plan is stale: state now exists")
 		}
 		return NodeInitResult{}, fmt.Errorf("recheck authoritative state: %w", err)
+	}
+	if plan.releaseManifest.SchemaVersion != 0 {
+		if initializer.runtime.Release == nil {
+			return NodeInitResult{}, fmt.Errorf("invalid node initialization release plan")
+		}
+		installed, err := initializer.runtime.Release.Install(ctx, model.RoleNode)
+		if err != nil {
+			return NodeInitResult{}, fmt.Errorf("install node release components: %w", err)
+		}
+		if !reflect.DeepEqual(installed.Manifest, plan.releaseManifest) {
+			return NodeInitResult{}, fmt.Errorf("installed node release differs from the verified plan")
+		}
 	}
 	if _, err := initializer.runtime.Layout.Apply(plan.layout); err != nil {
 		return NodeInitResult{}, fmt.Errorf("apply node layout: %w", err)

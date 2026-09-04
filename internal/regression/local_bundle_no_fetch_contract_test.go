@@ -40,4 +40,20 @@ func TestBundledComponentsHaveNoInitApplyRepairUpstreamFetchPath(t *testing.T) {
 			t.Errorf("local bundle boundary omits %q", required)
 		}
 	}
+	for relative, required := range map[string][]string{
+		"internal/cli/gateway_init.go":       {"buildSystemInitRelease(paths, snapshot)", "NewSystemGatewayInitializer(paths, snapshot, release"},
+		"internal/cli/node_init.go":          {"buildSystemInitRelease(paths, snapshot)", "NewSystemNodeInitializer(paths, snapshot, release"},
+		"internal/lifecycle/gateway_init.go": {"Release.Inspect(ctx)", "Release.Install(ctx, model.RoleGateway)"},
+		"internal/lifecycle/node_init.go":    {"Release.Inspect(ctx)", "Release.Install(ctx, model.RoleNode)"},
+	} {
+		content, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, token := range required {
+			if !strings.Contains(string(content), token) {
+				t.Errorf("%s does not bind production init to local release token %q", relative, token)
+			}
+		}
+	}
 }

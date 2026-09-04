@@ -3,9 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
 const DefaultHandshakeHostRollbackWindow = 24 * time.Hour
@@ -516,11 +515,11 @@ func (manager *HandshakeHostManager) reconcileStateWrite(before, candidate model
 }
 
 func explicitHandshakeHostCandidate(hostname string) (HandshakeHostCandidate, error) {
-	publicKey, err := base64.RawURLEncoding.DecodeString(bundledHandshakeHostPublicKey)
+	publicKey, err := releasetrust.PublicKey()
 	if err != nil {
 		return HandshakeHostCandidate{}, err
 	}
-	bundle, err := DecodeAndVerifyHandshakeHostBundle(bundledHandshakeHostEnvelope, ed25519.PublicKey(publicKey))
+	bundle, err := DecodeAndVerifyHandshakeHostBundle(bundledHandshakeHostEnvelope, publicKey)
 	if err != nil {
 		return HandshakeHostCandidate{}, err
 	}

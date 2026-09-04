@@ -47,6 +47,16 @@ type ReleaseBundleInstaller struct {
 	platform  ReleasePlatform
 }
 
+type InitReleaseSource interface {
+	Inspect(context.Context) (ReleaseManifest, error)
+	Install(context.Context, model.Role) (ReleaseBundleInstallResult, error)
+}
+
+type LocalInitReleaseSource struct {
+	installer *ReleaseBundleInstaller
+	bundle    string
+}
+
 type stagedReleaseBundle struct {
 	manifest  ReleaseManifest
 	root      string
@@ -126,6 +136,27 @@ func NewReleaseBundleInstaller(root string, publicKey ed25519.PublicKey, platfor
 	}, nil
 }
 
+func NewLocalInitReleaseSource(installer *ReleaseBundleInstaller, bundlePath string) (*LocalInitReleaseSource, error) {
+	if installer == nil || !filepath.IsAbs(bundlePath) || filepath.Clean(bundlePath) != bundlePath {
+		return nil, fmt.Errorf("local init release source requires an installer and clean absolute bundle path")
+	}
+	return &LocalInitReleaseSource{installer: installer, bundle: bundlePath}, nil
+}
+
+func (source *LocalInitReleaseSource) Inspect(ctx context.Context) (ReleaseManifest, error) {
+	if source == nil || source.installer == nil {
+		return ReleaseManifest{}, fmt.Errorf("local init release source is incomplete")
+	}
+	return source.installer.Inspect(ctx, source.bundle)
+}
+
+func (source *LocalInitReleaseSource) Install(ctx context.Context, role model.Role) (ReleaseBundleInstallResult, error) {
+	if source == nil || source.installer == nil {
+		return ReleaseBundleInstallResult{}, fmt.Errorf("local init release source is incomplete")
+	}
+	return source.installer.Install(ctx, source.bundle, role)
+}
+
 func (installer *ReleaseBundleInstaller) Install(ctx context.Context, bundlePath string, role model.Role) (ReleaseBundleInstallResult, error) {
 	if ctx == nil {
 		return ReleaseBundleInstallResult{}, fmt.Errorf("context is required")
@@ -182,38 +213,72 @@ func (installer *ReleaseBundleInstaller) Install(ctx context.Context, bundlePath
 	}, nil
 }
 
-func (installer *ReleaseBundleInstaller) stage(ctx context.Context, bundlePath string) (*stagedReleaseBundle, error) {
+// Inspect verifies the complete local bundle without creating a staging or
+// install file. Init uses it while building a read-only role plan, then Install
+// repeats the verification immediately before mutation.
+func (installer *ReleaseBundleInstaller) Inspect(ctx context.Context, bundlePath string) (ReleaseManifest, error) {
+	if ctx == nil {
+		return ReleaseManifest{}, fmt.Errorf("context is required")
+	}
+	if installer == nil || len(installer.publicKey) != ed25519.PublicKeySize {
+		return ReleaseManifest{}, fmt.Errorf("release bundle installer is incomplete")
+	}
+	input, manifest, err := installer.open(bundlePath)
+	if err != nil {
+		return ReleaseManifest{}, err
+	}
+	defer input.Close()
+	if _, err := consumeReleaseBundleArtifacts(ctx, input, manifest, ""); err != nil {
+		return ReleaseManifest{}, err
+	}
+	return cloneReleaseManifest(manifest), nil
+}
+
+func (installer *ReleaseBundleInstaller) open(bundlePath string) (*os.File, ReleaseManifest, error) {
 	if !filepath.IsAbs(bundlePath) || filepath.Clean(bundlePath) != bundlePath {
-		return nil, releaseBundleInvalid("bundle path must be clean and absolute")
+		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle path must be clean and absolute")
 	}
 	info, err := os.Lstat(bundlePath)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximumReleaseBundleBytes {
-		return nil, releaseBundleInvalid("bundle must be a bounded regular file")
+		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle must be a bounded regular file")
 	}
 	input, err := os.Open(bundlePath)
 	if err != nil {
-		return nil, releaseBundleInvalid("open bundle")
+		return nil, ReleaseManifest{}, releaseBundleInvalid("open bundle")
 	}
-	defer input.Close()
 	magic := make([]byte, len(releaseBundleMagic))
 	if _, err := io.ReadFull(input, magic); err != nil || string(magic) != releaseBundleMagic {
-		return nil, releaseBundleInvalid("bundle magic is invalid")
+		_ = input.Close()
+		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle magic is invalid")
 	}
 	manifestLength, err := readReleaseBundleUint32(input)
 	if err != nil || manifestLength == 0 || manifestLength > MaximumSignedReleaseManifestBytes {
-		return nil, releaseBundleInvalid("signed manifest length is invalid")
+		_ = input.Close()
+		return nil, ReleaseManifest{}, releaseBundleInvalid("signed manifest length is invalid")
 	}
 	signed := make([]byte, manifestLength)
 	if _, err := io.ReadFull(input, signed); err != nil {
-		return nil, releaseBundleInvalid("signed manifest is truncated")
+		_ = input.Close()
+		return nil, ReleaseManifest{}, releaseBundleInvalid("signed manifest is truncated")
 	}
 	manifest, err := DecodeAndVerifyReleaseManifest(signed, installer.publicKey)
 	if err != nil {
-		return nil, releaseBundleInvalid("verify signed manifest: %v", err)
+		_ = input.Close()
+		return nil, ReleaseManifest{}, releaseBundleInvalid("verify signed manifest: %v", err)
 	}
 	if err := VerifyReleasePlatform(manifest, installer.platform); err != nil {
+		_ = input.Close()
+		return nil, ReleaseManifest{}, err
+	}
+	return input, manifest, nil
+}
+
+func (installer *ReleaseBundleInstaller) stage(ctx context.Context, bundlePath string) (*stagedReleaseBundle, error) {
+	input, manifest, err := installer.open(bundlePath)
+	if err != nil {
 		return nil, err
 	}
+	defer input.Close()
 	stageRoot, err := os.MkdirTemp("", "vpnctl-release-bundle-")
 	if err != nil {
 		return nil, releaseBundleInvalid("create bundle stage")
@@ -222,13 +287,22 @@ func (installer *ReleaseBundleInstaller) stage(ctx context.Context, bundlePath s
 		_ = os.RemoveAll(stageRoot)
 		return nil, releaseBundleInvalid("secure bundle stage")
 	}
-	staged := &stagedReleaseBundle{manifest: manifest, root: stageRoot, artifacts: make(map[string]string, len(manifest.Artifacts))}
 	keep := false
 	defer func() {
 		if !keep {
 			_ = os.RemoveAll(stageRoot)
 		}
 	}()
+	artifacts, err := consumeReleaseBundleArtifacts(ctx, input, manifest, stageRoot)
+	if err != nil {
+		return nil, err
+	}
+	keep = true
+	return &stagedReleaseBundle{manifest: manifest, root: stageRoot, artifacts: artifacts}, nil
+}
+
+func consumeReleaseBundleArtifacts(ctx context.Context, input io.Reader, manifest ReleaseManifest, stageRoot string) (map[string]string, error) {
+	artifacts := make(map[string]string, len(manifest.Artifacts))
 	for index, artifact := range manifest.Artifacts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -245,29 +319,39 @@ func (installer *ReleaseBundleInstaller) stage(ctx context.Context, bundlePath s
 		if err != nil || size != uint64(artifact.SizeBytes) {
 			return nil, releaseBundleInvalid("artifact %s size differs from signed manifest", artifact.Path)
 		}
-		stagedPath := filepath.Join(stageRoot, fmt.Sprintf("%02d.artifact", index))
-		output, err := os.OpenFile(stagedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return nil, releaseBundleInvalid("create artifact stage")
-		}
 		digest := sha256.New()
-		_, copyErr := io.CopyN(io.MultiWriter(output, digest), input, artifact.SizeBytes)
-		syncErr := output.Sync()
-		closeErr := output.Close()
+		var stagedPath string
+		var output *os.File
+		writer := io.Writer(digest)
+		if stageRoot != "" {
+			stagedPath = filepath.Join(stageRoot, fmt.Sprintf("%02d.artifact", index))
+			output, err = os.OpenFile(stagedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return nil, releaseBundleInvalid("create artifact stage")
+			}
+			writer = io.MultiWriter(output, digest)
+		}
+		_, copyErr := io.CopyN(writer, input, artifact.SizeBytes)
+		var syncErr, closeErr error
+		if output != nil {
+			syncErr = output.Sync()
+			closeErr = output.Close()
+		}
 		if copyErr != nil || syncErr != nil || closeErr != nil {
 			return nil, releaseBundleInvalid("artifact %s is truncated", artifact.Path)
 		}
 		if hex.EncodeToString(digest.Sum(nil)) != artifact.SHA256 {
 			return nil, releaseBundleInvalid("artifact %s checksum differs from signed manifest", artifact.Path)
 		}
-		staged.artifacts[artifact.Component] = stagedPath
+		if stageRoot != "" {
+			artifacts[artifact.Component] = stagedPath
+		}
 	}
 	var trailing [1]byte
 	if count, err := input.Read(trailing[:]); count != 0 || !errors.Is(err, io.EOF) {
 		return nil, releaseBundleInvalid("bundle contains unsigned trailing bytes")
 	}
-	keep = true
-	return staged, nil
+	return artifacts, nil
 }
 
 func (installer *ReleaseBundleInstaller) prepareCandidates(ctx context.Context, staged *stagedReleaseBundle, role model.Role) ([]releaseInstallCandidate, error) {

@@ -246,6 +246,10 @@ type nodeInitHarness struct {
 }
 
 func newNodeInitHarness(t *testing.T) *nodeInitHarness {
+	return newNodeInitHarnessWithRelease(t, nil)
+}
+
+func newNodeInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *nodeInitHarness {
 	t.Helper()
 	root := newGatewaySystemRoot(t)
 	paths, err := store.NewPaths(root)
@@ -265,7 +269,7 @@ func newNodeInitHarness(t *testing.T) *nodeInitHarness {
 	roles := &recordingGatewayRoles{events: events, root: root}
 	harness := &nodeInitHarness{paths: paths, state: state, roles: roles, events: events}
 	initializer, err := NewNodeInitializer(NodeInitRuntime{
-		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
+		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
 		State: state, Layout: layout, Roles: roles,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { harness.idCalls++; return nodeTestHostID, nil },

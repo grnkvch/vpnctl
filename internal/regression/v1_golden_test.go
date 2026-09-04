@@ -116,8 +116,8 @@ func TestV1GoldenInstallerArtifacts(t *testing.T) {
 		t.Fatalf("parse installer contract fixture: %v", err)
 	}
 
-	installScript := readRepositoryFile(t, "scripts", "install.sh")
-	releaseScript := readRepositoryFile(t, "scripts", "release.sh")
+	installScript := readRepositoryFile(t, "scripts", "install-v1.sh")
+	releaseScript := readRepositoryFile(t, "scripts", "release-v1.sh")
 	for _, expected := range contract.InstallScriptContains {
 		if !strings.Contains(installScript, expected) {
 			t.Errorf("v1 install.sh no longer contains %q", expected)

@@ -1,55 +1,60 @@
 #!/bin/sh
 set -eu
 
+umask 077
+
 version="${1:-}"
 if [ -z "$version" ]; then
-	echo "usage: scripts/release.sh <version>" >&2
+	echo "usage: VPNCTL_RELEASE_SIGNING_KEY=<path> VPNCTL_MIHOMO_ARCHIVE=<path> VPNCTL_FRP_ARCHIVE=<path> scripts/release.sh <version>" >&2
 	exit 2
 fi
-
 case "$version" in
-	v*) ;;
-	*)
-		echo "version must start with v, for example v0.1.0" >&2
-		exit 2
-		;;
+	v[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]*) ;;
+	*) echo "version must be a safe v-prefixed tag, for example v2.0.0" >&2; exit 2 ;;
 esac
+
+if [ -z "${VPNCTL_RELEASE_SIGNING_KEY:-}" ]; then echo "error: VPNCTL_RELEASE_SIGNING_KEY is required" >&2; exit 2; fi
+if [ -z "${VPNCTL_MIHOMO_ARCHIVE:-}" ]; then echo "error: VPNCTL_MIHOMO_ARCHIVE is required" >&2; exit 2; fi
+if [ -z "${VPNCTL_FRP_ARCHIVE:-}" ]; then echo "error: VPNCTL_FRP_ARCHIVE is required" >&2; exit 2; fi
 
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 dist_dir="$root_dir/dist"
-work_dir="$dist_dir/vpnctl_linux_amd64"
-binary="$work_dir/vpnctl"
-archive="$dist_dir/vpnctl_linux_amd64.tar.gz"
-checksums="$dist_dir/checksums.txt"
+mkdir -p "$dist_dir"
+work_dir=$(mktemp -d "$dist_dir/.vpnctl-release.XXXXXX")
+cleanup() {
+	rm -rf "$work_dir"
+}
+trap cleanup EXIT INT TERM HUP
 
-rm -rf "$work_dir" "$archive" "$checksums"
-mkdir -p "$work_dir"
+binary="$work_dir/vpnctl-linux-amd64.input"
+output="$work_dir/output"
+mkdir -m 0700 "$output"
 
 cd "$root_dir"
 go test ./...
-
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 	-trimpath \
+	-buildvcs=false \
 	-ldflags "-s -w -X github.com/vgrinkevich/vpnctl/internal/cli.version=$version" \
 	-o "$binary" \
 	./cmd/vpnctl
 
-cp README.md "$work_dir/README.md"
-cp docs/CLI_SPEC.md "$work_dir/CLI_SPEC.md"
+go run ./cmd/vpnctl-release \
+	-version "$version" \
+	-vpnctl "$binary" \
+	-mihomo "$VPNCTL_MIHOMO_ARCHIVE" \
+	-frp "$VPNCTL_FRP_ARCHIVE" \
+	-signing-key "$VPNCTL_RELEASE_SIGNING_KEY" \
+	-output-dir "$output"
 
-(
-	cd "$dist_dir"
-	tar -czf "$(basename "$archive")" "$(basename "$work_dir")"
-	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum "$(basename "$archive")" >"$(basename "$checksums")"
-	else
-		shasum -a 256 "$(basename "$archive")" >"$(basename "$checksums")"
-	fi
-)
+for asset in vpnctl-linux-amd64 vpnctl-v2-linux-amd64.bundle release-checksums.txt release-checksums.txt.sig; do
+	mv -f "$output/$asset" "$dist_dir/$asset"
+done
 
-echo "release artifacts:"
-echo "  $archive"
-echo "  $checksums"
+echo "signed v2 release artifacts:"
+echo "  $dist_dir/vpnctl-linux-amd64"
+echo "  $dist_dir/vpnctl-v2-linux-amd64.bundle"
+echo "  $dist_dir/release-checksums.txt"
+echo "  $dist_dir/release-checksums.txt.sig"
 echo
-echo "create a GitHub release and upload both files, for example:"
-echo "  gh release create $version $archive $checksums --title $version --notes-file <notes.md>"
+echo "upload all four files to the matching GitHub release"

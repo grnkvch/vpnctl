@@ -7,7 +7,6 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
-	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -40,7 +39,10 @@ func (adapter gatewayInitWatchdogAdapter) RollbackNow(ctx context.Context, trans
 // NewSystemGatewayInitializer composes the production Linux adapters around
 // the read-only snapshot and verified bundle manifest supplied by the caller.
 // Host discovery remains outside so CLI dry-run and apply use one frozen view.
-func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostSnapshot, manifest model.ComponentManifest, binaryPath string) (*lifecycle.GatewayInitializer, error) {
+func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostSnapshot, release lifecycle.InitReleaseSource, binaryPath string) (*lifecycle.GatewayInitializer, error) {
+	if release == nil {
+		return nil, fmt.Errorf("create gateway initializer: local release bundle is required")
+	}
 	stateStore, err := store.NewStateStore(paths)
 	if err != nil {
 		return nil, fmt.Errorf("create gateway state store: %w", err)
@@ -90,7 +92,7 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
 	}
 	return lifecycle.NewGatewayInitializer(lifecycle.GatewayInitRuntime{
-		Paths: paths, Snapshot: snapshot, Manifest: manifest, BinaryPath: binary,
+		Paths: paths, Snapshot: snapshot, Release: release, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
 		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
 		PublicCertificate: publicCertificate,

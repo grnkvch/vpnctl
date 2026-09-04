@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -317,7 +319,26 @@ func buildSystemGatewayInitializer(ctx context.Context, paths store.Paths) (gate
 	if err != nil {
 		return nil, err
 	}
-	return controller.NewSystemGatewayInitializer(paths, snapshot, developmentComponentManifest(), linuxplatform.DefaultVPNCTLBinaryPath)
+	release, err := buildSystemInitRelease(paths, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return controller.NewSystemGatewayInitializer(paths, snapshot, release, linuxplatform.DefaultVPNCTLBinaryPath)
+}
+
+func buildSystemInitRelease(paths store.Paths, snapshot linuxplatform.HostSnapshot) (lifecycle.InitReleaseSource, error) {
+	publicKey, err := releasetrust.PublicKey()
+	if err != nil {
+		return nil, err
+	}
+	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, publicKey, lifecycle.ReleasePlatform{
+		OperatingSystem: snapshot.OS.ID, Version: snapshot.OS.VersionID, Architecture: snapshot.Architecture,
+	})
+	if err != nil {
+		return nil, err
+	}
+	bundlePath := filepath.Join(paths.Root, strings.TrimPrefix(lifecycle.ReleaseInstalledBundlePath, "/"))
+	return lifecycle.NewLocalInitReleaseSource(installer, bundlePath)
 }
 
 func developmentComponentManifest() model.ComponentManifest {

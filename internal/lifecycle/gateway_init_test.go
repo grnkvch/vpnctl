@@ -691,6 +691,10 @@ type gatewayInitHarness struct {
 }
 
 func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
+	return newGatewayInitHarnessWithRelease(t, nil)
+}
+
+func newGatewayInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *gatewayInitHarness {
 	t.Helper()
 	root := newGatewaySystemRoot(t)
 	paths, err := store.NewPaths(root)
@@ -718,7 +722,7 @@ func newGatewayInitHarness(t *testing.T) *gatewayInitHarness {
 	transports := &recordingGatewayTransports{events: events}
 	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, events: events}
 	runtime := GatewayInitRuntime{
-		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
+		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
 		PublicCertificate: publicCertificate,
 		HandshakeHosts:    handshakeHosts,

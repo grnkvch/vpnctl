@@ -213,7 +213,11 @@ func buildSystemNodeInitializer(ctx context.Context, paths store.Paths) (nodeIni
 	if err != nil {
 		return nil, err
 	}
-	return controller.NewSystemNodeInitializer(paths, snapshot, developmentComponentManifest(), linuxplatform.DefaultVPNCTLBinaryPath)
+	release, err := buildSystemInitRelease(paths, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return controller.NewSystemNodeInitializer(paths, snapshot, release, linuxplatform.DefaultVPNCTLBinaryPath)
 }
 
 func classifyNodeInitError(err error) (output.ExitCategory, string, string) {

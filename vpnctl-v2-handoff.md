@@ -404,6 +404,13 @@ vpnctl policy clear --client <name-or-id>
 - Release delivery использует один signed self-contained bundle: vpnctl binary,
   manifest и pinned third-party data-plane binaries для обеих roles. Init
   устанавливает из локального bundle только components выбранной role.
+- Универсальный v2 bootstrap скачивает standalone `vpnctl`, полный bundle,
+  canonical version/size/SHA-256 metadata и detached Ed25519 signature. Он
+  использует общий pinned release trust anchor, проверяет все четыре asset до
+  mutation, публикует binary последним и сохраняет bundle в
+  `/usr/local/lib/vpnctl/release/vpnctl.bundle`. Тот же installer принимает
+  явный локальный asset directory после `scp`; `init` read-only проверяет bundle
+  в plan и повторно проверяет/устанавливает только role components в apply.
 - Normal apply/repair не скачивают binaries из upstream repositories. Update
   получает новый цельный bundle и сохраняет предыдущий для rollback. Bundle
   можно скачать на другой машине, передать через `scp` и установить offline;

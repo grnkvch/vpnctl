@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
 const (
@@ -35,8 +36,6 @@ var (
 	ErrNoHandshakeHostCandidate   = errors.New("no handshake-host candidate passed validation")
 )
 
-const bundledHandshakeHostPublicKey = "tCAzV5kpvCXDidVel5aefc6NLYtrgyT5h0vppG_r8JM"
-
 //go:embed handshake_hosts.v1.json
 var bundledHandshakeHostEnvelope []byte
 
@@ -45,7 +44,7 @@ var bundledHandshakeHostEnvelope []byte
 // current development bundle. Task 14 will move the same verified artifacts
 // into the self-contained release archive without changing this boundary.
 func NewBundledHandshakeHostSelector() (*HandshakeHostSelector, error) {
-	publicKey, err := base64.RawURLEncoding.DecodeString(bundledHandshakeHostPublicKey)
+	publicKey, err := releasetrust.PublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("decode bundled handshake-host public key: %w", err)
 	}
@@ -53,7 +52,7 @@ func NewBundledHandshakeHostSelector() (*HandshakeHostSelector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewHandshakeHostSelector(bundledHandshakeHostEnvelope, ed25519.PublicKey(publicKey), prober, DefaultHandshakeHostProbeTimeout)
+	return NewHandshakeHostSelector(bundledHandshakeHostEnvelope, publicKey, prober, DefaultHandshakeHostProbeTimeout)
 }
 
 type HandshakeHostCandidate struct {

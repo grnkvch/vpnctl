@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
 func TestHandshakeHostBundleVerificationRejectsTamperAndAmbiguity(t *testing.T) {
@@ -66,11 +67,11 @@ func TestHandshakeHostBundleVerificationRejectsTamperAndAmbiguity(t *testing.T) 
 
 func TestBundledHandshakeHostListIsSignedAndVersioned(t *testing.T) {
 	t.Parallel()
-	publicKey, err := base64.RawURLEncoding.DecodeString(bundledHandshakeHostPublicKey)
+	publicKey, err := releasetrust.PublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, err := DecodeAndVerifyHandshakeHostBundle(bundledHandshakeHostEnvelope, ed25519.PublicKey(publicKey))
+	bundle, err := DecodeAndVerifyHandshakeHostBundle(bundledHandshakeHostEnvelope, publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
