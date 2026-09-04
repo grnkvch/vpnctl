@@ -46,6 +46,7 @@ type AuthorizationServer struct {
 	listen      func(string, string) (net.Listener, error)
 	admission   chan struct{}
 	observe     func(string, bool, bool, string)
+	ready       func()
 	rotationMu  sync.RWMutex
 	rotations   map[string]credentialRotationWindow
 	nextLeaseID uint64
@@ -224,6 +225,9 @@ func (server *AuthorizationServer) Serve(ctx context.Context) error {
 	if err := validateAuthorizationListener(listener); err != nil {
 		_ = listener.Close()
 		return err
+	}
+	if server.ready != nil {
+		server.ready()
 	}
 	_ = observability.EmitCode(ctx, observability.TunnelServiceStarted)
 

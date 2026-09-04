@@ -90,7 +90,7 @@ ProtectControlGroups=true
 			dependencies += "\nAfter=vpnctl-standard.service\nRequires=vpnctl-standard.service"
 		}
 		if mode == "gateway-tunnel-server" {
-			dependencies += " vpnctl-standard.service vpnctl-controller.service\nAfter=vpnctl-standard.service vpnctl-controller.service"
+			dependencies += " vpnctl-standard.service\nAfter=vpnctl-standard.service"
 		}
 		content := fmt.Sprintf(`[Unit]
 Description=vpnctl %s

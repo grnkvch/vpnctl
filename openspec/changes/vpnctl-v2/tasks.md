@@ -162,7 +162,7 @@
 - [x] 13.8 Implement explicit safe `--probe-url` GET and `SKIPPED` outcomes for unknown external dependencies; verify no body, credentials, hidden provider endpoint, or configuration mutation.
 - [x] 13.9 Implement persisted logging opt-ins for all scopes/levels with required duration capped at one hour, restart-safe expiry, journald default, optional `0600` bounded file, status, and disable; verify default-off and automatic expiry across restarts.
 - [x] 13.10 Apply source-level redaction to controller, transports, routing, DNS, tunnel, and ingress and disable hidden telemetry/update checks; verify canary-secret E2E scans of stdout, stderr, journal, files, state, and network captures.
-- [ ] 13.11 Verify controller outage/restart leaves all applied data-plane processes and configs working while management returns unavailable; add this as a repeatable fault-injection suite.
+- [x] 13.11 Verify controller outage/restart leaves all applied data-plane processes and configs working while management returns unavailable; add this as a repeatable fault-injection suite.
 
 ## 14. Delivery, Backup, Update, and Removal
 

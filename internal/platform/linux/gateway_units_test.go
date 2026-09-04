@@ -37,6 +37,9 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 		if !unit.Enable || !unit.Start {
 			t.Errorf("gateway unit %s is not enabled and started", unit.Name)
 		}
+		if unit.Name != "vpnctl-controller.service" && strings.Contains(content, "vpnctl-controller.service") {
+			t.Errorf("gateway data-plane unit %s is lifecycle-coupled to controller", unit.Name)
+		}
 		if unit.Name == "vpnctl-controller.service" {
 			for _, required := range []string{
 				"RuntimeDirectory=vpnctl", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes", "UMask=0077", "TimeoutStopSec=30s",
@@ -71,17 +74,14 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 		if unit.Name == "vpnctl-tunnel-server.service" {
 			for _, required := range []string{
 				"ExecStart=/usr/local/bin/vpnctl __service gateway-tunnel-server",
-				"After=vpnctl-standard.service vpnctl-controller.service",
-				"Wants=network-online.target vpnctl-standard.service vpnctl-controller.service",
+				"After=vpnctl-standard.service",
+				"Wants=network-online.target vpnctl-standard.service",
 				"UMask=0077", "RestrictAddressFamilies=AF_INET AF_UNIX", "LimitNOFILE=512",
 				"LockPersonality=true", "SystemCallArchitectures=native",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("gateway tunnel unit missing %q", required)
 				}
-			}
-			if strings.Contains(content, "Requires=vpnctl-controller.service") {
-				t.Error("gateway tunnel lifetime is coupled to controller restart")
 			}
 		}
 	}

@@ -39,7 +39,7 @@ var (
 		return routing.RunNodeDNSIntegrationService(ctx, paths, linuxplatform.OSProbeRunner{}, action)
 	}
 	runFRPServerService = func(ctx context.Context, paths store.Paths) error {
-		return tunnel.RunFRPServerService(ctx, paths, linuxplatform.OSProbeRunner{}, tunnel.OSFRPProcessRunner{})
+		return tunnel.RunGatewayTunnelService(ctx, paths, linuxplatform.OSProbeRunner{}, tunnel.OSFRPProcessRunner{})
 	}
 	runFRPClientService = func(ctx context.Context, paths store.Paths) error {
 		return tunnel.RunFRPClientService(ctx, paths, linuxplatform.OSProbeRunner{}, tunnel.OSFRPProcessRunner{})

@@ -1158,16 +1158,18 @@ https://PUBLIC_GATEWAY_IP/telegram/webhook
   выключен; несколько expose streams одного node проходят через одно
   persistent transport connection.
 - `frpc` configuration обновляется атомарно и применяется через loopback-only
-  dynamic reload. Gateway controller использует frp server-plugin hooks
-  `Login` и `NewProxy`, чтобы связать connection с immutable node ID и разрешить
-  только mappings, уже присутствующие в authoritative vpnctl state.
+  dynamic reload. Независимый gateway tunnel service запускает local-only frp
+  server-plugin hooks `Login`, `NewProxy` и `Ping` вместе с `frps`, чтобы
+  связать connection с immutable node ID, разрешить только mappings из
+  authoritative vpnctl state и сохранить действующие tunnel sessions при
+  остановке management controller.
 - Внутренний frp connection всегда использует TLS с проверкой gateway
   certificate, даже когда проходит внутри уже encrypted active transport. Для
   tunnel authentication каждый node получает отдельный случайный 256-bit
   symmetric token; встроенный общий frp server token не считается per-node
   identity boundary.
 - `frpc` передаёт immutable node ID и tunnel token в TLS-protected metadata.
-  Gateway controller проверяет их на `Login`, а на `NewProxy` дополнительно
+  Gateway tunnel authorizer проверяет их на `Login`, а на `NewProxy` дополнительно
   сверяет proxy name, type и loopback remote port с authoritative expose state.
   Отдельный frps process, OIDC provider или public plugin endpoint для каждого
   node не создаются.

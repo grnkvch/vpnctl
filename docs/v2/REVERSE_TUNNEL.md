@@ -77,7 +77,7 @@ run native `verify` after vpnctl's strict canonical validation.
 
 The gateway renders one `frps` configuration bound to its private node-overlay
 address on TCP `17000`. Proxy endpoints bind only to `127.0.0.1`, are limited
-to TCP `20000-29999`, and require the controller authorization hook on
+to TCP `20000-29999`, and require the tunnel-service authorization hook on
 `127.0.0.1:19091`. No dashboard, HTTP/HTTPS vhost, public proxy bind, KCP, QUIC,
 UDP proxy type, or shared provider token is enabled.
 
@@ -91,9 +91,9 @@ node routing layer sends that endpoint through the one manually active
 standard or restricted transport and blocks it when that transport is down.
 
 Both service units discard output by default, use `Restart=on-failure`, and
-are ordered after their standard/controller or active-routing dependencies
-without coupling their lifetime to controller restarts. Gateway firewall input admits TCP `17000` only from active node
-overlay identities; it is not a public fixed listener. The accepted runtime
+are ordered after their standard or active-routing dependencies without any
+controller lifecycle dependency. Gateway firewall input admits TCP `17000`
+only from active node overlay identities; it is not a public fixed listener. The accepted runtime
 gate reconfirmed one persistent connection for two exposes and 12 concurrent
 streams per expose, TLS refusal before credential disclosure, dynamic mapping,
 8-second reconnect, 2-second revoke, and a restricted steady state with no
@@ -131,13 +131,16 @@ credential generation.
 
 ## Login and mapping authorization
 
-The gateway controller owns the frp server-plugin endpoint in addition to its
-root-only Unix management socket, while `frps` remains an independent service.
-The plugin listener is fixed to IPv4 loopback `127.0.0.1:19091`; it cannot be
-configured to a wildcard or public address. Controller systemd confinement
-allows only `AF_INET` and `AF_UNIX`. If either controller listener fails, the
-controller process exits and `frps` fails closed for new plugin decisions; it
-does not replace the authorizer with a cached or permissive decision.
+The independently supervised gateway tunnel service owns both the frp
+server-plugin endpoint and the `frps` child process. It starts `frps` only
+after the authorizer is listening, and failure of either side stops the pair
+so systemd can restart one coherent fail-closed unit. The plugin listener is
+fixed to IPv4 loopback `127.0.0.1:19091`; it cannot be configured to a wildcard
+or public address. Tunnel-service confinement allows only `AF_INET` and
+`AF_UNIX`. The separate gateway controller owns only management. Its outage or
+restart cannot stop the authorizer, `frps`, an established session, or its
+mappings; state/credential read failure still rejects the next decision
+without substituting a cached or permissive result.
 
 Only versioned frp `0.1.0` `Login`, `NewProxy`, and `Ping` requests at the matching
 `/handler?version=0.1.0&op=<operation>` endpoint are accepted. The HTTP boundary
@@ -221,8 +224,9 @@ Commit makes the candidate generation authoritative and causes the previous
 generation's next Ping/Login to fail. Rollback or finalization removes the
 lease; an uncommitted candidate can no longer connect. The lease holds no
 credential or secret-store reference, is safe against stale removal, and
-vanishes on controller restart. Thus a restart can reduce the rotation overlap
-but cannot broaden authorization.
+vanishes on tunnel-service restart. Thus an authorizer restart can reduce the
+rotation overlap but cannot broaden authorization; a management controller
+restart does not affect the lease.
 
 ## Atomic node mapping configuration
 

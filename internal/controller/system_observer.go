@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
-	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 const systemObservationTimeout = 3 * time.Second
@@ -127,63 +125,5 @@ func RunSystemController(ctx context.Context, paths store.Paths) error {
 	if err != nil {
 		return err
 	}
-	state, err := store.NewStateStore(paths)
-	if err != nil {
-		return fmt.Errorf("create tunnel authorization state store: %w", err)
-	}
-	secrets, err := store.NewSecretStore(paths)
-	if err != nil {
-		return fmt.Errorf("create tunnel authorization secret store: %w", err)
-	}
-	credentials, err := tunnel.NewStoreCredentialSource(secrets)
-	if err != nil {
-		return err
-	}
-	authorizer, err := tunnel.NewAuthorizationServer(state, credentials)
-	if err != nil {
-		return err
-	}
-	return runSystemControllerServices(ctx, controller.Serve, authorizer.Serve)
-}
-
-type systemControllerService func(context.Context) error
-
-type systemControllerServiceResult struct {
-	name string
-	err  error
-}
-
-func runSystemControllerServices(ctx context.Context, controllerService, authorizationService systemControllerService) error {
-	if ctx == nil || controllerService == nil || authorizationService == nil {
-		return fmt.Errorf("system controller services are incomplete")
-	}
-	serviceContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	results := make(chan systemControllerServiceResult, 2)
-	services := []struct {
-		name string
-		run  systemControllerService
-	}{
-		{name: "gateway controller", run: controllerService},
-		{name: "tunnel authorization", run: authorizationService},
-	}
-	for _, service := range services {
-		service := service
-		go func() {
-			results <- systemControllerServiceResult{name: service.name, err: service.run(serviceContext)}
-		}()
-	}
-	first := <-results
-	parentStopped := ctx.Err() != nil
-	cancel()
-	second := <-results
-	for _, result := range []systemControllerServiceResult{first, second} {
-		if result.err != nil && !errors.Is(result.err, context.Canceled) {
-			return fmt.Errorf("%s failed: %w", result.name, result.err)
-		}
-	}
-	if !parentStopped {
-		return fmt.Errorf("%s stopped unexpectedly", first.name)
-	}
-	return nil
+	return controller.Serve(ctx)
 }

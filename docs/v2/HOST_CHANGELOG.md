@@ -2,6 +2,70 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — controller-outage data-plane independence
+
+### Planned reversible validation
+
+- Task 13.11 is source-only. The gateway Unix-socket controller will own only
+  management admission, observation, and authoritative mutations. The passive
+  frp Login/NewProxy/Ping authorizer will move from the controller process into
+  the independently supervised tunnel-server service so controller failure
+  cannot remove heartbeat authorization from an already applied reverse
+  tunnel. It will continue reading the same root-only authoritative state and
+  credentials and will remain fail-closed when those sources are unavailable.
+- A repeatable fault-injection suite will run real temporary management Unix
+  sockets alongside independently controlled loopback forwarding fixtures for
+  applied gateway data-plane components. It will capture process identities,
+  config bytes/hashes, forwarding counters, and authoritative generation;
+  stop the controller; require management to return the stable unavailable
+  category while forwarding continues; restart the controller; and require all
+  captured data-plane values to remain unchanged.
+- Unit-contract checks will forbid controller lifecycle dependencies that can
+  stop/restart gateway data-plane units and will prove controller startup uses
+  passive `systemctl show` only. Test processes, sockets, configs, and state
+  exist only below `t.TempDir()` or Go-owned temporary paths and are removed by
+  cleanup. No real systemd unit, service, host/VM process, network rule, public
+  endpoint, provider, credential, application, or gateway/node state is
+  changed; repository rollback is limited to the task 13.11 commit.
+- Full-suite validation found the host data volume at `100%` with `149 MiB`
+  available; Go linking and test temporary-directory creation stopped with
+  `no space left on device`. The only planned host cleanup is `go clean
+  -cache`, scoped by the Go tool to its disposable build cache at
+  `/Users/vgrinkevich/Library/Caches/go-build` (measured `2.8 GiB`). It does
+  not touch the module cache, repository, artifacts, VMs, services, or user
+  sources. There is no state rollback: Go recreates required cache entries on
+  subsequent builds.
+
+### Result
+
+- The controller entrypoint is management-only. The local frp
+  Login/NewProxy/Ping authorizer now starts first and remains co-supervised with
+  the `frps` child inside `vpnctl-tunnel-server.service`; either tunnel-side
+  failure stops the pair for systemd restart, while controller failure has no
+  tunnel lifecycle edge. Every rendered gateway data-plane unit rejects a
+  `vpnctl-controller.service` dependency.
+- The repeatable fault suite passed five consecutive ordinary and three
+  race-detector runs. Across baseline, controller outage, and controller
+  restart, all six independently owned standard, restricted, routing, DNS,
+  tunnel, and ingress forwarding processes answered probes with unchanged
+  PIDs and exact config bytes/SHA-256. Management returned exit category
+  `gateway_unavailable` only while the root-only Unix socket was absent, then
+  returned successfully after restart. Authoritative generation `4` and its
+  empty logging set remained unchanged; controller startup performed passive
+  observation only.
+- The first full suite stopped before semantic execution because the host had
+  only `149 MiB` free. The documented `go clean -cache` removed only the
+  disposable `2.8 GiB` Go build cache and raised available space to `4.4 GiB`;
+  validation recreated `497 MiB` of cache and left `4.2 GiB` available. The
+  retried full ordinary and race-detector suites, `go vet ./...`, dependency
+  listing, Bash syntax, JSON parsing, formatting/diff checks, and strict
+  OpenSpec validation all passed at `127/156`.
+- No systemd unit, service, VM, firewall/routing rule, public endpoint,
+  credential, provider, or deployed gateway/node state was changed. Temporary
+  subprocesses, sockets, configs, and authoritative state were removed by test
+  cleanup. Source rollback is the single task 13.11 commit; the Go build cache
+  is regenerated automatically and has no stateful rollback requirement.
+
 ## 2026-09-04 — source-redacted component logging and no hidden calls
 
 ### Planned reversible validation
