@@ -224,8 +224,16 @@ func buildSystemBackupper(_ context.Context, paths store.Paths) (backupManager, 
 	if err != nil {
 		return nil, err
 	}
+	secretStore, err := store.NewSecretStore(paths)
+	if err != nil {
+		return nil, err
+	}
+	payloads, err := lifecycle.NewGatewayBackupPayloadSource(paths, secretStore)
+	if err != nil {
+		return nil, err
+	}
 	return lifecycle.NewGatewayBackupper(lifecycle.GatewayBackupRuntime{
-		State: stateStore, Payloads: lifecycle.StateBackupPayloadSource{}, BackupsDir: paths.BackupsDir,
+		State: stateStore, Payloads: payloads, BackupsDir: paths.BackupsDir,
 	})
 }
 

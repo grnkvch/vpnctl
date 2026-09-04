@@ -20,7 +20,7 @@ import (
 )
 
 func TestGatewayBackupWritesAtomicEncryptedArchiveAndMetadata(t *testing.T) {
-	backupper, state, backupDir, now := newGatewayBackupFixture(t, StateBackupPayloadSource{})
+	backupper, state, backupDir, now := newGatewayBackupFixture(t, stateBackupPayloadSource{})
 	plan, err := backupper.Plan(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestGatewayBackupWritesAtomicEncryptedArchiveAndMetadata(t *testing.T) {
 }
 
 func TestGatewayBackupRefusesExistingTargetAtPlanAndPublish(t *testing.T) {
-	backupper, state, backupDir, _ := newGatewayBackupFixture(t, StateBackupPayloadSource{})
+	backupper, state, backupDir, _ := newGatewayBackupFixture(t, stateBackupPayloadSource{})
 	target := filepath.Join(backupDir, "custom.backup")
 	if err := os.WriteFile(target, []byte("foreign"), 0o640); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestGatewayBackupRemovesPublishedArchiveWhenMetadataCommitFails(t *testing.
 		t.Fatal(err)
 	}
 	backupper, err := newGatewayBackupper(GatewayBackupRuntime{
-		State: state, Payloads: StateBackupPayloadSource{}, BackupsDir: backupDir,
+		State: state, Payloads: stateBackupPayloadSource{}, BackupsDir: backupDir,
 		Now:     func() time.Time { return time.Date(2026, 9, 4, 14, 5, 6, 0, time.UTC) },
 		NewUUID: func() (string, error) { return "92000000-0000-4000-8000-000000000001", nil },
 		Random:  bytes.NewReader(bytes.Repeat([]byte{0x41}, 64)),
@@ -150,7 +150,7 @@ func TestGatewayBackupRemovesPublishedArchiveWhenMetadataCommitFails(t *testing.
 }
 
 func TestGatewayBackupRejectsStateChangeAndNonGatewayBeforeWriting(t *testing.T) {
-	backupper, state, backupDir, _ := newGatewayBackupFixture(t, StateBackupPayloadSource{})
+	backupper, state, backupDir, _ := newGatewayBackupFixture(t, stateBackupPayloadSource{})
 	plan, err := backupper.Plan(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestGatewayBackupRejectsStateChangeAndNonGatewayBeforeWriting(t *testing.T)
 		t.Fatal(err)
 	}
 	nodeBackupper, err := newGatewayBackupper(GatewayBackupRuntime{
-		State: node.state, Payloads: StateBackupPayloadSource{}, BackupsDir: nodeDir,
+		State: node.state, Payloads: stateBackupPayloadSource{}, BackupsDir: nodeDir,
 	}, fastBackupArchiveCodec())
 	if err != nil {
 		t.Fatal(err)

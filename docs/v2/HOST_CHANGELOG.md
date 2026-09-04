@@ -2,6 +2,58 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — structural gateway backup allowlist
+
+### Planned reversible implementation
+
+- Task 14.8 is source-only on this development host. The production backup
+  payload will expand from authoritative state to an explicit structural
+  allowlist: exact state-referenced gateway identities/certificates,
+  gateway-side node trust and shared credentials, active client transport
+  credentials, managed client profile/metadata pairs, the public certificate
+  export, and regular configured preset YAML files.
+- Secret inclusion will be derived from validated gateway ownership and exact
+  generation-scoped references. Node-owned private control and WireGuard keys
+  will never be selected; arbitrary files under the secret, export, config, or
+  state trees will not be discovered recursively. All selected files will be
+  snapshotted with no-follow regular-file checks, bounded sizes, deterministic
+  archive names, hashes, and duplicate-path rejection before encryption.
+- Archive-content tests will decrypt test backups and compare the complete
+  payload/manifest. Canary node-private keys and application files placed next
+  to managed data will be scanned for both path and unique byte markers and
+  must be absent; missing or unsafe selected material must fail before archive
+  publication or authoritative metadata mutation.
+- No production archive, secret, profile, preset, state, binary, package,
+  systemd unit, service, listener, firewall, route, gateway, node, or external
+  endpoint will change. Tests use temporary roots only; repository rollback is
+  limited to the future task 14.8 commit.
+
+### Result
+
+- Replaced the production state-only payload source with a structural gateway
+  source. It derives exact generation-scoped secret references from validated
+  gateway state and includes gateway listener/enrollment/certificate keys,
+  active client credentials, and only the gateway-side public/shared material
+  required to preserve trust with active private nodes.
+- Added deterministic inclusion of top-level preset YAML, the public gateway
+  certificate export, and exact state-derived client profile/metadata paths.
+  Selected files are bounded, opened without following symlinks, hashed before
+  encryption, streamed without whole-file buffering, and rejected if their
+  inode, mode, size, content, directory membership, or prior absence changes
+  between planning and archive creation.
+- Added decrypted archive/manifest tests with unique canaries for node control
+  and WireGuard private keys, an unrelated secret, client export, non-preset
+  config, and application state. All are absent by exact path and byte scan;
+  substituted references, symlinks, source drift, and newly appeared managed
+  paths fail closed. Revoked node/client records remain backup-compatible after
+  their no-longer-required credentials are destroyed.
+- Targeted ordinary and race tests, the complete ordinary and race suites,
+  `go vet`, shell syntax checks, JSON parsing, `git diff --check`, and strict
+  OpenSpec validation passed. Full socket-based suites ran outside the
+  development sandbox because it forbids local binds. No production host
+  resource was changed; only repository files and `/tmp/vpnctl-go-cache` were
+  used.
+
 ## 2026-09-04 — authenticated streaming gateway backup
 
 ### Planned reversible implementation
