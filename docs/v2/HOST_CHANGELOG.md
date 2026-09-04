@@ -2,6 +2,61 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — planned v1 migration compatibility and impact report
+
+### Planned reversible implementation
+
+- Task 15.3 is read-only/source-only on this development host. The impact
+  analyzer will consume the task-15.1 inspection and the same explicit target
+  facts as conversion, but it will not create a staging root, write v1/v2
+  state, or invoke services, firewall, network, DNS, swap, or remote hosts.
+- The deterministic report will enumerate every known transformed or dropped
+  server, client, ruleset, generated-artifact, and UFW field; distinguish
+  automatic compatible mappings from operator-review blockers; and group
+  mandatory Clash/WireGuard re-export reasons by stable client mapping.
+- Endpoint/standard-port changes, unverified legacy profile bytes, and
+  unresolved Clash preset provenance will require explicit client re-export.
+  Unknown UFW ownership, missing retained credentials, invalid v2 identities
+  or names, and any unclassified conversion preflight failure will block
+  migration rather than be silently omitted.
+- Tests will use only temporary synthetic v1 fixtures and no staging target;
+  source byte/mode/time snapshots will prove no mutation. Rollback is limited
+  to reverting the future task 15.3 commit.
+
+### Result
+
+- Added a deterministic read-only migration impact report with explicit
+  `compatible`, `requires-action`, and `blocked` outcomes. It exposes stable
+  gateway/client identity mappings, whether the complete migration may start,
+  every known source/target field transformation or drop, and per-client
+  required re-exports with format, reason codes, and copy-ready commands.
+- The report covers gateway/client UUID mapping, gateway display-name loss,
+  public-endpoint normalization/change, fixed interface/port adoption,
+  canonical subnet and empty-DNS normalization, incompatible DNS, client tags
+  and revocation-reason loss, deleted-timestamp synthesis, client name/platform
+  and duplicate-name conflicts, ruleset display-name/case/schema conflicts,
+  legacy-artifact relocation, applied WireGuard/sysctl replacement, and the
+  complete inspected UFW rule set.
+- Exact legacy Clash rendering identifies a preset only when one ruleset is an
+  unambiguous byte match; exact WireGuard and Clash renderings remain usable
+  when endpoint/port are unchanged. Endpoint or fixed-port changes, modified
+  profile bytes, and unresolved preset provenance produce explicit Clash and/or
+  WireGuard re-export actions. Unknown UFW/TCP ownership, missing retained
+  keys, incompatible client/preset values, or residual conversion-validation
+  failure block migration before any mutation.
+- Relaxed the pure converter's unnecessary dependency on a v1 port of 51820:
+  nonstandard v1 listeners now stage the fixed v2 transport while the impact
+  report mandates re-export. Noncanonical valid v1 client prefixes normalize
+  without changing addresses, and an empty v1 DNS list becomes the documented
+  gateway default; both transformations are reported.
+- Tests prove the exact complete-fixture impact code set, no source/staging
+  mutation, secret/path-safe projections, compatible exact profiles,
+  unverified profile and ambiguous-preset actions, fixed-port conversion,
+  unknown UFW ownership, missing-key refusal, and invalid v2 client-name
+  refusal. Full `go test ./...`, focused lifecycle race tests, `go vet ./...`,
+  formatting, and `git diff --check` passed; no production host artifact was
+  read or changed.
+
 ## 2026-09-04 — planned deterministic v1-to-v2 staged conversion
 
 ### Planned reversible implementation

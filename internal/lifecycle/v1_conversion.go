@@ -214,12 +214,6 @@ func buildV1ConversionPlan(input V1ConversionInput) (v1ConversionPlan, error) {
 	if server == nil || len(inspection.privateKeys["server"]) == 0 {
 		return v1ConversionPlan{}, fmt.Errorf("%w: validated server state and private key are required", ErrV1ConversionNotReady)
 	}
-	if server.WireGuardSubnet != model.DefaultClientCIDR {
-		return v1ConversionPlan{}, fmt.Errorf("%w: v1 client subnet %s is not the v2 migration subnet %s", ErrV1ConversionNotReady, server.WireGuardSubnet, model.DefaultClientCIDR)
-	}
-	if server.WireGuardPort != transport.StandardUDPPort {
-		return v1ConversionPlan{}, fmt.Errorf("%w: v1 WireGuard port %d is not the v2 standard port %d", ErrV1ConversionNotReady, server.WireGuardPort, transport.StandardUDPPort)
-	}
 	if err := validateV1ConversionPublicIPv4(input.PublicIPv4); err != nil {
 		return v1ConversionPlan{}, err
 	}
@@ -229,14 +223,22 @@ func buildV1ConversionPlan(input V1ConversionInput) (v1ConversionPlan, error) {
 	if input.NodeCIDR == "" {
 		input.NodeCIDR = model.DefaultNodeCIDR
 	}
+	clientPrefix, err := netip.ParsePrefix(server.WireGuardSubnet)
+	if err != nil || !clientPrefix.Addr().Is4() {
+		return v1ConversionPlan{}, fmt.Errorf("%w: v1 client subnet cannot be normalized", ErrV1ConversionNotReady)
+	}
+	clientCIDR := clientPrefix.Masked().String()
 
 	gateway, clientIDs := mapV1Identities(server.ID, inspection.state.Clients)
 	network := linuxplatform.GatewayNetworkPlan{
-		PublicIPv4: input.PublicIPv4, ClientCIDR: server.WireGuardSubnet,
+		PublicIPv4: input.PublicIPv4, ClientCIDR: clientCIDR,
 		NodeCIDR: input.NodeCIDR, ExternalInterface: server.ExternalInterface,
 	}
 	candidate := initialGatewayState(gateway.TargetID, input.ConvertedAt, network, input.SSHPort, input.Components, input.HandshakeHost)
 	candidate.DNS.IPv4 = append([]string(nil), server.DNSServers...)
+	if len(candidate.DNS.IPv4) == 0 {
+		candidate.DNS.IPv4 = model.DefaultGatewayDNSUpstreams()
+	}
 
 	presetSources := make(map[string][]byte, len(inspection.rulesets))
 	presets := make([]model.Preset, 0, len(inspection.rulesets))
@@ -302,7 +304,7 @@ func buildV1ConversionPlan(input V1ConversionInput) (v1ConversionPlan, error) {
 		client := model.Client{
 			SchemaVersion: model.ResourceSchemaVersion, ID: mapped.TargetID, Name: source.Name, Platform: source.Platform,
 			Lifecycle: lifecycle, OverlayIPv4: source.AssignedIP, CredentialGeneration: 1,
-			AssignedPresets: append([]string(nil), assigned...), ActiveTransport: model.TransportStandard,
+			AssignedPresets: append([]string{}, assigned...), ActiveTransport: model.TransportStandard,
 			CreatedAt: source.CreatedAt.UTC(), RevokedAt: revokedAt,
 		}
 		if err := client.Validate(); err != nil {
@@ -333,7 +335,7 @@ func buildV1ConversionPlan(input V1ConversionInput) (v1ConversionPlan, error) {
 		}
 		clientResult = append(clientResult, V1ClientConversion{
 			V1IdentityMapping: mapped, Name: client.Name, Lifecycle: client.Lifecycle,
-			OverlayIPv4: client.OverlayIPv4, AssignedPresets: append([]string(nil), client.AssignedPresets...),
+			OverlayIPv4: client.OverlayIPv4, AssignedPresets: append([]string{}, client.AssignedPresets...),
 		})
 	}
 	if err := candidate.Validate(); err != nil {
@@ -452,10 +454,18 @@ func renderV1PresetSource(ruleset v1state.Ruleset) ([]byte, error) {
 }
 
 func detectV1ClientPreset(inspection *V1Inspection, client v1state.ClientState) string {
+	matches := matchingV1ClientPresets(inspection, client)
+	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0]
+}
+
+func matchingV1ClientPresets(inspection *V1Inspection, client v1state.ClientState) []string {
 	privateKey := inspection.privateKeys["client:"+client.ID]
 	profile := inspection.generated[filepath.ToSlash(filepath.Join("generated", "delivery", client.ID+".clash.yaml"))]
 	if len(privateKey) == 0 || len(profile) == 0 || inspection.state.Server == nil {
-		return ""
+		return nil
 	}
 	dns := append([]string(nil), inspection.state.Server.DNSServers...)
 	if len(dns) == 0 {
@@ -472,10 +482,8 @@ func detectV1ClientPreset(inspection *V1Inspection, client v1state.ClientState) 
 			matches = append(matches, id)
 		}
 	}
-	if len(matches) != 1 {
-		return ""
-	}
-	return matches[0]
+	sort.Strings(matches)
+	return matches
 }
 
 func planV1Artifacts(inspection *V1Inspection, mappings map[string]V1IdentityMapping) (map[string][]byte, []V1ArtifactConversion, error) {
