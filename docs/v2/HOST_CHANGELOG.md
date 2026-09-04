@@ -2,6 +2,43 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-04 — update restart isolation and forwarding continuity
+
+### Planned reversible validation
+
+- Task 14.6 is source-only on this development host. Tests will build signed
+  release pairs whose only changed artifact is vpnctl and assert exact
+  per-unit restart counters: gateway management may stop/start once, while
+  unchanged healthy frp, Mihomo, WireGuard, routing guard, and nginx units are
+  never restarted.
+- A forwarding probe owned by the test runtime will remain active before,
+  during, and after the controller-only update, demonstrating that management
+  quiescence does not couple to the data plane. Separate injected component
+  health failures will verify that only components actually activated by the
+  attempt are rolled back in reverse order and that untouched services retain
+  zero restart/rollback counts.
+- No production binary, package, systemd unit, service, state, snapshot,
+  release path, VM, listener, firewall, route, public endpoint, gateway, or
+  node will change. All signed bundles, counters, probes, services, states, and
+  snapshots are test-only and live in temporary roots; repository rollback is
+  limited to the future task 14.6 commit.
+
+### Result
+
+- Added a signed controller-only release fixture and an update continuity
+  probe. The update stops/starts gateway management once, observes forwarding
+  before and throughout that management outage, and records zero restart or
+  rollback calls for unchanged transport, routing, DNS, tunnel, and ingress
+  services.
+- Added exact service counters for injected frp and Mihomo health failures on
+  a node. A failed frp activation rolls back only the tunnel client; a later
+  Mihomo failure rolls back the routing service and the previously activated
+  tunnel client, while all untouched services retain zero counts.
+- Targeted lifecycle tests, the complete Go suite, race suite, static checks,
+  shell syntax checks, JSON validation, and strict OpenSpec validation are the
+  acceptance gates. Validation remains source-only and created no host state
+  outside ordinary build caches.
+
 ## 2026-09-04 — persistent update snapshot and manual rollback
 
 ### Planned reversible validation

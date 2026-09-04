@@ -134,6 +134,14 @@ func updateReleaseAssetsWithInstalled(t *testing.T, privateKey ed25519.PrivateKe
 		"vpnctl": []byte("vpnctl-" + marker), "frpc": []byte("frpc-" + marker),
 		"frps": []byte("frps-" + marker), "mihomo": []byte("mihomo-" + marker),
 	}
+	assets, manifest := updateReleaseAssetsForInstalled(t, privateKey, version, installed, map[string]string{
+		"frp": "0.69.0-" + marker, "mihomo": "v1.19.30-" + marker,
+	})
+	return assets, manifest, installed
+}
+
+func updateReleaseAssetsForInstalled(t *testing.T, privateKey ed25519.PrivateKey, version string, installed map[string][]byte, componentVersions map[string]string) (map[string][]byte, ReleaseManifest) {
+	t.Helper()
 	frpArchive := testReleaseFRPArchive(t, installed["frpc"], installed["frps"])
 	mihomoArchive := testReleaseGzip(t, installed["mihomo"])
 	manifest, _ := releaseManifestFixture()
@@ -152,13 +160,10 @@ func updateReleaseAssetsWithInstalled(t *testing.T, privateKey ed25519.PrivateKe
 				continue
 			}
 			component.SHA256 = artifact.SHA256
-			switch component.Name {
-			case "vpnctl":
+			if component.Name == "vpnctl" {
 				component.Version = version
-			case "frp":
-				component.Version = "0.69.0-" + marker
-			case "mihomo":
-				component.Version = "v1.19.30-" + marker
+			} else if componentVersion := componentVersions[component.Name]; componentVersion != "" {
+				component.Version = componentVersion
 			}
 		}
 	}
@@ -176,7 +181,7 @@ func updateReleaseAssetsWithInstalled(t *testing.T, privateKey ed25519.PrivateKe
 		ReleaseBinaryAsset: installed["vpnctl"], ReleaseBundleAsset: bundle.Bytes(),
 		ReleaseChecksumsAsset: encoded, ReleaseChecksumsSignatureAsset: signature,
 	}
-	return assets, manifest, installed
+	return assets, manifest
 }
 
 func writeStagedUpdateRelease(t *testing.T, assets map[string][]byte, manifest ReleaseManifest) *StagedUpdateRelease {

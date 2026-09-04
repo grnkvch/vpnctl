@@ -260,6 +260,96 @@ func TestUpdaterRejectsInstalledDriftAfterPlanningBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestControllerOnlyUpdateKeepsForwardingAndNeverRestartsDataPlane(t *testing.T) {
+	fixture := newUpdaterFixture(t, model.RoleGateway, "new")
+	configureControllerOnlyUpdate(t, &fixture)
+	host := newContinuityUpdateHost()
+	fixture.updater.runtime.Host = host
+	plan, err := fixture.updater.Plan(context.Background(), "v2.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range plan.Components {
+		if component.Name != "vpnctl" && (component.FileChanged || len(component.AffectedServices) != 0) {
+			t.Fatalf("controller-only plan changes data plane: %+v", component)
+		}
+	}
+	if _, err := fixture.updater.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	wantRestarts := map[string]int{"vpnctl-controller.service": 1}
+	if !host.forwarding || host.forwardingChecks < 4 || host.forwardingWhileQuiesced < 2 || !reflect.DeepEqual(host.restarts, wantRestarts) || len(host.rollbacks) != 0 {
+		t.Fatalf("controller-only continuity forwarding=%t checks=%d while-quiesced=%d restarts=%v rollbacks=%v calls=%v", host.forwarding, host.forwardingChecks, host.forwardingWhileQuiesced, host.restarts, host.rollbacks, host.calls)
+	}
+	for _, dataPlane := range []string{
+		"vpnctl-standard.service", "vpnctl-restricted.service", "vpnctl-dns.service",
+		"vpnctl-tunnel-server.service", "vpnctl-routing.service", "vpnctl-tunnel-client.service", "nginx.service",
+	} {
+		if host.restarts[dataPlane] != 0 || host.rollbacks[dataPlane] != 0 {
+			t.Fatalf("unchanged data-plane service %s was restarted or rolled back", dataPlane)
+		}
+	}
+	want := []string{"preflight:gateway", "quiesce:gateway", "activate:vpnctl", "resume:gateway"}
+	if !reflect.DeepEqual(host.calls, want) {
+		t.Fatalf("controller-only calls=%v want=%v", host.calls, want)
+	}
+}
+
+func TestChangedComponentRollbackCountersExcludeUntouchedUnits(t *testing.T) {
+	for _, test := range []struct {
+		failed        string
+		wantRestarts  map[string]int
+		wantRollbacks map[string]int
+	}{
+		{
+			failed:        "frp",
+			wantRestarts:  map[string]int{"vpnctl-tunnel-client.service": 1},
+			wantRollbacks: map[string]int{"vpnctl-tunnel-client.service": 1},
+		},
+		{
+			failed:        "mihomo",
+			wantRestarts:  map[string]int{"vpnctl-tunnel-client.service": 1, "vpnctl-routing.service": 1},
+			wantRollbacks: map[string]int{"vpnctl-tunnel-client.service": 1, "vpnctl-routing.service": 1},
+		},
+	} {
+		t.Run(test.failed, func(t *testing.T) {
+			fixture := newUpdaterFixture(t, model.RoleNode, "new")
+			host := newContinuityUpdateHost()
+			host.failHealth = test.failed
+			fixture.updater.runtime.Host = host
+			plan, err := fixture.updater.Plan(context.Background(), "v2.1.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.updater.Apply(context.Background(), plan); !errors.Is(err, ErrUpdateHealth) {
+				t.Fatalf("health failure = %v", err)
+			}
+			if !reflect.DeepEqual(host.restarts, test.wantRestarts) || !reflect.DeepEqual(host.rollbacks, test.wantRollbacks) {
+				t.Fatalf("component counters restarts=%v rollbacks=%v", host.restarts, host.rollbacks)
+			}
+			for _, untouched := range []string{"nginx.service", "vpnctl-controller.service", "vpnctl-restricted.service"} {
+				if host.restarts[untouched] != 0 || host.rollbacks[untouched] != 0 {
+					t.Fatalf("untouched service %s was restarted or rolled back", untouched)
+				}
+			}
+		})
+	}
+}
+
+func configureControllerOnlyUpdate(t *testing.T, fixture *updaterFixture) {
+	t.Helper()
+	installed := map[string][]byte{
+		"vpnctl": []byte("vpnctl-controller-only"), "frpc": []byte("frpc-old"),
+		"frps": []byte("frps-old"), "mihomo": []byte("mihomo-old"),
+	}
+	assets, manifest := updateReleaseAssetsForInstalled(t, fixture.signingKey, "v2.1.0", installed, map[string]string{
+		"frp": "0.69.0-old", "mihomo": "v1.19.30-old",
+	})
+	fixture.source.stage = writeStagedUpdateRelease(t, assets, manifest)
+	fixture.targetAssets = assets
+	fixture.targetInstalled = installed
+}
+
 func TestUpdateMigrationPreviewKeepsBinaryOnlyRollbackAvailable(t *testing.T) {
 	state := model.State{SchemaVersion: model.StateSchemaVersion}
 	target := model.ComponentManifest{
@@ -340,6 +430,7 @@ type updaterFixture struct {
 	targetAssets    map[string][]byte
 	targetInstalled map[string][]byte
 	snapshots       *FilesystemUpdateSnapshotStore
+	signingKey      ed25519.PrivateKey
 }
 
 func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updaterFixture {
@@ -397,7 +488,7 @@ func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updat
 	}
 	return updaterFixture{
 		root: root, updater: updater, state: stateStore, source: source, fleet: fleet, host: host,
-		targetAssets: targetAssets, targetInstalled: targetInstalled, snapshots: snapshots,
+		targetAssets: targetAssets, targetInstalled: targetInstalled, snapshots: snapshots, signingKey: privateKey,
 	}
 }
 
@@ -446,6 +537,73 @@ type recordingUpdateHost struct {
 	calls         []string
 	failHealth    string
 	remoteUpdates int
+}
+
+type continuityUpdateHost struct {
+	*recordingUpdateHost
+	forwarding              bool
+	forwardingChecks        int
+	managementDown          bool
+	forwardingWhileQuiesced int
+	restarts                map[string]int
+	rollbacks               map[string]int
+}
+
+func newContinuityUpdateHost() *continuityUpdateHost {
+	return &continuityUpdateHost{
+		recordingUpdateHost: &recordingUpdateHost{}, forwarding: true,
+		restarts: map[string]int{}, rollbacks: map[string]int{},
+	}
+}
+
+func (host *continuityUpdateHost) observeForwarding() {
+	if host.forwarding {
+		host.forwardingChecks++
+		if host.managementDown {
+			host.forwardingWhileQuiesced++
+		}
+	}
+}
+
+func (host *continuityUpdateHost) Preflight(ctx context.Context, role model.Role, manifest ReleaseManifest) ([]UpdatePackageCheck, error) {
+	host.observeForwarding()
+	return host.recordingUpdateHost.Preflight(ctx, role, manifest)
+}
+
+func (host *continuityUpdateHost) QuiesceManagement(ctx context.Context, role model.Role) error {
+	host.observeForwarding()
+	if err := host.recordingUpdateHost.QuiesceManagement(ctx, role); err != nil {
+		return err
+	}
+	host.managementDown = role == model.RoleGateway
+	host.observeForwarding()
+	return nil
+}
+
+func (host *continuityUpdateHost) ActivateAndHealth(ctx context.Context, role model.Role, change UpdateComponentChange) error {
+	host.observeForwarding()
+	for _, service := range change.AffectedServices {
+		host.restarts[service]++
+	}
+	return host.recordingUpdateHost.ActivateAndHealth(ctx, role, change)
+}
+
+func (host *continuityUpdateHost) RollbackAndHealth(ctx context.Context, role model.Role, change UpdateComponentChange) error {
+	host.observeForwarding()
+	for _, service := range change.AffectedServices {
+		host.rollbacks[service]++
+	}
+	return host.recordingUpdateHost.RollbackAndHealth(ctx, role, change)
+}
+
+func (host *continuityUpdateHost) ResumeManagement(ctx context.Context, role model.Role) error {
+	host.observeForwarding()
+	if err := host.recordingUpdateHost.ResumeManagement(ctx, role); err != nil {
+		return err
+	}
+	host.managementDown = false
+	host.observeForwarding()
+	return nil
 }
 
 func (host *recordingUpdateHost) Preflight(_ context.Context, role model.Role, manifest ReleaseManifest) ([]UpdatePackageCheck, error) {
