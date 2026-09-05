@@ -99,9 +99,15 @@ def run_armed_probe(args: argparse.Namespace) -> dict[str, object]:
     if trigger_file.exists() or ready_file.exists():
         raise FileExistsError("armed probe synchronization file already exists")
     context = ssl.create_default_context(cafile=args.certificate)
-    connection = http.client.HTTPSConnection(args.public_ip, 443, timeout=args.timeout, context=context)
+    connection = http.client.HTTPSConnection(
+        args.public_ip, 443, timeout=args.connect_timeout, context=context
+    )
     try:
         connection.connect()
+        if connection.sock is None:
+            raise ConnectionError("armed probe TLS socket is unavailable")
+        connection.timeout = args.timeout
+        connection.sock.settimeout(args.timeout)
         ready_file.touch(mode=0o600, exist_ok=False)
         wait_for_trigger(trigger_file, args.trigger_timeout)
         return webhook_request(args, 0, time.monotonic(), connection)
@@ -316,6 +322,7 @@ def main() -> None:
     armed_probe.add_argument("--trigger-file", required=True)
     armed_probe.add_argument("--ready-file", required=True)
     armed_probe.add_argument("--trigger-timeout", type=float, default=30.0)
+    armed_probe.add_argument("--connect-timeout", type=float, default=5.0)
     recover = commands.add_parser("recover")
     recover.add_argument("--public-ip", required=True)
     recover.add_argument("--certificate", required=True)

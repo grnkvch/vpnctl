@@ -97,6 +97,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"fault_stage: $fault_stage", "result_emitted=false", "fault_incomplete",
 		"load armed-probe", "load armed-recover", "prepare_armed_probe", "run_armed_probe", "run_armed_recovery", "cleanup_armed_probe",
 		"armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe", "--trigger-timeout 30",
+		"--timeout 2", "--connect-timeout 5",
 		"--recovery-limit-seconds \"$recovery_limit_seconds\"", "recovery-trigger", "recovery-ready", "recovery-result.json",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",

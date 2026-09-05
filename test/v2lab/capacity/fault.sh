@@ -117,6 +117,7 @@ prepare_armed_probe() {
   fi
   python3 /usr/local/libexec/vpnctl-v2-capacity/load armed-probe \
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 2 \
+    --connect-timeout 5 \
     --trigger-file "$armed_probe_root/trigger" --ready-file "$armed_probe_root/ready" \
     --trigger-timeout 30 > "$armed_probe_root/result.json" &
   armed_probe_pid=$!

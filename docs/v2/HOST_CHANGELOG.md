@@ -1062,6 +1062,30 @@ This journal records development-host mutations made while implementing and vali
   to distinguish constrained-host/reconnect jitter from a reproducible product
   failure. No implementation or acceptance threshold changes for this repeat.
 
+### Pre-fault TLS arm timeout and split timeout correction
+
+- The identical clean-source repeat at commit
+  `f1e40857f56f9f97f44798719192c1c43f1743f0` again passed peer readiness,
+  provider composition, controller startup, and both connection-limit gates.
+  At 145 seconds of sustained load its pre-armed HTTPS worker failed closed
+  before readiness because the single TLS handshake exceeded its two-second
+  timeout on the constrained gateway. Typed evidence under
+  `artifacts/v2lab/capacity-e2e/run-20260905T113947Z/reconnect.json` records
+  `fault_stage=preflight`, zero down/recovery time, unchanged FRPS/FRPC service
+  state, and no unavailable probe; no summary or capacity result is claimed.
+- The armed trap stopped the partial workloads, removed all owner resources and
+  packages, and restored both fixtures to `Stopped`; no new QEMU crash report
+  appeared. Because the abort occurred before the restart timer and KILL, the
+  data-plane fault was never injected and no recovery metric can be inferred.
+- The pre-fault TLS connection now has a separate fixed five-second connect
+  timeout inside the existing ten-second parent readiness bound. Immediately
+  after TLS connects, both the connection and its socket are reset to the
+  original two-second request timeout before the ready marker is published.
+  Thus constrained interpreter/TLS setup remains outside the measured outage,
+  while the triggered `503`, 2.75--3.50-second down interval, eight-second
+  recovery, workload latency, and every other acceptance bound remain
+  unchanged. Repository rollback is the single correction commit.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

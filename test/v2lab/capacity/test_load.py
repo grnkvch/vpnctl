@@ -1,8 +1,10 @@
 import importlib.util
 import json
 import pathlib
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 SOURCE = pathlib.Path(__file__).with_name("load.py")
@@ -68,6 +70,33 @@ class CapacityLoadTest(unittest.TestCase):
             MODULE.wait_for_trigger(trigger, 0.025, clock, clock.sleep)
         self.assertAlmostEqual(clock.value, 0.025)
 
+    def test_armed_probe_resets_connect_timeout_before_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            args = types.SimpleNamespace(
+                public_ip="192.0.2.1",
+                certificate="unused",
+                body_bytes=128,
+                timeout=2.0,
+                connect_timeout=5.0,
+                trigger_file=str(root / "trigger"),
+                ready_file=str(root / "ready"),
+                trigger_timeout=30.0,
+            )
+            connection = FakeHTTPSConnection()
+            with (
+                mock.patch.object(MODULE.ssl, "create_default_context", return_value=object()),
+                mock.patch.object(MODULE.http.client, "HTTPSConnection", return_value=connection) as constructor,
+                mock.patch.object(MODULE, "wait_for_trigger"),
+            ):
+                result = MODULE.run_armed_probe(args)
+
+            constructor.assert_called_once_with("192.0.2.1", 443, timeout=5.0, context=mock.ANY)
+            self.assertEqual(connection.timeout, 2.0)
+            self.assertEqual(connection.sock.timeouts, [2.0])
+            self.assertEqual(result["status"], 503)
+            self.assertFalse(result["ok"])
+
     def test_armed_recovery_reads_restart_timestamp_after_trigger(self):
         clock = FakeClock()
         trigger = TriggerTextPath(clock, visible_at=0.03, contents="0.03\n")
@@ -96,6 +125,39 @@ class RecoveryOperation:
         duration, successful = self.outcomes[min(index, len(self.outcomes) - 1)]
         self.clock.value += duration
         return {"ok": successful, "status": 200 if successful else 503}
+
+
+class FakeSocket:
+    def __init__(self):
+        self.timeouts = []
+
+    def settimeout(self, timeout):
+        self.timeouts.append(timeout)
+
+
+class FakeResponse:
+    status = 503
+
+    def read(self, _limit):
+        return b"{}"
+
+
+class FakeHTTPSConnection:
+    def __init__(self):
+        self.timeout = None
+        self.sock = None
+
+    def connect(self):
+        self.sock = FakeSocket()
+
+    def request(self, *_args, **_kwargs):
+        return None
+
+    def getresponse(self):
+        return FakeResponse()
+
+    def close(self):
+        return None
 
 
 class TriggerPath:
