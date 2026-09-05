@@ -2,6 +2,33 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — failure-aware handshake-host activation contract
+
+### Source-only implementation boundary
+
+- Gateway handshake-host commit/rollback runtime activation is now an explicit
+  reversible transaction: `Activate` may fail, `Rollback` restores the exact
+  prior listener generation, and `Commit` discards retained rollback data only
+  after authoritative state is durable.
+- A recoverable activation failure rolls back before any state write. A state
+  write failure is reconciled by rereading the exact generation: proven old
+  state rolls runtime back, proven candidate state finalizes runtime, and an
+  ambiguous outcome remains fail-closed and is reported as uncertain. Cleanup
+  failure is distinguished from uncertain activation and keeps the desired
+  generation active.
+- The OpenSpec design records this ordering so the future external Mihomo
+  adapter cannot regress to an assumed-infallible restart.
+- Changes are confined to repository source, design, tests, and disposable Go
+  build cache. Tests use an in-memory listener activation and state store. No
+  external host, VM, process, service, package, network, firewall, route, DNS,
+  swap, certificate, `/etc`, or `/var` resource was changed. Repository
+  rollback is one ordinary `git revert` of the implementation commit.
+
+### Acceptance
+
+- Transport, CLI, and regression suites pass. Failure injection covers stage,
+  activation, runtime rollback, state-write reconciliation, and final cleanup.
+
 ## 2026-09-05 — staged public handshake-host replacement
 
 ### Source-only implementation boundary

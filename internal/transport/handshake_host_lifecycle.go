@@ -25,6 +25,7 @@ var (
 	ErrHandshakeHostImpactChanged   = errors.New("handshake-host replacement impact changed after prepare")
 	ErrHandshakeHostPlanStale       = errors.New("handshake-host replacement plan is stale")
 	ErrHandshakeHostCommitUncertain = errors.New("handshake-host state commit is uncertain")
+	ErrHandshakeHostFinalizePending = errors.New("handshake-host runtime cleanup remains pending")
 )
 
 type HandshakeHostStateStore interface {
@@ -33,10 +34,13 @@ type HandshakeHostStateStore interface {
 }
 
 // HandshakeHostGatewayActivation is prepared and validated without changing
-// the live listener. Activate must be an in-memory/atomic publication step
-// after the authoritative candidate generation is durably committed.
+// the live listener. Activate publishes a reversible local generation and
+// verifies it; Commit discards the rollback snapshot only after authoritative
+// state is durable. Rollback must restore the exact previous generation.
 type HandshakeHostGatewayActivation interface {
-	Activate()
+	Activate() error
+	Commit() error
+	Rollback() error
 }
 
 type HandshakeHostGatewayRuntime interface {
@@ -365,6 +369,9 @@ func (manager *HandshakeHostManager) Commit(ctx context.Context, plan HandshakeH
 	if activation == nil {
 		return HandshakeHostChangeResult{}, fmt.Errorf("prepare gateway restricted listener for handshake-host commit: empty activation")
 	}
+	if err := activateHandshakeHostRuntime(activation); err != nil {
+		return HandshakeHostChangeResult{}, fmt.Errorf("activate gateway restricted listener for handshake-host commit: %w", err)
+	}
 	result := HandshakeHostChangeResult{
 		OperationID: plan.OperationID, StateGeneration: candidate.Generation, Active: selection, RollbackUntil: &expires,
 		StaleNodeIDs: append([]string(nil), committed.AffectedNodeIDs...), StaleClientIDs: append([]string(nil), committed.AffectedClientIDs...),
@@ -376,7 +383,9 @@ func (manager *HandshakeHostManager) Commit(ctx context.Context, plan HandshakeH
 		}
 		return HandshakeHostChangeResult{}, reconcileErr
 	}
-	activation.Activate()
+	if err := activation.Commit(); err != nil {
+		return result, errors.Join(ErrHandshakeHostFinalizePending, err)
+	}
 	return result, nil
 }
 
@@ -448,6 +457,9 @@ func (manager *HandshakeHostManager) Rollback(ctx context.Context, plan Handshak
 	if activation == nil {
 		return HandshakeHostChangeResult{}, fmt.Errorf("prepare gateway restricted listener for handshake-host rollback: empty activation")
 	}
+	if err := activateHandshakeHostRuntime(activation); err != nil {
+		return HandshakeHostChangeResult{}, fmt.Errorf("activate gateway restricted listener for handshake-host rollback: %w", err)
+	}
 	result := HandshakeHostChangeResult{
 		OperationID: plan.OperationID, StateGeneration: candidate.Generation, Active: previous,
 		StaleNodeIDs: append([]string(nil), plan.Impact.NodeIDs...), StaleClientIDs: append([]string(nil), plan.Impact.ClientIDs...),
@@ -459,8 +471,20 @@ func (manager *HandshakeHostManager) Rollback(ctx context.Context, plan Handshak
 		}
 		return HandshakeHostChangeResult{}, reconcileErr
 	}
-	activation.Activate()
+	if err := activation.Commit(); err != nil {
+		return result, errors.Join(ErrHandshakeHostFinalizePending, err)
+	}
 	return result, nil
+}
+
+func activateHandshakeHostRuntime(activation HandshakeHostGatewayActivation) error {
+	if err := activation.Activate(); err != nil {
+		if rollbackErr := activation.Rollback(); rollbackErr != nil {
+			return errors.Join(ErrHandshakeHostCommitUncertain, err, fmt.Errorf("restore previous gateway restricted listener: %w", rollbackErr))
+		}
+		return err
+	}
+	return nil
 }
 
 func (manager *HandshakeHostManager) loadGatewayState() (model.State, error) {
@@ -504,10 +528,17 @@ func (manager *HandshakeHostManager) reconcileStateWrite(before, candidate model
 		switch {
 		case encodeErr == nil && candidateErr == nil && bytes.Equal(loadedRaw, candidateRaw):
 			if activation != nil {
-				activation.Activate()
+				if err := activation.Commit(); err != nil {
+					return true, errors.Join(ErrHandshakeHostCommitUncertain, saveErr, ErrHandshakeHostFinalizePending, err)
+				}
 			}
 			return true, fmt.Errorf("%w: %s generation is active after save error: %v", ErrHandshakeHostCommitUncertain, operation, saveErr)
 		case encodeErr == nil && beforeErr == nil && bytes.Equal(loadedRaw, beforeRaw):
+			if activation != nil {
+				if err := activation.Rollback(); err != nil {
+					return false, errors.Join(ErrHandshakeHostCommitUncertain, saveErr, fmt.Errorf("restore previous gateway restricted listener: %w", err))
+				}
+			}
 			return false, fmt.Errorf("persist %s: %w", operation, saveErr)
 		}
 	}

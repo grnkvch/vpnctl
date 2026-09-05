@@ -187,6 +187,17 @@ The signed bundle carries an ordered list with stable candidate IDs and hostname
 
 Replacement is a saga with `prepare` and `commit`: validate candidate, render impacted node/client generations, show impact, stage reachable nodes, then explicitly commit the single gateway host. Old configs are flagged stale; one rollback snapshot is retained. If the old path cannot carry control, the node-local SSH recovery command validates a manually provided candidate against gateway authoritative pending state before replacing only local transport configuration.
 
+The gateway listener stage is a failure-aware reversible local transaction,
+not an assumed-infallible process restart. Commit first validates and stages the
+candidate, activates and health-checks it while retaining the exact previous
+generation, then writes authoritative state and discards the local rollback
+snapshot. If the state write reports failure, vpnctl rereads it: a proven old
+generation rolls the listener back, a proven candidate generation finalizes
+it, and an ambiguous observation is reported as uncertain without guessing.
+An activation failure restores the listener before any authoritative write;
+final cleanup failure keeps the proven candidate active and reports pending
+cleanup.
+
 Alternative considered: automatic multi-host SNI fallback. It hides transport changes, complicates ShadowTLS demultiplexing, and conflicts with the manual-only transport contract.
 
 ### 10. Authenticate enrollment with a stable gateway identity separate from ingress TLS

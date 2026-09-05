@@ -126,7 +126,8 @@ func TestHandshakeHostCommitActivatesOneHostAndReportsStaleArtifacts(t *testing.
 			t.Fatalf("restricted transport %s retained old host", transport.OwnerID)
 		}
 	}
-	if fixture.runtime.prepares != 1 || fixture.runtime.activations != 1 || !reflect.DeepEqual(fixture.runtime.trace, []string{"runtime.prepare", "state.save", "runtime.activate"}) {
+	if fixture.runtime.prepares != 1 || fixture.runtime.activations != 1 || fixture.runtime.commits != 1 ||
+		!reflect.DeepEqual(fixture.runtime.trace, []string{"runtime.prepare", "runtime.activate", "state.save", "runtime.commit"}) {
 		t.Fatalf("runtime activation trace = %v", fixture.runtime.trace)
 	}
 	view, err := fixture.manager.Show(context.Background())
@@ -214,7 +215,7 @@ func TestHandshakeHostRollbackRestoresExactSnapshotAndReportsRestaleness(t *test
 	if operation.State != model.OperationFailed || operation.ErrorCode != "operator-rollback" {
 		t.Fatalf("rolled-back operation = %+v", operation)
 	}
-	if !reflect.DeepEqual(fixture.runtime.trace, []string{"runtime.prepare", "state.save", "runtime.activate"}) {
+	if !reflect.DeepEqual(fixture.runtime.trace, []string{"runtime.prepare", "runtime.activate", "state.save", "runtime.commit"}) {
 		t.Fatalf("rollback runtime trace = %v", fixture.runtime.trace)
 	}
 	for _, transport := range state.Transports {
@@ -271,7 +272,7 @@ func TestHandshakeHostRollbackExpiresAndNextPrepareSupersedesSnapshot(t *testing
 	}
 }
 
-func TestHandshakeHostCommitRuntimeOrStateFailureNeverActivatesCandidate(t *testing.T) {
+func TestHandshakeHostCommitRuntimeOrStateFailureRestoresCandidateActivation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -295,8 +296,13 @@ func TestHandshakeHostCommitRuntimeOrStateFailureNeverActivatesCandidate(t *test
 			if _, err := fixture.manager.Commit(context.Background(), plan); err == nil {
 				t.Fatal("Commit() succeeded with injected failure")
 			}
-			if fixture.runtime.activations != 0 || fixture.store.state.HandshakeHost.Hostname != "www.microsoft.com" || fixture.store.state.HandshakeHostChange.State != model.HandshakeHostPrepared {
-				t.Fatalf("failed commit activated candidate: activations=%d state=%+v", fixture.runtime.activations, fixture.store.state.HandshakeHostChange)
+			wantActivations, wantRollbacks := 0, 0
+			if test.stateFail {
+				wantActivations, wantRollbacks = 1, 1
+			}
+			if fixture.runtime.activations != wantActivations || fixture.runtime.rollbacks != wantRollbacks ||
+				fixture.store.state.HandshakeHost.Hostname != "www.microsoft.com" || fixture.store.state.HandshakeHostChange.State != model.HandshakeHostPrepared {
+				t.Fatalf("failed commit runtime=%d/%d state=%+v", fixture.runtime.activations, fixture.runtime.rollbacks, fixture.store.state.HandshakeHostChange)
 			}
 		})
 	}
@@ -315,8 +321,59 @@ func TestHandshakeHostCommitActivatesCandidateAfterCommittedWriteError(t *testin
 	if !errors.Is(err, ErrHandshakeHostCommitUncertain) {
 		t.Fatalf("committed write error = %v", err)
 	}
-	if result.Active.Hostname != "www.apple.com" || fixture.store.state.HandshakeHost.Hostname != "www.apple.com" || fixture.runtime.activations != 1 {
-		t.Fatalf("committed write was not aligned: result=%+v active=%s activations=%d", result, fixture.store.state.HandshakeHost.Hostname, fixture.runtime.activations)
+	if result.Active.Hostname != "www.apple.com" || fixture.store.state.HandshakeHost.Hostname != "www.apple.com" || fixture.runtime.activations != 1 || fixture.runtime.commits != 1 || fixture.runtime.rollbacks != 0 {
+		t.Fatalf("committed write was not aligned: result=%+v active=%s runtime=%d/%d/%d", result, fixture.store.state.HandshakeHost.Hostname, fixture.runtime.activations, fixture.runtime.commits, fixture.runtime.rollbacks)
+	}
+}
+
+func TestHandshakeHostCommitActivationFailureIsRolledBackBeforeStateWrite(t *testing.T) {
+	t.Parallel()
+
+	fixture := newHandshakeHostLifecycleFixture(t)
+	preparePlan, _ := fixture.manager.PlanPrepare(context.Background(), "www.apple.com")
+	_, _ = fixture.manager.Prepare(preparePlan)
+	plan, _ := fixture.manager.PlanCommit()
+	fixture.runtime.activationFail = true
+	saves := fixture.store.saves
+	if _, err := fixture.manager.Commit(context.Background(), plan); err == nil || errors.Is(err, ErrHandshakeHostCommitUncertain) {
+		t.Fatalf("recoverable activation failure = %v", err)
+	}
+	if fixture.store.saves != saves || fixture.runtime.activations != 1 || fixture.runtime.rollbacks != 1 || fixture.runtime.commits != 0 ||
+		fixture.store.state.HandshakeHost.Hostname != "www.microsoft.com" || fixture.store.state.HandshakeHostChange.State != model.HandshakeHostPrepared {
+		t.Fatalf("activation failure state/runtime = %s %+v / %d/%d/%d", fixture.store.state.HandshakeHost.Hostname, fixture.store.state.HandshakeHostChange, fixture.runtime.activations, fixture.runtime.rollbacks, fixture.runtime.commits)
+	}
+}
+
+func TestHandshakeHostCommitRollbackFailureIsReportedUncertain(t *testing.T) {
+	t.Parallel()
+
+	fixture := newHandshakeHostLifecycleFixture(t)
+	preparePlan, _ := fixture.manager.PlanPrepare(context.Background(), "www.apple.com")
+	_, _ = fixture.manager.Prepare(preparePlan)
+	plan, _ := fixture.manager.PlanCommit()
+	fixture.runtime.activationFail, fixture.runtime.rollbackFail = true, true
+	if _, err := fixture.manager.Commit(context.Background(), plan); !errors.Is(err, ErrHandshakeHostCommitUncertain) {
+		t.Fatalf("failed activation rollback error = %v", err)
+	}
+	if fixture.store.state.HandshakeHost.Hostname != "www.microsoft.com" || fixture.runtime.activations != 1 || fixture.runtime.rollbacks != 1 {
+		t.Fatalf("uncertain activation rollback state/runtime = %s / %d/%d", fixture.store.state.HandshakeHost.Hostname, fixture.runtime.activations, fixture.runtime.rollbacks)
+	}
+}
+
+func TestHandshakeHostCommitFinalizeFailureKeepsDesiredState(t *testing.T) {
+	t.Parallel()
+
+	fixture := newHandshakeHostLifecycleFixture(t)
+	preparePlan, _ := fixture.manager.PlanPrepare(context.Background(), "www.apple.com")
+	_, _ = fixture.manager.Prepare(preparePlan)
+	plan, _ := fixture.manager.PlanCommit()
+	fixture.runtime.commitFail = true
+	result, err := fixture.manager.Commit(context.Background(), plan)
+	if !errors.Is(err, ErrHandshakeHostFinalizePending) || result.Active.Hostname != "www.apple.com" {
+		t.Fatalf("finalize failure result/error = %+v / %v", result, err)
+	}
+	if fixture.store.state.HandshakeHost.Hostname != "www.apple.com" || fixture.runtime.activations != 1 || fixture.runtime.commits != 1 || fixture.runtime.rollbacks != 0 {
+		t.Fatalf("finalize failure state/runtime = %s / %d/%d/%d", fixture.store.state.HandshakeHost.Hostname, fixture.runtime.activations, fixture.runtime.commits, fixture.runtime.rollbacks)
 	}
 }
 
@@ -427,11 +484,16 @@ func (prober *handshakeHostLifecycleProber) Probe(_ context.Context, candidate H
 }
 
 type handshakeHostLifecycleRuntime struct {
-	prepares    int
-	activations int
-	fail        bool
-	prepared    []model.State
-	trace       []string
+	prepares       int
+	activations    int
+	commits        int
+	rollbacks      int
+	fail           bool
+	activationFail bool
+	commitFail     bool
+	rollbackFail   bool
+	prepared       []model.State
+	trace          []string
 }
 
 func (runtime *handshakeHostLifecycleRuntime) Prepare(_ context.Context, state model.State) (HandshakeHostGatewayActivation, error) {
@@ -448,9 +510,31 @@ type handshakeHostLifecycleActivation struct {
 	runtime *handshakeHostLifecycleRuntime
 }
 
-func (activation handshakeHostLifecycleActivation) Activate() {
+func (activation handshakeHostLifecycleActivation) Activate() error {
 	activation.runtime.activations++
 	activation.runtime.trace = append(activation.runtime.trace, "runtime.activate")
+	if activation.runtime.activationFail {
+		return errors.New("synthetic activation failure")
+	}
+	return nil
+}
+
+func (activation handshakeHostLifecycleActivation) Commit() error {
+	activation.runtime.commits++
+	activation.runtime.trace = append(activation.runtime.trace, "runtime.commit")
+	if activation.runtime.commitFail {
+		return errors.New("synthetic finalize failure")
+	}
+	return nil
+}
+
+func (activation handshakeHostLifecycleActivation) Rollback() error {
+	activation.runtime.rollbacks++
+	activation.runtime.trace = append(activation.runtime.trace, "runtime.rollback")
+	if activation.runtime.rollbackFail {
+		return errors.New("synthetic rollback failure")
+	}
+	return nil
 }
 
 func handshakeHostGatewayState(t *testing.T, created time.Time) model.State {
