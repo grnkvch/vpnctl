@@ -14,7 +14,9 @@ This journal records development-host mutations made while implementing and vali
 - Role and argument validation happen before the viewer is constructed.
   Human and JSON results expose only the hostname, lifecycle/health state,
   generation, impact IDs, and rollback metadata; credential material is not
-  part of the result contract.
+  part of the result contract. The public fields are nested below
+  `data.resource`, matching the frozen `resource-v1` JSON Schema rather than
+  relying only on the common envelope validator.
 - Changes are confined to repository source/tests and disposable Go build
   cache. Tests use an in-memory viewer and do not contact a hostname. No
   external host, VM, service, package, network, firewall, route, DNS, swap,

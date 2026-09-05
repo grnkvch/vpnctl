@@ -44,8 +44,9 @@ func TestExecuteTransportHostShowUsesGatewayViewerAndStableJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := document["data"].(map[string]any)
+	resource, _ := data["resource"].(map[string]any)
 	if document["command"] != "transport.host.show" || document["status"] != "ok" ||
-		data["active"] != "www.microsoft.com" || data["health"] != "healthy" || data["generation"] != float64(7) {
+		resource["active"] != "www.microsoft.com" || resource["health"] != "healthy" || resource["generation"] != float64(7) {
 		t.Fatalf("transport host show document = %#v", document)
 	}
 	encoded := stdout.String()

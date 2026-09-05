@@ -98,10 +98,11 @@ func TestHandshakeHostShowOutputContainsNoCandidateWhenCommitted(t *testing.T) {
 	if err := result.Validate(); err != nil {
 		t.Fatalf("show output validation = %v", err)
 	}
-	if result.Command != "transport.host.show" || result.Data["active"] != "www.apple.com" || result.Data["rollback_available"] != true {
+	resource, _ := result.Data["resource"].(output.SafeObject)
+	if result.Command != "transport.host.show" || resource["active"] != "www.apple.com" || resource["rollback_available"] != true {
 		t.Fatalf("show output = %+v", result)
 	}
-	if _, found := result.Data["prepared"]; found {
+	if _, found := resource["prepared"]; found {
 		t.Fatalf("committed show leaked a prepared marker: %+v", result.Data)
 	}
 }

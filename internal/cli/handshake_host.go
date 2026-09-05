@@ -164,29 +164,29 @@ func (workflow *HandshakeHostRecoveryWorkflow) Apply(ctx context.Context, _ Muta
 }
 
 func HandshakeHostShowOutput(view transport.HandshakeHostView) output.Result {
-	data := output.SafeObject{
+	resource := output.SafeObject{
 		"active": view.Active.Hostname, "state": string(view.State), "generation": view.StateGeneration,
 		"health": string(view.Health.Condition), "health_code": view.Health.Code, "rollback_available": view.RollbackAvailable,
 	}
 	if view.Prepared != nil {
-		data["prepared"] = view.Prepared.Hostname
+		resource["prepared"] = view.Prepared.Hostname
 	}
 	if view.State == "prepared" {
-		data["affected_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
-		data["affected_clients"] = append([]string(nil), view.Impact.ClientIDs...)
+		resource["affected_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
+		resource["affected_clients"] = append([]string(nil), view.Impact.ClientIDs...)
 	}
 	if view.State == "committed" {
-		data["stale_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
-		data["stale_clients"] = append([]string(nil), view.Impact.ClientIDs...)
+		resource["stale_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
+		resource["stale_clients"] = append([]string(nil), view.Impact.ClientIDs...)
 	}
 	if view.RollbackExpiresAt != nil {
-		data["rollback_expires_at"] = view.RollbackExpiresAt.Format("2006-01-02T15:04:05Z07:00")
+		resource["rollback_expires_at"] = view.RollbackExpiresAt.Format("2006-01-02T15:04:05Z07:00")
 	}
 	status, category := output.StatusOK, output.CategorySuccess
 	if view.Health.RequiresAction {
 		status, category = output.StatusDegraded, output.CategoryUnavailable
 	}
-	result := output.NewResult("transport.host.show", status, category, data)
+	result := output.NewResult("transport.host.show", status, category, output.SafeObject{"resource": resource})
 	if view.OperationID != "" {
 		result.ResourceIDs["operation_id"] = view.OperationID
 	}
