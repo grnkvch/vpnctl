@@ -89,6 +89,23 @@ type spikeBaseline struct {
 			Scheduled      bool   `json:"scheduled"`
 			RemoteDelivery bool   `json:"remote_delivery"`
 		} `json:"backup"`
+		MinimumGatewayCapacity struct {
+			LogicalTelegramUsers int    `json:"logical_telegram_users"`
+			DurationSeconds      int    `json:"duration_seconds"`
+			WebhookRPS           int    `json:"webhook_requests_per_second"`
+			BotAPIRPS            int    `json:"bot_api_requests_per_second"`
+			PersonalClients      int    `json:"personal_clients"`
+			ControllerRSS        int    `json:"controller_idle_rss_bytes"`
+			WebhookSteadyP95     int    `json:"webhook_steady_state_success_p95_ms"`
+			WebhookSteadyP99     int    `json:"webhook_steady_state_success_p99_ms"`
+			BotAPIGlobalP95      int    `json:"bot_api_success_p95_ms"`
+			BotAPIGlobalP99      int    `json:"bot_api_success_p99_ms"`
+			TunnelReconnect      int    `json:"tunnel_reconnect_seconds"`
+			PerExposeConcurrent  int    `json:"per_expose_concurrent_requests"`
+			GatewayConcurrent    int    `json:"gateway_concurrent_requests"`
+			AcceptedSourceCommit string `json:"accepted_source_commit"`
+			AcceptedEvidence     string `json:"accepted_evidence"`
+		} `json:"minimum_gateway_capacity"`
 	} `json:"limits"`
 	ResolvedParameters   []string `json:"resolved_design_parameters"`
 	UnresolvedParameters []string `json:"unresolved_design_parameters"`
@@ -120,8 +137,8 @@ func TestV2SpikeBaselinePinsEverySource(t *testing.T) {
 	if baseline.SchemaVersion != 1 || baseline.ManifestID != "vpnctl-v2-development-baseline" || baseline.Status != "development-accepted" {
 		t.Fatalf("unexpected spike baseline identity: version=%d id=%q status=%q", baseline.SchemaVersion, baseline.ManifestID, baseline.Status)
 	}
-	if len(baseline.Sources) != 9 {
-		t.Fatalf("source manifest count = %d, want 9", len(baseline.Sources))
+	if len(baseline.Sources) != 10 {
+		t.Fatalf("source manifest count = %d, want 10", len(baseline.Sources))
 	}
 	repositoryRoot := filepath.Join("..", "..")
 	seen := make(map[string]struct{}, len(baseline.Sources))
@@ -162,6 +179,7 @@ func TestV2SpikeBaselineClosesProviderAndParameterChoices(t *testing.T) {
 		"backup-warning-age",
 		"numeric-cli-exit-codes",
 		"public-command-tree",
+		"minimum-gateway-target-capacity",
 	)
 	resolved := make(map[string]struct{}, len(baseline.ResolvedParameters))
 	for _, parameter := range baseline.ResolvedParameters {
@@ -229,15 +247,25 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 	if limits.Backup.WarningAgeDays != 30 || limits.Backup.Scheduled || limits.Backup.RemoteDelivery {
 		t.Errorf("unexpected backup operational defaults: %#v", limits.Backup)
 	}
+	capacity := limits.MinimumGatewayCapacity
+	if capacity.LogicalTelegramUsers != 300 || capacity.DurationSeconds != 300 ||
+		capacity.WebhookRPS != 10 || capacity.BotAPIRPS != 5 || capacity.PersonalClients != 5 ||
+		capacity.ControllerRSS != 20*1024*1024 || capacity.WebhookSteadyP95 != 1000 ||
+		capacity.WebhookSteadyP99 != 2000 || capacity.BotAPIGlobalP95 != 1000 ||
+		capacity.BotAPIGlobalP99 != 2000 || capacity.TunnelReconnect != 8 ||
+		capacity.PerExposeConcurrent != 40 || capacity.GatewayConcurrent != 64 ||
+		capacity.AcceptedSourceCommit != "69e46fa00933f714a90207ee20be4a657b4c9b9d" ||
+		capacity.AcceptedEvidence != "artifacts/v2lab/capacity-e2e/run-20260905T134326Z/summary.json" {
+		t.Errorf("unexpected accepted minimum-gateway capacity: %#v", capacity)
+	}
 }
 
 func TestV2SpikeBaselineAssignsDeferredGatesToSection16(t *testing.T) {
 	t.Parallel()
 	baseline := readSpikeBaseline(t)
 	want := map[string]string{
-		"minimum-gateway-target-capacity": "16.9",
-		"deployed-clash-mi":               "16.11",
-		"deployed-telegram-webhook":       "16.11",
+		"deployed-clash-mi":         "16.11",
+		"deployed-telegram-webhook": "16.11",
 	}
 	if len(baseline.DeferredReleaseGates) != len(want) {
 		t.Fatalf("deferred release gate count = %d, want %d", len(baseline.DeferredReleaseGates), len(want))
@@ -251,10 +279,11 @@ func TestV2SpikeBaselineAssignsDeferredGatesToSection16(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, task := range []string{"16.9", "16.11"} {
-		if !strings.Contains(string(tasks), "- [ ] "+task+" ") {
-			t.Errorf("deferred release task %s is not present and pending", task)
-		}
+	if !strings.Contains(string(tasks), "- [x] 16.9 ") {
+		t.Error("accepted minimum-gateway capacity task 16.9 is not complete")
+	}
+	if !strings.Contains(string(tasks), "- [ ] 16.11 ") {
+		t.Error("deployed release task 16.11 is not present and pending")
 	}
 }
 

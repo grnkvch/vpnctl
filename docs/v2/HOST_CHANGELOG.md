@@ -1220,6 +1220,47 @@ This journal records development-host mutations made while implementing and vali
   reports both fixtures `Stopped`; no QEMU crash report appeared and no manual
   host rollback remains.
 
+### Accepted minimum-gateway capacity result
+
+- The clean-source run at commit
+  `69e46fa00933f714a90207ee20be4a657b4c9b9d` passed every hard assertion and
+  atomically published `status=passed` at
+  `artifacts/v2lab/capacity-e2e/run-20260905T134326Z/summary.json`. The fixed
+  five-minute profile represented 300 logical Telegram users with 3000
+  512-byte IP-only HTTPS webhook requests, 1500 restricted Bot API-like
+  requests, and five simultaneous personal WireGuard clients.
+- Webhook delivery completed 2936/3000. All 64 `503` responses were inside the
+  accepted fault window, the final 30-second tail was healthy, and steady-state
+  successful latency passed at p95/p99 `121.905/1446.608ms`. Bot API-like
+  traffic completed 1500/1500 with global p95/p99
+  `776.058/1795.734ms`. Every client received 300/300 probes with zero packet
+  loss and average RTT between 1.816 and 2.055 ms.
+- The armed unavailable request returned `503` in 49 ms. Measured FRPS down
+  time was `2.773s`; first HTTPS recovery succeeded at `1.802s` after restart
+  and five stable successes completed at `2.548s`, below the eight-second
+  bound. The tunnel-client service retained PID 2977 and zero restarts while
+  its supervised frpc child changed from PID 2984 to 4921.
+- Controller idle RSS was 11,583,488 bytes. Gateway/node average CPU was
+  `45.805/56.239%`; minimum available memory was
+  `240189440/191246336` bytes; maximum swap use was `44863488/9572352` bytes;
+  minimum free disk exceeded 5.3/5.5 GB and measured growth was 0/4096 bytes.
+  Per-expose admission was exactly 40 accepted and five rejected; gateway
+  admission was 64 accepted/eight rejected with 64 active upstream handlers.
+  All monitored units had zero OOM kills and no workload deadlocked.
+- Owner cleanup removed every capacity/provider/package and exact temporary
+  resource before summary acceptance. Independent status confirmed both
+  fixtures `Stopped`; no new QEMU crash report appeared and no manual rollback
+  remains. The pinned capacity manifest and accepted source/evidence identity
+  are now part of `COMPONENT_LIMITS.v1.json`, task 16.9 is complete, and the
+  only remaining external release gates are deployed Clash Mi plus real
+  Telegram webhook validation in task 16.11.
+- Full ordinary and race-detector Go suites, vet, package/dependency listing,
+  capacity Python tests, all Bash syntax, JSON, strict OpenSpec, formatting,
+  checksum, and diff gates passed at 154/156 tasks. `go list` emitted only its
+  known non-fatal global module stat-cache permission warning. Reusable Go and
+  Python caches remain outside the repository under `/private/tmp` and contain
+  no deployed state or secrets; repository rollback is the task-16.9 commits.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

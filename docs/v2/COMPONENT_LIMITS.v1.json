@@ -37,6 +37,10 @@
       "sha256": "1661e5e8f0997ee1aa217f775ac6c97d8c29bb0c62826faf9f1322533c2b9981"
     },
     {
+      "path": "test/v2lab/capacity/manifest.json",
+      "sha256": "7fc28dd94d914c58e95d228305acf91ef2859dbe4337be25a29f142b30efb184"
+    },
+    {
       "path": "docs/v2/CLI_CONTRACT.md",
       "sha256": "04f49414b91ec813b95478f05679caff477a1a4c6ef755e4c87004b29141a955"
     }
@@ -355,6 +359,23 @@
       "idempotency_max_records_per_node": 1024,
       "logging_default_enabled": false,
       "logging_opt_in_max_seconds": 3600
+    },
+    "minimum_gateway_capacity": {
+      "logical_telegram_users": 300,
+      "duration_seconds": 300,
+      "webhook_requests_per_second": 10,
+      "bot_api_requests_per_second": 5,
+      "personal_clients": 5,
+      "controller_idle_rss_bytes": 20971520,
+      "webhook_steady_state_success_p95_ms": 1000,
+      "webhook_steady_state_success_p99_ms": 2000,
+      "bot_api_success_p95_ms": 1000,
+      "bot_api_success_p99_ms": 2000,
+      "tunnel_reconnect_seconds": 8,
+      "per_expose_concurrent_requests": 40,
+      "gateway_concurrent_requests": 64,
+      "accepted_source_commit": "69e46fa00933f714a90207ee20be4a657b4c9b9d",
+      "accepted_evidence": "artifacts/v2lab/capacity-e2e/run-20260905T134326Z/summary.json"
     }
   },
   "resolved_design_parameters": [
@@ -372,16 +393,11 @@
     "backup-kdf-aead-and-resource-limits",
     "backup-warning-age",
     "numeric-cli-exit-codes",
-    "public-command-tree"
+    "public-command-tree",
+    "minimum-gateway-target-capacity"
   ],
   "unresolved_design_parameters": [],
   "deferred_release_gates": [
-    {
-      "id": "minimum-gateway-target-capacity",
-      "task": "16.9",
-      "blocks_v2_release": true,
-      "scope": "one Telegram node serving the defined several-hundred-user profile plus five personal clients under sustained load"
-    },
     {
       "id": "deployed-clash-mi",
       "task": "16.11",
