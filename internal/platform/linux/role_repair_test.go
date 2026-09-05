@@ -492,6 +492,23 @@ func TestRoleRepairRejectsWritableUnitDirectory(t *testing.T) {
 	}
 }
 
+func TestRoleRepairAcceptsNonWritableSearchableConfigRoot(t *testing.T) {
+	t.Parallel()
+	fixture := newRoleRepairFixture(t, model.RoleGateway)
+	if err := os.Chmod(fixture.configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := []byte("new\n")
+	request := RoleRepairRequest{Role: model.RoleGateway, Resources: []RoleRepairResource{{
+		Kind: RoleRepairConfig, Name: "dns.json", Content: target, ContentSHA256: roleRepairDigest(target),
+	}}, RestartUnits: []string{}}
+	plan, err := fixture.installer.PlanRepair(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Destroy()
+}
+
 func TestRoleRepairRejectsFailedPreStateAsNonReversible(t *testing.T) {
 	t.Parallel()
 	fixture := newRoleRepairFixture(t, model.RoleGateway)

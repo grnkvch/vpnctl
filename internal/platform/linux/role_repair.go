@@ -129,7 +129,7 @@ func (installer *RoleSystemdInstaller) PlanRepair(ctx context.Context, request R
 	if err := validateRoleRepairDirectory(installer.unitDir, ownerUID, false); err != nil {
 		return nil, fmt.Errorf("validate repair unit directory: %w", err)
 	}
-	if err := validateRoleRepairDirectory(installer.configDir, ownerUID, true); err != nil {
+	if err := validateRoleRepairDirectory(installer.configDir, ownerUID, false); err != nil {
 		return nil, err
 	}
 	if err := validateRoleRepairDirectory(installer.configRoot, ownerUID, true); err != nil {
