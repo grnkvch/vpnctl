@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -137,11 +138,19 @@ func TestPassiveStatusMapsJoinedNodeGatewayToSelectedTransportProcess(t *testing
 
 func TestProductionStatusConvergenceGapIsExplicit(t *testing.T) {
 	t.Parallel()
-	planner, err := operations.NewConvergencePlanner(unavailableConvergenceSource{}, unavailableOwnedResourceDiscoverer{})
+	paths, err := store.NewPaths(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := planner.Plan(context.Background()); err == nil || !strings.Contains(err.Error(), "persisted convergence snapshot is unavailable") {
+	source, err := operations.NewFileConvergenceSnapshotSource(paths.ConvergenceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := operations.NewConvergencePlanner(source, unavailableOwnedResourceDiscoverer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planner.Plan(context.Background()); err == nil || !errors.Is(err, operations.ErrConvergenceSnapshotUnavailable) {
 		t.Fatalf("Plan() error = %v", err)
 	}
 }

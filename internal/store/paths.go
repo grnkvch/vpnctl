@@ -14,6 +14,7 @@ type Paths struct {
 	StateDir          string
 	StateFile         string
 	PreviousStateFile string
+	ConvergenceFile   string
 	SecretsDir        string
 	ExportsDir        string
 	ClientExportsDir  string
@@ -55,6 +56,7 @@ func NewPaths(root string) (Paths, error) {
 		StateDir:          stateDir,
 		StateFile:         filepath.Join(stateDir, "state.json"),
 		PreviousStateFile: filepath.Join(stateDir, "state.previous.json"),
+		ConvergenceFile:   filepath.Join(stateDir, "convergence.json"),
 		SecretsDir:        filepath.Join(stateDir, "secrets"),
 		ExportsDir:        filepath.Join(stateDir, "exports"),
 		ClientExportsDir:  filepath.Join(stateDir, "exports", "clients"),

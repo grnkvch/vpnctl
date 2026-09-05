@@ -130,12 +130,6 @@ func (reader statusStateReader) ReadStatusState(ctx context.Context) (model.Stat
 	return reader.state.Load()
 }
 
-type unavailableConvergenceSource struct{}
-
-func (unavailableConvergenceSource) ReadConvergenceSnapshot(context.Context) (operations.ConvergenceSnapshot, error) {
-	return operations.ConvergenceSnapshot{}, errors.New("persisted convergence snapshot is unavailable")
-}
-
 type unavailableOwnedResourceDiscoverer struct{}
 
 func (unavailableOwnedResourceDiscoverer) DiscoverOwnedResources(context.Context, operations.ConvergenceManifest) ([]operations.OwnedResourceObservation, error) {
@@ -167,7 +161,11 @@ func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion 
 	if !ok {
 		return nil, fmt.Errorf("status requires an initialized host role")
 	}
-	planner, err := operations.NewConvergencePlanner(unavailableConvergenceSource{}, unavailableOwnedResourceDiscoverer{})
+	convergence, err := operations.NewFileConvergenceSnapshotSource(paths.ConvergenceFile)
+	if err != nil {
+		return nil, err
+	}
+	planner, err := operations.NewConvergencePlanner(convergence, unavailableOwnedResourceDiscoverer{})
 	if err != nil {
 		return nil, err
 	}

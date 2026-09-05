@@ -63,3 +63,15 @@ The public `plan-v1` adapter emits pending changes and drift as separate arrays.
 Intentional pending work keeps the success exit category. Drift adds a
 `review_drift` action pointing to `vpnctl repair`; it does not cause planning
 itself to mutate or repair anything.
+
+## Persisted snapshot boundary
+
+The production read boundary is the root-only regular file
+`/var/lib/vpnctl/convergence.json`. Readers open the exact path without
+following symlinks, require mode `0600`, one filesystem link, a bounded
+non-empty payload, one closed JSON value, and a fully valid canonical snapshot.
+An absent file is an unavailable observation; unsafe shape, malformed JSON, or
+invalid manifests are authoritative validation failures. The reader never
+creates or repairs the file. Initial publication and atomic CAS updates remain
+a separate writer integration so a partial implementation cannot silently
+declare desired and applied state equal.

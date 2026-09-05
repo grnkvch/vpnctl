@@ -396,7 +396,7 @@ func canonicalSnapshot(snapshot ConvergenceSnapshot) (ConvergenceSnapshot, error
 	if snapshot.Pending == nil {
 		return ConvergenceSnapshot{}, fmt.Errorf("%w: pending operations must be present", ErrConvergencePlanInvalid)
 	}
-	pending := append([]PendingOperation(nil), snapshot.Pending...)
+	pending := append([]PendingOperation{}, snapshot.Pending...)
 	for index := range pending {
 		pending[index].Resources = append([]ManagedResourceKey(nil), pending[index].Resources...)
 		if err := pending[index].validate(applied.Generation, desired.Generation); err != nil {
@@ -527,7 +527,7 @@ func canonicalResources(resources []ManagedResource, label string) ([]ManagedRes
 	if resources == nil {
 		return nil, fmt.Errorf("%w: %s must be present", ErrConvergencePlanInvalid, label)
 	}
-	result := append([]ManagedResource(nil), resources...)
+	result := append([]ManagedResource{}, resources...)
 	for index, resource := range result {
 		if err := resource.validate(); err != nil {
 			return nil, fmt.Errorf("%w: %s %d: %v", ErrConvergencePlanInvalid, label, index, err)
@@ -562,7 +562,7 @@ func canonicalObservations(observed []OwnedResourceObservation) ([]OwnedResource
 	if observed == nil {
 		return nil, fmt.Errorf("%w: owned observations must be present", ErrConvergencePlanInvalid)
 	}
-	result := append([]OwnedResourceObservation(nil), observed...)
+	result := append([]OwnedResourceObservation{}, observed...)
 	for index, observation := range result {
 		if err := observation.Key.validate(); err != nil {
 			return nil, fmt.Errorf("%w: owned observation %d: %v", ErrConvergencePlanInvalid, index, err)
@@ -691,7 +691,7 @@ func (drift OwnedDrift) validate() error {
 }
 
 func cloneManifest(manifest ConvergenceManifest) ConvergenceManifest {
-	manifest.Resources = append([]ManagedResource(nil), manifest.Resources...)
+	manifest.Resources = append([]ManagedResource{}, manifest.Resources...)
 	return manifest
 }
 

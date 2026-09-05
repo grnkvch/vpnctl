@@ -2,6 +2,34 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — strict persisted convergence read boundary
+
+### Planned reversible validation
+
+- Reserve `/var/lib/vpnctl/convergence.json` in centralized role paths and add
+  a read-only snapshot source. It follows no symlink, accepts only a non-empty
+  single-link `0600` regular file within 16 MiB, strict-decodes one JSON value,
+  and canonicalizes the complete desired/applied/pending contract.
+- Missing storage remains typed unavailable; unsafe files and invalid payloads
+  become typed convergence-validation failures. This slice intentionally adds
+  no writer and cannot create, replace, or repair the production path.
+- Tests use only per-case temporary directories and files. Repository rollback
+  is limited to this commit; no host rollback is needed.
+
+### Acceptance
+
+- Reader tests cover canonical ordering, empty arrays, missing storage,
+  cancellation, unknown fields, trailing JSON, unsafe mode, empty/oversized
+  payloads, and symlink refusal. They also exposed and fixed nil canonical
+  slices that could make a valid empty snapshot fail on its second validation.
+- Formatting/diff checks, `go vet ./...`, strict OpenSpec validation, and a
+  standalone complete `go test ./...` passed. An earlier test run executed in
+  parallel with vet transiently missed the gateway controller readiness window;
+  the isolated full rerun passed without source changes.
+- No production convergence path was created or read. Only disposable test
+  files and the existing suite's local sockets were used; no persistent host
+  mutation or rollback remains.
+
 ## 2026-09-06 — public passive status entry point
 
 ### Planned reversible validation
