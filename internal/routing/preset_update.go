@@ -77,6 +77,7 @@ const (
 type PresetUpdateResult struct {
 	Name             string
 	Mode             PresetUpdateMode
+	OperationID      string
 	FromRevision     uint64
 	ToRevision       uint64
 	SourceChanged    bool
@@ -90,6 +91,7 @@ type PresetUpdater struct {
 	state   PresetUpdateStateStore
 	updates PresetTemplateUpdateSource
 	now     func() time.Time
+	uuid    model.UUIDGenerator
 }
 
 func NewPresetUpdater(paths store.Paths, state PresetUpdateStateStore, updates PresetTemplateUpdateSource, now func() time.Time) (*PresetUpdater, error) {
@@ -103,7 +105,7 @@ func NewPresetUpdater(paths store.Paths, state PresetUpdateStateStore, updates P
 	if now == nil {
 		now = time.Now
 	}
-	return &PresetUpdater{paths: paths, state: state, updates: updates, now: now}, nil
+	return &PresetUpdater{paths: paths, state: state, updates: updates, now: now, uuid: model.NewUUID}, nil
 }
 
 // Plan is read-only. The returned source and whole-set diff are the exact
@@ -224,6 +226,11 @@ func (updater *PresetUpdater) Apply(plan PresetUpdatePlan, mode PresetUpdateMode
 		if err != nil {
 			return PresetUpdateResult{}, err
 		}
+	} else {
+		candidateState, err = buildDeferredPresetState(state, plan.Name, plan.NextStateGeneration, updater.now().UTC(), updater.uuid)
+		if err != nil {
+			return PresetUpdateResult{}, err
+		}
 	}
 	stagedPath, err := stagePresetSource(updater.paths.PresetsDir, plan.sourceAfter)
 	if err != nil {
@@ -242,7 +249,10 @@ func (updater *PresetUpdater) Apply(plan PresetUpdatePlan, mode PresetUpdateMode
 	}
 	result := PresetUpdateResult{
 		Name: plan.Name, Mode: mode, FromRevision: plan.FromRevision, ToRevision: plan.ToRevision,
-		SourceChanged: true, StateGeneration: state.Generation, Diff: clonePresetDiff(diff),
+		SourceChanged: true, StateGeneration: candidateState.Generation, Diff: clonePresetDiff(diff),
+	}
+	if mode == PresetUpdateDeferred {
+		result.OperationID = candidateState.Operations[len(candidateState.Operations)-1].ID
 	}
 	if err := activatePresetSource(updater.paths.PresetsDir, stagedPath, plan.Name+".yaml"); err != nil {
 		activeSource, readErr := readPresetSourceFile(plan.SourcePath)
@@ -251,13 +261,10 @@ func (updater *PresetUpdater) Apply(plan PresetUpdatePlan, mode PresetUpdateMode
 		}
 		return PresetUpdateResult{}, err
 	}
-	if mode == PresetUpdateDeferred {
-		return result, nil
-	}
 	if err := updater.state.Save(state.Generation, candidateState); err != nil {
 		loaded, loadErr := updater.state.Load()
 		if loadErr == nil && reflect.DeepEqual(loaded, candidateState) {
-			result.EffectiveChanged = true
+			result.EffectiveChanged = mode == PresetUpdateImmediate
 			result.StateGeneration = candidateState.Generation
 			return result, fmt.Errorf("%w: state is active but durability confirmation failed: %v", ErrPresetUpdateCommitUncertain, err)
 		}
@@ -267,9 +274,36 @@ func (updater *PresetUpdater) Apply(plan PresetUpdatePlan, mode PresetUpdateMode
 		rollbackErr := rollbackPresetSource(updater.paths.PresetsDir, plan.Name+".yaml", plan.SourceExisted, plan.sourceBefore, plan.sourceAfter)
 		return PresetUpdateResult{}, joinPresetUpdateRollbackError(err, rollbackErr)
 	}
-	result.EffectiveChanged = true
+	result.EffectiveChanged = mode == PresetUpdateImmediate
 	result.StateGeneration = candidateState.Generation
 	return result, nil
+}
+
+func buildDeferredPresetState(state model.State, name string, nextGeneration uint64, at time.Time, generator model.UUIDGenerator) (model.State, error) {
+	wantNext, err := model.NextGeneration(state.Generation)
+	if generator == nil || at.IsZero() || nextGeneration == 0 || err != nil || nextGeneration != wantNext {
+		return model.State{}, fmt.Errorf("deferred preset update operation inputs are invalid")
+	}
+	operationID, err := model.AllocateUUID(occupiedPolicyOperationIDs(state), generator)
+	if err != nil {
+		return model.State{}, err
+	}
+	operation := model.Operation{
+		SchemaVersion: model.ResourceSchemaVersion, ID: operationID, Type: model.OperationApply,
+		State: model.OperationPending, TargetKind: "preset", TargetID: name,
+		ExpectedGeneration: state.Generation, DesiredGeneration: nextGeneration,
+		Steps: []model.OperationStep{}, CreatedAt: at, UpdatedAt: at,
+	}
+	if err := operation.Validate(); err != nil {
+		return model.State{}, err
+	}
+	candidate := state
+	candidate.Generation = nextGeneration
+	candidate.Operations = append(append([]model.Operation{}, state.Operations...), operation)
+	if err := model.ValidateTransition(state, candidate); err != nil {
+		return model.State{}, fmt.Errorf("validate deferred preset update transition: %w", err)
+	}
+	return candidate, nil
 }
 
 func (updater *PresetUpdater) loadGatewayState() (model.State, error) {

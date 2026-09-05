@@ -63,6 +63,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isClientCatalogInvocation(args) {
 		return executeClientCatalog(args, stdout, stderr)
 	}
+	if isPresetUpdateInvocation(args) {
+		return executePresetUpdate(args, stdout, stderr)
+	}
 	if isPresetCatalogInvocation(args) {
 		return executePresetCatalog(args, stdout, stderr)
 	}

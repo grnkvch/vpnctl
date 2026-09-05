@@ -96,10 +96,6 @@ func TestPresetUpdaterDeferredChangesOnlyUserOwnedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stateBytesBefore, err := os.ReadFile(paths.StateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
 	plan, err := updater.Plan("telegram")
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +105,7 @@ func TestPresetUpdaterDeferredChangesOnlyUserOwnedSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(deferred) error = %v", err)
 	}
-	if result.Mode != PresetUpdateDeferred || !result.SourceChanged || result.EffectiveChanged || result.StateGeneration != 1 {
+	if result.Mode != PresetUpdateDeferred || !result.SourceChanged || result.EffectiveChanged || result.StateGeneration != 2 || model.ValidateResourceID(result.OperationID) != nil {
 		t.Fatalf("Apply(deferred) = %#v", result)
 	}
 	source, err := os.ReadFile(plan.SourcePath)
@@ -120,7 +116,16 @@ func TestPresetUpdaterDeferredChangesOnlyUserOwnedSource(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(ast.Selectors, wantSelectors) {
 		t.Fatalf("deferred source = %#v, %v", ast, err)
 	}
-	assertCatalogStateUnchanged(t, stateStore, paths, stateBefore, stateBytesBefore)
+	deferredState, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deferredState.Generation != 2 || !reflect.DeepEqual(deferredState.Presets, stateBefore.Presets) ||
+		!reflect.DeepEqual(deferredState.Policies, stateBefore.Policies) || len(deferredState.Operations) != 1 ||
+		deferredState.Operations[0].ID != result.OperationID || deferredState.Operations[0].State != model.OperationPending ||
+		deferredState.Operations[0].TargetKind != "preset" || deferredState.Operations[0].TargetID != "telegram" {
+		t.Fatalf("deferred authoritative state = %#v", deferredState)
+	}
 	catalog, err := NewPresetCatalog(paths, stateStore)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +335,6 @@ func TestPresetUpdaterExplicitlyRestoresDeletedBuiltinAndRejectsUnrelatedInvalid
 	}, false)
 	updater := newTestPresetUpdater(t, paths, stateStore, []BuiltinPresetTemplate{base, next})
 	stateBefore, _ := stateStore.Load()
-	stateBytesBefore, _ := os.ReadFile(paths.StateFile)
 
 	plan, err := updater.Plan("telegram")
 	if err != nil {
@@ -339,14 +343,20 @@ func TestPresetUpdaterExplicitlyRestoresDeletedBuiltinAndRejectsUnrelatedInvalid
 	if plan.SourceExisted || plan.FromRevision != 0 || plan.ToRevision != 2 {
 		t.Fatalf("restore plan = %#v", plan)
 	}
-	if _, err := updater.Apply(plan, PresetUpdateDeferred); err != nil {
+	result, err := updater.Apply(plan, PresetUpdateDeferred)
+	if err != nil {
 		t.Fatalf("Apply(restore deferred) error = %v", err)
 	}
 	restored, err := os.ReadFile(filepath.Join(paths.PresetsDir, "telegram.yaml"))
 	if err != nil || !bytes.Equal(restored, next.Source) {
 		t.Fatalf("restored source = %q, %v", restored, err)
 	}
-	assertCatalogStateUnchanged(t, stateStore, paths, stateBefore, stateBytesBefore)
+	deferredState, err := stateStore.Load()
+	if err != nil || deferredState.Generation != stateBefore.Generation+1 ||
+		!reflect.DeepEqual(deferredState.Presets, stateBefore.Presets) || !reflect.DeepEqual(deferredState.Policies, stateBefore.Policies) ||
+		len(deferredState.Operations) != 1 || deferredState.Operations[0].ID != result.OperationID {
+		t.Fatalf("restored deferred state = %#v, %v", deferredState, err)
+	}
 
 	writeCatalogPreset(t, paths, "telegram.yaml", base.Source)
 	writeCatalogPreset(t, paths, "openai.yaml", []byte("schema_version: 1\nname: openai\ninclude:\n  - type: unknown\n    value: example.com\nexclude: []\n"))

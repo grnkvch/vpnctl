@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public built-in preset update command
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes gateway-only
+  `preset update <name>` with dry-run, immediate, and deferred modes through
+  the common mutation boundary. It uses the embedded adjacent-revision
+  catalog and the existing three-way merge, so operator additions/exclusions
+  are preserved and same-matcher conflicts remain fail-closed.
+- Immediate mode atomically activates the editable source and its effective
+  preset/policy generations. Deferred mode activates only the reviewed
+  editable source and now also records a real UUID-addressed pending `apply`
+  operation in authoritative gateway state; a state-write failure restores
+  the exact prior source. Results identify affected clients/nodes with
+  explicit re-export or node-convergence actions.
+- Changes are confined to repository source/tests and disposable Go build
+  cache. Test fixtures write only under exact temporary roots. No external
+  host, VM, service, package, network, firewall, route, DNS, swap,
+  certificate, `/etc`, or `/var` resource was changed. Repository rollback is
+  one ordinary `git revert` of the implementation commit.
+
+### Acceptance
+
+- Routing, CLI, and regression suites pass. Coverage proves public dry-run
+  immutability, durable deferred receipts, gateway-only preflight before
+  updater construction, mutually exclusive modes, assignment follow-up
+  actions, stale/invalid merge refusal, atomic source rollback, and preserved
+  dependency/schema contracts.
+
 ## 2026-09-05 — public policy commands and node-to-gateway policy RPC
 
 ### Source-only implementation boundary
