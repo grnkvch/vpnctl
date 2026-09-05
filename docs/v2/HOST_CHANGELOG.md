@@ -377,6 +377,54 @@ This journal records development-host mutations made while implementing and vali
   narrow accepted window, unstable tail recovery, and latency bounds remain
   independently fatal; no transport or resource limit is weakened.
 
+### Production-default capacity result and planned reconnect diagnosis
+
+- The clean-source run at commit
+  `768a3c145cb8fdf4037a30fb8c6365d6ca9b1b4d` completed the full fixed
+  five-minute profile and restored both fixtures to verified `Stopped`.
+  Production-default logging removed the unrelated restricted-path stall:
+  Bot API-like traffic completed 1500/1500 with p95 359.539 ms and p99
+  520.871 ms, all five clients had zero packet loss, exact ingress admission
+  remained 40/5 and 64/8 with 64 backend handlers, and every resource, OOM,
+  deadlock, and cleanup bound passed. Evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T035035Z`.
+- The run is not accepted because webhook ingress completed only 2828/3000.
+  All 172 expected 503 responses remained inside the explicit fault window,
+  latency and tail recovery passed, but the observed unavailable interval at
+  workload offsets 143.015--160.120 exceeded the 11-second outage plus
+  reconnect allowance represented by the 2890 success floor. Five immediate
+  probe successes also produced a misleading `0.000` recovery measurement,
+  so probe-only stability is insufficient evidence while the scheduled
+  workload is still receiving 503.
+- The next diagnostic action may start only the two existing, contract-matching
+  Lima fixtures, one at a time, read only the previous boot's FRPS, FRPC,
+  ingress, and tunnel-auth journals plus lifecycle metadata, and immediately
+  stop each fixture. It must install or change no guest resource. Rollback is
+  the exact pair of `limactl stop` operations and final verification that both
+  fixtures are again `Stopped`; findings will be appended before changing the
+  reconnect gate.
+
+### Reconnect diagnosis result and guest-local fault controller
+
+- The planned read-only inspection completed with no guest mutation. Gateway
+  journal evidence shows FRPS inactive at 07:05:25.479 and started only at
+  07:05:32.446: the intended three-second outage became 6.967 seconds because
+  a separate host-to-node SSH probe remained in the critical path under load.
+  FRPC and the restricted node service did not restart during the injected
+  outage. Production `error`/`silent` logging correctly omitted informational
+  retry traffic and showed no new restricted-provider failure. Both fixtures
+  were immediately returned to verified `Stopped`; a redundant stop against
+  the already stopped node was rejected by Lima without changing state.
+- The correction remains source-only until the next clean run. A capacity-owned
+  helper will execute inside the gateway, stop only the exact FRPS fixture,
+  schedule its restart concurrently after the fixed three-second interval,
+  assert a local public-IP HTTPS `503`, and require five consecutive valid
+  responses within the eight-second recovery limit. Its EXIT trap restores
+  FRPS on every error. The parent harness will additionally reject measured
+  down-time outside 2.75--3.50 seconds, copy/remove only explicitly listed
+  temporary files, and retain scheduled workload success as an independent
+  acceptance condition.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

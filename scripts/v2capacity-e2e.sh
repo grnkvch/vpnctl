@@ -236,7 +236,7 @@ cleanup_capacity_ingress_backup() {
 
 cleanup_guest_temporary() {
   guest "$gateway_instance" sudo rm -f \
-    /tmp/clients.sh /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" \
+    /tmp/clients.sh /tmp/fault.sh /tmp/load.py /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" \
     /tmp/vpnctl-v2-capacity-peers.conf >/dev/null 2>&1 || true
   guest "$node_instance" sudo rm -f \
     /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
@@ -348,7 +348,8 @@ assert_clean() {
 
 assert_capacity_temporary_absent() {
   local instance path
-  for path in /tmp/clients.sh /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" /tmp/vpnctl-v2-capacity-peers.conf; do
+  for path in /tmp/clients.sh /tmp/fault.sh /tmp/load.py /tmp/monitor.py /tmp/controller \
+    "/tmp/$controller_unit" /tmp/vpnctl-v2-capacity-peers.conf; do
     assert_path_absent "$gateway_instance" "$path"
   done
   for path in /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
@@ -380,7 +381,8 @@ prepare_controller_binary() {
 
 copy_capacity_files() {
   limactl copy --backend=scp \
-    "$fixture_root/clients.sh" "$fixture_root/monitor.py" "$fixture_root/$controller_unit" \
+    "$fixture_root/clients.sh" "$fixture_root/fault.sh" "$fixture_root/load.py" \
+    "$fixture_root/monitor.py" "$fixture_root/$controller_unit" \
     "$temporary_root/controller" "$gateway_instance:/tmp/"
   limactl copy --backend=scp \
     "$fixture_root/clients.sh" "$fixture_root/client_load.py" "$fixture_root/load.py" "$fixture_root/monitor.py" \
@@ -413,6 +415,8 @@ setup_clients() {
 setup_controller() {
   local attempt pid rss
   guest "$gateway_instance" sudo install -m 0755 /tmp/controller /usr/local/libexec/vpnctl-v2-capacity/controller
+  guest "$gateway_instance" sudo install -m 0755 /tmp/fault.sh /usr/local/libexec/vpnctl-v2-capacity/fault
+  guest "$gateway_instance" sudo install -m 0755 /tmp/load.py /usr/local/libexec/vpnctl-v2-capacity/load
   guest "$gateway_instance" sudo install -m 0644 "/tmp/$controller_unit" "/etc/systemd/system/$controller_unit"
   guest "$gateway_instance" sudo install -m 0755 /tmp/monitor.py /usr/local/libexec/vpnctl-v2-capacity/monitor
   guest "$gateway_instance" sudo install -d -m 0700 /var/lib/vpnctl-v2-capacity
@@ -634,58 +638,16 @@ start_loads() {
 }
 
 inject_reconnect() {
-  local down_seconds attempt unavailable=false recovered=false stop_state probe_output remaining stable=0
-  local stop_started stop_finished unavailable_started unavailable_finished recovery_started recovery_finished
+  local gateway_ip down_seconds recovery_limit
+  gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
-  stop_started=$(python3 -c 'import time; print(time.monotonic())')
-  guest "$gateway_instance" sudo systemctl stop --no-block "$tunnel_server_unit"
-  sleep 0.25
-  guest "$gateway_instance" sudo systemctl kill --kill-who=main --signal=KILL "$tunnel_server_unit" \
-    >/dev/null 2>&1 || true
-  for attempt in $(seq 1 20); do
-    stop_state=$(guest "$gateway_instance" systemctl show --value -p ActiveState "$tunnel_server_unit")
-    if [ "$stop_state" = inactive ] || [ "$stop_state" = failed ]; then
-      break
-    fi
-    sleep 0.1
-  done
-  [ "$stop_state" = inactive ] || [ "$stop_state" = failed ] || {
-    echo "FRP server did not stop within the bounded fault-injection window" >&2
-    exit 1
-  }
-  stop_finished=$(python3 -c 'import time; print(time.monotonic())')
-  unavailable_started=$(python3 -c 'import time; print(time.monotonic())')
-  probe_output=$(probe_webhook 2>/dev/null || true)
-  unavailable_finished=$(python3 -c 'import time; print(time.monotonic())')
-  if [ "$(printf '%s\n' "$probe_output" | jq -r '.status' 2>/dev/null || true)" = 503 ]; then
-    unavailable=true
-  fi
-  printf '%s\n' "$probe_output" > "$run_root/reconnect-unavailable-probe.json"
-  [ "$unavailable" = true ] || { echo "ingress did not become 503 while frps was stopped" >&2; exit 1; }
-  remaining=$(awk -v duration="$down_seconds" -v start="$unavailable_started" -v finish="$unavailable_finished" \
-    'BEGIN {value=duration-(finish-start); if (value < 0) value=0; printf "%.3f", value}')
-  sleep "$remaining"
-  guest "$gateway_instance" sudo systemctl start "$tunnel_server_unit"
-  recovery_started=$(python3 -c 'import time; print(time.monotonic())')
-  for attempt in $(seq 1 100); do
-    if probe_webhook 2>/dev/null | jq -e '.status == 200 and .ok == true' >/dev/null; then
-      stable=$((stable + 1))
-      if [ "$stable" -eq 5 ]; then
-        recovered=true
-        break
-      fi
-    else
-      stable=0
-    fi
-    sleep 0.1
-  done
-  recovery_finished=$(python3 -c 'import time; print(time.monotonic())')
-  [ "$recovered" = true ] || { echo "FRP did not reconnect under sustained load" >&2; exit 1; }
-  jq -n --argjson down_seconds "$down_seconds" \
-    --argjson stop_seconds "$(awk -v start="$stop_started" -v finish="$stop_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
-    --argjson recovery_seconds "$(awk -v start="$recovery_started" -v finish="$recovery_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
-    '{unavailable_status: 503, stop_seconds: $stop_seconds, down_seconds: $down_seconds, recovery_seconds: $recovery_seconds, stable_recovery_probes: 5, recovered_without_client_restart: true}' \
+  recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
+  guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/fault \
+    --unit "$tunnel_server_unit" --public-ip "$gateway_ip" \
+    --certificate /etc/vpnctl-v2-spike/ingress/gateway.crt \
+    --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
     > "$run_root/reconnect.json"
+  jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
 }
 
 wait_loads() {
@@ -759,6 +721,9 @@ assert_summary() {
     .resources.memory.maximum_swap_used_bytes <= $limits[0].bounds.maximum_swap_used_bytes and
     .resources.disk.minimum_free_bytes >= $limits[0].bounds.minimum_free_disk_bytes and
     .resources.disk.growth_bytes <= $limits[0].bounds.maximum_disk_growth_bytes and
+    .reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds and
+    .reconnect.down_seconds >= ($limits[0].fault.frps_down_seconds - 0.25) and
+    .reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5) and
     .reconnect.recovery_seconds <= $limits[0].bounds.tunnel_reconnect_seconds and
     .connection_limits.per_expose == {accepted: 40, rejected: 5} and
     .connection_limits.gateway.accepted == 64 and .connection_limits.gateway.rejected == 8 and
@@ -780,6 +745,7 @@ verify() {
   assert_cached_archive "$repository_root/test/v2lab/tunnel/manifest.json" '.frp'
   assert_cached_archive "$repository_root/test/v2lab/restricted/manifest.json" '.mihomo'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test/v2lab/capacity/test_load.py > "$run_root/source-tests.log" 2>&1
+  bash -n "$fixture_root/fault.sh"
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./test/v2lab/capacity/controller > "$run_root/controller-build-test.log"
   prepare_controller_binary
   trap cleanup_on_exit EXIT INT TERM

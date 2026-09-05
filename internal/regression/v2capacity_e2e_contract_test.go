@@ -59,6 +59,16 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			t.Errorf("capacity backend drop-in is missing %q", required)
 		}
 	}
+	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
+	for _, required := range []string{
+		"systemctl stop --no-block", "--kill-who=main --signal=KILL",
+		"sleep \"$down_seconds\"", "restart_pid=$!", "unavailable_status: $unavailable_probe.status",
+		"stable_recovery_probes: 5", "recovered_without_client_restart: true",
+	} {
+		if !strings.Contains(faultHelper, required) {
+			t.Errorf("capacity fault helper is missing %q", required)
+		}
+	}
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))
 	for _, required := range []string{
@@ -67,9 +77,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"gateway-limit-during-connections.txt", ".status_counts[\"200\"] == 64",
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
-		"frps_stop_after_seconds", "systemctl stop --no-block", "--kill-who=main --signal=KILL",
-		"FRP server did not stop within the bounded fault-injection window", "stop_seconds: $stop_seconds",
-		"stable_recovery_probes: 5", "recovered_without_client_restart: true",
+		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
+		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
+		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {
