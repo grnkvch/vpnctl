@@ -72,9 +72,17 @@ following symlinks, require mode `0600`, one filesystem link, a bounded
 non-empty payload, one closed JSON value, and a fully valid canonical snapshot.
 An absent file is an unavailable observation; unsafe shape, malformed JSON, or
 invalid manifests are authoritative validation failures. The reader never
-creates or repairs the file. Initial publication and atomic CAS updates remain
-a separate writer integration so a partial implementation cannot silently
-declare desired and applied state equal.
+creates or repairs the file. A separate mutation-side store now provides
+initial publication and exact compare-and-swap updates without adding a write
+method to the planner interface. It canonicalizes and bounds the closed JSON
+value, requires a real `0700` parent plus one-link `0600` writer lock,
+serializes cooperating processes with a cancellation-aware flock, writes and
+fsyncs a same-directory `0600` candidate, atomically renames it, and fsyncs the
+directory. Stale/absent baselines are conflicts; failures after rename are
+reported as outcome-uncertain so callers re-read instead of retrying blindly.
+Component manifest publication still has to be connected to each successful
+init/mutation/apply transaction before the general production repair command
+can rely on this baseline.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It

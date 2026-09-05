@@ -20,7 +20,8 @@ generation и показывает только имена/SHA-256 всех gene
 сохраняет fail-closed guard и возвращает явный retry action. Это первый
 production recovery layer для post-join node activation; общий
 gateway/current-node repair произвольного owned drift всё ещё требует
-подключения durable convergence snapshot writer и role-scoped executors.
+подключения уже реализованного durable convergence snapshot CAS writer к
+успешным mutation transactions и role-scoped executors.
 
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.

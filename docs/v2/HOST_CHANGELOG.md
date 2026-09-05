@@ -2,6 +2,33 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — durable convergence snapshot CAS writer
+
+### Planned reversible validation
+
+- Add the mutation-side companion to the existing read-only
+  `convergence.json` source. Initial publication requires absence; every update
+  requires the exact prior canonical snapshot and refuses stale writers.
+- Require a real `0700` state directory and a one-link `0600` no-follow lock,
+  serialize cooperating processes with cancellation-aware flock, write a
+  bounded canonical `0600` candidate on the same filesystem, then fsync,
+  atomic-rename, and fsync the parent directory. A failure after rename is
+  explicitly outcome-uncertain and must be reconciled by re-read.
+- Validation uses only per-test temporary directories and intentionally unsafe
+  symlink/hardlink fixtures inside them. It does not create the production
+  snapshot/lock, alter authoritative state, or mutate either VM. Repository
+  rollback removes this source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests prove canonical initial bytes, exact no-op, successful and stale CAS,
+  single-winner competing updates, cancellation before and during lock wait,
+  unsafe directory/lock refusal, and readable publication after an injected
+  post-rename durability failure.
+- Focused ordinary and race-detector operations suites, the full Go suite,
+  `go vet ./...`, strict OpenSpec validation, and diff checks passed. No
+  production host resource changed, so no host rollback remains.
+
 ## 2026-09-05 — committed private-node repair command
 
 ### Planned reversible validation
