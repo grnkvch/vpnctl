@@ -60,6 +60,22 @@ This journal records development-host mutations made while implementing and vali
   is rejected. Manual rollback uses those same owner-checked operations;
   repository rollback is ordinary `git revert` of the task commits.
 
+### First pre-start attempt and cleanup correction
+
+- The first sandboxed invocation stopped before either VM started because Lima
+  could not update its own `~/.lima/_networks/user-v2` log. Both fixtures
+  remained `Stopped`, and no guest path, process, service, listener, interface,
+  namespace, nftables table, package, or sysctl was changed. The ignored
+  preflight evidence remains under
+  `artifacts/v2lab/capacity-e2e/run-20260905T001946Z`.
+- That attempt exposed a harness cleanup-order defect: the exact host build root
+  `/private/tmp/vpnctl-v2-capacity.8muoNF` was created before the EXIT trap was
+  armed. It contained only the task-built controller and Go build output; it
+  was removed explicitly and verified absent. The trap is now armed
+  immediately after build-root creation, before any Lima query/start, so both
+  early host-only and partial VM-start failures remove the exact temporary root
+  and restore any VM that this run started.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

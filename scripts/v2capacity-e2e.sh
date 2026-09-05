@@ -585,6 +585,7 @@ verify() {
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test/v2lab/capacity/test_load.py > "$run_root/source-tests.log" 2>&1
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./test/v2lab/capacity/controller > "$run_root/controller-build-test.log"
   prepare_controller_binary
+  trap cleanup_on_exit EXIT INT TERM
 
   assert_instance_contract "$gateway_instance"
   assert_instance_contract "$node_instance"
@@ -594,7 +595,6 @@ verify() {
   record_fixture "$node_instance" "$run_root/node-before.json"
   start_fixture "$gateway_instance" gateway_started
   start_fixture "$node_instance" node_started
-  trap cleanup_on_exit EXIT INT TERM
   cleanup_owned
   assert_clean
   assert_capacity_temporary_absent
