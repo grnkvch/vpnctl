@@ -29,6 +29,37 @@ This journal records development-host mutations made while implementing and vali
   exposing webhook paths or claiming seamless continuity. Repository rollback
   is `git revert <task-16.8-commit>`; no development-host rollback is expected.
 
+### Acceptance
+
+- The release gate passed on source commit
+  `530697269d219dfff686fa8a8c3b38830154ef49`. Gateway update applied only
+  changed local components, recorded all five expected interruptions, and an
+  explicit rollback restored the exact prior release tree and semantic state
+  before consuming its snapshot. Injected component-health failure restored
+  files/state automatically, while a controller-only update kept forwarding
+  live and did not restart or roll back any data-plane unit.
+- Gateway-first compatibility accepted current-major additive-minor and the
+  immediately previous major over a real mTLS loopback RPC, rejected newer/no-
+  mutual protocol windows before local mutation, and emitted follow-up update
+  actions only for compatible active nodes. The CLI exposed explicit latest or
+  exact version selection, an explicit `update rollback` command, interruption,
+  fleet, and migration impact.
+- The production backup/restore path created an atomic authenticated encrypted
+  archive and structurally authenticated it before restore. Same-IP restore
+  preserved gateway, node, and client trust plus reconnect material. Changed-
+  IP restore rotated only public ingress identity while preserving control,
+  node, and client trust; it identified one node, two stale client exports, and
+  one active expose. CLI projection produced exactly five required actions,
+  hid webhook paths, and made no seamless-continuity claim. An incomplete
+  impact plan was rejected before mutation; replace required an emergency
+  snapshot; injected health/stale-plan failures left no partial convergence.
+- Stable acceptance is recorded in
+  `test/v2lab/update-restore-e2e/manifest.json`; raw ignored evidence is at
+  `artifacts/v2lab/update-restore-e2e/run-20260904T235956Z/summary.json`. The
+  gate used only Go-managed temporary directories and short-lived loopback
+  listeners, so host rollback is not applicable. Repository rollback is
+  `git revert <task-16.8-commit>`.
+
 ## 2026-09-05 — planned adversarial security E2E
 
 ### Planned reversible lab mutations

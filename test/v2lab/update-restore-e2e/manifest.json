@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "accepted_at": "2026-09-05",
+  "scope": "source-production-workflows",
+  "actual_deployment": "deferred-to-task-16.11",
+  "update": {
+    "apply_and_exact_rollback": true,
+    "health_failure_auto_rollback": true,
+    "controller_only_forwarding_continuous": true,
+    "unchanged_data_plane_not_restarted": true,
+    "interruptions_explicit": true,
+    "gateway_first_enforced": true,
+    "same_major_additive_supported": true,
+    "previous_major_supported": true,
+    "incompatible_window_blocked_before_mutation": true,
+    "compatible_active_node_actions_only": true
+  },
+  "backup_restore": {
+    "atomic_encrypted_backup": true,
+    "authenticated_structural_restore": true,
+    "same_ip_trust_preserved": true,
+    "same_ip_node_client_reconnect_material_preserved": true,
+    "changed_ip_public_certificate_rotated": true,
+    "changed_ip_control_node_client_trust_preserved": true,
+    "changed_ip_affected_nodes": 1,
+    "changed_ip_stale_client_exports": 2,
+    "changed_ip_affected_exposes": 1,
+    "changed_ip_required_actions": 5,
+    "changed_ip_incomplete_action_plan_rejected": true,
+    "no_seamless_continuity_claim": true,
+    "replace_requires_emergency_snapshot": true,
+    "failed_restore_rolls_back_without_partial_convergence": true
+  },
+  "interaction": {
+    "update_latest_or_explicit_only": true,
+    "rollback_is_explicit_command": true,
+    "restore_replace_is_explicit_flag": true,
+    "fleet_and_migration_impact_visible": true,
+    "changed_ip_actions_hide_webhook_paths": true
+  },
+  "host_mutation": false
+}
