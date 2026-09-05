@@ -346,6 +346,8 @@ type GatewayTrust struct {
 	EnrollmentPublicKeyRef        string    `json:"enrollment_public_key_ref"`
 	ControlCAFingerprints         []string  `json:"control_ca_fingerprints"`
 	ControlCACertificateRefs      []string  `json:"control_ca_certificate_refs"`
+	TunnelCertificateFingerprint  string    `json:"tunnel_certificate_fingerprint"`
+	TunnelCertificateRef          SecretRef `json:"tunnel_certificate_ref"`
 	StandardPublicKey             string    `json:"standard_public_key"`
 	RestrictedServerCredentialRef SecretRef `json:"restricted_server_credential_ref"`
 	LastKnownGatewayGeneration    uint64    `json:"last_known_gateway_generation"`

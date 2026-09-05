@@ -223,6 +223,28 @@ func TestJoinRejectsSignedResponseAssignmentSubstitution(t *testing.T) {
 	}
 }
 
+func TestJoinRejectsTunnelCertificateSubstitutionAfterGatewayCommit(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	fixture.workflow.exchanger = tamperTunnelCertificateJoinExchanger{base: fixture.exchanger}
+	_, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"})
+	if !errors.Is(err, ErrJoinUncertain) || !strings.Contains(err.Error(), "tunnel_server_certificate") {
+		t.Fatalf("Join(tampered tunnel certificate) error = %v", err)
+	}
+	gateway, _ := fixture.gatewayState.Load()
+	nodeState, _ := fixture.nodeState.Load()
+	if gateway.Invites[0].State != model.InviteConsumed || len(gateway.Nodes) != 1 {
+		t.Fatalf("gateway commit disappeared after tunnel certificate substitution: %+v", gateway)
+	}
+	if nodeState.Generation != 1 || len(nodeState.Nodes) != 0 {
+		t.Fatalf("node accepted substituted tunnel certificate: %+v", nodeState)
+	}
+	references, _ := NewNodeCredentialReferences(joinTestNodeID, 1)
+	if _, err := fixture.nodeSecrets.Get(references.ControlPrivateKey); err != nil {
+		t.Fatalf("uncertain join deleted reconcilable local identity: %v", err)
+	}
+}
+
 func TestJoinReadinessReportRequiresEveryProbe(t *testing.T) {
 	for _, mutate := range []func(*JoinReadinessReport){
 		func(value *JoinReadinessReport) { value.Gateway = false },
@@ -420,7 +442,7 @@ func TestMultipleJoinedNodesRetainIsolatedIdentitiesAndResources(t *testing.T) {
 	}
 
 	gateway, _ := fixture.gatewayState.Load()
-	if gateway.Generation != 5 || len(gateway.Nodes) != 2 || len(gateway.Transports) != 4 || len(gateway.Certificates) != 3 {
+	if gateway.Generation != 5 || len(gateway.Nodes) != 2 || len(gateway.Transports) != 4 || len(gateway.Certificates) != 4 {
 		t.Fatalf("multi-node gateway state: generation=%d nodes=%d transports=%d certs=%d",
 			gateway.Generation, len(gateway.Nodes), len(gateway.Transports), len(gateway.Certificates))
 	}
@@ -536,8 +558,15 @@ func newJoinFixture(t *testing.T, checker GatewayJoinReadinessChecker) *joinFixt
 		t.Fatal(err)
 	}
 	runner := &joinWireGuardRunner{}
+	tunnelTLS, err := tunnel.NewGatewayTLSIdentityProvisioner(gatewaySecrets, tunnel.GatewayTLSIdentityRuntime{
+		NewUUID: func() (string, error) { return "10000000-0000-4000-8000-000000000099", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	builder, err := NewGatewayJoinBuilder(manager, gatewaySecrets, GatewayJoinRuntime{
-		Entropy: rand.Reader, Now: func() time.Time { return now.Add(time.Minute) }, WireGuardRunner: runner, Readiness: checker,
+		Entropy: rand.Reader, Now: func() time.Time { return now.Add(time.Minute) }, WireGuardRunner: runner,
+		Readiness: checker, TunnelTLS: tunnelTLS,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -716,6 +745,10 @@ type tamperJoinExchanger struct {
 	base NodeJoinExchanger
 }
 
+type tamperTunnelCertificateJoinExchanger struct {
+	base NodeJoinExchanger
+}
+
 func (exchanger tamperJoinExchanger) Exchange(ctx context.Context, endpoint string, requestBody *output.Secret) (NodeJoinExchangeResult, error) {
 	result, err := exchanger.base.Exchange(ctx, endpoint, requestBody)
 	if err != nil {
@@ -730,6 +763,31 @@ func (exchanger tamperJoinExchanger) Exchange(ctx context.Context, endpoint stri
 		return NodeJoinExchangeResult{CommitPossible: true}, err
 	}
 	response.Assignment.GatewayStateGeneration++
+	envelope.Data, err = json.Marshal(response)
+	if err != nil {
+		return NodeJoinExchangeResult{CommitPossible: true}, err
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return NodeJoinExchangeResult{CommitPossible: true}, err
+	}
+	return NodeJoinExchangeResult{Response: encoded, CommitPossible: true}, nil
+}
+
+func (exchanger tamperTunnelCertificateJoinExchanger) Exchange(ctx context.Context, endpoint string, requestBody *output.Secret) (NodeJoinExchangeResult, error) {
+	result, err := exchanger.base.Exchange(ctx, endpoint, requestBody)
+	if err != nil {
+		return result, err
+	}
+	var envelope PublicEnrollmentResponse
+	if err := json.Unmarshal(result.Response, &envelope); err != nil {
+		return NodeJoinExchangeResult{CommitPossible: true}, err
+	}
+	var response nodeJoinWireResponse
+	if err := json.Unmarshal(envelope.Data, &response); err != nil {
+		return NodeJoinExchangeResult{CommitPossible: true}, err
+	}
+	response.TunnelServerCertificatePEM += "\n"
 	envelope.Data, err = json.Marshal(response)
 	if err != nil {
 		return NodeJoinExchangeResult{CommitPossible: true}, err
@@ -767,7 +825,8 @@ type joinReadinessChecker struct {
 
 func (checker joinReadinessChecker) Check(_ context.Context, candidate GatewayJoinCandidate) (JoinReadinessReport, error) {
 	if candidate.State.Generation == 0 || candidate.Node.ID == "" || len(candidate.ControlCertificatePEM) == 0 ||
-		candidate.GatewayWireGuardPublicKey == "" || len(candidate.RestrictedServerCredential()) == 0 {
+		len(candidate.TunnelServerCertificatePEM) == 0 || candidate.GatewayWireGuardPublicKey == "" ||
+		len(candidate.RestrictedServerCredential()) == 0 {
 		return JoinReadinessReport{}, errors.New("incomplete readiness candidate")
 	}
 	if err := candidate.UseNodeSharedCredentials(func(restrictedCredential, tunnelCredential []byte) error {
@@ -833,6 +892,8 @@ func assertRejectedJoinHasNoPartialNode(t *testing.T, fixture *joinFixture) {
 		model.SecretRef("control-cert:" + joinTestNodeID + "-g1"),
 		model.SecretRef("restricted-user:" + joinTestNodeID + "-g1"),
 		model.SecretRef("tunnel-token:" + joinTestNodeID + "-g1"),
+		tunnel.GatewayTLSCertificateRef,
+		tunnel.GatewayTLSPrivateKeyRef,
 	} {
 		if _, err := fixture.gatewaySecrets.Get(reference); !errors.Is(err, store.ErrSecretNotFound) {
 			t.Fatalf("rejected join retained gateway material %s: %v", reference, err)
@@ -889,5 +950,37 @@ func assertJoinSecretsAndPrivateKeyBoundary(t *testing.T, fixture *joinFixture, 
 	}
 	if nodeState.Nodes[0].Gateway.StandardPublicKey != joinGatewayWireGuardPublic() {
 		t.Fatalf("node trust gateway WireGuard key = %q", nodeState.Nodes[0].Gateway.StandardPublicKey)
+	}
+	trust := nodeState.Nodes[0].Gateway
+	if trust.TunnelCertificateRef != tunnel.GatewayTrustedCertificateRef {
+		t.Fatalf("node trust gateway tunnel certificate ref = %q", trust.TunnelCertificateRef)
+	}
+	var gatewayTunnelCertificate *model.Certificate
+	for index := range gateway.Certificates {
+		if gateway.Certificates[index].Kind == model.CertificateTunnelServer {
+			gatewayTunnelCertificate = &gateway.Certificates[index]
+		}
+	}
+	if gatewayTunnelCertificate == nil || gatewayTunnelCertificate.Fingerprint != trust.TunnelCertificateFingerprint ||
+		gatewayTunnelCertificate.CertificateRef != tunnel.GatewayTLSCertificateRef.String() ||
+		gatewayTunnelCertificate.PrivateKeyRef != tunnel.GatewayTLSPrivateKeyRef {
+		t.Fatalf("gateway/node tunnel TLS trust differs: gateway=%+v node=%+v", gatewayTunnelCertificate, trust)
+	}
+	gatewayTunnelPEM, err := fixture.gatewaySecrets.Get(tunnel.GatewayTLSCertificateRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(gatewayTunnelPEM)
+	nodeTunnelPEM, err := fixture.nodeSecrets.Get(tunnel.GatewayTrustedCertificateRef)
+	if err != nil || !bytes.Equal(gatewayTunnelPEM, nodeTunnelPEM) {
+		t.Fatalf("node did not retain exact gateway tunnel certificate: %v", err)
+	}
+	defer clear(nodeTunnelPEM)
+	fingerprint, err := tunnel.ValidateGatewayTLSCertificatePEM(nodeTunnelPEM, fixture.now.Add(time.Minute))
+	if err != nil || fingerprint != trust.TunnelCertificateFingerprint {
+		t.Fatalf("node tunnel certificate trust = %q, %v", fingerprint, err)
+	}
+	if _, err := fixture.nodeSecrets.Get(tunnel.GatewayTLSPrivateKeyRef); !errors.Is(err, store.ErrSecretNotFound) {
+		t.Fatalf("node retained gateway tunnel private key: %v", err)
 	}
 }

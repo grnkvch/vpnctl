@@ -19,6 +19,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
@@ -362,17 +363,27 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 	if string(values.GatewayWireGuardPublicKey) != assignmentGatewayWireGuardPublicKey(values) {
 		return verifiedLocalJoin{}, fmt.Errorf("gateway WireGuard material is not canonical")
 	}
+	tunnelFingerprint, err := tunnel.ValidateGatewayTLSCertificatePEM(values.TunnelServerCertificatePEM, workflow.runtime.Now())
+	if err != nil {
+		return verifiedLocalJoin{}, fmt.Errorf("gateway tunnel TLS certificate is invalid: %w", err)
+	}
+	if tunnelFingerprint != assignment.TunnelCertificateFingerprint {
+		return verifiedLocalJoin{}, fmt.Errorf("gateway tunnel TLS certificate fingerprint differs from signed assignment")
+	}
 
 	caReference := model.SecretRef("control-cert:gateway-ca-g1")
 	leafReference := model.SecretRef("control-cert:" + assignment.NodeID + "-g1")
 	enrollmentReference := model.SecretRef("enrollment-public:gateway")
 	restrictedReference := model.SecretRef("restricted-server:gateway-g1")
+	tunnelCertificateReference := tunnel.GatewayTrustedCertificateRef
 	trust := &model.GatewayTrust{
 		GatewayID: assignment.GatewayID, PublicIPv4: assignment.GatewayPublicIPv4, NodeCIDR: assignment.NodeCIDR,
 		GatewayOverlayIPv4: assignment.GatewayOverlayIPv4, ControlProtocol: assignment.ControlProtocol,
 		EnrollmentFingerprint: assignment.EnrollmentFingerprint, EnrollmentPublicKeyRef: enrollmentReference.String(),
 		ControlCAFingerprints:         []string{assignment.ControlCAFingerprint},
 		ControlCACertificateRefs:      []string{caReference.String()},
+		TunnelCertificateFingerprint:  assignment.TunnelCertificateFingerprint,
+		TunnelCertificateRef:          tunnelCertificateReference,
 		StandardPublicKey:             string(values.GatewayWireGuardPublicKey),
 		RestrictedServerCredentialRef: restrictedReference,
 		LastKnownGatewayGeneration:    assignment.GatewayStateGeneration,
@@ -441,6 +452,7 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 		{reference: leafReference, content: append([]byte(nil), values.ControlCertificatePEM...)},
 		{reference: enrollmentReference, content: append([]byte(nil), values.EnrollmentPublicKeyPEM...)},
 		{reference: restrictedReference, content: append([]byte(nil), values.RestrictedServerCredential...)},
+		{reference: tunnelCertificateReference, content: append([]byte(nil), values.TunnelServerCertificatePEM...)},
 	}
 	return verifiedLocalJoin{
 		state: candidate, entries: entries,

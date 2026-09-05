@@ -102,7 +102,8 @@ func TestNodeDeleteRequiresRevokeAndRemovesOnlyGatewayResources(t *testing.T) {
 	state, _ := fixture.gatewayState.Load()
 	if len(state.Nodes) != 1 || state.Nodes[0].Lifecycle != model.LifecycleDeleted || state.Nodes[0].RevokedAt == nil ||
 		len(state.Nodes[0].AssignedPresets) != 0 || len(state.Transports) != 0 || len(state.Policies) != 0 ||
-		len(state.Exposes) != 0 || len(state.Certificates) != 1 || state.Certificates[0].Kind != model.CertificateControlCA {
+		len(state.Exposes) != 0 || len(state.Certificates) != 2 || state.Certificates[0].Kind != model.CertificateControlCA ||
+		state.Certificates[1].Kind != model.CertificateTunnelServer {
 		t.Fatalf("deleted gateway resources = %+v", state)
 	}
 	catalog, _ := NewNodeCatalog(fixture.gatewayState)
@@ -162,7 +163,7 @@ func TestRevokingOneNodePreservesOtherNodeIdentityAndPaths(t *testing.T) {
 	}
 	state, _ := joined.gatewayState.Load()
 	if len(state.Nodes) != 2 || state.Nodes[0].Lifecycle != model.LifecycleRevoked || state.Nodes[1].ID != secondID ||
-		state.Nodes[1].Lifecycle != model.LifecycleActive || len(state.Transports) != 4 || len(state.Certificates) != 3 {
+		state.Nodes[1].Lifecycle != model.LifecycleActive || len(state.Transports) != 4 || len(state.Certificates) != 4 {
 		t.Fatalf("one-of-many revoke state = %+v", state)
 	}
 	for _, record := range state.Transports {
@@ -453,7 +454,7 @@ func assertNodeRevokedFailClosed(t *testing.T, fixture *nodeLifecycleFixture) {
 	}
 	if state.Generation != 5 || len(state.Nodes) != 1 || state.Nodes[0].Lifecycle != model.LifecycleRevoked ||
 		state.Nodes[0].RevokedAt == nil || len(state.Transports) != 2 || len(state.Exposes) != 1 ||
-		state.Exposes[0].State != model.ExposeDisabled || state.Exposes[0].Generation != 2 || len(state.Policies) != 1 || len(state.Certificates) != 2 {
+		state.Exposes[0].State != model.ExposeDisabled || state.Exposes[0].Generation != 2 || len(state.Policies) != 1 || len(state.Certificates) != 3 {
 		t.Fatalf("revoked state = %+v", state)
 	}
 	for _, record := range state.Transports {

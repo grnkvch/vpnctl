@@ -26,6 +26,7 @@ const (
 	joinControlCAHashName           = "control_ca"
 	joinControlCertificateHashName  = "control_certificate"
 	joinEnrollmentPublicKeyHashName = "enrollment_public_key"
+	joinTunnelCertificateHashName   = "tunnel_server_certificate"
 	joinGatewayWireGuardKeyHashName = "gateway_wireguard_public_key"
 	joinRestrictedUpstreamHashName  = "restricted_server_credential"
 )
@@ -175,6 +176,7 @@ type NodeJoinAssignment struct {
 	EnrollmentFingerprint         string              `json:"enrollment_fingerprint"`
 	ControlCAFingerprint          string              `json:"control_ca_fingerprint"`
 	ControlCertificateFingerprint string              `json:"control_certificate_fingerprint"`
+	TunnelCertificateFingerprint  string              `json:"tunnel_certificate_fingerprint"`
 	HandshakeHostCandidateID      string              `json:"handshake_host_candidate_id"`
 	HandshakeHost                 string              `json:"handshake_host"`
 	HandshakeHostListVersion      int                 `json:"handshake_host_list_version"`
@@ -239,7 +241,8 @@ func (assignment NodeJoinAssignment) Validate() error {
 	if !protocolPattern.MatchString(assignment.ControlProtocol) ||
 		!fingerprintPattern.MatchString(assignment.EnrollmentFingerprint) ||
 		!fingerprintPattern.MatchString(assignment.ControlCAFingerprint) ||
-		!fingerprintPattern.MatchString(assignment.ControlCertificateFingerprint) {
+		!fingerprintPattern.MatchString(assignment.ControlCertificateFingerprint) ||
+		!fingerprintPattern.MatchString(assignment.TunnelCertificateFingerprint) {
 		return fmt.Errorf("node join control trust is invalid")
 	}
 	if assignment.HandshakeHostListVersion < 1 {
@@ -289,6 +292,7 @@ type nodeJoinWireResponse struct {
 	ControlCACertificatePEM    string             `json:"control_ca_certificate_pem"`
 	ControlCertificatePEM      string             `json:"control_certificate_pem"`
 	EnrollmentPublicKeyPEM     string             `json:"enrollment_public_key_pem"`
+	TunnelServerCertificatePEM string             `json:"tunnel_server_certificate_pem"`
 	GatewayWireGuardPublicKey  string             `json:"gateway_wireguard_public_key"`
 	RestrictedServerCredential json.RawMessage    `json:"restricted_server_credential"`
 }
@@ -302,6 +306,7 @@ type NodeJoinResponseValues struct {
 	ControlCACertificatePEM    []byte
 	ControlCertificatePEM      []byte
 	EnrollmentPublicKeyPEM     []byte
+	TunnelServerCertificatePEM []byte
 	GatewayWireGuardPublicKey  []byte
 	RestrictedServerCredential []byte
 }
@@ -312,7 +317,7 @@ func (NodeJoinResponseValues) MarshalJSON() ([]byte, error) {
 
 func encodeNodeJoinResponse(
 	assignment NodeJoinAssignment,
-	controlCAPEM, controlCertificatePEM, enrollmentPublicKeyPEM []byte,
+	controlCAPEM, controlCertificatePEM, enrollmentPublicKeyPEM, tunnelServerCertificatePEM []byte,
 	gatewayWireGuardPublicKey string,
 	restrictedServerCredential []byte,
 ) (*output.Secret, error) {
@@ -320,6 +325,7 @@ func encodeNodeJoinResponse(
 		SchemaVersion: NodeJoinSchemaVersion, Assignment: assignment,
 		ControlCACertificatePEM: string(controlCAPEM), ControlCertificatePEM: string(controlCertificatePEM),
 		EnrollmentPublicKeyPEM: string(enrollmentPublicKeyPEM), GatewayWireGuardPublicKey: gatewayWireGuardPublicKey,
+		TunnelServerCertificatePEM: string(tunnelServerCertificatePEM),
 		RestrictedServerCredential: append(json.RawMessage(nil), restrictedServerCredential...),
 	}
 	defer clear(wire.RestrictedServerCredential)
@@ -379,6 +385,7 @@ func (material *NodeJoinResponseMaterial) Use(callback func(NodeJoinResponseValu
 			ControlCACertificatePEM:    []byte(wire.ControlCACertificatePEM),
 			ControlCertificatePEM:      []byte(wire.ControlCertificatePEM),
 			EnrollmentPublicKeyPEM:     []byte(wire.EnrollmentPublicKeyPEM),
+			TunnelServerCertificatePEM: []byte(wire.TunnelServerCertificatePEM),
 			GatewayWireGuardPublicKey:  []byte(wire.GatewayWireGuardPublicKey),
 			RestrictedServerCredential: append([]byte(nil), wire.RestrictedServerCredential...),
 		}
@@ -401,6 +408,7 @@ func (values *NodeJoinResponseValues) destroy() {
 	clear(values.ControlCACertificatePEM)
 	clear(values.ControlCertificatePEM)
 	clear(values.EnrollmentPublicKeyPEM)
+	clear(values.TunnelServerCertificatePEM)
 	clear(values.GatewayWireGuardPublicKey)
 	clear(values.RestrictedServerCredential)
 }
@@ -413,7 +421,7 @@ func validateNodeJoinWireResponse(wire nodeJoinWireResponse) error {
 		return err
 	}
 	if len(wire.ControlCACertificatePEM) == 0 || len(wire.ControlCertificatePEM) == 0 ||
-		len(wire.EnrollmentPublicKeyPEM) == 0 || len(wire.GatewayWireGuardPublicKey) == 0 ||
+		len(wire.EnrollmentPublicKeyPEM) == 0 || len(wire.TunnelServerCertificatePEM) == 0 || len(wire.GatewayWireGuardPublicKey) == 0 ||
 		len(wire.RestrictedServerCredential) == 0 {
 		return fmt.Errorf("node join response material is incomplete")
 	}
@@ -436,6 +444,7 @@ func validateNodeJoinWireResponse(wire nodeJoinWireResponse) error {
 		joinControlCAHashName:           sha256Hex([]byte(wire.ControlCACertificatePEM)),
 		joinControlCertificateHashName:  sha256Hex([]byte(wire.ControlCertificatePEM)),
 		joinEnrollmentPublicKeyHashName: sha256Hex([]byte(wire.EnrollmentPublicKeyPEM)),
+		joinTunnelCertificateHashName:   sha256Hex([]byte(wire.TunnelServerCertificatePEM)),
 		joinGatewayWireGuardKeyHashName: sha256Hex([]byte(wire.GatewayWireGuardPublicKey)),
 		joinRestrictedUpstreamHashName:  sha256Hex(wire.RestrictedServerCredential),
 	}
@@ -484,7 +493,7 @@ func validateCanonicalJoinPresets(presets []string) error {
 func joinResponseMaterialHashNames() []string {
 	result := []string{
 		joinControlCAHashName, joinControlCertificateHashName, joinEnrollmentPublicKeyHashName,
-		joinGatewayWireGuardKeyHashName, joinRestrictedUpstreamHashName,
+		joinTunnelCertificateHashName, joinGatewayWireGuardKeyHashName, joinRestrictedUpstreamHashName,
 	}
 	sort.Strings(result)
 	return result

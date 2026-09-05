@@ -2,7 +2,34 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
-## 2026-09-06 — stable reverse-tunnel TLS identity
+## 2026-09-05 — reverse-tunnel trust bootstrap through join
+
+### Planned reversible validation
+
+- Integrate the stable gateway-owned frps TLS identity into the initial node
+  join saga. The first join stages the identity before readiness and commits its
+  metadata with the node; pre-commit failure rolls back newly owned references,
+  while later joins validate and reuse the committed identity.
+- Bind the public tunnel certificate and its fingerprint into the signed join
+  assignment and material hashes. The node validates the exact managed public
+  profile, stores the certificate under a node-local trust reference, and never
+  receives the gateway private key.
+- Validation is source-only with temporary secret stores and in-memory HTTPS
+  handlers. It does not create a production certificate, consume a real invite,
+  bind a production port, start frp, or mutate any host/VM state. Repository
+  rollback removes this source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests prove exact certificate transfer and fingerprint pinning, gateway-only
+  private-key ownership, rollback after failed readiness, reuse across nodes,
+  fail-closed response-substitution handling, and preservation of the shared
+  host identity across node revoke/delete.
+- The full Go suite, `go vet ./...`, diff checks, and strict OpenSpec validation
+  passed. No production secret, file, service, listener, host, or VM was
+  touched, so no host rollback remains.
+
+## 2026-09-05 — stable reverse-tunnel TLS identity
 
 ### Planned reversible validation
 
@@ -27,7 +54,7 @@ This journal records development-host mutations made while implementing and vali
 - The full Go suite and `go vet ./...` passed. No production secret, file,
   service, listener, host, or VM was touched, so no host rollback remains.
 
-## 2026-09-06 — bounded enrollment loopback server
+## 2026-09-05 — bounded enrollment loopback server
 
 ### Planned reversible validation
 
@@ -51,7 +78,7 @@ This journal records development-host mutations made while implementing and vali
   passed. No production port, service, host, VM, token, or persistent state was
   touched, so no host rollback remains.
 
-## 2026-09-06 — lossless private-node policy handoff
+## 2026-09-05 — lossless private-node policy handoff
 
 ### Planned reversible validation
 
@@ -83,7 +110,7 @@ This journal records development-host mutations made while implementing and vali
   transitions stayed inside disposable test fixtures; no persistent host
   mutation or rollback remains.
 
-## 2026-09-06 — public strict convergence plan
+## 2026-09-05 — public strict convergence plan
 
 ### Planned reversible validation
 
@@ -110,7 +137,7 @@ This journal records development-host mutations made while implementing and vali
   disposable local sockets were used; no persistent host mutation or rollback
   remains.
 
-## 2026-09-06 — production owned-unit drift observation
+## 2026-09-05 — production owned-unit drift observation
 
 ### Planned reversible validation
 
@@ -139,7 +166,7 @@ This journal records development-host mutations made while implementing and vali
   existing suite's disposable local sockets were used; no persistent host
   mutation or rollback remains.
 
-## 2026-09-06 — production owned-file drift observation
+## 2026-09-05 — production owned-file drift observation
 
 ### Planned reversible validation
 
@@ -168,7 +195,7 @@ This journal records development-host mutations made while implementing and vali
   existing suite's disposable local sockets were touched; no persistent host
   mutation or rollback remains.
 
-## 2026-09-06 — strict persisted convergence read boundary
+## 2026-09-05 — strict persisted convergence read boundary
 
 ### Planned reversible validation
 
@@ -196,7 +223,7 @@ This journal records development-host mutations made while implementing and vali
   files and the existing suite's local sockets were used; no persistent host
   mutation or rollback remains.
 
-## 2026-09-06 — public passive status entry point
+## 2026-09-05 — public passive status entry point
 
 ### Planned reversible validation
 

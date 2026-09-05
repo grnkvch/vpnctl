@@ -609,6 +609,8 @@ func exposeSagaNodeState(t *testing.T) model.State {
 			EnrollmentPublicKeyRef:        "enrollment-public:gateway",
 			ControlCAFingerprints:         []string{"sha256:" + strings.Repeat("e", 64)},
 			ControlCACertificateRefs:      []string{"control-cert:gateway-ca-g1"},
+			TunnelCertificateFingerprint:  "sha256:" + strings.Repeat("c", 64),
+			TunnelCertificateRef:          "tunnel-cert:gateway-g1",
 			StandardPublicKey:             base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x51}, 32)),
 			RestrictedServerCredentialRef: "restricted-upstream:gateway-g1", LastKnownGatewayGeneration: 7,
 		},

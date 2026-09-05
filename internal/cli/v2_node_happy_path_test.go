@@ -98,8 +98,12 @@ func TestV2NodeMinimalCommandsHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tunnelTLS, err := tunnel.NewGatewayTLSIdentityProvisioner(gatewaySecrets, tunnel.GatewayTLSIdentityRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	joinBuilder, err := enrollment.NewGatewayJoinBuilder(inviteManager, gatewaySecrets, enrollment.GatewayJoinRuntime{
-		Now: time.Now, WireGuardRunner: wireGuard, Readiness: v2NodeHappyJoinReadiness{},
+		Now: time.Now, WireGuardRunner: wireGuard, Readiness: v2NodeHappyJoinReadiness{}, TunnelTLS: tunnelTLS,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -552,6 +556,7 @@ type v2NodeHappyJoinReadiness struct{}
 func (v2NodeHappyJoinReadiness) Check(_ context.Context, candidate enrollment.GatewayJoinCandidate) (enrollment.JoinReadinessReport, error) {
 	if candidate.State.Generation == 0 || candidate.Node.ID != v2NodeHappyNodeID ||
 		len(candidate.ControlCACertificatePEM) == 0 || len(candidate.ControlCertificatePEM) == 0 ||
+		len(candidate.TunnelServerCertificatePEM) == 0 ||
 		candidate.GatewayWireGuardPublicKey != v2NodeHappyGatewayPublicKey() || len(candidate.RestrictedServerCredential()) == 0 {
 		return enrollment.JoinReadinessReport{}, errors.New("join readiness received incomplete candidate")
 	}

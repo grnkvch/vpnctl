@@ -138,36 +138,42 @@ The gateway compares the authenticated invite generation, reserves the exact
 case-insensitive name and immutable ID, allocates the next node-pool address,
 and resolves requested names only against its applied effective presets. It
 loads exactly one active control CA, issues the node leaf from the submitted
-CSR, derives the gateway WireGuard public key, and returns only the restricted
-server credential needed by the node—not the gateway ShadowTLS bootstrap
-credential. Both standard and restricted records are built; the explicit
-choice is active and the other is standby.
+CSR, derives the gateway WireGuard public key, and provisions or validates one
+stable gateway-owned reverse-tunnel TLS identity. The first join creates its
+self-signed Ed25519 server certificate and private key through owner-create-only
+references; later joins reuse the same validated identity. The response returns
+the public tunnel certificate and only the restricted server credential needed
+by the node—not the gateway tunnel private key or ShadowTLS bootstrap
+credential. Both standard and restricted records are built; the explicit choice
+is active and the other is standby.
 
 Before commit, the mandatory readiness boundary must report gateway staging,
 control mTLS, standard transport, restricted TCP/UoT, and reverse tunnel as
 healthy for the complete candidate. A missing result fails closed. After that
 gate, the gateway owner-creates the node control certificate, restricted
 identity, and tunnel token, then consumes the invite and appends the node,
-optional explicit policy, both transports, and certificate in one validated
-compare-and-swap state generation. A proven state-write failure removes only
-the secrets created by that transaction. A write whose outcome cannot be
-proven is retained for reconciliation rather than risking deletion of a
-committed identity.
+optional explicit policy, both transports, node certificate, and—on the first
+join—the tunnel certificate record in one validated compare-and-swap state
+generation. A pre-commit failure or proven state-write failure removes only the
+secrets created by that transaction, including an otherwise orphaned first
+tunnel identity. A write whose outcome cannot be proven is retained for
+reconciliation rather than risking deletion of a committed identity.
 
 The signed response binds the assigned name/ID/IP, active transport, canonical
 preset names and one canonical effective snapshot per assigned preset, control
-protocol and trust roots,
+protocol and trust roots, the exact gateway tunnel-certificate fingerprint,
 handshake-host identity/version, gateway state generation, and exact hashes of
 all delivered material. The node pins the enrollment DER-SPKI fingerprint from
 the invite, reconstructs the transcript, verifies the CA and leaf profile plus
-CSR public-key equality, and commits one local generation containing gateway
-trust, both transports, the optional policy, its exact assigned effective preset
-snapshots, and public certificate metadata. The flattened policy selector view
-is derived and verified on the node rather than duplicated on the wire, so
-per-preset exclusion boundaries survive enrollment.
-The CA, enrollment public key, node certificate, and restricted server
-credential use owner-create-only local references. Node control and WireGuard
-private keys never have a gateway storage path.
+CSR public-key equality, validates the exact self-signed tunnel server profile,
+and commits one local generation containing gateway trust, both transports, the
+optional policy, its exact assigned effective preset snapshots, and public
+certificate metadata. The flattened policy selector view is derived and
+verified on the node rather than duplicated on the wire, so per-preset exclusion
+boundaries survive enrollment. The CA, enrollment public key, node certificate,
+restricted server credential, and trusted tunnel certificate use
+owner-create-only local references. The gateway tunnel private key and node
+control/WireGuard private keys never cross their respective host boundary.
 
 This is a reconcilable saga, not distributed consensus. Once the gateway has
 committed, a lost, malformed, or locally unpersistable response is explicitly

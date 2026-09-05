@@ -603,6 +603,10 @@ sudo vpnctl expose 3000 --path /telegram/webhook
   отменяет join целиком, а invite остаётся неиспользованным.
 - Gateway endpoint, fingerprint и node name берутся из invite. Token вводится
   только через hidden prompt и никогда не передаётся command-line argument.
+- В signed enrollment response node получает public certificate стабильной
+  gateway-owned reverse-tunnel TLS identity и его fingerprint. Node проверяет
+  точный managed profile и сохраняет certificate в отдельный root-only trust
+  reference; tunnel private key никогда не покидает gateway.
 - `join` разрешён только на initialized, но ещё не joined node. Повторный join
   подключённого node ничего не меняет и направляет пользователя к manual
   `transport switch`.
@@ -1182,6 +1186,13 @@ https://PUBLIC_GATEWAY_IP/telegram/webhook
   tunnel authentication каждый node получает отдельный случайный 256-bit
   symmetric token; встроенный общий frp server token не считается per-node
   identity boundary.
+- Gateway использует одну стабильную generation-1 TLS identity для общего
+  `frps`: self-signed Ed25519 server certificate с exact DNS name
+  `vpnctl-tunnel-gateway` и пятилетним сроком. Первый join создаёт certificate и
+  private key транзакционно, последующие joins валидируют и переиспользуют их;
+  каждый node pins доставленные certificate bytes и fingerprint без доверия к
+  system CA. Ни node revoke/delete, ни transport switch эту host-owned identity
+  не удаляют.
 - `frpc` передаёт immutable node ID и tunnel token в TLS-protected metadata.
   Gateway tunnel authorizer проверяет их на `Login`, а на `NewProxy` дополнительно
   сверяет proxy name, type и loopback remote port с authoritative expose state.

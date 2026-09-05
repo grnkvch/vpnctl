@@ -23,6 +23,7 @@ import (
 const (
 	GatewayTLSCertificateRef      = model.SecretRef("tunnel-cert:server-g1")
 	GatewayTLSPrivateKeyRef       = model.SecretRef("tunnel-key:server-g1")
+	GatewayTrustedCertificateRef  = model.SecretRef("tunnel-cert:gateway-g1")
 	GatewayTLSCertificateValidity = 1825 * 24 * time.Hour
 	GatewayTLSCertificateWarnDays = 180
 	gatewayTLSSerialBytes         = 16
@@ -202,13 +203,13 @@ func ValidateGatewayTLSIdentity(certificatePEM, privateKeyPEM []byte, record mod
 		len(record.SANs) != 1 || record.SANs[0] != "DNS:"+FRPTLSServerName {
 		return fmt.Errorf("gateway tunnel TLS certificate metadata is invalid")
 	}
-	certificateBlock, rest := pem.Decode(certificatePEM)
-	if certificateBlock == nil || certificateBlock.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
-		return fmt.Errorf("gateway tunnel TLS certificate PEM is invalid")
-	}
-	certificate, err := x509.ParseCertificate(certificateBlock.Bytes)
+	fingerprint, err := ValidateGatewayTLSCertificatePEM(certificatePEM, now)
 	if err != nil {
-		return fmt.Errorf("parse gateway tunnel TLS certificate: %w", err)
+		return err
+	}
+	certificate, err := parseGatewayTLSCertificatePEM(certificatePEM)
+	if err != nil {
+		return err
 	}
 	keyBlock, rest := pem.Decode(privateKeyPEM)
 	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
@@ -220,20 +221,50 @@ func ValidateGatewayTLSIdentity(certificatePEM, privateKeyPEM []byte, record mod
 	if err != nil || !ok || !publicOK || len(privateKey) != ed25519.PrivateKeySize || !bytes.Equal(privateKey.Public().(ed25519.PublicKey), publicKey) {
 		return fmt.Errorf("gateway tunnel TLS key pair is invalid")
 	}
-	fingerprint := sha256.Sum256(certificate.Raw)
-	now = now.UTC()
-	if certificate.SignatureAlgorithm != x509.PureEd25519 || certificate.Subject.CommonName != FRPTLSServerName ||
-		len(certificate.DNSNames) != 1 || certificate.DNSNames[0] != FRPTLSServerName || len(certificate.IPAddresses) != 0 ||
-		len(certificate.EmailAddresses) != 0 || len(certificate.URIs) != 0 || certificate.IsCA ||
-		certificate.KeyUsage != x509.KeyUsageDigitalSignature || len(certificate.ExtKeyUsage) != 1 || certificate.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth ||
-		certificate.CheckSignature(certificate.SignatureAlgorithm, certificate.RawTBSCertificate, certificate.Signature) != nil ||
-		certificate.VerifyHostname(FRPTLSServerName) != nil || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) ||
-		record.Fingerprint != "sha256:"+hex.EncodeToString(fingerprint[:]) || record.SerialHex != certificate.SerialNumber.Text(16) ||
+	if record.Fingerprint != fingerprint || record.SerialHex != certificate.SerialNumber.Text(16) ||
 		record.Subject != certificate.Subject.String() || !record.NotBefore.Equal(certificate.NotBefore.UTC()) || !record.NotAfter.Equal(certificate.NotAfter.UTC()) ||
 		record.WarningDays != GatewayTLSCertificateWarnDays {
 		return fmt.Errorf("gateway tunnel TLS certificate differs from its managed profile")
 	}
 	return nil
+}
+
+// ValidateGatewayTLSCertificatePEM is the node-side trust boundary. It checks
+// the complete managed public profile without requiring or exposing the
+// gateway private key and returns the raw-certificate fingerprint persisted in
+// node gateway trust.
+func ValidateGatewayTLSCertificatePEM(certificatePEM []byte, now time.Time) (string, error) {
+	certificate, err := parseGatewayTLSCertificatePEM(certificatePEM)
+	if err != nil {
+		return "", err
+	}
+	now = now.UTC()
+	if now.IsZero() || certificate.SignatureAlgorithm != x509.PureEd25519 || certificate.Subject.CommonName != FRPTLSServerName ||
+		certificate.Subject.String() != "CN="+FRPTLSServerName || certificate.Issuer.String() != "CN="+FRPTLSServerName ||
+		!bytes.Equal(certificate.RawIssuer, certificate.RawSubject) || certificate.SerialNumber == nil || certificate.SerialNumber.Sign() <= 0 ||
+		certificate.SerialNumber.BitLen() > gatewayTLSSerialBytes*8-1 ||
+		len(certificate.DNSNames) != 1 || certificate.DNSNames[0] != FRPTLSServerName || len(certificate.IPAddresses) != 0 ||
+		len(certificate.EmailAddresses) != 0 || len(certificate.URIs) != 0 || certificate.IsCA ||
+		certificate.KeyUsage != x509.KeyUsageDigitalSignature || len(certificate.ExtKeyUsage) != 1 || certificate.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth ||
+		certificate.CheckSignature(certificate.SignatureAlgorithm, certificate.RawTBSCertificate, certificate.Signature) != nil ||
+		certificate.VerifyHostname(FRPTLSServerName) != nil || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) ||
+		certificate.NotAfter.Sub(certificate.NotBefore) != GatewayTLSCertificateValidity {
+		return "", fmt.Errorf("gateway tunnel TLS certificate differs from its managed profile")
+	}
+	fingerprint := sha256.Sum256(certificate.Raw)
+	return "sha256:" + hex.EncodeToString(fingerprint[:]), nil
+}
+
+func parseGatewayTLSCertificatePEM(certificatePEM []byte) (*x509.Certificate, error) {
+	certificateBlock, rest := pem.Decode(certificatePEM)
+	if certificateBlock == nil || certificateBlock.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("gateway tunnel TLS certificate PEM is invalid")
+	}
+	certificate, err := x509.ParseCertificate(certificateBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse gateway tunnel TLS certificate: %w", err)
+	}
+	return certificate, nil
 }
 
 func generateGatewayTLSIdentity(entropy io.Reader, issuedAt time.Time) ([]byte, []byte, *x509.Certificate, error) {

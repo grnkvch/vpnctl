@@ -86,8 +86,9 @@ func TestV2NodeCredentialLifecycleE2E(t *testing.T) {
 	finalGateway, _ := fixture.gatewayState.Load()
 	if finalGateway.Generation != 7 || len(finalGateway.Nodes) != 1 ||
 		finalGateway.Nodes[0].Lifecycle != model.LifecycleDeleted || len(finalGateway.Transports) != 0 ||
-		len(finalGateway.Policies) != 0 || len(finalGateway.Exposes) != 0 || len(finalGateway.Certificates) != 1 ||
-		finalGateway.Certificates[0].Kind != model.CertificateControlCA {
+		len(finalGateway.Policies) != 0 || len(finalGateway.Exposes) != 0 || len(finalGateway.Certificates) != 2 ||
+		finalGateway.Certificates[0].Kind != model.CertificateControlCA ||
+		finalGateway.Certificates[1].Kind != model.CertificateTunnelServer {
 		t.Fatalf("node delete retained gateway-owned resources: %+v", finalGateway)
 	}
 	localState, _ := fixture.nodeState.Load()

@@ -751,6 +751,12 @@ func (trust GatewayTrust) Validate() error {
 		}
 		seenRefs[certificateRef] = struct{}{}
 	}
+	if err := validateFingerprint("tunnel_certificate_fingerprint", trust.TunnelCertificateFingerprint); err != nil {
+		return err
+	}
+	if err := validateOpaqueRef("tunnel_certificate_ref", trust.TunnelCertificateRef.String()); err != nil {
+		return err
+	}
 	standardPublicKey, err := base64.StdEncoding.Strict().DecodeString(trust.StandardPublicKey)
 	if err != nil || len(standardPublicKey) != 32 || base64.StdEncoding.EncodeToString(standardPublicKey) != trust.StandardPublicKey {
 		return invalid("standard_public_key", "must be canonical base64 for 256 bits")

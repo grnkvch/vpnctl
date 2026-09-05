@@ -23,6 +23,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
@@ -65,6 +66,7 @@ type GatewayJoinCandidate struct {
 	ControlCACertificatePEM    []byte
 	ControlCertificatePEM      []byte
 	EnrollmentPublicKeyPEM     []byte
+	TunnelServerCertificatePEM []byte
 	GatewayWireGuardPublicKey  string
 	restrictedServerCredential []byte
 	shared                     *output.Secret
@@ -90,6 +92,7 @@ type GatewayJoinRuntime struct {
 	Now             func() time.Time
 	WireGuardRunner wireguard.Runner
 	Readiness       GatewayJoinReadinessChecker
+	TunnelTLS       *tunnel.GatewayTLSIdentityProvisioner
 }
 
 type GatewayJoinBuilder struct {
@@ -99,7 +102,7 @@ type GatewayJoinBuilder struct {
 }
 
 func NewGatewayJoinBuilder(invites *InviteManager, secrets NodeCredentialSecretStore, runtime GatewayJoinRuntime) (*GatewayJoinBuilder, error) {
-	if invites == nil || invites.state == nil || secrets == nil || runtime.Readiness == nil {
+	if invites == nil || invites.state == nil || secrets == nil || runtime.Readiness == nil || runtime.TunnelTLS == nil {
 		return nil, fmt.Errorf("gateway join requires invite, secret, and readiness services")
 	}
 	if runtime.Entropy == nil {
@@ -164,6 +167,28 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 	if preparedAt.Before(state.Host.InitializedAt) {
 		return PreparedEnrollmentArtifacts{}, fmt.Errorf("gateway clock precedes host initialization")
 	}
+	tunnelTLS, err := builder.runtime.TunnelTLS.Provision(ctx, state, preparedAt)
+	if err != nil {
+		return PreparedEnrollmentArtifacts{}, fmt.Errorf("provision gateway tunnel TLS identity: %w", err)
+	}
+	keepTunnelTLS := false
+	defer func() {
+		if !keepTunnelTLS {
+			_ = builder.runtime.TunnelTLS.Rollback(context.Background(), tunnelTLS)
+		}
+	}()
+	tunnelCertificatePEM, err := builder.secrets.Get(model.SecretRef(tunnelTLS.Certificate.CertificateRef))
+	if err != nil {
+		return PreparedEnrollmentArtifacts{}, fmt.Errorf("read gateway tunnel TLS certificate: %w", err)
+	}
+	defer clear(tunnelCertificatePEM)
+	tunnelFingerprint, err := tunnel.ValidateGatewayTLSCertificatePEM(tunnelCertificatePEM, preparedAt)
+	if err != nil {
+		return PreparedEnrollmentArtifacts{}, fmt.Errorf("validate gateway tunnel TLS certificate: %w", err)
+	}
+	if tunnelFingerprint != tunnelTLS.Certificate.Fingerprint {
+		return PreparedEnrollmentArtifacts{}, fmt.Errorf("gateway tunnel TLS certificate fingerprint differs from state")
+	}
 
 	authority, err := builder.loadJoinAuthority(state)
 	if err != nil {
@@ -201,6 +226,7 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 		gatewayOverlayIPv4: gatewayOverlayIPv4, preparedAt: preparedAt,
 		controlCA: authority.caRecord, controlCACertificatePEM: authority.caCertificatePEM,
 		issued: issued, enrollmentPublicKeyPEM: authority.enrollmentPublicKeyPEM,
+		tunnelCertificateFingerprint: tunnelFingerprint, tunnelCertificatePEM: tunnelCertificatePEM,
 		gatewayWireGuardPublicKey: gatewayWireGuardPublicKey, restrictedUpstream: restrictedUpstream,
 	})
 	if err != nil {
@@ -208,6 +234,10 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 	}
 	candidateState := state
 	candidateState.Generation = assignment.GatewayStateGeneration
+	if len(tunnelTLS.OwnedReferences) != 0 {
+		tunnelRecord := tunnelTLS.Certificate
+		resources.tunnelCertificate = &tunnelRecord
+	}
 	appendGatewayJoinResources(&candidateState, resources)
 	if err := candidateState.Validate(); err != nil {
 		return PreparedEnrollmentArtifacts{}, fmt.Errorf("validate prepared join candidate: %w", err)
@@ -217,6 +247,7 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 		ControlCACertificatePEM:    append([]byte(nil), authority.caCertificatePEM...),
 		ControlCertificatePEM:      append([]byte(nil), issued.CertificatePEM...),
 		EnrollmentPublicKeyPEM:     append([]byte(nil), authority.enrollmentPublicKeyPEM...),
+		TunnelServerCertificatePEM: append([]byte(nil), tunnelCertificatePEM...),
 		GatewayWireGuardPublicKey:  gatewayWireGuardPublicKey,
 		restrictedServerCredential: append([]byte(nil), restrictedUpstream...), shared: &shared,
 	}
@@ -231,7 +262,7 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 
 	response, err := encodeNodeJoinResponse(
 		assignment, authority.caCertificatePEM, issued.CertificatePEM, authority.enrollmentPublicKeyPEM,
-		gatewayWireGuardPublicKey, restrictedUpstream,
+		tunnelCertificatePEM, gatewayWireGuardPublicKey, restrictedUpstream,
 	)
 	if err != nil {
 		return PreparedEnrollmentArtifacts{}, err
@@ -249,9 +280,11 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 	committer := &gatewayJoinCommitter{
 		invites: builder.invites, secrets: builder.secrets, authorization: authorization,
 		resources: resources, assignment: assignment, shared: shared,
-		controlCertificate: append([]byte(nil), issued.CertificatePEM...),
+		controlCertificate:   append([]byte(nil), issued.CertificatePEM...),
+		tunnelTLSProvisioner: builder.runtime.TunnelTLS, tunnelTLSInstallation: tunnelTLS,
 	}
 	keepShared = true
+	keepTunnelTLS = true
 	return PreparedEnrollmentArtifacts{
 		NodeID: request.PublicExchange.NodeID, Transport: request.Transport,
 		Presets: append([]string{}, presetNames...), PublicKeyHashes: publicHashes,
@@ -349,31 +382,34 @@ func (builder *GatewayJoinBuilder) loadGatewayTransportMaterial(ctx context.Cont
 }
 
 type gatewayJoinResourceInput struct {
-	state                     model.State
-	authorization             InviteAuthorization
-	request                   *NodeJoinRequest
-	presetNames               []string
-	effectivePresets          []model.Preset
-	selectors                 []model.Selector
-	policyHash                string
-	overlayIPv4               string
-	gatewayOverlayIPv4        string
-	preparedAt                time.Time
-	controlCA                 model.Certificate
-	controlCACertificatePEM   []byte
-	issued                    control.IssuedNodeCertificate
-	enrollmentPublicKeyPEM    []byte
-	gatewayWireGuardPublicKey string
-	restrictedUpstream        []byte
+	state                        model.State
+	authorization                InviteAuthorization
+	request                      *NodeJoinRequest
+	presetNames                  []string
+	effectivePresets             []model.Preset
+	selectors                    []model.Selector
+	policyHash                   string
+	overlayIPv4                  string
+	gatewayOverlayIPv4           string
+	preparedAt                   time.Time
+	controlCA                    model.Certificate
+	controlCACertificatePEM      []byte
+	issued                       control.IssuedNodeCertificate
+	enrollmentPublicKeyPEM       []byte
+	tunnelCertificateFingerprint string
+	tunnelCertificatePEM         []byte
+	gatewayWireGuardPublicKey    string
+	restrictedUpstream           []byte
 }
 
 type gatewayJoinResources struct {
-	node          model.Node
-	policy        *model.Policy
-	transports    []model.Transport
-	certificate   model.Certificate
-	restrictedRef model.SecretRef
-	tunnelRef     model.SecretRef
+	node              model.Node
+	policy            *model.Policy
+	transports        []model.Transport
+	certificate       model.Certificate
+	tunnelCertificate *model.Certificate
+	restrictedRef     model.SecretRef
+	tunnelRef         model.SecretRef
 }
 
 func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResources, NodeJoinAssignment, error) {
@@ -450,6 +486,7 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 		EnrollmentFingerprint:         input.authorization.EnrollmentFingerprint,
 		ControlCAFingerprint:          input.controlCA.Fingerprint,
 		ControlCertificateFingerprint: certificate.Fingerprint,
+		TunnelCertificateFingerprint:  input.tunnelCertificateFingerprint,
 		HandshakeHostCandidateID:      input.state.HandshakeHost.CandidateID,
 		HandshakeHost:                 input.state.HandshakeHost.Hostname,
 		HandshakeHostListVersion:      input.state.HandshakeHost.ListVersion,
@@ -458,6 +495,7 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 			joinControlCAHashName:           sha256Hex(input.controlCACertificatePEM),
 			joinControlCertificateHashName:  sha256Hex(input.issued.CertificatePEM),
 			joinEnrollmentPublicKeyHashName: sha256Hex(input.enrollmentPublicKeyPEM),
+			joinTunnelCertificateHashName:   sha256Hex(input.tunnelCertificatePEM),
 			joinGatewayWireGuardKeyHashName: sha256Hex([]byte(input.gatewayWireGuardPublicKey)),
 			joinRestrictedUpstreamHashName:  sha256Hex(input.restrictedUpstream),
 		},
@@ -477,6 +515,9 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 func appendGatewayJoinResources(candidate *model.State, resources gatewayJoinResources) {
 	candidate.Nodes = append(append([]model.Node{}, candidate.Nodes...), resources.node)
 	candidate.Transports = append(append([]model.Transport{}, candidate.Transports...), resources.transports...)
+	if resources.tunnelCertificate != nil {
+		candidate.Certificates = append(append([]model.Certificate{}, candidate.Certificates...), *resources.tunnelCertificate)
+	}
 	candidate.Certificates = append(append([]model.Certificate{}, candidate.Certificates...), resources.certificate)
 	if resources.policy != nil {
 		candidate.Policies = append(append([]model.Policy{}, candidate.Policies...), *resources.policy)
@@ -484,17 +525,19 @@ func appendGatewayJoinResources(candidate *model.State, resources gatewayJoinRes
 }
 
 type gatewayJoinCommitter struct {
-	mu                 sync.Mutex
-	invites            *InviteManager
-	secrets            NodeCredentialSecretStore
-	authorization      InviteAuthorization
-	resources          gatewayJoinResources
-	assignment         NodeJoinAssignment
-	shared             output.Secret
-	controlCertificate []byte
-	owned              []model.SecretRef
-	committed          bool
-	destroyed          bool
+	mu                    sync.Mutex
+	invites               *InviteManager
+	secrets               NodeCredentialSecretStore
+	authorization         InviteAuthorization
+	resources             gatewayJoinResources
+	assignment            NodeJoinAssignment
+	shared                output.Secret
+	controlCertificate    []byte
+	tunnelTLSProvisioner  *tunnel.GatewayTLSIdentityProvisioner
+	tunnelTLSInstallation tunnel.GatewayTLSIdentityInstallation
+	owned                 []model.SecretRef
+	committed             bool
+	destroyed             bool
 }
 
 func (committer *gatewayJoinCommitter) Commit(ctx context.Context, replayHash string) error {
@@ -547,6 +590,7 @@ func (committer *gatewayJoinCommitter) Commit(ctx context.Context, replayHash st
 		if loadErr == nil && committer.joinWasCommittedInState(current, replayHash) {
 			committer.committed = true
 			committer.owned = nil
+			committer.retainTunnelTLS()
 			return nil
 		}
 		if loadErr == nil && !gatewayStateContainsNode(current, committer.resources.node.ID) {
@@ -554,12 +598,14 @@ func (committer *gatewayJoinCommitter) Commit(ctx context.Context, replayHash st
 		}
 		if loadErr != nil || current.Generation > committer.authorization.ExpectedStateGeneration {
 			committer.owned = nil
+			committer.retainTunnelTLS()
 			return errors.Join(ErrJoinUncertain, err, loadErr)
 		}
 		return errors.Join(err, committer.rollbackOwned())
 	}
 	committer.committed = true
 	committer.owned = nil
+	committer.retainTunnelTLS()
 	return nil
 }
 
@@ -594,7 +640,15 @@ func (committer *gatewayJoinCommitter) rollbackOwned() error {
 		}
 	}
 	committer.owned = nil
+	if committer.tunnelTLSProvisioner != nil && len(committer.tunnelTLSInstallation.OwnedReferences) != 0 {
+		rollbackErrors = append(rollbackErrors, committer.tunnelTLSProvisioner.Rollback(context.Background(), committer.tunnelTLSInstallation))
+		committer.tunnelTLSInstallation.OwnedReferences = nil
+	}
 	return errors.Join(rollbackErrors...)
+}
+
+func (committer *gatewayJoinCommitter) retainTunnelTLS() {
+	committer.tunnelTLSInstallation.OwnedReferences = nil
 }
 
 func (committer *gatewayJoinCommitter) Destroy() {
@@ -607,6 +661,10 @@ func (committer *gatewayJoinCommitter) Destroy() {
 		return
 	}
 	committer.shared.Destroy()
+	if !committer.committed && committer.tunnelTLSProvisioner != nil && len(committer.tunnelTLSInstallation.OwnedReferences) != 0 {
+		_ = committer.tunnelTLSProvisioner.Rollback(context.Background(), committer.tunnelTLSInstallation)
+		committer.tunnelTLSInstallation.OwnedReferences = nil
+	}
 	clear(committer.controlCertificate)
 	committer.controlCertificate = nil
 	committer.destroyed = true
@@ -685,10 +743,12 @@ func destroyGatewayJoinCandidate(candidate *GatewayJoinCandidate) {
 	clear(candidate.ControlCACertificatePEM)
 	clear(candidate.ControlCertificatePEM)
 	clear(candidate.EnrollmentPublicKeyPEM)
+	clear(candidate.TunnelServerCertificatePEM)
 	clear(candidate.restrictedServerCredential)
 	candidate.ControlCACertificatePEM = nil
 	candidate.ControlCertificatePEM = nil
 	candidate.EnrollmentPublicKeyPEM = nil
+	candidate.TunnelServerCertificatePEM = nil
 	candidate.restrictedServerCredential = nil
 }
 
