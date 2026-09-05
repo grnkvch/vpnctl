@@ -495,9 +495,9 @@ setup_controller() {
 compose_ingress_tunnel() {
   local gateway_ip attempt probe_output client_dropin_path
   gateway_ip=$(lab_ip "$gateway_instance")
-  "$repository_root/scripts/v2restricted-spike.sh" prepare > "$run_root/restricted-prepare.log"
-  "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
-  "$repository_root/scripts/v2ingress-spike.sh" prepare "$gateway_ip" > "$run_root/ingress-prepare.log"
+  "$repository_root/scripts/v2restricted-spike.sh" prepare > "$run_root/restricted-prepare.log" 2>&1
+  "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log" 2>&1
+  "$repository_root/scripts/v2ingress-spike.sh" prepare "$gateway_ip" > "$run_root/ingress-prepare.log" 2>&1
 
   [ "$(guest "$gateway_instance" sudo grep -Fxc 'log-level: info' /etc/vpnctl-v2-spike/restricted/gateway.yaml)" -eq 1 ]
   [ "$(guest "$node_instance" sudo grep -Fxc 'log-level: info' /etc/vpnctl-v2-spike/restricted/node.yaml)" -eq 1 ]

@@ -853,6 +853,26 @@ This journal records development-host mutations made while implementing and vali
   packages, and returned both fixtures to `Stopped`. No manual rollback is
   required.
 
+### Transient tunnel-prepare abort before capacity execution
+
+- The next clean-source attempt at commit
+  `1e6d18bd9685d8385cce884547cc9ebd85c6035b` started both exact fixtures and
+  successfully prepared the restricted provider, then
+  `v2tunnel-spike.sh prepare` returned a silent nonzero before ingress setup,
+  nginx installation, controller startup, workload, or fault execution. Its
+  incomplete diagnostic directory is
+  `artifacts/v2lab/capacity-e2e/run-20260905T100653Z`; the tunnel prepare log is
+  empty, so the attempt provides no capacity or recovery evidence.
+- The armed parent cleanup removed the partial tunnel/restricted and capacity
+  guest resources and returned both fixtures to verified `Stopped`. The
+  checksum cache and pre-existing ignored tunnel-generated development files
+  remain under their documented shared artifact root; no manual rollback is
+  required.
+- Each provider prepare invocation now captures combined stdout and stderr in
+  its already retained run-specific log. This does not retry or change provider
+  behavior; it makes any repeated pre-capacity failure attributable while
+  preserving credential-safe ignored evidence and the existing cleanup path.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
