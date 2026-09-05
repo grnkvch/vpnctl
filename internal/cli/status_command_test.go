@@ -146,7 +146,11 @@ func TestProductionStatusConvergenceGapIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	planner, err := operations.NewConvergencePlanner(source, unavailableOwnedResourceDiscoverer{})
+	discoverer, err := operations.NewFilesystemOwnedResourceDiscoverer(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := operations.NewConvergencePlanner(source, discoverer)
 	if err != nil {
 		t.Fatal(err)
 	}

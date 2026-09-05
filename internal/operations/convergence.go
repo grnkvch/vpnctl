@@ -310,21 +310,29 @@ func ArtifactConvergenceManifest(
 		if err != nil {
 			return ConvergenceManifest{}, fmt.Errorf("encode artifact fingerprint material: %w", err)
 		}
-		runtimeMaterial, err := json.Marshal(struct {
-			Type          string `json:"type"`
-			Mode          string `json:"mode"`
-			ContentSHA256 string `json:"content_sha256"`
-		}{Type: "regular", Mode: artifact.Mode, ContentSHA256: artifact.ContentSHA256})
+		runtimeSHA256, err := managedFileRuntimeFingerprint("regular", artifact.Mode, artifact.ContentSHA256)
 		if err != nil {
 			return ConvergenceManifest{}, fmt.Errorf("encode artifact runtime fingerprint material: %w", err)
 		}
 		resources = append(resources, ManagedResource{
 			Key:            ManagedResourceKey{Component: component, Kind: ManagedResourceFile, ID: artifact.Path},
-			RevisionSHA256: ManagedFingerprint(revisionMaterial), RuntimeSHA256: ManagedFingerprint(runtimeMaterial),
+			RevisionSHA256: ManagedFingerprint(revisionMaterial), RuntimeSHA256: runtimeSHA256,
 			ApplyImpact: applyImpact, RemoveImpact: removeImpact,
 		})
 	}
 	return NewConvergenceManifest(manifest.SourceStateGeneration, resources)
+}
+
+func managedFileRuntimeFingerprint(fileType, mode, contentSHA256 string) (string, error) {
+	material, err := json.Marshal(struct {
+		Type          string `json:"type"`
+		Mode          string `json:"mode"`
+		ContentSHA256 string `json:"content_sha256"`
+	}{Type: fileType, Mode: mode, ContentSHA256: contentSHA256})
+	if err != nil {
+		return "", err
+	}
+	return ManagedFingerprint(material), nil
 }
 
 func (plan ConvergencePlan) Validate() error {

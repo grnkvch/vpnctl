@@ -75,3 +75,13 @@ invalid manifests are authoritative validation failures. The reader never
 creates or repairs the file. Initial publication and atomic CAS updates remain
 a separate writer integration so a partial implementation cannot silently
 declare desired and applied state equal.
+
+The first production discovery adapter is deliberately limited to file
+resources positively named by the applied manifest under `/etc/vpnctl/`. It
+maps the production root explicitly, never enumerates neighboring files,
+follows neither symlinks nor hard links, hashes regular content through a
+16-MiB bound, and fingerprints type, mode, and content without returning raw
+bytes. Missing paths are omitted for the planner's `missing` classification;
+wrong type, mode, or content becomes `modified`. Unit, state, and network
+resources remain typed unsupported until their own ownership-aware adapters
+are connected, so a mixed manifest cannot yield a partial healthy result.

@@ -130,12 +130,6 @@ func (reader statusStateReader) ReadStatusState(ctx context.Context) (model.Stat
 	return reader.state.Load()
 }
 
-type unavailableOwnedResourceDiscoverer struct{}
-
-func (unavailableOwnedResourceDiscoverer) DiscoverOwnedResources(context.Context, operations.ConvergenceManifest) ([]operations.OwnedResourceObservation, error) {
-	return nil, errors.New("owned-resource discovery is unavailable")
-}
-
 type unitStatusObserver interface {
 	Observe(context.Context, model.State) (controller.Observation, error)
 }
@@ -165,7 +159,11 @@ func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion 
 	if err != nil {
 		return nil, err
 	}
-	planner, err := operations.NewConvergencePlanner(convergence, unavailableOwnedResourceDiscoverer{})
+	owned, err := operations.NewFilesystemOwnedResourceDiscoverer(paths.Root)
+	if err != nil {
+		return nil, err
+	}
+	planner, err := operations.NewConvergencePlanner(convergence, owned)
 	if err != nil {
 		return nil, err
 	}

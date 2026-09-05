@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — production owned-file drift observation
+
+### Planned reversible validation
+
+- Replace the status planner's unconditional discovery placeholder with a
+  read-only adapter for applied file resources under the exact
+  `/etc/vpnctl/` ownership scope. It resolves that scope through the explicit
+  system root, enumerates no directories, and reads no resource absent from
+  the applied manifest.
+- Regular files contribute only a bounded type/mode/content fingerprint.
+  Missing files are omitted; symlinks, hard links, directories, mode changes,
+  and content changes become modified runtime shapes without exposing bytes.
+  Non-file resources remain typed unsupported rather than partially healthy.
+- Tests use temporary roots only. The adapter has no state-save, file-write,
+  unit-control, listener, firewall, route, DNS, HTTP, or provider capability;
+  repository rollback is limited to this commit and no host rollback is needed.
+
+### Acceptance
+
+- An exact renderer manifest matches an unchanged file with zero drift.
+  Separate cases prove missing, content, mode, symlink, hard-link, and directory
+  changes map deterministically without reading link targets or serializing
+  content. Oversized files, cancellation, foreign paths, and unsupported
+  resource kinds fail closed.
+- The complete sequential Go suite, `go vet ./...`, formatting/diff checks,
+  and strict OpenSpec validation passed. Only temporary test roots and the
+  existing suite's disposable local sockets were touched; no persistent host
+  mutation or rollback remains.
+
 ## 2026-09-06 — strict persisted convergence read boundary
 
 ### Planned reversible validation
