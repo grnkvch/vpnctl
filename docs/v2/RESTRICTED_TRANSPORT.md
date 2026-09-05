@@ -64,12 +64,16 @@ old host remains the sole active selection. A second pending replacement is
 rejected.
 
 `transport host commit` requires explicit confirmation and repeats the exact
-candidate probe. The gateway runtime stages and validates the candidate before
-the authoritative write, then publishes it only after the single next state
-generation is durable. That generation replaces the one authoritative host and
-every enabled restricted transport record together; it never retains two
-active host selections or chooses a fallback. A brief restricted-path outage
-during listener publication is accepted by the product contract.
+candidate probe. The gateway runtime stages and validates the candidate,
+retains the exact previous listener generation, atomically publishes and
+health-checks the candidate, and only then writes the single next authoritative
+state generation. A failed activation restores the listener before that write;
+a failed state write rolls it back when rereading proves the old generation,
+or finalizes it when rereading proves the candidate generation. That state
+generation replaces the one authoritative host and every enabled restricted
+transport record together; it never retains two active host selections or
+chooses a fallback. A brief restricted-path outage during listener publication
+is accepted by the product contract.
 
 Commit retains one exact previous-host snapshot for 24 hours. It reports every
 affected node configuration and Clash client export as stale, with explicit

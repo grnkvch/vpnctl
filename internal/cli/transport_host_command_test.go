@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,69 @@ func TestExecuteTransportHostPrepareRejectsRoleAndArgumentsBeforeBuildingManager
 	code = Execute([]string{"transport", "host", "prepare", "www.apple.com", "--json"}, &stdout, &stderr)
 	if code != ExitValidation || built || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"code":"transport_host_invalid"`) {
 		t.Fatalf("node prepare code=%d built=%t stdout=%q stderr=%q", code, built, stdout.String(), stderr.String())
+	}
+}
+
+func TestExecuteTransportHostCommitAndRollbackUseDryRunAndExplicitYes(t *testing.T) {
+	originalPaths, originalRole, originalManager, originalTTY := transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager, transportHostOpenTTY
+	t.Cleanup(func() {
+		transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager, transportHostOpenTTY = originalPaths, originalRole, originalManager, originalTTY
+	})
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRecordingHandshakeHostGatewayManager()
+	transportHostSystemPaths = func() store.Paths { return paths }
+	transportHostLoadRole = func(store.Paths) (HostRole, error) { return RoleGateway, nil }
+	transportHostBuildManager = func(store.Paths) (HandshakeHostGatewayManager, error) { return manager, nil }
+	transportHostOpenTTY = func() (PromptIO, io.Closer, error) {
+		t.Fatal("dry-run/--yes unexpectedly opened a controlling TTY")
+		return nil, nil, errors.New("unexpected TTY")
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"transport", "host", "commit", "--dry-run", "--json"}, &stdout, &stderr)
+	if code != ExitSuccess || stderr.Len() != 0 || manager.planCommitCalls != 1 || manager.commitCalls != 0 ||
+		!strings.Contains(stdout.String(), `"candidate":"www.apple.com"`) || !strings.Contains(stdout.String(), `"changed":true`) {
+		t.Fatalf("commit dry-run code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planCommitCalls, manager.commitCalls, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	code = Execute([]string{"--json", "transport", "host", "commit", "--yes"}, &stdout, &stderr)
+	if code != ExitSuccess || stderr.Len() != 0 || manager.planCommitCalls != 2 || manager.commitCalls != 1 ||
+		!strings.Contains(stdout.String(), `"active":"www.apple.com"`) || !strings.Contains(stdout.String(), `"rollback_expires_at"`) {
+		t.Fatalf("commit code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planCommitCalls, manager.commitCalls, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	code = Execute([]string{"transport", "host", "rollback", "--yes", "--json"}, &stdout, &stderr)
+	if code != ExitSuccess || stderr.Len() != 0 || manager.planRollbackCalls != 1 || manager.rollbackCalls != 1 ||
+		!strings.Contains(stdout.String(), `"active":"www.microsoft.com"`) {
+		t.Fatalf("rollback code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planRollbackCalls, manager.rollbackCalls, stdout.String(), stderr.String())
+	}
+}
+
+func TestExecuteTransportHostCommitRequiresTTYOrYes(t *testing.T) {
+	originalPaths, originalRole, originalManager, originalTTY := transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager, transportHostOpenTTY
+	t.Cleanup(func() {
+		transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager, transportHostOpenTTY = originalPaths, originalRole, originalManager, originalTTY
+	})
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRecordingHandshakeHostGatewayManager()
+	transportHostSystemPaths = func() store.Paths { return paths }
+	transportHostLoadRole = func(store.Paths) (HostRole, error) { return RoleGateway, nil }
+	transportHostBuildManager = func(store.Paths) (HandshakeHostGatewayManager, error) { return manager, nil }
+	transportHostOpenTTY = func() (PromptIO, io.Closer, error) { return nil, nil, errors.New("no controlling TTY") }
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"transport", "host", "commit", "--json"}, &stdout, &stderr)
+	if code != ExitValidation || stderr.Len() != 0 || manager.planCommitCalls != 0 || manager.commitCalls != 0 ||
+		!strings.Contains(stdout.String(), `"code":"controlling_tty_required"`) {
+		t.Fatalf("unconfirmed commit code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planCommitCalls, manager.commitCalls, stdout.String(), stderr.String())
 	}
 }
 

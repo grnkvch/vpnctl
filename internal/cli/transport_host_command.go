@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -23,6 +24,13 @@ var (
 	transportHostLoadRole     = loadSystemHostRole
 	transportHostBuildViewer  = buildSystemHandshakeHostViewer
 	transportHostBuildManager = buildSystemHandshakeHostManager
+	transportHostOpenTTY      = func() (PromptIO, io.Closer, error) {
+		terminal, err := OpenControllingTerminal()
+		if err != nil {
+			return nil, nil, err
+		}
+		return terminal, terminal, nil
+	}
 )
 
 func isTransportHostShowInvocation(args []string) bool {
@@ -33,6 +41,16 @@ func isTransportHostShowInvocation(args []string) bool {
 func isTransportHostPrepareInvocation(args []string) bool {
 	positionals := commandPositionalsWithValues(args, nil)
 	return len(positionals) >= 3 && positionals[0] == "transport" && positionals[1] == "host" && positionals[2] == "prepare"
+}
+
+func isTransportHostCommitInvocation(args []string) bool {
+	positionals := commandPositionalsWithValues(args, nil)
+	return len(positionals) >= 3 && positionals[0] == "transport" && positionals[1] == "host" && positionals[2] == "commit"
+}
+
+func isTransportHostRollbackInvocation(args []string) bool {
+	positionals := commandPositionalsWithValues(args, nil)
+	return len(positionals) >= 3 && positionals[0] == "transport" && positionals[1] == "host" && positionals[2] == "rollback"
 }
 
 type transportHostPrepareArguments struct {
@@ -128,6 +146,112 @@ func parseTransportHostPrepareArguments(args []string) (transportHostPrepareArgu
 	return parsed, nil
 }
 
+type transportHostCommitArguments struct {
+	CommandID string
+	DryRun    bool
+	Yes       bool
+	JSON      bool
+	Help      bool
+}
+
+func executeTransportHostCommitOrRollback(args []string, stdout, stderr io.Writer) int {
+	parsed, err := parseTransportHostCommitArguments(args)
+	if parsed.Help {
+		printTransportHostCommitHelp(stdout)
+		return ExitSuccess
+	}
+	emitter, emitterErr := NewResultEmitter(stdout, stderr, parsed.JSON)
+	if emitterErr != nil {
+		fmt.Fprintf(stderr, "transport host mutation failed: %v\n", emitterErr)
+		return ExitInternal
+	}
+	if err != nil {
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, output.CategoryValidation, "invalid_arguments", err.Error())
+	}
+	paths := transportHostSystemPaths()
+	role, err := transportHostLoadRole(paths)
+	if err != nil || role == RoleUninitialized {
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, output.CategoryValidation, "invalid_host_state", "transport host mutation requires an initialized gateway")
+	}
+	request := MutationRequest{CommandID: parsed.CommandID, Role: role, DryRun: parsed.DryRun, Yes: parsed.Yes, JSON: parsed.JSON}
+	if _, _, err := V2CommandRegistry().ResolveMutationMode(request); err != nil {
+		category, code, message := classifyTransportHostMutationError(err)
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, category, code, message)
+	}
+	manager, err := transportHostBuildManager(paths)
+	if err != nil {
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, output.CategoryInternal, "transport_host_unavailable", "vpnctl could not construct the handshake-host manager")
+	}
+	var workflow MutationWorkflow
+	if parsed.CommandID == "transport.host.commit" {
+		workflow, err = NewHandshakeHostCommitWorkflow(manager)
+	} else {
+		workflow, err = NewHandshakeHostRollbackWorkflow(manager)
+	}
+	if err != nil {
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, output.CategoryInternal, "transport_host_unavailable", "vpnctl could not construct the handshake-host workflow")
+	}
+	var terminal PromptIO
+	var closer io.Closer
+	if !parsed.Yes && !parsed.DryRun {
+		terminal, closer, err = transportHostOpenTTY()
+		if err != nil {
+			return emitTransportHostMutationFailure(emitter, parsed.CommandID, output.CategoryValidation, "controlling_tty_required", "transport host confirmation requires a controlling TTY or --yes")
+		}
+		defer closer.Close()
+	}
+	outcome, err := V2CommandRegistry().RunMutation(context.Background(), request, terminal, workflow, nil)
+	if err != nil {
+		category, code, message := classifyTransportHostMutationError(err)
+		return emitTransportHostMutationFailure(emitter, parsed.CommandID, category, code, message)
+	}
+	exit, err := emitter.Emit(outcome.Result)
+	if err != nil {
+		return ExitInternal
+	}
+	return exit
+}
+
+func parseTransportHostCommitArguments(args []string) (transportHostCommitArguments, error) {
+	parsed := transportHostCommitArguments{CommandID: "transport.host.commit"}
+	positionals := make([]string, 0, len(args))
+	seen := make(map[string]bool)
+	for _, argument := range args {
+		switch argument {
+		case "--json", "--dry-run", "--yes":
+			if seen[argument] {
+				return parsed, fmt.Errorf("%s may be supplied only once", argument)
+			}
+			seen[argument] = true
+			switch argument {
+			case "--json":
+				parsed.JSON = true
+			case "--dry-run":
+				parsed.DryRun = true
+			case "--yes":
+				parsed.Yes = true
+			}
+		case "-h", "--help", "help":
+			parsed.Help = true
+		default:
+			if strings.HasPrefix(argument, "-") {
+				return parsed, fmt.Errorf("unsupported transport host mutation option %s", argument)
+			}
+			positionals = append(positionals, argument)
+		}
+	}
+	if len(positionals) >= 3 && positionals[2] == "rollback" {
+		parsed.CommandID = "transport.host.rollback"
+	}
+	if parsed.Help {
+		return parsed, nil
+	}
+	if len(positionals) != 3 || positionals[0] != "transport" || positionals[1] != "host" || (positionals[2] != "commit" && positionals[2] != "rollback") {
+		return parsed, fmt.Errorf("usage: vpnctl transport host <commit|rollback> [--dry-run] [--yes] [--json]")
+	}
+	return parsed, nil
+}
+
 type transportHostShowArguments struct {
 	JSON bool
 	Help bool
@@ -207,25 +331,9 @@ func parseTransportHostShowArguments(args []string) (transportHostShowArguments,
 }
 
 // HandshakeHostManager requires a runtime for its complete lifecycle API, but
-// Show and Prepare never reach it. Keeping the rejecting runtime here makes
-// that boundary explicit until commit/rollback have a failure-aware external
-// process activation.
+// Show never reaches it. Keeping a separate rejecting runtime preserves the
+// inspection command's capability-limited construction boundary.
 func buildSystemHandshakeHostViewer(paths store.Paths) (handshakeHostViewer, error) {
-	manager, err := buildSystemHandshakeHostManager(paths)
-	if err != nil {
-		return nil, err
-	}
-	viewer, ok := manager.(handshakeHostViewer)
-	if !ok {
-		return nil, fmt.Errorf("handshake-host manager does not support inspection")
-	}
-	return viewer, nil
-}
-
-// The prepare phase changes only authoritative staged state. Commit and
-// rollback are not exposed through this builder until the external Mihomo
-// activation can report and roll back publication failures.
-func buildSystemHandshakeHostManager(paths store.Paths) (HandshakeHostGatewayManager, error) {
 	stateStore, err := store.NewStateStore(paths)
 	if err != nil {
 		return nil, err
@@ -235,6 +343,26 @@ func buildSystemHandshakeHostManager(paths store.Paths) (HandshakeHostGatewayMan
 		return nil, err
 	}
 	return transport.NewHandshakeHostManager(stateStore, prober, rejectingHandshakeHostRuntime{}, nil, nil)
+}
+
+func buildSystemHandshakeHostManager(paths store.Paths) (HandshakeHostGatewayManager, error) {
+	stateStore, err := store.NewStateStore(paths)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := store.NewSecretStore(paths)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := controller.NewSystemGatewayHandshakeHostRuntime(paths, stateStore, secrets)
+	if err != nil {
+		return nil, err
+	}
+	prober, err := transport.NewTLSHandshakeHostProber(transport.TLSHandshakeHostProbeOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return transport.NewHandshakeHostManager(stateStore, prober, runtime, nil, nil)
 }
 
 type rejectingHandshakeHostRuntime struct{}
@@ -256,15 +384,20 @@ func classifyTransportHostError(err error) (output.ExitCategory, string, string)
 
 func classifyTransportHostMutationError(err error) (output.ExitCategory, string, string) {
 	switch {
-	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags):
-		return output.CategoryValidation, "transport_host_invalid", "transport host prepare is available only on an initialized gateway with valid arguments"
+	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags), errors.Is(err, ErrInteractionRefused),
+		errors.Is(err, transport.ErrHandshakeHostChangeNotFound), errors.Is(err, transport.ErrHandshakeHostRollbackExpired):
+		return output.CategoryValidation, "transport_host_invalid", "the transport host request or current replacement state is invalid"
 	case errors.Is(err, transport.ErrHandshakeHostChangeExists), errors.Is(err, transport.ErrHandshakeHostRollbackPending),
-		errors.Is(err, transport.ErrHandshakeHostPlanStale), errors.Is(err, store.ErrStateConflict):
+		errors.Is(err, transport.ErrHandshakeHostPlanStale), errors.Is(err, transport.ErrHandshakeHostImpactChanged),
+		errors.Is(err, controller.ErrHandshakeHostRuntimeConflict), errors.Is(err, controller.ErrHandshakeHostRuntimeDrift),
+		errors.Is(err, store.ErrStateConflict):
 		return output.CategoryConflict, "transport_host_conflict", "another handshake-host replacement or rollback window conflicts with this request"
 	case errors.Is(err, transport.ErrNoHandshakeHostCandidate):
 		return output.CategoryUnavailable, "transport_host_probe_failed", "the explicitly selected handshake host did not pass the required TLS probe"
+	case errors.Is(err, transport.ErrHandshakeHostCommitUncertain), errors.Is(err, transport.ErrHandshakeHostFinalizePending):
+		return output.CategoryUnavailable, "transport_host_uncertain", "the handshake-host runtime or authoritative state requires explicit inspection and repair"
 	default:
-		return output.CategoryInternal, "transport_host_operation_failed", "vpnctl could not prepare the handshake-host replacement"
+		return output.CategoryUnavailable, "transport_host_operation_failed", "vpnctl could not complete the handshake-host operation; the active host was not changed unless reported as uncertain"
 	}
 }
 
@@ -308,5 +441,18 @@ Usage:
 Planning probes exactly the supplied hostname and reports every affected node
 and client. It never changes the live listener; activation requires a separate
 transport host commit operation.
+`)
+}
+
+func printTransportHostCommitHelp(writer io.Writer) {
+	fmt.Fprint(writer, `Commit or roll back the one staged gateway handshake-host replacement.
+
+Usage:
+  vpnctl transport host commit [--dry-run] [--yes] [--json]
+  vpnctl transport host rollback [--dry-run] [--yes] [--json]
+
+Both operations require explicit confirmation unless --yes is supplied.
+Candidate publication is validated, health-gated, and automatically restored
+to the exact previous listener generation when activation fails.
 `)
 }

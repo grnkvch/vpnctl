@@ -75,6 +75,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isTransportHostPrepareInvocation(args) {
 		return executeTransportHostPrepare(args, stdout, stderr)
 	}
+	if isTransportHostCommitInvocation(args) || isTransportHostRollbackInvocation(args) {
+		return executeTransportHostCommitOrRollback(args, stdout, stderr)
+	}
 	if isTransportHostShowInvocation(args) {
 		return executeTransportHostShow(args, stdout, stderr)
 	}

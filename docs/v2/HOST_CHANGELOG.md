@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public handshake-host commit and rollback
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes gateway-only `transport host commit`
+  and `transport host rollback`. Both support read-only `--dry-run`; immediate
+  execution requires the controlling-TTY confirmation flow or explicit
+  `--yes` and uses the production transactional restricted-listener runtime.
+- Argument and role validation occur before manager construction. `show`
+  remains capability-limited and is still built without the mutation runtime
+  or secret store. Conflicts, failed explicit probes, uncertain commits, and
+  retained cleanup are mapped to stable non-secret result categories.
+- Operator documentation now matches the reversible activation ordering:
+  stage and parser validation, candidate publication and health gate,
+  authoritative write, then final cleanup, with generation-aware rollback on
+  a reported state-write failure.
+- Changes are confined to repository source, documentation, tests, and
+  disposable Go build cache. Command tests use an in-memory manager and never
+  construct the production runner. No external host, VM, process, service,
+  package, network, firewall, route, DNS, swap, certificate, `/etc`, or `/var`
+  resource was changed. Repository rollback is one ordinary `git revert` of
+  the implementation commit.
+
+### Acceptance
+
+- CLI, controller, transport, and regression suites pass. Coverage proves
+  commit dry-run immutability, confirmed commit/rollback dispatch, stable
+  output fields, and refusal without either a controlling TTY or `--yes`.
+
 ## 2026-09-05 — transactional gateway handshake-host runtime
 
 ### Source-only implementation boundary
