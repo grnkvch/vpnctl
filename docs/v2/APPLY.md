@@ -4,6 +4,22 @@ Task 13.4 makes `vpnctl apply` the only general executor for already registered
 pending desired state. It does not register new intent, infer desired changes
 from files, or repair drift.
 
+## Production connection status
+
+The public `vpnctl apply [--yes] [--json]` invocation is routed through the v2
+registry and can prove a stable no-op against the persisted convergence
+snapshot. It retains the exact authoritative state across preview and apply;
+the node form also performs a fresh authenticated gateway probe even for a
+no-op. A missing TTY is consulted only after the complete plan proves that
+availability/destructive consent is needed.
+
+Operation-specific production executors and mutation-side Desired publication
+are not connected yet. If authoritative state contains pending intent, the
+system command therefore returns `apply_convergence_unavailable`; it never
+reports that intent as applied merely because the older persisted snapshot is
+clean. The coordinator and output contracts below are the boundary those
+executors must implement.
+
 ## Eligibility and preview stability
 
 The apply coordinator accepts a concrete `ConvergencePlanner`, not an arbitrary

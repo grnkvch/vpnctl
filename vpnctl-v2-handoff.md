@@ -9,6 +9,17 @@
 
 Последнее обновление: **2026-09-06**.
 
+Public `vpnctl apply` теперь однозначно маршрутизируется в v2 registry и не
+может провалиться в legacy v1 apply. Production boundary умеет доказать
+стабильный no-op, удерживая exact authoritative state вместе с convergence
+plan; node дополнительно делает свежий authenticated gateway probe даже для
+no-op. TTY требуется только после полного availability/destructive preview.
+При этом operation-specific pending executors и mutation-side Desired
+publication ещё не подключены: наличие pending state возвращает явный
+`apply_convergence_unavailable`, а не ложный success по старому clean snapshot.
+Следующий implementation slice — связать deferred writer с operation-bound
+Desired material и затем подключить gateway/current-node executors.
+
 Immutable applied-material foundation теперь подключён ко всем production
 publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в
 root-only content-addressed bundle до соответствующего convergence

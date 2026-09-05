@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Public fail-closed apply command boundary
+
+### Planned reversible validation
+
+- Route public `vpnctl apply` through the v2 command registry, never through
+  the retained v1 local WireGuard implementation. Accept only `--yes` and
+  `--json`; keep `vpnctl plan` as the separate read-only preview.
+- Bind a verified no-op to an exact authoritative state plus convergence plan
+  before and after execution. On a node, require a fresh authenticated gateway
+  probe even for that no-op. If authoritative pending intent exists without a
+  connected operation-specific executor/material publication, return
+  unavailable instead of claiming that it was applied.
+- Validation uses only in-memory state/planner/operator doubles, Go temporary
+  directories, and `/private/tmp/vpnctl-go-cache`. No real config, unit,
+  service, state, socket, network, host, VM, or public endpoint is mutated.
+
+### Acceptance
+
+- Focused tests cover global JSON routing, explicit consent, conditional TTY
+  acquisition, no-TTY no-op, unsupported flags before system construction,
+  stable authority binding, and fail-closed unpublished pending intent.
+- The focused race suite, complete Go suite, `go vet ./...`, documentation
+  contract regression, strict OpenSpec validation, formatting, and diff checks
+  pass.
+- The public system boundary intentionally does not execute pending operations
+  yet. The next slice must publish operation-bound Desired material and connect
+  gateway/current-node executors before the deferred workflow is complete.
+- Repository rollback removes this source/documentation slice and transient
+  test fixtures; no development-host rollback is needed.
+
 ## 2026-09-06 — Public generation-bound owned-drift repair
 
 ### Planned reversible validation

@@ -14,12 +14,15 @@ transport test, call a webhook/provider URL, start or reload a service, or
 repair/apply anything. Explicit network diagnostics belong only to
 `vpnctl doctor`.
 
-The public command currently treats the persisted convergence snapshot as an
-explicitly unavailable input because production desired/applied manifest
-persistence is not connected yet. It still reports authoritative state and
-passive systemd metadata, but returns `degraded` rather than inventing matching
-desired/applied generations or claiming that drift is absent. This fail-visible
-behavior is temporary groundwork for the production convergence store.
+The public command reads the root-only persisted convergence snapshot and the
+production owned file/unit observers used by `vpnctl plan`. Gateway/node init,
+successful join, and committed-generation recovery publish their exact role
+baselines. Missing, unsafe, invalid, or unsupported convergence inputs remain
+fail-visible and return `degraded`/`failed` rather than inventing generations or
+claiming that drift is absent. Mutation-side Desired publication for later
+deferred operations is not connected yet; locally retained pending state must
+therefore remain explicitly unavailable rather than looking like a clean
+applied generation.
 
 ## Output structure
 

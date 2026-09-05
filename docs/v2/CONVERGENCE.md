@@ -109,7 +109,11 @@ never rewrites state. When no gateway network transaction has ever been
 confirmed, the same reviewed repair also reinstalls watchdog templates and
 repeats initial firewall/sysctl activation only after a fresh network snapshot
 exactly matches the oldest retained pre-vpnctl snapshot. Later mutation/apply
-publication remains to be connected.
+publication remains to be connected. The public v2 `apply` command is now
+routed and generation-bound for a verified no-op, including a fresh node
+gateway probe. It explicitly refuses locally retained pending intent until the
+matching Desired material publisher and operation-specific executor exist, so
+an older clean snapshot cannot produce false success.
 
 Generic public repair is now connected without conflating that recovery path.
 It is selected only when the Applied generation has its exact immutable bundle
