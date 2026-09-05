@@ -873,6 +873,30 @@ This journal records development-host mutations made while implementing and vali
   behavior; it makes any repeated pre-capacity failure attributable while
   preserving credential-safe ignored evidence and the existing cleanup path.
 
+### Partial restricted-fixture residue and planned owner recovery
+
+- The following clean-source attempt at commit
+  `f15b1f201007942dd318bb735d3bceecfff74652` started both exact fixtures and
+  stopped at its initial cleanup because exactly one side of the restricted
+  fixture remained owner-marked. The pair cleanup correctly refused to infer
+  ownership across a partial installation. No capacity/provider installation,
+  workload, or fault from this attempt is accepted; its preflight-only evidence
+  is at `artifacts/v2lab/capacity-e2e/run-20260905T101626Z`. Its trap returned
+  both contract-matching fixtures to verified `Stopped`.
+- Recovery may start only those same two fixtures, inspect the exact
+  `/etc/vpnctl-v2-spike/restricted/.owner` marker and all restricted fixed
+  paths/units/listeners on each side, and proceed only if each present resource
+  is owned by `vpnctl-v2-restricted-spike-v1` while the missing side has none of
+  the reserved resources. The unrelated Lima VM remains out of scope.
+- For that exact state, the existing child `prepare` operation may complete the
+  missing owner side after its own conflict/port checks, immediately followed
+  by the child owner-checked `uninstall`. This is safer than deleting an
+  inferred partial file set: it re-establishes the fixture's complete declared
+  ownership boundary before using its normal rollback. Final inspection must
+  prove both restricted paths, units, processes, listeners, and task nftables
+  absent, then return both VM states to `Stopped`. Any foreign or ambiguous
+  resource stops recovery without mutation.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
