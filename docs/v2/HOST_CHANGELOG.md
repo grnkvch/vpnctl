@@ -1011,6 +1011,30 @@ This journal records development-host mutations made while implementing and vali
   reproducible disposable fixture material; no foreign resource or crash report
   is in scope.
 
+### Recovered residue and bounded WireGuard readiness correction
+
+- The next invocation started both exact fixtures, accepted the recorded owner
+  closure, and completed its initial cleanup before creating a fresh capacity
+  generation. It then generated all five node peer records but returned `1`
+  during `setup_clients`, before provider prepare or capacity measurement. No
+  new QEMU report appeared; the trap shut down both VMs normally and restored
+  their original `Stopped` states. Diagnostic artifacts are retained at
+  `artifacts/v2lab/capacity-e2e/run-20260905T110453Z`; no summary or acceptance
+  result exists.
+- The setup helper previously made exactly one two-packet ping attempt per new
+  WireGuard namespace and returned the bare command status. A cold namespace can
+  require more than that one-shot window for endpoint/handshake readiness, so
+  this pre-measurement check was timing-sensitive and provided no typed error.
+  Each of the same five peers now receives at most twelve one-packet attempts,
+  separated by 250 ms, and must have both a successful ping and nonzero latest
+  handshake before setup continues. Exhaustion names only the synthetic
+  namespace and fails closed.
+- This readiness window runs before provider composition and before the fixed
+  300-second workload. It does not retry a load request, hide packet loss, or
+  alter the later zero-loss, concurrency, latency, reconnect, or resource
+  bounds. The existing owner trap remains responsible for all guest cleanup;
+  repository rollback is the single correction commit.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

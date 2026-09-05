@@ -7,6 +7,8 @@ owner_path=$root/.owner
 gateway_interface=v2capwg
 client_table=vpnctl_v2_capacity_clients
 client_names=(v2capc1 v2capc2 v2capc3 v2capc4 v2capc5)
+client_ready_attempts=12
+client_ready_interval_seconds=0.25
 
 owned() {
   [ -f "$owner_path" ] && grep -Fxq "$owner" "$owner_path"
@@ -115,11 +117,24 @@ gateway_install_peers() {
 }
 
 node_verify() {
-  local namespace
+  local namespace attempt latest_handshake ready
   owned || { echo "capacity node root is not owned" >&2; exit 3; }
   for namespace in "${client_names[@]}"; do
-    ip netns exec "$namespace" ping -n -q -c 2 -W 2 10.66.0.1 >/dev/null
-    [ "$(ip netns exec "$namespace" wg show vpnctl-wg latest-handshakes | awk '{print $2}')" != 0 ]
+    ready=false
+    for attempt in $(seq 1 "$client_ready_attempts"); do
+      if ip netns exec "$namespace" ping -n -q -c 1 -W 1 10.66.0.1 >/dev/null; then
+        latest_handshake=$(ip netns exec "$namespace" wg show vpnctl-wg latest-handshakes | awk '{print $2}')
+        if [ "$latest_handshake" != 0 ]; then
+          ready=true
+          break
+        fi
+      fi
+      sleep "$client_ready_interval_seconds"
+    done
+    if [ "$ready" != true ]; then
+      echo "capacity client handshake did not become ready: $namespace" >&2
+      exit 4
+    fi
   done
 }
 

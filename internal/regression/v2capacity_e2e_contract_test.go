@@ -76,6 +76,15 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			t.Errorf("capacity client helper is missing %q", required)
 		}
 	}
+	wireGuardClients := readContractFile(t, filepath.Join(fixtureRoot, "clients.sh"))
+	for _, required := range []string{
+		"client_ready_attempts=12", "client_ready_interval_seconds=0.25",
+		"capacity client handshake did not become ready: $namespace",
+	} {
+		if !strings.Contains(wireGuardClients, required) {
+			t.Errorf("capacity WireGuard helper is missing %q", required)
+		}
+	}
 	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
 		"runtime_dropin_directory=/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d",
