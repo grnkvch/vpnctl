@@ -1,219 +1,103 @@
 # vpnctl
 
-`vpnctl` is a small CLI for managing a personal self-hosted WireGuard VPN
-server and its client configs.
+`vpnctl` v2 manages a small self-hosted VPN deployment with one public gateway,
+multiple personal devices, and multiple private VPS nodes. The gateway is a
+dedicated, operator-owned Ubuntu server in the external region. It provides
+internet egress, two manually selected client/node transports, and optional
+IP-only HTTPS ingress for applications running on private nodes.
 
-The current MVP is designed for one operator, one Ubuntu VPS, and a small number
-of clients. It runs directly on the server as `root`, stores source-of-truth
-state in `.vpnctl/`, and applies rendered WireGuard configuration to the local
-system.
+The v2.0 operator entry point is
+[`docs/v2/OPERATIONS.md`](docs/v2/OPERATIONS.md). It contains the supported
+deployment model, both installation happy paths, routing and DNS boundaries,
+webhook ownership, diagnostics, backup/update/removal, migration, and
+troubleshooting. The complete stable command surface is frozen in
+[`docs/v2/CLI_CONTRACT.md`](docs/v2/CLI_CONTRACT.md).
 
-## Features
+## Supported host
 
-- One-shot Ubuntu server setup for WireGuard, UFW, forwarding, and QR support.
-- Local Git-friendly state under `.vpnctl/`.
-- Secret key storage under `.vpnctl/secrets/`.
-- WireGuard client creation, listing, show, revoke, key rotation, and deletion.
-- Server config apply from current state.
-- WireGuard client export with optional QR PNG.
-- Clash/Mihomo profile export with editable domain rulesets.
-- `scp` hints for copying generated client artifacts from the server.
+- Ubuntu 24.04 LTS, Linux amd64/x86_64, systemd;
+- root for installation and operational commands;
+- one immutable role per host: `gateway` or `node`;
+- dedicated host ownership for vpnctl-managed networking and listeners;
+- minimum target: 1 vCPU, 512 MiB RAM, 10 GiB disk; vpnctl can offer a managed
+  1 GiB swap file during initialization.
 
-## Supported Platform
+The gateway public IPv4 is always supplied manually. vpnctl does not discover
+it through an external service. The fixed public listeners are `443/TCP` for
+managed HTTPS, `8443/TCP` for the restricted transport, and `51820/UDP` for
+standard WireGuard. `443/UDP` and `8443/UDP` remain closed.
 
-Server target for the MVP:
+## Signed installation
 
-- Ubuntu 24.04 LTS
-- Linux amd64/x86_64
-- systemd
-- root execution for system-changing commands
-
-Do not run `vpnctl setup` or `vpnctl apply` on a development laptop. They write
-system files and run `systemctl`, `ufw`, `sysctl`, and WireGuard commands.
-
-## Install
-
-After a GitHub release has been published, install on the server with:
+After a v2 release is published, install its signed binary and retained bundle
+on each server:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo sh
 ```
 
-Install a specific release:
+Install an explicit signed version:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo VPNCTL_VERSION=v2.0.0 sh
 ```
 
-Useful installer environment variables:
+The bootstrap verifies Ed25519-signed version, size, and SHA-256 metadata before
+changing the standard installation. An offline `scp` workflow is documented in
+[`docs/v2/INSTALLATION.md`](docs/v2/INSTALLATION.md). Copying an unverified
+binary by itself is not a v2 installation.
 
-```text
-VPNCTL_VERSION            Signed release tag to install. Default: latest
-VPNCTL_REPO               GitHub repo. Default: vgrinkevich/vpnctl
-VPNCTL_RELEASE_ASSET_DIR  Absolute local directory containing all four signed assets
-```
+## Minimal start
 
-The v2 installer verifies Ed25519-signed version/size/SHA-256 metadata before
-changing the standard binary or retained bundle paths. See
-[`docs/v2/INSTALLATION.md`](docs/v2/INSTALLATION.md) for the online and offline
-`scp` flows. The preserved v1 scripts are named `install-v1.sh` and
-`release-v1.sh`.
-
-## Build From Source
+On the public gateway:
 
 ```sh
-go test ./...
-GOOS=linux GOARCH=amd64 go build -o vpnctl ./cmd/vpnctl
+sudo vpnctl init --gateway --public-ip 203.0.113.10
 ```
 
-For a manual/offline installation, copy the four signed v2 release assets and
-run the installer with `VPNCTL_RELEASE_ASSET_DIR`; copying an unverified binary
-alone is not a v2 installation.
+If the result reports a firewall transaction, open a genuinely new SSH session
+and run its exact `vpnctl confirm <transaction-id>` command within 120 seconds.
 
-## First Server Setup
-
-Run these commands on the Ubuntu server as `root`.
+For a personal selective client:
 
 ```sh
-mkdir -p ~/vpnctl-state
-cd ~/vpnctl-state
-
-vpnctl setup --endpoint SERVER_IP --dry-run
-vpnctl setup --endpoint SERVER_IP
+sudo vpnctl client add iphone telegram openai
+sudo vpnctl client export iphone clash
 ```
 
-`--endpoint` is the public IP address or DNS name clients should use to reach
-the VPN server. It is intentionally explicit because VPS networking can include
-private IPs, floating IPs, NAT, IPv6, or DNS-based endpoints.
-
-Check non-secret server state:
+For a private VPS, create an invite on the gateway, then initialize and join on
+the private VPS. The invite is read from a hidden terminal prompt and is never
+placed in argv:
 
 ```sh
-vpnctl server show
+# gateway
+sudo vpnctl invite bot-server
+
+# private VPS
+sudo vpnctl init --node
+sudo vpnctl join restricted telegram
 ```
 
-## Client Workflow
-
-Create a client:
-
-```sh
-vpnctl client create iphone --platform ios
-vpnctl client list
-vpnctl client show iphone
-```
-
-Export client configs:
-
-```sh
-vpnctl client export iphone --type wireguard --qr
-vpnctl client export iphone --type clash
-```
-
-Apply server-side peer changes:
-
-```sh
-vpnctl apply --dry-run
-vpnctl apply
-```
-
-After export, `vpnctl` prints the generated file path and an `scp` hint for
-copying the artifact from the server.
-
-## Client Lifecycle
-
-Revoke a client and apply the server config:
-
-```sh
-vpnctl client revoke iphone --reason "lost device"
-vpnctl apply
-```
-
-Rotate client keys, then export a fresh config and apply the server config:
-
-```sh
-vpnctl client rotate-keys iphone --yes
-vpnctl client export iphone --type wireguard --qr
-vpnctl apply
-```
-
-Delete a client from active state:
-
-```sh
-vpnctl client delete iphone --yes
-vpnctl apply
-```
-
-Deleted and revoked clients are hidden from `client list` by default. To include
-them:
-
-```sh
-vpnctl client list --all
-```
-
-## Rulesets And Clash Export
-
-The default Clash/Mihomo ruleset routes these domains through the VPN:
-
-- `chatgpt.com`
-- `openai.com`
-- `claude.ai`
-- `anthropic.com`
-
-Create or replace a ruleset:
-
-```sh
-vpnctl ruleset add custom-ai --domain chatgpt.com,openai.com,claude.ai
-vpnctl ruleset show custom-ai
-vpnctl client export iphone --type clash --ruleset custom-ai
-```
-
-Non-matching Clash traffic stays direct via the final `MATCH,DIRECT` rule.
-
-## Release Artifacts
-
-Create signed v2 release artifacts locally from the already downloaded pinned
-provider archives and an external mode-`0600` release signing key:
-
-```sh
-VPNCTL_RELEASE_SIGNING_KEY=/secure/vpnctl-release-key.pem \
-VPNCTL_MIHOMO_ARCHIVE=/cache/mihomo-linux-amd64-v1.19.30.gz \
-VPNCTL_FRP_ARCHIVE=/cache/frp_0.69.0_linux_amd64.tar.gz \
-scripts/release.sh v2.0.0
-```
-
-The script runs tests, reproducibly builds `linux/amd64`, verifies pinned
-provider bytes, and writes:
-
-```text
-dist/vpnctl-linux-amd64
-dist/vpnctl-v2-linux-amd64.bundle
-dist/release-checksums.txt
-dist/release-checksums.txt.sig
-```
-
-Upload all four files to the matching GitHub release. Private signing material
-is never copied into `dist/` or stored in the repository.
-
-## State Layout
-
-Default state directory:
-
-```text
-.vpnctl/
-  state.json
-  rulesets/
-  secrets/
-  generated/
-```
-
-Secrets and generated artifacts are ignored by Git by default.
+Use the emitted `scp` hints to retrieve client profiles and the public ingress
+certificate. URL delivery, subscription links, and QR export are not v2.0
+delivery methods.
 
 ## Development
 
-Run the test suite:
+Run the ordinary suite:
 
 ```sh
 go test ./...
 ```
 
-Project documentation lives under `docs/`, including the CLI contract and ADRs.
+Build the Linux binary from source for development only:
+
+```sh
+GOOS=linux GOARCH=amd64 go build -o vpnctl ./cmd/vpnctl
+```
+
+The signed release builder, provider pins, reproducibility contract, and
+maintainer-only signing-key flow are documented in
+[`docs/v2/RELEASE_BUNDLE.md`](docs/v2/RELEASE_BUNDLE.md) and
+[`docs/v2/RELEASE_MANIFEST.md`](docs/v2/RELEASE_MANIFEST.md). The preserved v1
+installer/release code exists only for migration and regression.

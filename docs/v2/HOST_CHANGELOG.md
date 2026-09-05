@@ -2,6 +2,51 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — v2.0 operator documentation and executable examples
+
+### Source-only validation boundary
+
+- Task 16.10 replaces the stale v1-oriented root README with the v2.0 deployment
+  and signed-installation entry point and adds one canonical operator guide.
+  The guide covers the gateway/personal-device and gateway/private-node happy
+  paths, explicit preset assignment, DNS/classification limits, restricted
+  UDP-over-TCP limits, application-owned webhook registration, passive status,
+  bounded doctor probes, temporary opt-in logging, backup/restore, local
+  gateway-first update, recoverable uninstall, destructive purge, one-time v1
+  migration, and symptom-oriented troubleshooting.
+- Every operator-guide `vpnctl` command is tagged with its frozen command ID
+  and host role. The docs test parses each concrete invocation, rejects
+  unresolved placeholders and backlog-only command forms, verifies it against
+  the exact registry syntax, and executes the production registry's role-aware
+  dispatch path while proving its selected handler is invoked. A second
+  exhaustive test executes every command row from
+  `CLI_CONTRACT.md` for every allowed role. The standalone migration test
+  parses and executes all four documented v1-migration argument forms through
+  the real maintenance CLI parser. Signed installer integration tests remain
+  the execution coverage for online-source and offline-asset bootstrap.
+- Validation changes only repository documentation/tests and ordinary
+  disposable Go build cache. It does not initialize vpnctl, open a socket,
+  contact a release/provider/public endpoint, read a token, install a package,
+  start a VM/service, or alter firewall, routing, DNS, swap, certificates, or
+  any production host path. No host rollback is required. Repository rollback
+  is one ordinary `git revert` of the task commit.
+
+### Acceptance
+
+- The canonical guide contains 37 concrete v2.0 command examples. All execute
+  through the frozen registry with their documented host role; the exhaustive
+  contract test independently executes all 69 public command rows for every
+  allowed role. The four multi-line v1 migration examples execute through the
+  maintenance parser. Tests reject unresolved placeholders, missing required
+  operational sections, stale v1 command forms in the root README, and
+  out-of-scope command forms such as QR, domain/ACME, generic ingress, or
+  automatic transport selection.
+- The focused docs/parser suites, complete ordinary and race-detector Go
+  suites, `go vet ./...`, all repository shell syntax, all checked JSON, diff
+  whitespace checks, and strict OpenSpec validation passed. No VM, network,
+  package, service, provider, public endpoint, or production path was touched,
+  so the source commit remains the only rollback boundary.
+
 ## 2026-09-05 — planned sustained minimum-gateway capacity E2E
 
 ### Planned reversible lab mutations

@@ -2,11 +2,52 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 )
+
+func TestDocumentedV1MigrationCommandsExecuteThroughCLIParser(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "v2", "V1_MIGRATION.md"))
+	if err != nil {
+		t.Fatalf("read v1 migration guide: %v", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	parsedCount := 0
+	for index := 0; index < len(lines); index++ {
+		line := strings.TrimSpace(lines[index])
+		if !strings.HasPrefix(line, "sudo vpnctl-v1-migrate") {
+			continue
+		}
+		parts := make([]string, 0)
+		for {
+			continued := strings.HasSuffix(line, "\\")
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+			parts = append(parts, strings.Fields(line)...)
+			if !continued {
+				break
+			}
+			index++
+			if index >= len(lines) {
+				t.Fatal("migration guide ends inside a continued command")
+			}
+			line = strings.TrimSpace(lines[index])
+		}
+		if len(parts) < 3 || parts[0] != "sudo" || parts[1] != "vpnctl-v1-migrate" {
+			t.Fatalf("invalid documented migration command: %q", strings.Join(parts, " "))
+		}
+		if _, _, help, parseErr := parseOptions(parts[2:]); parseErr != nil || help {
+			t.Errorf("documented migration command does not execute through parser: %q: help=%t err=%v", strings.Join(parts, " "), help, parseErr)
+		}
+		parsedCount++
+	}
+	if parsedCount != 4 {
+		t.Fatalf("executed documented migration commands = %d, want 4", parsedCount)
+	}
+}
 
 func TestParseOptionsRequiresExplicitBundlePublicIPAndDowntimeMode(t *testing.T) {
 	options, port, help, err := parseOptions([]string{
