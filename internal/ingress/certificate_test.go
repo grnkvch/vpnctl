@@ -112,6 +112,31 @@ func TestPublicCertificateProvisioningCreatesExactRootOnlyStableMaterial(t *test
 	}
 }
 
+func TestValidateLivePublicCertificateEnforcesIdentityProfileAndValidity(t *testing.T) {
+	t.Parallel()
+	issuedAt := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
+	material, err := GeneratePublicCertificate(rand.Reader, publicCertificateTestIPv4, issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLivePublicCertificate(material.Certificate, publicCertificateTestIPv4, issuedAt); err != nil {
+		t.Fatalf("valid live certificate: %v", err)
+	}
+	for _, test := range []struct {
+		name    string
+		address string
+		now     time.Time
+	}{
+		{"wrong IP", "203.0.113.99", issuedAt},
+		{"before validity", publicCertificateTestIPv4, issuedAt.Add(-time.Second)},
+		{"expiry boundary", publicCertificateTestIPv4, material.Certificate.NotAfter},
+	} {
+		if err := ValidateLivePublicCertificate(material.Certificate, test.address, test.now); !errors.Is(err, ErrPublicCertificateInvalid) {
+			t.Fatalf("%s error = %v", test.name, err)
+		}
+	}
+}
+
 func TestPublicCertificateInspectionWarningBoundaries(t *testing.T) {
 	t.Parallel()
 

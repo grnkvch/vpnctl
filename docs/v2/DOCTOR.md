@@ -5,6 +5,12 @@ diagnostic boundary. Unlike passive `status`, it may emit synthetic network
 traffic, but it cannot change desired state, apply or repair resources, switch
 transport, register a webhook, or call a user expose path.
 
+The public command is connected to the production role state and closed
+network runner. It accepts only the scopes above, global `--json`, and the
+explicit `--probe-url` opt-in. An initialized but not-yet-joined node can run
+the command: node-only tunnel and ingress dependencies are then reported as
+not-applicable rather than preventing construction of the diagnostic.
+
 With no scope, `default` runs the union of the role-applicable checks. An
 explicit scope runs only that scope. Plans are deterministic and every network
 attempt receives a unique `<run-uuid>-<sequence>` probe ID for traffic and log
@@ -19,6 +25,16 @@ correlation.
 | `tunnel` | Internal tunnel-server TCP readiness and every active expose mapping | Local multiplexed session and every active expose registration through the local frp status endpoint |
 | `ingress` | Public-IP TLS, `GET /.well-known/vpnctl/health`, and every active gateway tunnel mapping | Gateway public-IP TLS, the same reserved health request, every active tunnel mapping, and every active node-local upstream |
 
+On a private node, the TCP active-transport check is a fresh authenticated
+mTLS control probe to the trusted gateway overlay and the UDP check is an
+actual DNS exchange with gateway DNS through the selected path. Both reread
+the exact local authoritative state after the probe and fail if transport
+identity or generation changed. A gateway cannot originate an end-to-end flow
+from an external client or private node by itself. Until a separately
+authenticated remote-origin probe exists, the gateway runtime reports
+`transport_origin_probe_unavailable` instead of substituting local process
+health or claiming a false end-to-end pass.
+
 Standby and disabled transports are structurally absent from the probe plan.
 Disabled exposes are also omitted. A role/resource that is legitimately not
 applicable is reported as `skipped`; missing configured DNS paths are failures.
@@ -28,6 +44,14 @@ is the constant reserved health path. User expose paths, webhook URLs, provider
 API endpoints, credentials, request bodies, and desired-state/mutation handles
 are not fields of a built-in request. Execution endpoints are adapter-only and
 are not copied into human or JSON results.
+
+Public ingress TLS does not use the system CA store because the IP-only
+certificate is intentionally self-signed. The runner instead enforces the
+exact vpnctl live-certificate profile: one IP SAN matching the endpoint,
+RSA-2048 with exponent 65537, SHA-256/RSA self-signature, non-CA server-only
+usage, the fixed five-year validity span, and a currently valid interval.
+Handshake, certificate, HTTP, and DNS adapter errors are collapsed to stable
+safe result codes and never copied into command output.
 
 `--probe-url <https-url>` is the sole opt-in external target. The URL must be
 absolute HTTPS, must not contain userinfo or a fragment, and is held in a

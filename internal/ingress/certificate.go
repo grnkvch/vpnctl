@@ -417,27 +417,8 @@ func ValidatePublicCertificatePEM(certificatePEM []byte, record model.Certificat
 	if err != nil {
 		return nil, fmt.Errorf("%w: parse public PEM: %v", ErrPublicCertificateInvalid, err)
 	}
-	address, err := canonicalPublicCertificateIPv4(publicIPv4)
-	if err != nil {
+	if err := validatePublicCertificateShape(certificate, publicIPv4); err != nil {
 		return nil, err
-	}
-	publicKey, ok := certificate.PublicKey.(*rsa.PublicKey)
-	if !ok || publicKey.N.BitLen() != PublicCertificateKeyBits || publicKey.E != 65537 {
-		return nil, fmt.Errorf("%w: RSA-2048 public key is required", ErrPublicCertificateInvalid)
-	}
-	if certificate.SignatureAlgorithm != x509.SHA256WithRSA || certificate.Subject.CommonName != publicIPv4 ||
-		len(certificate.IPAddresses) != 1 || !certificate.IPAddresses[0].Equal(net.IP(address.AsSlice())) ||
-		len(certificate.DNSNames) != 0 || len(certificate.EmailAddresses) != 0 || len(certificate.URIs) != 0 ||
-		certificate.NotAfter.Sub(certificate.NotBefore) != PublicCertificateValidity || certificate.IsCA ||
-		certificate.KeyUsage != x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment ||
-		len(certificate.ExtKeyUsage) != 1 || certificate.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
-		return nil, fmt.Errorf("%w: certificate shape differs from the public ingress contract", ErrPublicCertificateInvalid)
-	}
-	if err := certificate.VerifyHostname(publicIPv4); err != nil {
-		return nil, fmt.Errorf("%w: IPv4 SAN verification failed", ErrPublicCertificateInvalid)
-	}
-	if err := certificate.CheckSignature(certificate.SignatureAlgorithm, certificate.RawTBSCertificate, certificate.Signature); err != nil {
-		return nil, fmt.Errorf("%w: self-signature verification failed", ErrPublicCertificateInvalid)
 	}
 	fingerprint := sha256.Sum256(certificate.Raw)
 	if record.Kind != model.CertificatePublicIngress || record.Fingerprint != "sha256:"+hex.EncodeToString(fingerprint[:]) ||
@@ -447,6 +428,51 @@ func ValidatePublicCertificatePEM(certificatePEM []byte, record model.Certificat
 		return nil, fmt.Errorf("%w: PEM differs from authoritative metadata", ErrPublicCertificateInvalid)
 	}
 	return certificate, nil
+}
+
+// ValidateLivePublicCertificate enforces the exact IP-only self-signed
+// certificate profile vpnctl provisions and its current validity window.
+func ValidateLivePublicCertificate(certificate *x509.Certificate, publicIPv4 string, now time.Time) error {
+	if certificate == nil || now.IsZero() {
+		return fmt.Errorf("%w: live certificate and current time are required", ErrPublicCertificateInvalid)
+	}
+	if err := validatePublicCertificateShape(certificate, publicIPv4); err != nil {
+		return err
+	}
+	now = now.UTC()
+	if now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
+		return fmt.Errorf("%w: certificate is outside its validity window", ErrPublicCertificateInvalid)
+	}
+	return nil
+}
+
+func validatePublicCertificateShape(certificate *x509.Certificate, publicIPv4 string) error {
+	if certificate == nil {
+		return fmt.Errorf("%w: certificate is required", ErrPublicCertificateInvalid)
+	}
+	address, err := canonicalPublicCertificateIPv4(publicIPv4)
+	if err != nil {
+		return err
+	}
+	publicKey, ok := certificate.PublicKey.(*rsa.PublicKey)
+	if !ok || publicKey.N.BitLen() != PublicCertificateKeyBits || publicKey.E != 65537 {
+		return fmt.Errorf("%w: RSA-2048 public key is required", ErrPublicCertificateInvalid)
+	}
+	if certificate.SignatureAlgorithm != x509.SHA256WithRSA || certificate.Subject.CommonName != publicIPv4 ||
+		len(certificate.IPAddresses) != 1 || !certificate.IPAddresses[0].Equal(net.IP(address.AsSlice())) ||
+		len(certificate.DNSNames) != 0 || len(certificate.EmailAddresses) != 0 || len(certificate.URIs) != 0 ||
+		certificate.NotAfter.Sub(certificate.NotBefore) != PublicCertificateValidity || certificate.IsCA ||
+		certificate.KeyUsage != x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment ||
+		len(certificate.ExtKeyUsage) != 1 || certificate.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
+		return fmt.Errorf("%w: certificate shape differs from the public ingress contract", ErrPublicCertificateInvalid)
+	}
+	if err := certificate.VerifyHostname(publicIPv4); err != nil {
+		return fmt.Errorf("%w: IPv4 SAN verification failed", ErrPublicCertificateInvalid)
+	}
+	if err := certificate.CheckSignature(certificate.SignatureAlgorithm, certificate.RawTBSCertificate, certificate.Signature); err != nil {
+		return fmt.Errorf("%w: self-signature verification failed", ErrPublicCertificateInvalid)
+	}
+	return nil
 }
 
 func publicCertificateRecord(state model.State) (model.Certificate, error) {

@@ -2,6 +2,39 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Public bounded doctor runtime
+
+### Planned reversible validation
+
+- Route public `vpnctl doctor` through the v2 registry and bind it to validated
+  authoritative role state plus a closed production probe runner. Permit only
+  DNS UDP/TCP, fixed TCP endpoints, active selected-path adapters, public-IP
+  TLS, vpnctl's reserved HTTPS health path, and an explicit redacted
+  credential-free `--probe-url` GET.
+- Keep the operation read-only. Joined-node transport probes use authenticated
+  control and gateway-DNS traffic, then reread exact local state. Gateway
+  transport checks fail explicitly when no authenticated remote origin exists;
+  they never substitute local process state for end-to-end evidence.
+- Validation uses in-memory pipes and HTTP/TLS/DNS peers, Go temporary
+  directories, and `/private/tmp/vpnctl-go-cache`. No real config, unit,
+  service, state, route, firewall, listener, gateway, node, public endpoint,
+  webhook, Telegram registration, or external probe target is mutated or
+  contacted.
+
+### Acceptance
+
+- Focused tests cover public parser/dispatch and exit categories, URL
+  redaction, invalid-input short circuit, unjoined-node construction, gateway
+  remote-origin refusal, joined-node TCP/UDP selected-path evidence, DNS
+  framing, bounded TCP, exact self-signed IP certificate validation, reserved
+  health HTTP, external-target rejection in the closed runner, and active
+  adapter delegation.
+- The focused race suite, complete Go suite, `go vet ./...`, documentation
+  contract regression, strict OpenSpec validation, formatting, and diff checks
+  pass.
+- Repository rollback removes this source/documentation slice and transient
+  test fixtures. No development-host rollback is needed.
+
 ## 2026-09-06 — Public fail-closed apply command boundary
 
 ### Planned reversible validation

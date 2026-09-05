@@ -9,6 +9,20 @@
 
 Последнее обновление: **2026-09-06**.
 
+Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
+через v2 registry и подключён к production state/network runtime. Closed runner
+выполняет DNS UDP/TCP, TCP readiness, IP-only TLS и reserved HTTPS health;
+произвольный внешний HTTPS GET остаётся только за явным `--probe-url`, без
+redirect/cookies/credentials и без сериализации URL. На joined node transport
+TCP доказывается свежим authenticated control probe через gateway overlay,
+UDP — реальным gateway-DNS exchange через выбранный путь, с повторной проверкой
+точного state. Unjoined node получает корректные skipped checks. Gateway без
+аутентифицированного remote-origin механизма возвращает
+`transport_origin_probe_unavailable`, а не подменяет end-to-end проверку
+локальным process health. Live ingress принимает только точный пятилетний
+IP-only self-signed RSA-профиль vpnctl. Реальные Clash Mi/Telegram проверки
+по-прежнему отложены до deployed release gate 16.11.
+
 Public `vpnctl apply` теперь однозначно маршрутизируется в v2 registry и не
 может провалиться в legacy v1 apply. Production boundary умеет доказать
 стабильный no-op, удерживая exact authoritative state вместе с convergence
