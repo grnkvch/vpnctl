@@ -930,6 +930,29 @@ This journal records development-host mutations made while implementing and vali
   lab fixture; it can be recreated from the checksum-pinned cache and checked-in
   source, and no user data or foreign resource is in scope.
 
+### Acceptance and completed rollback
+
+- The immediate pre-mutation recheck matched the recorded closure exactly. Only
+  the empty gateway owner marker was restored with the fixed
+  `vpnctl-v2-restricted-spike-v1` bytes, after which the existing restricted
+  fixture `uninstall` removed the complete node side and the declared gateway
+  files. Systemd reported non-fatal masked-unit reference warnings for the
+  three empty gateway unit fragments; no service was started by recovery.
+- Because those empty fragments prevented systemd from applying their normal
+  `StateDirectory=` cleanup, post-uninstall inspection found only three known
+  disposable state files: the checksum-matched gateway `cache.db` plus the two
+  zero-length echo fixtures `probe.txt` and `telegram-api.json`. Their exact
+  hashes/types were revalidated, only those three files were deleted, and only
+  their two now-empty `/var/lib/vpnctl-v2-spike-*` directories were removed.
+- Final read-only inspection proved every declared restricted owner/config/unit/
+  binary/helper/state path absent on both machines, all reserved task listeners
+  absent, and `table inet vpnctl_v2_spike_capture` absent. Both exact Lima
+  fixtures were then returned to verified `Stopped`; the unrelated VM was not
+  targeted. The first postflight command accidentally placed local `sudo`
+  before `limactl`, failed at its password prompt, and made no change; the
+  successful checks used unprivileged host `limactl` with guest-local sudo.
+  Recovery is complete and no manual rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
