@@ -189,6 +189,27 @@ This journal records development-host mutations made while implementing and vali
   one vCPU, and every required lab command. A non-running start failure or a
   missing/invalid completion state remains fatal and is rolled back.
 
+### Transient gateway QEMU/TCG crash and bounded restart
+
+- The clean-source run at commit
+  `11c0de830ffcc2c9ae04b2b249ff33ad2b99c6f5` stopped during gateway boot,
+  before node startup, clean-state inspection, or any vpnctl/provider
+  installation. The guest serial log contains no kernel panic and ends during
+  its legacy package-index refresh. The macOS crash report records host-side
+  `EXC_BAD_ACCESS`/`SIGSEGV` in QEMU's TCG
+  `tb_target_set_jmp_target`; Lima therefore reported the fixture no longer
+  running, and the degraded-start fallback correctly refused to proceed.
+- Both fixtures were verified `Stopped`; the exact host build root was absent.
+  The incomplete host-only evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T013231Z`. The system-owned crash
+  report remains untouched at
+  `~/Library/Logs/DiagnosticReports/qemu-system-x86_64-2026-09-05-043606.ips`.
+- Startup now retries exactly once only when the failed driver has already
+  returned the exact contract-matching fixture to `Stopped`. A running VM
+  still takes the separately bounded completion path, any transitional status
+  is left to the armed rollback, and a second driver failure remains fatal.
+  This adds no retry to the measured workload and changes no capacity bound.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

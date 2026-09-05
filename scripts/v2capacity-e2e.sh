@@ -89,20 +89,27 @@ lab_ip() {
 }
 
 start_fixture() {
-  local instance=$1 marker=$2
+  local instance=$1 marker=$2 start_attempt
   assert_instance_contract "$instance"
   if instance_running "$instance"; then
     return
   fi
   printf -v "$marker" '%s' true
-  if ! limactl start --tty=false --timeout "$fixture_start_timeout" "$instance"; then
-    if ! instance_running "$instance"; then
-      echo "fixture start failed before reaching a running state: $instance" >&2
+  for start_attempt in 1 2; do
+    if limactl start --tty=false --timeout "$fixture_start_timeout" "$instance"; then
+      break
+    fi
+    if instance_running "$instance"; then
+      echo "fixture entered running/degraded state; waiting for exact boot completion: $instance" >&2
+      wait_for_degraded_boot "$instance"
+      break
+    fi
+    if [ "$start_attempt" -eq 2 ] || [ "$(instance_status "$instance")" != Stopped ]; then
+      echo "fixture start failed before reaching a stable running state: $instance" >&2
       return 4
     fi
-    echo "fixture entered running/degraded state; waiting for exact boot completion: $instance" >&2
-    wait_for_degraded_boot "$instance"
-  fi
+    echo "fixture driver stopped during startup; retrying once: $instance" >&2
+  done
   assert_instance_contract "$instance"
   instance_running "$instance" || { echo "fixture did not become ready: $instance" >&2; exit 4; }
 }
