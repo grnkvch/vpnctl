@@ -2,6 +2,30 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — bounded enrollment loopback server
+
+### Planned reversible validation
+
+- Add the production HTTP serving boundary for the existing signed enrollment
+  handler. It binds only fixed IPv4 loopback `127.0.0.1:19092`, matching the
+  owned nginx upstream, disables keep-alive and default server logging, and
+  reuses the accepted control-plane header/read/write/idle bounds.
+- This slice does not yet attach the server to the system controller or claim
+  that join/recovery runtime composition is complete. Validation uses only an
+  ephemeral loopback port in a Go test; it does not bind the production port,
+  start nginx/controller, issue or consume a token, or mutate any host/VM
+  state. Repository rollback is deletion of this source slice; no host rollback
+  is needed.
+
+### Acceptance
+
+- Socket-level tests prove the server accepts HTTP on IPv4 loopback, refuses a
+  non-loopback listener before serving, requests the exact production
+  `tcp4/127.0.0.1:19092` bind, and shuts down cleanly with its parent context.
+- The full Go suite, `go vet ./...`, diff checks, and strict OpenSpec validation
+  passed. No production port, service, host, VM, token, or persistent state was
+  touched, so no host rollback remains.
+
 ## 2026-09-06 — lossless private-node policy handoff
 
 ### Planned reversible validation
