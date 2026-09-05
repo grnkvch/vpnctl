@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 )
 
@@ -105,6 +106,7 @@ type systemRPCMux struct {
 	uninstall   control.RPCHandler
 	expose      control.RPCHandler
 	policy      control.RPCHandler
+	mutation    control.RPCHandler
 	repairProbe control.RPCHandler
 }
 
@@ -119,6 +121,11 @@ func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, req
 		return mux.expose.HandleRPC(ctx, peer, request)
 	case operations.PolicyPlanRPCOperation, operations.PolicyCommitRPCOperation:
 		return mux.policy.HandleRPC(ctx, peer, request)
+	case string(model.OperationTransportSwitch):
+		if mux.mutation == nil {
+			return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil
+		}
+		return mux.mutation.HandleRPC(ctx, peer, request)
 	case operations.RepairProbeRPCOperation:
 		if mux.repairProbe == nil {
 			return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil

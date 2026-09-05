@@ -13,13 +13,18 @@ Public `vpnctl transport test <standard|restricted>` и
 `vpnctl transport switch <standard|restricted>` теперь имеют строгий parser,
 role gate, v2 registry dispatch, JSON-safe evidence и общий mutation contract
 с explicit consent, `--dry-run` и `--defer`. Production planning читает точное
-joined-node state и не меняет его. Host transport provider и authoritative
-deferred writer пока намеренно закрыты typed
-`system transport runtime adapter is unavailable`: public команда не имитирует
-успешные probes/activation и не записывает selection до появления реального
-runtime. Следующий slice — подключить operation-bound deferred intent и
-production provider, сохранив четыре обязательные проверки и manual-only
-selection.
+joined-node state и не меняет selection. `--defer` теперь регистрирует
+аутентифицированный gateway-authoritative `transport-switch` intent через
+durable idempotency controller, а только после подтверждённого gateway commit
+записывает node-side pending mirror; offline queue отсутствует. Stable request
+и operation IDs позволяют безопасно повторить команду после потерянного
+ответа, а active/standby остаются неизменными на обоих хостах. Pending mirror
+не даёт `vpnctl apply` ошибочно вернуть no-op, но operation-bound Desired
+material и executor пока не подключены, поэтому apply честно остаётся
+unavailable. Host transport provider для test/immediate switch также пока
+закрыт typed `system transport runtime adapter is unavailable`. Следующий
+slice — Desired publication и current-node cross-host executor с четырьмя
+обязательными проверками и manual-only selection.
 
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
 через v2 registry и подключён к production state/network runtime. Closed runner

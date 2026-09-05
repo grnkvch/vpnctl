@@ -172,11 +172,22 @@ func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore
 	if err != nil {
 		return nil, err
 	}
+	transportSwitchDispatcher, err := NewTransportSwitchMutationDispatcher(nil)
+	if err != nil {
+		return nil, err
+	}
+	transportSwitch, err := controller.NewNodeMutationHandler(transportSwitchDispatcher)
+	if err != nil {
+		return nil, err
+	}
 	repairProbe, err := operations.NewRepairProbeGatewayRPCHandler(stateStore)
 	if err != nil {
 		return nil, err
 	}
-	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose, policy: policy, repairProbe: repairProbe}
+	handler := systemRPCMux{
+		update: preflight, uninstall: uninstall, expose: expose, policy: policy,
+		mutation: transportSwitch, repairProbe: repairProbe,
+	}
 	handlers := make(map[int]control.RPCHandler, len(state.Components.ControlProtocols))
 	for _, rawVersion := range state.Components.ControlProtocols {
 		version, parseErr := control.ParseRPCProtocolVersion(rawVersion)

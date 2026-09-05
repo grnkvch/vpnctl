@@ -232,6 +232,11 @@ func mutationTestController(t *testing.T) (*Controller, ControllerStateStore, ti
 		Kind: model.TransportStandard, State: model.TransportActive, Provider: "wireguard", Protocol: model.ProtocolUDP,
 		Port: 51820, CredentialGeneration: 1, CredentialRef: "secret:node-standard",
 		PublicKey: "test-public-key", ConfigHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetNode, OwnerID: mutationTestNodeID,
+		Kind: model.TransportRestricted, State: model.TransportStandby, Provider: "mihomo", Protocol: model.ProtocolTCP,
+		Port: 8443, CredentialGeneration: 1, CredentialRef: "secret:node-restricted", HandshakeHost: "www.apple.com",
+		ConfigHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	})
 	if err := stateStore.Save(1, state); err != nil {
 		t.Fatal(err)

@@ -393,6 +393,12 @@ func controllerTestState(t *testing.T, role model.Role) (store.Paths, *store.Sta
 			Components:          []model.ComponentPin{{Name: "vpnctl", Version: "v2.0.0-dev", Source: "bundle:vpnctl", Bundled: true, SHA256: strings.Repeat("1", 64), Capabilities: []string{"cli", "controller"}}},
 		},
 	}
+	if role == model.RoleGateway {
+		state.HandshakeHost = &model.HandshakeHost{
+			SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "apple",
+			Hostname: "www.apple.com", SelectedAt: host.InitializedAt,
+		}
+	}
 	if err := stateStore.Save(0, state); err != nil {
 		t.Fatal(err)
 	}

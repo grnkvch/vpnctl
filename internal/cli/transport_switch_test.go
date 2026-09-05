@@ -104,12 +104,12 @@ type transportSwitchAuthority struct {
 
 func (authority *transportSwitchAuthority) RegisterPending(_ context.Context, plan MutationPlan) (DeferredReceipt, error) {
 	authority.calls++
-	authority.target, _ = plan.Result.Data["target"].(string)
+	authority.target, _ = plan.Result.Data["candidate"].(string)
 	authority.current, _ = plan.Result.Data["current"].(string)
 	return DeferredReceipt{
 		CommandID: "transport.switch", OperationID: "30000000-0000-4000-8000-000000000001", AuthoritativeGeneration: 13,
 		Result: output.NewResult("transport.switch", output.StatusPending, output.CategorySuccess, output.SafeObject{
-			"changed": true, "current": authority.current, "target": authority.target, "generation": uint64(13),
+			"changed": true, "current": authority.current, "candidate": authority.target, "generation": uint64(13),
 		}),
 	}, nil
 }

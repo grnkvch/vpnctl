@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
@@ -326,7 +327,7 @@ func classifyTransportSwitchError(err error) (output.ExitCategory, string, strin
 		return output.CategoryUnavailable, "transport_switch_uncertain", "the target may be active after an uncertain state commit; inspect status before retrying"
 	case errors.Is(err, transport.ErrTransportSwitchTargetNotReady):
 		return output.CategoryUnavailable, "transport_target_not_ready", "the explicitly selected target failed a mandatory readiness check; the previous transport remains selected"
-	case errors.Is(err, ErrGatewayUnavailable):
+	case errors.Is(err, ErrGatewayUnavailable), errors.Is(err, operations.ErrTransportSwitchGatewayUnavailable):
 		return output.CategoryUnavailable, "gateway_unavailable", "deferred transport switch requires the authoritative gateway"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrSystemTransportRuntimeUnavailable):
 		return output.CategoryUnavailable, "transport_switch_unavailable", "the bounded transport switch runtime is unavailable"

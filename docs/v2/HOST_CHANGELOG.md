@@ -2,6 +2,42 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Gateway-authoritative deferred transport intent
+
+### Planned reversible validation
+
+- Register node `transport switch --defer` through the authenticated overlay
+  controller using a stable request identity bound to exact node/gateway
+  generations, current transport, and explicit target. Retain a versioned
+  target containing the node execution generations and a deterministic but
+  distinct operation ID.
+- Commit only a pending gateway operation and its compact idempotency result;
+  do not change gateway active/standby transport. After a confirmed or safely
+  replayed gateway commit, persist the matching node-side pending mirror and
+  advance last-known gateway generation without changing local selection.
+  Gateway unavailability creates no local/offline queue.
+- Validation uses in-memory RPC callers, temporary state stores,
+  `/private/tmp/vpnctl-go-cache`, and existing local test listeners only. It
+  does not alter a real transport, config, unit, process, route, firewall,
+  host, VM, public endpoint, webhook, or client.
+
+### Acceptance
+
+- Tests cover canonical intent encoding, stable and distinct request/operation
+  IDs, exact full and compact replay receipts, failure-category closure,
+  gateway registration under the common mutation lock, retained idempotency
+  replay and post-eviction reconciliation, single pending switch per node,
+  unchanged active/standby selection, controller mux routing, node mirror
+  persistence, mirror retry without another RPC, and the public system
+  `--defer --yes --json` path.
+- The pending mirror intentionally makes current `vpnctl apply` fail explicit
+  unavailable instead of reporting a false no-op. Operation-bound node Desired
+  publication and the cross-host executor remain the next slice.
+- The focused race suite, complete Go suite, `go vet ./...`, documentation
+  regression, strict OpenSpec validation, formatting, and diff checks pass.
+  Repository rollback removes this source/documentation slice and temporary
+  test fixtures; no development-host rollback is needed.
+
 ## 2026-09-06 — Public manual transport command boundary
 
 ### Planned reversible validation

@@ -61,7 +61,7 @@ func (workflow *TransportSwitchWorkflow) Apply(ctx context.Context, _ MutationPl
 
 func transportSwitchPlanOutput(plan transport.SwitchPlan) output.Result {
 	return output.NewResult("transport.switch", output.StatusOK, output.CategorySuccess, output.SafeObject{
-		"changed": plan.Changed, "current": string(plan.Current), "target": string(plan.Target),
+		"changed": plan.Changed, "current": string(plan.Current), "candidate": string(plan.Target),
 		"generation": plan.NextStateGeneration,
 	})
 }

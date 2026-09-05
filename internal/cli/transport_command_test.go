@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
@@ -191,11 +192,130 @@ func TestSystemTransportTestFailsExplicitlyAndPreservesState(t *testing.T) {
 	}
 }
 
+func TestSystemTransportDeferredWriterMirrorsConfirmedGatewayIntentWithoutChangingSelection(t *testing.T) {
+	paths, stateStore := storeTransportCommandState(t)
+	before, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldBuilder := transportBuildDeferredGateway
+	t.Cleanup(func() { transportBuildDeferredGateway = oldBuilder })
+	requestID := "73000000-0000-4000-8000-000000000011"
+	operationID, err := transport.SwitchOperationID(requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &transportDeferredGatewayFixture{receipt: transport.DeferredSwitchReceipt{
+		OperationID: operationID, RequestID: requestID, NodeID: before.Nodes[0].ID,
+		Current: model.TransportRestricted, Target: model.TransportStandard,
+		GatewayGeneration: 11, DesiredGatewayGeneration: 12,
+		ExpectedNodeGeneration: before.Generation, DesiredNodeGeneration: before.Generation + 2,
+	}}
+	transportBuildDeferredGateway = func(received store.Paths) (transportDeferredGateway, error) {
+		if received != paths {
+			t.Fatalf("remote paths=%+v, want %+v", received, paths)
+		}
+		return remote, nil
+	}
+	writer, err := buildSystemTransportDeferredWriter(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := MutationPlan{Impact: ImpactAvailability, Result: output.NewResult(
+		"transport.switch", output.StatusOK, output.CategorySuccess,
+		output.SafeObject{
+			"changed": true, "current": "restricted", "candidate": "standard", "generation": before.Generation + 1,
+		},
+	)}
+	receipt, err := writer.RegisterPending(context.Background(), public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.calls != 1 || remote.current != model.TransportRestricted || remote.target != model.TransportStandard ||
+		remote.expectedNodeGeneration != before.Generation || receipt.OperationID != remote.receipt.OperationID ||
+		receipt.AuthoritativeGeneration != remote.receipt.GatewayGeneration || receipt.Result.Status != output.StatusPending {
+		t.Fatalf("remote=%+v receipt=%+v", remote, receipt)
+	}
+	after, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Generation != before.Generation+1 || after.Nodes[0].ActiveTransport != before.Nodes[0].ActiveTransport ||
+		after.Nodes[0].Gateway.PendingRequestID != requestID || after.Nodes[0].Gateway.LastKnownGatewayGeneration != 11 ||
+		len(after.Operations) != len(before.Operations)+1 || after.Operations[len(after.Operations)-1].ID != operationID {
+		t.Fatalf("mirrored local pending state=%+v", after)
+	}
+	retry := public
+	retry.Result.Data["generation"] = after.Generation + 1
+	second, err := writer.RegisterPending(context.Background(), retry)
+	if err != nil || second.OperationID != operationID || remote.calls != 1 {
+		t.Fatalf("retained retry=%+v err=%v remote calls=%d", second, err, remote.calls)
+	}
+}
+
+func TestTransportSwitchCommandUsesSystemGatewayDeferredRegistration(t *testing.T) {
+	paths, stateStore := storeTransportCommandState(t)
+	state, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPaths, oldRole := transportSystemPaths, transportLoadRole
+	oldSwitcher, oldAuthority, oldRemote := transportBuildSwitcher, transportBuildAuthority, transportBuildDeferredGateway
+	t.Cleanup(func() {
+		transportSystemPaths, transportLoadRole = oldPaths, oldRole
+		transportBuildSwitcher, transportBuildAuthority, transportBuildDeferredGateway = oldSwitcher, oldAuthority, oldRemote
+	})
+	transportSystemPaths = func() store.Paths { return paths }
+	transportLoadRole = func(store.Paths) (HostRole, error) { return RoleNode, nil }
+	transportBuildSwitcher = buildSystemTransportSwitcher
+	transportBuildAuthority = buildSystemTransportDeferredWriter
+	requestID := "73000000-0000-4000-8000-000000000012"
+	operationID, err := transport.SwitchOperationID(requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &transportDeferredGatewayFixture{receipt: transport.DeferredSwitchReceipt{
+		OperationID: operationID, RequestID: requestID, NodeID: state.Nodes[0].ID,
+		Current: model.TransportRestricted, Target: model.TransportStandard,
+		GatewayGeneration: 11, DesiredGatewayGeneration: 12,
+		ExpectedNodeGeneration: state.Generation, DesiredNodeGeneration: state.Generation + 2,
+	}}
+	transportBuildDeferredGateway = func(store.Paths) (transportDeferredGateway, error) { return remote, nil }
+	var stdout, stderr bytes.Buffer
+	if code := Execute([]string{"--json", "transport", "switch", "standard", "--defer", "--yes"}, &stdout, &stderr); code != ExitSuccess {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if remote.calls != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"status":"pending"`) ||
+		!strings.Contains(stdout.String(), `"candidate":"standard"`) || !strings.Contains(stdout.String(), remote.receipt.OperationID) {
+		t.Fatalf("remote=%+v stdout=%s stderr=%s", remote, stdout.String(), stderr.String())
+	}
+}
+
 type transportCommandTester struct {
 	execution transport.TestExecution
 	err       error
 	target    model.TransportKind
 	calls     int
+}
+
+type transportDeferredGatewayFixture struct {
+	receipt                transport.DeferredSwitchReceipt
+	err                    error
+	calls                  int
+	current                model.TransportKind
+	target                 model.TransportKind
+	expectedNodeGeneration uint64
+}
+
+func (gateway *transportDeferredGatewayFixture) RegisterDeferred(
+	_ context.Context,
+	current model.TransportKind,
+	target model.TransportKind,
+	expectedNodeGeneration uint64,
+) (transport.DeferredSwitchReceipt, error) {
+	gateway.calls++
+	gateway.current, gateway.target, gateway.expectedNodeGeneration = current, target, expectedNodeGeneration
+	return gateway.receipt, gateway.err
 }
 
 func (tester *transportCommandTester) Test(_ context.Context, target model.TransportKind) (transport.TestExecution, error) {
@@ -264,3 +384,4 @@ func storeTransportCommandState(t *testing.T) (store.Paths, *store.StateStore) {
 }
 
 var _ transportTester = (*transportCommandTester)(nil)
+var _ transportDeferredGateway = (*transportDeferredGatewayFixture)(nil)

@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 )
 
@@ -73,7 +74,8 @@ func TestSystemRPCMuxKeepsUpdateAndUninstallOperationsSeparate(t *testing.T) {
 	update := &recordingRPCHandler{status: http.StatusOK}
 	uninstall := &recordingRPCHandler{status: http.StatusAccepted}
 	repairProbe := &recordingRPCHandler{status: http.StatusNoContent}
-	mux := systemRPCMux{update: update, uninstall: uninstall, repairProbe: repairProbe}
+	mutation := &recordingRPCHandler{status: http.StatusCreated}
+	mux := systemRPCMux{update: update, uninstall: uninstall, mutation: mutation, repairProbe: repairProbe}
 	request := control.RPCRequest{Operation: lifecycle.NodeUpdatePreflightOperation}
 	result, _ := mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
 	if result.StatusCode != http.StatusOK || update.calls != 1 || uninstall.calls != 0 {
@@ -88,6 +90,11 @@ func TestSystemRPCMuxKeepsUpdateAndUninstallOperationsSeparate(t *testing.T) {
 	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
 	if result.StatusCode != http.StatusNoContent || repairProbe.calls != 1 || update.calls != 1 || uninstall.calls != 1 {
 		t.Fatalf("repair probe mux result=%+v calls=%d/%d/%d", result, update.calls, uninstall.calls, repairProbe.calls)
+	}
+	request.Operation = string(model.OperationTransportSwitch)
+	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
+	if result.StatusCode != http.StatusCreated || mutation.calls != 1 || update.calls != 1 || uninstall.calls != 1 {
+		t.Fatalf("transport mutation mux result=%+v calls=%d/%d/%d", result, update.calls, uninstall.calls, mutation.calls)
 	}
 	request.Operation = "unknown"
 	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
