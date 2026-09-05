@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -27,12 +28,20 @@ func NewSystemNodeInitializer(paths store.Paths, snapshot linuxplatform.HostSnap
 	if err != nil {
 		return nil, fmt.Errorf("create node role installer: %w", err)
 	}
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		return nil, fmt.Errorf("create node convergence store: %w", err)
+	}
+	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore)
+	if err != nil {
+		return nil, fmt.Errorf("create node convergence publisher: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
 	}
 	return lifecycle.NewNodeInitializer(lifecycle.NodeInitRuntime{
 		Paths: paths, Snapshot: snapshot, Release: release, BinaryPath: binary,
-		State: stateStore, Layout: layout, Roles: roleInstaller,
+		State: stateStore, Layout: layout, Roles: roleInstaller, Convergence: convergence,
 	})
 }

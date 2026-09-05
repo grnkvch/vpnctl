@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — initial private-node convergence baseline
+
+### Planned reversible validation
+
+- Derive the first desired/applied convergence manifest from the exact staged
+  `init --node` role request: four installed but inactive/disabled systemd unit
+  files and the root-only bootstrap config. Persist only generation-bound
+  revision/runtime fingerprints; rendered unit/config content never enters the
+  snapshot.
+- Publish the baseline only after the initial node state commit. A publication
+  failure is therefore reported as degraded with `changed=true`, never as a
+  rolled-back init. Repeating `init --node` on the same unjoined node retries
+  the exact idempotent baseline without reinstalling units or rewriting state;
+  any different existing snapshot is a conflict.
+- Validation is source-only with temporary system roots, state directories,
+  fake lifecycle dependencies, and the atomic snapshot store. It does not
+  install a production unit, create `/var/lib/vpnctl/convergence.json`, start a
+  service, or mutate either VM. Repository rollback removes this source slice;
+  no host rollback is needed.
+
+### Acceptance
+
+- Tests prove read-only planning, `state -> convergence` commit order,
+  post-commit failure reporting and retry, exact five-resource baseline,
+  content-free fingerprints, idempotent same-baseline publication, different
+  baseline refusal, and production system-node initializer composition.
+- Focused and full Go suites, race checks for operations/lifecycle/controller/
+  CLI, `go vet ./...`, strict OpenSpec validation, and diff checks passed. No
+  production host resource changed, so no host rollback remains.
+
 ## 2026-09-05 — durable convergence snapshot CAS writer
 
 ### Planned reversible validation

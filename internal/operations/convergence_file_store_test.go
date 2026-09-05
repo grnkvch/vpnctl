@@ -73,11 +73,17 @@ func TestFileConvergenceSnapshotStoreCASRejectsStaleAndPreservesNoOp(t *testing.
 	if changed, err := store.CompareAndSwap(context.Background(), first, first); err != nil || changed {
 		t.Fatalf("no-op CAS = %t, %v", changed, err)
 	}
+	if changed, err := store.EnsureInitialized(context.Background(), first); err != nil || changed {
+		t.Fatalf("idempotent ensure = %t, %v", changed, err)
+	}
 	if changed, err := store.CompareAndSwap(context.Background(), first, second); err != nil || !changed {
 		t.Fatalf("update CAS = %t, %v", changed, err)
 	}
 	if err := store.Initialize(context.Background(), second); !errors.Is(err, ErrConvergenceSnapshotConflict) {
 		t.Fatalf("duplicate initialize error = %v", err)
+	}
+	if changed, err := store.EnsureInitialized(context.Background(), first); changed || !errors.Is(err, ErrConvergenceSnapshotConflict) {
+		t.Fatalf("conflicting ensure = %t, %v", changed, err)
 	}
 }
 

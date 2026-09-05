@@ -80,9 +80,13 @@ serializes cooperating processes with a cancellation-aware flock, writes and
 fsyncs a same-directory `0600` candidate, atomically renames it, and fsyncs the
 directory. Stale/absent baselines are conflicts; failures after rename are
 reported as outcome-uncertain so callers re-read instead of retrying blindly.
-Component manifest publication still has to be connected to each successful
-init/mutation/apply transaction before the general production repair command
-can rely on this baseline.
+Initial unjoined-node publication is connected to the successful
+`init --node` state commit. Its desired and applied manifests contain exactly
+the staged bootstrap config and four inactive/disabled unit files. A
+post-commit publication failure is explicit and a repeated init idempotently
+completes the same baseline. Joined-node, gateway, and later mutation/apply
+publication still have to be connected before the general production repair
+command can rely on the baseline for those generations.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It

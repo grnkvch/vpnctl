@@ -222,6 +222,8 @@ func buildSystemNodeInitializer(ctx context.Context, paths store.Paths) (nodeIni
 
 func classifyNodeInitError(err error) (output.ExitCategory, string, string) {
 	switch {
+	case errors.Is(err, lifecycle.ErrNodeInitConvergencePending):
+		return output.CategoryUnavailable, "init_convergence_pending", "node initialization is committed but its convergence baseline is not ready; retry init --node"
 	case errors.Is(err, lifecycle.ErrNodeRoleConflict), errors.Is(err, lifecycle.ErrNodeLayoutConflict):
 		return output.CategoryConflict, "init_conflict", err.Error()
 	case errors.Is(err, linuxplatform.ErrUnsupportedHost), errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrConsentDeclined),
@@ -233,8 +235,18 @@ func classifyNodeInitError(err error) (output.ExitCategory, string, string) {
 }
 
 func emitNodeInitFailure(emitter *ResultEmitter, category output.ExitCategory, warningCode, warningMessage string) int {
-	result := output.NewResult("init.node", output.StatusFailed, category, output.SafeObject{"changed": false, "role": "node"})
+	changed := warningCode == "init_convergence_pending"
+	status := output.StatusFailed
+	if category == output.CategoryUnavailable || category == output.CategoryConflict {
+		status = output.StatusDegraded
+	}
+	result := output.NewResult("init.node", status, category, output.SafeObject{"changed": changed, "role": "node"})
 	result.Warnings = append(result.Warnings, output.Message{Code: warningCode, Message: singleLineGatewayInitMessage(warningMessage)})
+	if changed {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code: "retry_node_init", Message: "Retry node initialization to publish the committed convergence baseline.", Command: "vpnctl init --node",
+		})
+	}
 	code, err := emitter.Emit(result)
 	if err != nil {
 		return ExitInternal

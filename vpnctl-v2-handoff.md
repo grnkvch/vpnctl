@@ -22,6 +22,11 @@ production recovery layer для post-join node activation; общий
 gateway/current-node repair произвольного owned drift всё ещё требует
 подключения уже реализованного durable convergence snapshot CAS writer к
 успешным mutation transactions и role-scoped executors.
+Первое подключение writer завершено для `init --node`: после state commit
+публикуется content-free desired=applied baseline generation 1 для bootstrap
+config и четырёх staged inactive units. Ошибка после commit явно возвращает
+`init_convergence_pending` с `changed=true`; повторный init допубликовывает тот
+же baseline идемпотентно, не переустанавливая роль.
 
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -35,7 +36,7 @@ func TestNodeInitAppliesUnjoinedRoleOnceAndSecondInitHasNoEffect(t *testing.T) {
 			t.Fatalf("read-only plan created %s: %v", root, err)
 		}
 	}
-	if harness.roles.applyCalls != 0 || harness.state.saveCalls != 0 {
+	if harness.roles.applyCalls != 0 || harness.state.saveCalls != 0 || harness.convergence.calls != 0 {
 		t.Fatal("read-only plan invoked a mutating dependency")
 	}
 
@@ -47,7 +48,7 @@ func TestNodeInitAppliesUnjoinedRoleOnceAndSecondInitHasNoEffect(t *testing.T) {
 	if !result.Changed || result.HostID != nodeTestHostID || !reflect.DeepEqual(result.Units, wantUnits) {
 		t.Fatalf("Apply() result = %+v", result)
 	}
-	if want := []string{"state-load", "roles-apply", "state-save"}; !reflect.DeepEqual(harness.events.values, want) {
+	if want := []string{"state-load", "roles-apply", "state-save", "convergence-publish"}; !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("apply events = %v, want %v", harness.events.values, want)
 	}
 	assertInitialUnjoinedNodeState(t, harness.state)
@@ -70,11 +71,45 @@ func TestNodeInitAppliesUnjoinedRoleOnceAndSecondInitHasNoEffect(t *testing.T) {
 	if secondResult.Changed || len(secondResult.Units) != 0 || harness.roles.applyCalls != beforeApply {
 		t.Fatalf("second result/calls = %+v/%d", secondResult, harness.roles.applyCalls)
 	}
-	if !reflect.DeepEqual(harness.events.values, []string{"state-load"}) {
+	if !reflect.DeepEqual(harness.events.values, []string{"state-load", "convergence-publish"}) {
 		t.Fatalf("second apply events = %v", harness.events.values)
 	}
 	if harness.idCalls != 1 {
 		t.Fatalf("host identity allocations = %d", harness.idCalls)
+	}
+}
+
+func TestNodeInitRetriesConvergencePublicationAfterCommittedFailure(t *testing.T) {
+	t.Parallel()
+
+	harness := newNodeInitHarness(t)
+	plan, err := harness.initializer.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.convergence.err = errors.New("snapshot storage unavailable")
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, ErrNodeInitConvergencePending) {
+		t.Fatalf("post-commit publication error = %v", err)
+	}
+	if harness.roles.applyCalls != 1 || harness.state.saveCalls != 1 || harness.convergence.calls != 1 {
+		t.Fatalf("first apply calls roles/state/convergence = %d/%d/%d", harness.roles.applyCalls, harness.state.saveCalls, harness.convergence.calls)
+	}
+	assertInitialUnjoinedNodeState(t, harness.state)
+
+	harness.convergence.err = nil
+	recovery, err := harness.initializer.Plan(context.Background())
+	if err != nil || !recovery.AlreadyInitialized || recovery.Changed {
+		t.Fatalf("recovery plan = %+v, %v", recovery, err)
+	}
+	result, err := harness.initializer.Apply(context.Background(), recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || harness.roles.applyCalls != 1 || harness.state.saveCalls != 1 || harness.convergence.calls != 2 {
+		t.Fatalf("recovery result/calls = %+v / %d/%d/%d", result, harness.roles.applyCalls, harness.state.saveCalls, harness.convergence.calls)
+	}
+	if harness.convergence.generation != 1 || harness.convergence.request.Role != model.RoleNode {
+		t.Fatalf("recovered convergence request = %d/%+v", harness.convergence.generation, harness.convergence.request)
 	}
 }
 
@@ -148,9 +183,17 @@ func TestNodeInitConcreteInstallerStagesNoGatewayOrActiveUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	initializer, err := NewNodeInitializer(NodeInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(),
-		State: stateStore, Layout: layout, Roles: roles,
+		State: stateStore, Layout: layout, Roles: roles, Convergence: convergence,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { return nodeTestHostID, nil },
 	})
@@ -186,6 +229,11 @@ func TestNodeInitConcreteInstallerStagesNoGatewayOrActiveUnits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(paths.ConfigDir, "generated", "node", "bootstrap.conf")); err != nil {
 		t.Fatalf("node bootstrap config is missing: %v", err)
+	}
+	convergenceSource, _ := operations.NewFileConvergenceSnapshotSource(paths.ConvergenceFile)
+	convergenceSnapshot, err := convergenceSource.ReadConvergenceSnapshot(context.Background())
+	if err != nil || convergenceSnapshot.Applied.Generation != 1 || len(convergenceSnapshot.Applied.Resources) != 5 {
+		t.Fatalf("node convergence baseline = %+v, %v", convergenceSnapshot, err)
 	}
 	if data, err := os.ReadFile(foreignApplication); err != nil || string(data) != "keep\n" {
 		t.Fatalf("foreign application changed: %q, %v", data, err)
@@ -241,6 +289,7 @@ type nodeInitHarness struct {
 	paths       store.Paths
 	state       *recordingNodeState
 	roles       *recordingGatewayRoles
+	convergence *recordingNodeInitConvergence
 	events      *gatewayInitEvents
 	idCalls     int
 }
@@ -267,10 +316,11 @@ func newNodeInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *nod
 	events := &gatewayInitEvents{}
 	state := &recordingNodeState{store: stateStore, events: events}
 	roles := &recordingGatewayRoles{events: events, root: root}
-	harness := &nodeInitHarness{paths: paths, state: state, roles: roles, events: events}
+	convergence := &recordingNodeInitConvergence{events: events}
+	harness := &nodeInitHarness{paths: paths, state: state, roles: roles, convergence: convergence, events: events}
 	initializer, err := NewNodeInitializer(NodeInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
-		State: state, Layout: layout, Roles: roles,
+		State: state, Layout: layout, Roles: roles, Convergence: convergence,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { harness.idCalls++; return nodeTestHostID, nil },
 	})
@@ -279,6 +329,26 @@ func newNodeInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *nod
 	}
 	harness.initializer = initializer
 	return harness
+}
+
+type recordingNodeInitConvergence struct {
+	events     *gatewayInitEvents
+	calls      int
+	generation uint64
+	request    linuxplatform.RoleInstallationRequest
+	err        error
+}
+
+func (publisher *recordingNodeInitConvergence) PublishNodeInitialization(
+	_ context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+) error {
+	publisher.events.add("convergence-publish")
+	publisher.calls++
+	publisher.generation = generation
+	publisher.request = request
+	return publisher.err
 }
 
 type recordingNodeState struct {

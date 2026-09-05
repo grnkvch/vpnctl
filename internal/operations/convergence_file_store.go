@@ -57,8 +57,15 @@ func newFileConvergenceSnapshotStore(
 
 // Initialize publishes the first baseline only when no snapshot exists.
 func (store *FileConvergenceSnapshotStore) Initialize(ctx context.Context, candidate ConvergenceSnapshot) error {
-	_, err := store.save(ctx, nil, candidate)
+	_, err := store.save(ctx, nil, candidate, false)
 	return err
+}
+
+// EnsureInitialized is the idempotent post-commit form used by lifecycle
+// recovery. It accepts an existing byte-logically equal baseline but still
+// rejects every different snapshot.
+func (store *FileConvergenceSnapshotStore) EnsureInitialized(ctx context.Context, candidate ConvergenceSnapshot) (bool, error) {
+	return store.save(ctx, nil, candidate, true)
 }
 
 // CompareAndSwap publishes candidate only when the current canonical snapshot
@@ -72,13 +79,14 @@ func (store *FileConvergenceSnapshotStore) CompareAndSwap(
 	if err != nil {
 		return false, fmt.Errorf("validate expected convergence snapshot: %w", err)
 	}
-	return store.save(ctx, &canonicalExpected, candidate)
+	return store.save(ctx, &canonicalExpected, candidate, false)
 }
 
 func (store *FileConvergenceSnapshotStore) save(
 	ctx context.Context,
 	expected *ConvergenceSnapshot,
 	candidate ConvergenceSnapshot,
+	acceptExistingEqual bool,
 ) (bool, error) {
 	if ctx == nil {
 		return false, fmt.Errorf("context is required")
@@ -121,6 +129,8 @@ func (store *FileConvergenceSnapshotStore) save(
 	current, readErr := store.source.ReadConvergenceSnapshot(ctx)
 	switch {
 	case expected == nil && errors.Is(readErr, ErrConvergenceSnapshotUnavailable):
+	case expected == nil && readErr == nil && acceptExistingEqual && reflect.DeepEqual(current, canonicalCandidate):
+		return false, nil
 	case expected == nil && readErr == nil:
 		return false, fmt.Errorf("%w: snapshot already exists", ErrConvergenceSnapshotConflict)
 	case expected == nil:

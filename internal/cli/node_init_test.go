@@ -145,12 +145,34 @@ func TestExecuteRepeatedNodeInitReportsNoChange(t *testing.T) {
 	}
 }
 
+func TestExecuteNodeInitReportsCommittedConvergenceRecovery(t *testing.T) {
+	initializer := &recordingNodeInitializer{applyErr: errors.Join(lifecycle.ErrNodeInitConvergencePending, errors.New("disk sync failed"))}
+	restore := stubNodeInitCommand(t, initializer, RoleUninitialized)
+	defer restore()
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"init", "--node", "--yes", "--json"}, &stdout, &stderr)
+	if code != ExitUnavailable || stderr.Len() != 0 || initializer.applyCalls != 1 {
+		t.Fatalf("Execute() code/calls = %d/%d stdout=%q stderr=%q", code, initializer.applyCalls, stdout.String(), stderr.String())
+	}
+	var result output.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != output.StatusDegraded || result.Data["changed"] != true || len(result.Warnings) != 1 ||
+		result.Warnings[0].Code != "init_convergence_pending" || len(result.RequiresAction) != 1 ||
+		result.RequiresAction[0].Command != "vpnctl init --node" {
+		t.Fatalf("post-commit result = %+v", result)
+	}
+}
+
 const nodeCLIHostID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 type recordingNodeInitializer struct {
 	planCalls          int
 	applyCalls         int
 	planErr            error
+	applyErr           error
 	alreadyInitialized bool
 }
 
@@ -170,6 +192,9 @@ func (initializer *recordingNodeInitializer) Plan(context.Context) (lifecycle.No
 
 func (initializer *recordingNodeInitializer) Apply(_ context.Context, plan lifecycle.NodeInitPlan) (lifecycle.NodeInitResult, error) {
 	initializer.applyCalls++
+	if initializer.applyErr != nil {
+		return lifecycle.NodeInitResult{}, initializer.applyErr
+	}
 	if plan.AlreadyInitialized {
 		return lifecycle.NodeInitResult{HostID: plan.HostID, Units: []string{}}, nil
 	}

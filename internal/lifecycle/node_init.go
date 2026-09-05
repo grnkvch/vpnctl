@@ -13,7 +13,10 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
-var ErrNodeRoleConflict = errors.New("host is already initialized with another role")
+var (
+	ErrNodeRoleConflict           = errors.New("host is already initialized with another role")
+	ErrNodeInitConvergencePending = errors.New("node initialization committed but convergence baseline is pending")
+)
 
 type NodeInitPlan struct {
 	Changed            bool
@@ -46,17 +49,22 @@ type NodeInitRoleInstaller interface {
 	Apply(context.Context, linuxplatform.RoleInstallationRequest) (linuxplatform.RoleInstallationResult, error)
 }
 
+type NodeInitConvergencePublisher interface {
+	PublishNodeInitialization(context.Context, uint64, linuxplatform.RoleInstallationRequest) error
+}
+
 type NodeInitRuntime struct {
-	Paths      store.Paths
-	Snapshot   linuxplatform.HostSnapshot
-	Manifest   model.ComponentManifest
-	Release    InitReleaseSource
-	BinaryPath string
-	State      NodeInitStateStore
-	Layout     *NodeLayoutInstaller
-	Roles      NodeInitRoleInstaller
-	Now        func() time.Time
-	NewHostID  model.UUIDGenerator
+	Paths       store.Paths
+	Snapshot    linuxplatform.HostSnapshot
+	Manifest    model.ComponentManifest
+	Release     InitReleaseSource
+	BinaryPath  string
+	State       NodeInitStateStore
+	Layout      *NodeLayoutInstaller
+	Roles       NodeInitRoleInstaller
+	Convergence NodeInitConvergencePublisher
+	Now         func() time.Time
+	NewHostID   model.UUIDGenerator
 }
 
 type NodeInitializer struct {
@@ -64,7 +72,7 @@ type NodeInitializer struct {
 }
 
 func NewNodeInitializer(runtime NodeInitRuntime) (*NodeInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.Convergence == nil {
 		return nil, fmt.Errorf("node initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -124,9 +132,21 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 		if !reflect.DeepEqual(existing.Components, manifest) {
 			return NodeInitPlan{}, fmt.Errorf("node release differs from authoritative state; use vpnctl update")
 		}
+		var roleRequest linuxplatform.RoleInstallationRequest
+		if len(existing.Nodes) == 0 {
+			var renderErr error
+			roleRequest, renderErr = linuxplatform.RenderNodeRoleInstallation(initializer.runtime.BinaryPath)
+			if renderErr != nil {
+				return NodeInitPlan{}, renderErr
+			}
+			if _, err := initializer.runtime.Roles.Plan(roleRequest); err != nil {
+				return NodeInitPlan{}, fmt.Errorf("plan staged node convergence recovery: %w", err)
+			}
+		}
 		return NodeInitPlan{
 			AlreadyInitialized: true, HostID: existing.Host.ID, desiredState: existing, Units: []string{},
 			Enrolled: len(existing.Nodes) == 1, ActiveTunnel: nodeHasActiveTunnel(existing), releaseManifest: releaseManifest,
+			roleRequest: roleRequest,
 		}, nil
 	}
 	if !errors.Is(loadErr, store.ErrStateNotFound) {
@@ -187,6 +207,11 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 		if err != nil || state.Host.ID != plan.HostID || state.Host.Role != model.RoleNode {
 			return NodeInitResult{}, fmt.Errorf("idempotent node plan is stale")
 		}
+		if len(state.Nodes) == 0 {
+			if err := initializer.runtime.Convergence.PublishNodeInitialization(ctx, state.Generation, plan.roleRequest); err != nil {
+				return NodeInitResult{}, errors.Join(ErrNodeInitConvergencePending, err)
+			}
+		}
 		return NodeInitResult{HostID: plan.HostID, Units: []string{}}, nil
 	}
 	if !plan.Changed || plan.AlreadyInitialized || plan.HostID == "" || plan.desiredState.Host.ID != plan.HostID {
@@ -220,6 +245,9 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 	}
 	if err := initializer.runtime.State.Save(0, plan.desiredState); err != nil {
 		return NodeInitResult{}, fmt.Errorf("persist initial node state: %w", err)
+	}
+	if err := initializer.runtime.Convergence.PublishNodeInitialization(ctx, plan.desiredState.Generation, plan.roleRequest); err != nil {
+		return NodeInitResult{}, errors.Join(ErrNodeInitConvergencePending, err)
 	}
 	return NodeInitResult{Changed: true, HostID: plan.HostID, Units: append([]string(nil), plan.Units...)}, nil
 }
