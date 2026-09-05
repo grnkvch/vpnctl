@@ -49,7 +49,7 @@ func ResolveNodeRoutingActiveOutbound(state model.State, credentials NodeRouting
 	if err != nil {
 		return NodeRoutingActiveOutbound{}, fmt.Errorf("read restricted gateway routing credential: %w", err)
 	}
-	gatewaySecret, err := restricted.DecodeGatewaySecret(gatewayContent)
+	gatewaySecret, err := restricted.DecodeNodeUpstreamSecret(gatewayContent)
 	if err != nil {
 		return NodeRoutingActiveOutbound{}, fmt.Errorf("validate restricted gateway routing credential: %w", err)
 	}

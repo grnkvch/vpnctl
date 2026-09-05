@@ -184,6 +184,18 @@ explicit repair/recovery workflow instead of being destructively deleted.
 Pre-commit validation and readiness failures are definitive and roll back the
 fresh node credentials immediately.
 
+After the node commits the signed assignment, one deterministic compiler
+materializes that generation into the complete local service boundary. It
+renders route-neutral WireGuard, policy-mode Mihomo, the independent kernel
+guard, DNS integration, one frpc process, and the exact pinned gateway tunnel
+certificate. The guard derives one unambiguous effective IPv4 main-table
+default route for recovery-marked traffic and admits only the exact public
+bootstrap paths TCP `443`, TCP `8443`, and UDP `51820`; equal-priority defaults
+with different next hops fail closed. Readiness markers bind state, policy,
+credential, config, and tunnel-certificate generations without containing raw
+credentials. File publication, ordered unit activation, and live readiness are
+separate system-runtime phases so the same compiler can be reused by `repair`.
+
 ## Joined-node behavior and gateway inspection
 
 Both join planning and apply first validate the local authoritative role and

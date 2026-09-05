@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	ProviderName          = "mihomo"
-	Cipher                = "2022-blake3-aes-256-gcm"
-	ShadowTLSVersion      = 3
-	UDPOverTCPVersion     = 2
-	TCPPort               = 8443
-	SecretSchemaVersion   = 1
-	SymmetricKeyByteCount = 32
+	ProviderName              = "mihomo"
+	Cipher                    = "2022-blake3-aes-256-gcm"
+	ShadowTLSVersion          = 3
+	UDPOverTCPVersion         = 2
+	TCPPort                   = 8443
+	SecretSchemaVersion       = 1
+	NodeUpstreamSchemaVersion = 1
+	SymmetricKeyByteCount     = 32
 )
 
 const GatewayCredentialRef model.SecretRef = "restricted-server:gateway-g1"
@@ -36,6 +37,14 @@ type GatewaySecret struct {
 type IdentitySecret struct {
 	SchemaVersion     int    `json:"schema_version"`
 	ShadowTLSPassword string `json:"shadowtls_password"`
+}
+
+// NodeUpstreamSecret is the deliberately reduced gateway credential sent to
+// a private node. The gateway-only bootstrap ShadowTLS password never crosses
+// the enrollment boundary.
+type NodeUpstreamSecret struct {
+	SchemaVersion       int    `json:"schema_version"`
+	ShadowsocksPassword string `json:"shadowsocks_password"`
 }
 
 func NewGatewaySecret(random io.Reader) (GatewaySecret, error) {
@@ -105,6 +114,35 @@ func DecodeIdentitySecret(content []byte) (IdentitySecret, error) {
 	}
 	if err := ValidateIdentityPassword(secret.ShadowTLSPassword); err != nil {
 		return IdentitySecret{}, err
+	}
+	return secret, nil
+}
+
+func EncodeNodeUpstreamSecret(password string) ([]byte, error) {
+	if err := ValidateServerPassword(password); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(NodeUpstreamSecret{SchemaVersion: NodeUpstreamSchemaVersion, ShadowsocksPassword: password})
+	if err != nil {
+		return nil, fmt.Errorf("encode restricted node upstream credential: %w", err)
+	}
+	return encoded, nil
+}
+
+func DecodeNodeUpstreamSecret(content []byte) (NodeUpstreamSecret, error) {
+	var secret NodeUpstreamSecret
+	if err := decodeSecret(content, &secret); err != nil {
+		return NodeUpstreamSecret{}, err
+	}
+	if secret.SchemaVersion != NodeUpstreamSchemaVersion {
+		return NodeUpstreamSecret{}, fmt.Errorf("unsupported restricted node upstream credential schema")
+	}
+	if err := ValidateServerPassword(secret.ShadowsocksPassword); err != nil {
+		return NodeUpstreamSecret{}, err
+	}
+	canonical, err := json.Marshal(secret)
+	if err != nil || !bytes.Equal(canonical, content) {
+		return NodeUpstreamSecret{}, fmt.Errorf("restricted node upstream credential must be canonical JSON")
 	}
 	return secret, nil
 }

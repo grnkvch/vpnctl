@@ -20,7 +20,7 @@ import (
 
 const (
 	NodeJoinSchemaVersion               = 1
-	NodeRestrictedUpstreamSchemaVersion = 1
+	NodeRestrictedUpstreamSchemaVersion = restricted.NodeUpstreamSchemaVersion
 	maximumNodeJoinPresets              = 64
 
 	joinControlCAHashName           = "control_ca"
@@ -281,10 +281,7 @@ func (assignment NodeJoinAssignment) SHA256() ([sha256.Size]byte, error) {
 	return digest, nil
 }
 
-type nodeRestrictedUpstreamWire struct {
-	SchemaVersion       int    `json:"schema_version"`
-	ShadowsocksPassword string `json:"shadowsocks_password"`
-}
+type nodeRestrictedUpstreamWire = restricted.NodeUpstreamSecret
 
 type nodeJoinWireResponse struct {
 	SchemaVersion              int                `json:"schema_version"`
@@ -527,12 +524,7 @@ func cloneJoinStringMap(value map[string]string) map[string]string {
 }
 
 func encodeRestrictedUpstreamCredential(password string) ([]byte, error) {
-	if err := restricted.ValidateServerPassword(password); err != nil {
-		return nil, err
-	}
-	return json.Marshal(nodeRestrictedUpstreamWire{
-		SchemaVersion: NodeRestrictedUpstreamSchemaVersion, ShadowsocksPassword: password,
-	})
+	return restricted.EncodeNodeUpstreamSecret(password)
 }
 
 func materialFingerprint(value []byte) string {

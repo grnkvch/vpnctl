@@ -58,3 +58,30 @@ func TestRestrictedSecretGenerationRejectsShortEntropy(t *testing.T) {
 		t.Fatal("GenerateIdentitySecret(short entropy) succeeded")
 	}
 }
+
+func TestNodeUpstreamSecretContainsOnlyCanonicalShadowsocksMaterial(t *testing.T) {
+	t.Parallel()
+
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, SymmetricKeyByteCount))
+	encoded, err := EncodeNodeUpstreamSecret(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schema_version":1,"shadowsocks_password":"` + password + `"}`
+	if string(encoded) != want || bytes.Contains(encoded, []byte("shadowtls")) {
+		t.Fatalf("node upstream credential = %q", encoded)
+	}
+	decoded, err := DecodeNodeUpstreamSecret(encoded)
+	if err != nil || decoded.SchemaVersion != NodeUpstreamSchemaVersion || decoded.ShadowsocksPassword != password {
+		t.Fatalf("DecodeNodeUpstreamSecret() = %+v, %v", decoded, err)
+	}
+	for name, value := range map[string][]byte{
+		"gateway-only field": []byte(`{"schema_version":1,"shadowsocks_password":"` + password + `","bootstrap_shadowtls_password":"` + strings.Repeat("42", SymmetricKeyByteCount) + `"}`),
+		"non-canonical":      append(append([]byte(nil), encoded...), '\n'),
+		"wrong schema":       bytes.Replace(encoded, []byte(`"schema_version":1`), []byte(`"schema_version":2`), 1),
+	} {
+		if _, err := DecodeNodeUpstreamSecret(value); err == nil {
+			t.Fatalf("DecodeNodeUpstreamSecret(%s) succeeded", name)
+		}
+	}
+}

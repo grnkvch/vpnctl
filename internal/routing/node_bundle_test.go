@@ -172,11 +172,9 @@ func TestResolveNodeRoutingActiveOutboundUsesOnlyAuthoritativeManualSelection(t 
 			state.Transports[index].State = model.TransportActive
 		}
 	}
-	gatewaySecret, err := restricted.EncodeSecret(restricted.GatewaySecret{
-		SchemaVersion:              restricted.SecretSchemaVersion,
-		ShadowsocksPassword:        base64.StdEncoding.EncodeToString([]byte(strings.Repeat("g", restricted.SymmetricKeyByteCount))),
-		BootstrapShadowTLSPassword: strings.Repeat("62", restricted.SymmetricKeyByteCount),
-	})
+	gatewaySecret, err := restricted.EncodeNodeUpstreamSecret(
+		base64.StdEncoding.EncodeToString([]byte(strings.Repeat("g", restricted.SymmetricKeyByteCount))),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

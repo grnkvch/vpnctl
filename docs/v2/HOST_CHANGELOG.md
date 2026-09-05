@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — joined-node service configuration compiler
+
+### Planned reversible validation
+
+- Add the missing source-only boundary that compiles a committed private-node
+  identity into one complete generation-bound service set: route-neutral
+  WireGuard, policy-mode Mihomo, independent nftables guard, DNS integration,
+  frpc, the exact gateway tunnel trust certificate, and four readiness markers.
+- Select only the unique effective IPv4 main-table default route for recovery
+  traffic. Preserve exact public recovery egress for TCP `443`, TCP `8443`, and
+  UDP `51820`; reject ambiguous equal-priority defaults rather than guessing.
+- Correct the node restricted-routing reader to consume the intentionally
+  reduced enrollment credential containing only the gateway Shadowsocks
+  password. The gateway-only bootstrap ShadowTLS password remains excluded.
+- Validation uses generated test PKI, in-memory enrollment handlers, fake
+  WireGuard commands, and secret/config trees below `t.TempDir()`. It does not
+  publish a real generated config, enable/start a unit, alter routing, bind a
+  production listener, consume a production invite, or mutate either VM.
+  Repository rollback removes this source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests cover standard and restricted compilation, exact preset-policy
+  preservation, direct-route selection/ambiguity, all service artifacts and
+  markers, root-bound frpc trust paths, certificate substitution refusal,
+  canonical reduced restricted credentials, and defensive artifact copies.
+- Focused and full Go suites, `go vet ./...`, strict OpenSpec validation, and
+  diff checks passed. No production secret, config, service, listener, route,
+  firewall, DNS setting, host, or VM was touched, so no host rollback remains.
+
 ## 2026-09-05 — reverse-tunnel trust bootstrap through join
 
 ### Planned reversible validation
