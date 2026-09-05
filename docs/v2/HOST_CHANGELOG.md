@@ -2,6 +2,37 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Public generation-bound owned-drift repair
+
+### Planned reversible validation
+
+- Select action-scoped repair only when the exact Applied snapshot has its
+  immutable material bundle and any newer local authoritative generation is
+  explained by retained pending intent. Retain full committed-generation
+  recovery for an unexplained incomplete/missing publication boundary, without
+  allowing repair to apply pending intent.
+- Execute gateway repair only as a runtime-only root-socket controller mutation
+  under its existing writer mutex. Execute node repair only in the current CLI
+  process while holding a safe local flock and after a fresh authenticated,
+  read-only mTLS gateway probe, including a no-op repair.
+- Validation uses in-memory RPC/controller/executor doubles, Go temporary
+  directories, and `/private/tmp/vpnctl-go-cache`. No real config, unit,
+  service, state, certificate, network, host, VM, or public endpoint is
+  mutated.
+
+### Acceptance
+
+- Focused tests cover RPC identity/reachability fail-closed behavior, exact
+  controller generation/action batches, runtime-only dispatch, stale and
+  broadened payload refusal, authoritative state/Applied/material binding,
+  local controller request/result validation, public adaptive selection, and
+  cancellation-aware no-follow node repair locking.
+- The complete ordinary Go suite, focused race suite, `go vet ./...`, strict
+  OpenSpec validation, formatting, and diff checks pass.
+- Repository rollback removes this source/documentation slice and the
+  transient test fixtures. The runtime lock is created only when the command
+  executes on a real node; no development-host rollback is needed.
+
 ## 2026-09-06 — Applied-bound local role repair executor
 
 ### Planned reversible validation

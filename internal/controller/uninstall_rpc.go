@@ -101,10 +101,11 @@ func uninstallRPCFailure(request control.RPCRequest, status int, category string
 }
 
 type systemRPCMux struct {
-	update    control.RPCHandler
-	uninstall control.RPCHandler
-	expose    control.RPCHandler
-	policy    control.RPCHandler
+	update      control.RPCHandler
+	uninstall   control.RPCHandler
+	expose      control.RPCHandler
+	policy      control.RPCHandler
+	repairProbe control.RPCHandler
 }
 
 func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, request control.RPCRequest) (control.RPCHandlerResult, error) {
@@ -118,6 +119,11 @@ func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, req
 		return mux.expose.HandleRPC(ctx, peer, request)
 	case operations.PolicyPlanRPCOperation, operations.PolicyCommitRPCOperation:
 		return mux.policy.HandleRPC(ctx, peer, request)
+	case operations.RepairProbeRPCOperation:
+		if mux.repairProbe == nil {
+			return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil
+		}
+		return mux.repairProbe.HandleRPC(ctx, peer, request)
 	default:
 		return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil
 	}

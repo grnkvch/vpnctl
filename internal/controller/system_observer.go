@@ -124,8 +124,12 @@ func newSystemController(paths store.Paths, state *store.StateStore) (*Controlle
 	if err != nil {
 		return nil, err
 	}
-	dispatcher, err := NewGatewayMutationDispatcherWithRepair(
-		dnsDispatcher, loggingDispatcher, NewGatewayInviteMutationDispatcher(nil, nil), repairDispatcher,
+	ownedRepairDispatcher, err := NewSystemGatewayOwnedRepairDispatcher(paths)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher, err := NewGatewayMutationDispatcherWithRepairs(
+		dnsDispatcher, loggingDispatcher, NewGatewayInviteMutationDispatcher(nil, nil), repairDispatcher, ownedRepairDispatcher,
 	)
 	if err != nil {
 		return nil, err

@@ -66,6 +66,24 @@ type RepairExecutionResult struct {
 	Resources        []RepairResourceResult `json:"resources"`
 }
 
+// NewRepairExecutionBatch retains the exact validated repair target for a
+// role-specific execution boundary. The returned slices do not alias plan.
+func NewRepairExecutionBatch(plan RepairPlan) (RepairExecutionBatch, error) {
+	if err := plan.Validate(); err != nil {
+		return RepairExecutionBatch{}, fmt.Errorf("%w: repair execution plan: %v", ErrRepairInvalid, err)
+	}
+	return repairExecutionBatch(plan), nil
+}
+
+// Validate proves that a role-specific executor returned one result for every
+// approved action and that each result reached the approved generation hash.
+func (result RepairExecutionResult) Validate(batch RepairExecutionBatch) error {
+	if err := batch.Validate(); err != nil {
+		return fmt.Errorf("repair execution batch: %w", err)
+	}
+	return result.validate(batch)
+}
+
 type RepairResult struct {
 	Changed    bool                   `json:"changed"`
 	Generation uint64                 `json:"generation"`
@@ -410,6 +428,18 @@ func (result RepairExecutionResult) validate(batch RepairExecutionBatch) error {
 		}
 	}
 	return nil
+}
+
+func (batch RepairExecutionBatch) Validate() error {
+	impact := ConvergenceImpactNone
+	for _, action := range batch.Actions {
+		impact = maximumConvergenceImpact(impact, action.Impact)
+	}
+	return (RepairPlan{
+		Role: batch.Role, CurrentNodeID: batch.CurrentNodeID,
+		TargetGeneration: batch.TargetGeneration, Impact: impact,
+		Actions: cloneRepairActions(batch.Actions), Convergence: cloneConvergencePlan(batch.Convergence),
+	}).Validate()
 }
 
 func (result RepairResult) Validate() error {

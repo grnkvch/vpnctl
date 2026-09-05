@@ -12,10 +12,29 @@ import (
 // GatewayMutationDispatcher keeps the controller as the sole gateway writer
 // while routing each closed operation family to its narrow implementation.
 type GatewayMutationDispatcher struct {
-	dns     *GatewayDNSMutationDispatcher
-	logging *GatewayLoggingMutationDispatcher
-	invites *GatewayInviteMutationDispatcher
-	repair  *GatewayRepairDispatcher
+	dns         *GatewayDNSMutationDispatcher
+	logging     *GatewayLoggingMutationDispatcher
+	invites     *GatewayInviteMutationDispatcher
+	repair      *GatewayRepairDispatcher
+	ownedRepair *GatewayOwnedRepairDispatcher
+}
+
+func NewGatewayMutationDispatcherWithRepairs(
+	dns *GatewayDNSMutationDispatcher,
+	logging *GatewayLoggingMutationDispatcher,
+	invites *GatewayInviteMutationDispatcher,
+	repair *GatewayRepairDispatcher,
+	ownedRepair *GatewayOwnedRepairDispatcher,
+) (*GatewayMutationDispatcher, error) {
+	if ownedRepair == nil {
+		return nil, fmt.Errorf("gateway owned repair dispatcher is required")
+	}
+	dispatcher, err := NewGatewayMutationDispatcherWithRepair(dns, logging, invites, repair)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher.ownedRepair = ownedRepair
+	return dispatcher, nil
 }
 
 func NewGatewayMutationDispatcher(dns *GatewayDNSMutationDispatcher, logging *GatewayLoggingMutationDispatcher, invites ...*GatewayInviteMutationDispatcher) (*GatewayMutationDispatcher, error) {
@@ -66,6 +85,8 @@ func (dispatcher *GatewayMutationDispatcher) Prepare(ctx context.Context, state 
 		return dispatcher.invites.Prepare(ctx, state, operation, payload)
 	case operation == GatewayRepairOperation && dispatcher.repair != nil:
 		return dispatcher.repair.Prepare(ctx, state, operation, payload)
+	case operation == GatewayOwnedRepairOperation && dispatcher.ownedRepair != nil:
+		return dispatcher.ownedRepair.Prepare(ctx, state, operation, payload)
 	default:
 		return PreparedMutation{}, fmt.Errorf("unsupported gateway mutation operation")
 	}

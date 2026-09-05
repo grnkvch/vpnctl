@@ -15,11 +15,14 @@ import (
 )
 
 var (
-	repairSystemPaths  = store.DefaultPaths
-	repairLoadRole     = loadSystemHostRole
-	repairBuildNode    = buildSystemCommittedNodeRepair
-	repairBuildGateway = buildSystemCommittedGatewayRepair
-	repairOpenTTY      = func() (PromptIO, io.Closer, error) {
+	repairSystemPaths             = store.DefaultPaths
+	repairLoadRole                = loadSystemHostRole
+	repairBuildNode               = buildSystemCommittedNodeRepair
+	repairBuildGateway            = buildSystemCommittedGatewayRepair
+	repairBuildConvergenceNode    = buildSystemNodeConvergenceRepair
+	repairBuildConvergenceGateway = buildSystemGatewayConvergenceRepair
+	repairPreferConvergence       = systemConvergenceRepairEligible
+	repairOpenTTY                 = func() (PromptIO, io.Closer, error) {
 		terminal, err := OpenControllingTerminal()
 		if err != nil {
 			return nil, nil, err
@@ -71,6 +74,15 @@ func executeRepair(args []string, stdout, stderr io.Writer) int {
 	var outcome MutationOutcome
 	switch role {
 	case RoleGateway:
+		if repairPreferConvergence(context.Background(), paths, role) {
+			operator, buildErr := repairBuildConvergenceGateway(paths)
+			if buildErr != nil {
+				category, code, message := classifyRepairCommandError(buildErr)
+				return emitRepairCommandFailure(emitter, category, code, message, false, role)
+			}
+			outcome, err = RunConvergenceRepair(context.Background(), role, parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
+			break
+		}
 		operator, buildErr := repairBuildGateway(paths)
 		if buildErr != nil {
 			category, code, message := classifyRepairCommandError(buildErr)
@@ -78,6 +90,15 @@ func executeRepair(args []string, stdout, stderr io.Writer) int {
 		}
 		outcome, err = RunCommittedGatewayRepair(context.Background(), parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
 	case RoleNode:
+		if repairPreferConvergence(context.Background(), paths, role) {
+			operator, buildErr := repairBuildConvergenceNode(paths)
+			if buildErr != nil {
+				category, code, message := classifyRepairCommandError(buildErr)
+				return emitRepairCommandFailure(emitter, category, code, message, false, role)
+			}
+			outcome, err = RunConvergenceRepair(context.Background(), role, parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
+			break
+		}
 		operator, buildErr := repairBuildNode(paths)
 		if buildErr != nil {
 			category, code, message := classifyRepairCommandError(buildErr)
@@ -138,7 +159,7 @@ func parseRepairArguments(args []string) (repairArguments, error) {
 }
 
 func printRepairHelp(writer io.Writer) {
-	fmt.Fprint(writer, `Reconcile vpnctl-owned runtime from the committed generation.
+	fmt.Fprint(writer, `Repair vpnctl-owned drift, or recover the committed generation when publication is incomplete.
 
 Usage:
   vpnctl repair [--dry-run] [--yes] [--json]
@@ -149,14 +170,14 @@ func classifyRepairCommandError(err error) (output.ExitCategory, string, string)
 	switch {
 	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags), errors.Is(err, ErrInteractionRefused),
 		errors.Is(err, ErrCommittedNodeRepairInvalid), errors.Is(err, ErrCommittedGatewayRepairInvalid), errors.Is(err, controller.ErrGatewayRepairInvalid),
-		errors.Is(err, store.ErrStateNotFound):
+		errors.Is(err, operations.ErrRepairInvalid), errors.Is(err, store.ErrStateNotFound):
 		return output.CategoryValidation, "repair_request_invalid", "repair requires a valid committed host generation"
 	case errors.Is(err, ErrCommittedNodeRepairStale), errors.Is(err, ErrCommittedGatewayRepairStale), errors.Is(err, controller.ErrGatewayRepairStale),
-		errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict), errors.Is(err, controller.ErrGatewayRepairWatchdogActive),
+		errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict), errors.Is(err, operations.ErrRepairConflict), errors.Is(err, controller.ErrGatewayRepairWatchdogActive),
 		errors.Is(err, controller.ErrGatewayRepairNetworkState):
 		return output.CategoryConflict, "repair_plan_stale", "the committed generation changed after repair preview"
-	case errors.Is(err, ErrCommittedGatewayRepairUnavailable):
-		return output.CategoryUnavailable, "gateway_controller_unavailable", "gateway repair requires the local controller service"
+	case errors.Is(err, ErrCommittedGatewayRepairUnavailable), errors.Is(err, operations.ErrRepairGatewayUnavailable):
+		return output.CategoryUnavailable, "gateway_controller_unavailable", "repair requires the authoritative gateway control service"
 	case errors.Is(err, ErrCommittedGatewayRepairUncertain):
 		return output.CategoryUnavailable, "gateway_repair_outcome_uncertain", "the controller response was lost; inspect gateway status and any active watchdog transaction before retrying"
 	case errors.Is(err, enrollment.ErrNodeActivationPending), errors.Is(err, ErrCommittedGatewayRepairPending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

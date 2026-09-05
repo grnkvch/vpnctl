@@ -172,7 +172,11 @@ func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore
 	if err != nil {
 		return nil, err
 	}
-	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose, policy: policy}
+	repairProbe, err := operations.NewRepairProbeGatewayRPCHandler(stateStore)
+	if err != nil {
+		return nil, err
+	}
+	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose, policy: policy, repairProbe: repairProbe}
 	handlers := make(map[int]control.RPCHandler, len(state.Components.ControlProtocols))
 	for _, rawVersion := range state.Components.ControlProtocols {
 		version, parseErr := control.ParseRPCProtocolVersion(rawVersion)

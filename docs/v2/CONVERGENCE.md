@@ -111,6 +111,17 @@ repeats initial firewall/sysctl activation only after a fresh network snapshot
 exactly matches the oldest retained pre-vpnctl snapshot. Later mutation/apply
 publication remains to be connected.
 
+Generic public repair is now connected without conflating that recovery path.
+It is selected only when the Applied generation has its exact immutable bundle
+and any newer authoritative generation is explained by retained pending intent.
+Gateway correction travels over
+the root-only local controller socket and executes under the controller
+mutation mutex. Current-node correction is serialized by a local repair flock
+and requires a fresh successful mTLS gateway probe before even a no-op result.
+Missing material or an unexplained state/Applied gap falls back to the full
+committed-generation adapter so a post-commit convergence publication failure
+remains recoverable without allowing repair to apply registered pending intent.
+
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It
 maps the production root explicitly, never enumerates neighboring files,

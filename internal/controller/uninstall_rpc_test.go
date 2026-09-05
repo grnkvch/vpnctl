@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 )
 
 func TestGatewayNodeUninstallHandlerCommitsUnderExpectedGeneration(t *testing.T) {
@@ -71,7 +72,8 @@ func TestGatewayNodeUninstallHandlerRejectsBeforeManagerOnGenerationOrConfirmati
 func TestSystemRPCMuxKeepsUpdateAndUninstallOperationsSeparate(t *testing.T) {
 	update := &recordingRPCHandler{status: http.StatusOK}
 	uninstall := &recordingRPCHandler{status: http.StatusAccepted}
-	mux := systemRPCMux{update: update, uninstall: uninstall}
+	repairProbe := &recordingRPCHandler{status: http.StatusNoContent}
+	mux := systemRPCMux{update: update, uninstall: uninstall, repairProbe: repairProbe}
 	request := control.RPCRequest{Operation: lifecycle.NodeUpdatePreflightOperation}
 	result, _ := mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
 	if result.StatusCode != http.StatusOK || update.calls != 1 || uninstall.calls != 0 {
@@ -81,6 +83,11 @@ func TestSystemRPCMuxKeepsUpdateAndUninstallOperationsSeparate(t *testing.T) {
 	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
 	if result.StatusCode != http.StatusAccepted || update.calls != 1 || uninstall.calls != 1 {
 		t.Fatalf("uninstall mux result=%+v calls=%d/%d", result, update.calls, uninstall.calls)
+	}
+	request.Operation = operations.RepairProbeRPCOperation
+	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)
+	if result.StatusCode != http.StatusNoContent || repairProbe.calls != 1 || update.calls != 1 || uninstall.calls != 1 {
+		t.Fatalf("repair probe mux result=%+v calls=%d/%d/%d", result, update.calls, uninstall.calls, repairProbe.calls)
 	}
 	request.Operation = "unknown"
 	result, _ = mux.HandleRPC(context.Background(), control.RPCPeer{}, request)

@@ -16,14 +16,18 @@ Initialize/CAS; equal-snapshot retry восстанавливает отсутс
 Gateway-join rollback удаляет candidate material только после успешного CAS к
 прежнему snapshot и его повторной проверки. Архив сохраняется recoverable
 `uninstall`, удаляется `purge` и намеренно не попадает в portable backup.
-Material-to-host bridge теперь тоже готов: он загружает только текущий Applied
+Material-to-host bridge теперь подключён к public `vpnctl repair`: он загружает только текущий Applied
 bundle, повторяет convergence/owned-drift проверку вокруг Linux host preflight,
 передаёт только previewed restore actions и явно показывает dependent service
-restarts для каждого config action. Missing archive и изменившийся snapshot,
-observation, action или dependency блокируют mutation. Следующий срез —
-gateway RPC под controller mutation lock, node-local serialization/gateway
-gate и безопасный выбор между generic drift repair и recovery незавершённой
-convergence publication.
+restarts для каждого config action. Команда выбирает generic path, когда exact
+Applied bundle доступен, а более новая authoritative generation объясняется
+retained pending intent; необъяснённый gap сохраняет полный committed-
+generation recovery для незавершённой publication. Gateway выполняет
+`repair.owned` только через
+root-only controller socket под mutation lock. Node держит local repair flock,
+повторяет boundary checks и перед любым apply/no-op доказывает доступность и
+актуальную identity через read-only mTLS `repair.probe`. Missing archive и
+изменившийся snapshot, observation, action или dependency блокируют mutation.
 
 Action-scoped Linux repair primitive теперь готов как безопасная restore-only
 граница для будущего generic executor. Он принимает exact subset unit/config
@@ -34,18 +38,17 @@ Action-scoped Linux repair primitive теперь готов как безопа
 и bytes восстанавливаются, полный runtime перепроверяется (невоспроизводимый
 старый substate становится явным incomplete rollback), а retained material
 стирается при one-shot apply.
-Примитив намеренно ещё не подключён к public generic drift repair: immutable
-archive уже готов, остаётся executor bridge под authoritative host mutation
-lock.
+Примитив подключён к public generic drift repair через описанные выше role-
+specific authoritative границы; network/state removal остаётся закрыт до
+появления ownership-aware production discovery/executor.
 
 Следующий generic-repair слой начат с безопасной read-only границы:
 `operations.BuildRepairPlan` теперь строит exact applied-generation plan без
 mutation executor, а `LocalRoleRepairScopeResolver` принимает только фиксированный
 unit catalog и непосредственные generated config-файлы текущей authoritative
 gateway/node роли. Cross-role component/path, nested path и network/state kind
-отклоняют весь plan. Это подготавливает настоящий drift-aware no-op/preview;
-public command пока сохраняет committed-generation recovery adapter до
-подключения post-observation executor bridge.
+отклоняют весь plan. Public command использует эту границу для current Applied
+и сохраняет committed-generation recovery adapter как отдельный fallback.
 
 Concrete gateway repair теперь подключён к public `vpnctl repair`. Read-only
 preview из committed gateway state и существующих secrets содержит только
@@ -90,9 +93,8 @@ generation и показывает только имена/SHA-256 всех gene
 Сменившийся state или candidate блокируется как stale, а повторный failure
 сохраняет fail-closed guard и возвращает явный retry action. Это первый
 production recovery layer для post-join node activation; общий
-gateway/current-node repair произвольного owned drift всё ещё требует
-подключения уже реализованного durable convergence snapshot CAS writer к
-успешным mutation transactions и role-scoped executors.
+gateway/current-node repair role-owned file/unit drift теперь подключён, а
+остальные typed ресурсы требуют отдельных ownership-aware adapters.
 Первое подключение writer завершено для `init --node`: после state commit
 публикуется content-free desired=applied baseline generation 1 для bootstrap
 config и четырёх staged inactive units. Ошибка после commit явно возвращает

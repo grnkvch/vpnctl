@@ -10,6 +10,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -135,6 +136,51 @@ func TestRepairCommandMarksLostGatewayResponseOutcomeUncertain(t *testing.T) {
 		!strings.Contains(stdout.String(), `"code":"inspect_gateway_repair"`) ||
 		!strings.Contains(stdout.String(), `"changed":true`) {
 		t.Fatalf("uncertain gateway repair exit/output = %d / %s / %s", exit, stdout.String(), stderr.String())
+	}
+}
+
+func TestRepairCommandPrefersActionScopedConvergenceWhenAppliedMaterialIsCurrent(t *testing.T) {
+	plan := convergenceRepairTestPlan(t)
+	operator := &recordingConvergenceRepairOperator{plan: plan}
+	oldPaths, oldRole := repairSystemPaths, repairLoadRole
+	oldPrefer, oldConvergence, oldCommitted, oldTTY := repairPreferConvergence, repairBuildConvergenceGateway, repairBuildGateway, repairOpenTTY
+	paths, _ := store.NewPaths(t.TempDir())
+	repairSystemPaths = func() store.Paths { return paths }
+	repairLoadRole = func(store.Paths) (HostRole, error) { return RoleGateway, nil }
+	repairPreferConvergence = func(context.Context, store.Paths, HostRole) bool { return true }
+	repairBuildConvergenceGateway = func(received store.Paths) (ConvergenceRepairOperator, error) {
+		if received != paths {
+			t.Fatalf("convergence repair paths = %+v", received)
+		}
+		return operator, nil
+	}
+	repairBuildGateway = func(store.Paths) (CommittedGatewayRepairOperator, error) {
+		t.Fatal("current applied material reached committed recovery")
+		return nil, nil
+	}
+	repairOpenTTY = func() (PromptIO, io.Closer, error) {
+		t.Fatal("dry-run opened TTY")
+		return nil, nil, nil
+	}
+	defer func() {
+		repairSystemPaths, repairLoadRole = oldPaths, oldRole
+		repairPreferConvergence, repairBuildConvergenceGateway, repairBuildGateway, repairOpenTTY = oldPrefer, oldConvergence, oldCommitted, oldTTY
+	}()
+
+	var stdout, stderr bytes.Buffer
+	if exit := Execute([]string{"repair", "--dry-run", "--json"}, &stdout, &stderr); exit != ExitSuccess {
+		t.Fatalf("convergence repair exit=%d stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+	}
+	if operator.planCalls != 1 || operator.repairCalls != 0 || !strings.Contains(stdout.String(), `"repair_count":2`) ||
+		strings.Contains(stdout.String(), `"scope":"committed_gateway_services"`) {
+		t.Fatalf("convergence repair calls=%d/%d stdout=%s", operator.planCalls, operator.repairCalls, stdout.String())
+	}
+}
+
+func TestRepairCommandClassifiesGenerationBoundRepairConflict(t *testing.T) {
+	category, code, _ := classifyRepairCommandError(operations.ErrRepairConflict)
+	if category != "conflict" || code != "repair_plan_stale" {
+		t.Fatalf("repair conflict classification = %s/%s", category, code)
 	}
 }
 

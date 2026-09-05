@@ -110,13 +110,31 @@ unexpected-resource removal remain closed. The gateway must invoke this
 executor under its controller mutation lock, and the node command must retain
 its gateway/serialization gate.
 
-Public `vpnctl repair` is not switched to this generic executor yet. It keeps
-using the narrower committed-generation recovery adapters below until the
-gateway RPC and node-local command composition can select generic drift repair
-without weakening recovery of a state generation whose convergence
-publication is still pending. Re-rendering current or `previous` state remains
-invalid: state-only mutations may advance those values without advancing the
-applied runtime.
+Public `vpnctl repair` now selects this generic executor when the immutable
+bundle for the complete `Applied` manifest can be loaded and either local state
+is at that generation or the newer state/snapshot explicitly retains pending
+intent. The same state, snapshot, and bundle boundary is checked around
+planning and again after consent. An unexplained state/Applied gap instead
+selects the committed-generation recovery adapter below. This is deliberately
+conservative: state-only or partially published mutations may advance
+authoritative state without advancing runtime, while registered pending intent
+must remain separate and must never be applied by repair.
+
+Gateway execution is a separate `repair.owned` runtime-only controller
+operation. The root-only local client sends the exact validated action batch
+plus the separately retained current state generation as its CAS guard; the controller reloads authoritative state and
+executes the material-to-host bridge while holding its normal mutation mutex.
+A lost local response is outcome-uncertain. The controller never exposes this
+operation over the node-facing RPC endpoint.
+
+On a private node, the current CLI process takes a same-owner, no-follow,
+single-link `0600` repair flock in the existing `0700` runtime directory. While
+holding it, the coordinator repeats the boundary checks, performs a fresh
+authenticated `repair.probe` over the existing mTLS control channel even for a
+no-op, and invokes only the current-node executor. The probe ignores stale
+last-known gateway generations because it is a reachability/identity proof,
+not a state mutation; gateway authorization still reloads the active node and
+credential generation for every request.
 
 ## Committed-generation recovery boundary
 
