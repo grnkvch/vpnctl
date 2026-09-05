@@ -84,6 +84,56 @@ func TestSystemControlRPCServesNodeUpdatePreflightOnOverlay(t *testing.T) {
 	}
 }
 
+func TestSystemPublicEnrollmentServerComposesRecoveryCoordinator(t *testing.T) {
+	fixture := newGatewayRenewalFixture(t)
+	server, err := newSystemPublicEnrollmentServer(fixture.controller, fixture.state, fixture.paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveContext, stop := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(serveContext, listener) }()
+	t.Cleanup(func() {
+		stop()
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Errorf("system public enrollment shutdown: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("system public enrollment did not stop")
+		}
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"purpose":        "recover",
+		"token":          "vpnctl-recovery-v1.test-only-token",
+		"node_nonce":     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, 16)),
+		"payload":        map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, "http://"+listener.Addr().String()+model.ReservedRecoveryPath, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("invalid recovery token status = %d", response.StatusCode)
+	}
+}
+
 func TestRunSystemManagementCancelsSiblingAndReturnsFailure(t *testing.T) {
 	want := errors.New("local listener failed")
 	siblingStopped := make(chan struct{})

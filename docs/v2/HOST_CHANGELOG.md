@@ -2,6 +2,40 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — controller-owned public join and recovery endpoint
+
+### Planned reversible validation
+
+- Attach the fixed `127.0.0.1:19092` enrollment server to the gateway
+  controller lifecycle alongside the root-only Unix socket and internal mTLS
+  RPC listener. Construct its signer from the installed enrollment identity
+  and route both reserved join and recovery paths through their production
+  coordinators; nginx remains the only public TLS edge on `443/TCP`.
+- Add a recovery-only gateway credential-replacement runtime. It retains a
+  strictly rendered candidate without publication, activates it only after
+  expired-node recovery proof, health-checks the exact replacement peer and
+  listeners, and restores the byte-exact predecessor when gateway CAS is known
+  old. This adapter is deliberately not reused for ordinary online rotation.
+- Hold the shared controller mutation lock from recovery activation through a
+  known commit/rollback/drain outcome. A parallel mutation therefore cannot be
+  committed and then overwritten by recovery rollback.
+- Validation is source-only with ephemeral loopback HTTP, temporary generated
+  trees, and fake systemd/socket/WireGuard runners. It does not bind production
+  `19092`, publish a real config, restart a real unit, rotate a real credential,
+  consume a token, or mutate either VM. Repository rollback removes this
+  source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests prove controller composition and invalid recovery-token concealment,
+  committed replacement-only gateway configs, byte-identical restoration on
+  activation failure, exact state generation, transaction cleanup, and
+  controller/listener cancellation behavior inherited by the three-service
+  supervisor.
+- The full Go suite, `go vet ./...`, strict OpenSpec validation, and diff checks
+  passed. No production listener, secret, config, unit, process, interface,
+  credential, token, host, or VM was changed, so no host rollback remains.
+
 ## 2026-09-05 — transactional gateway join candidate activation
 
 ### Planned reversible validation

@@ -641,6 +641,17 @@ sudo vpnctl expose 3000 --path /telegram/webhook
 - Bootstrap использует token-gated HTTPS endpoint на зарезервированном path,
   например `https://PUBLIC_IP/.well-known/vpnctl/enroll`. Он может разделять
   `443/TCP` с webhook ingress, потому что это обычный HTTPS path routing.
+- Gateway controller одновременно обслуживает root-only Unix management
+  socket, internal-overlay mTLS RPC и fixed loopback enrollment upstream
+  `127.0.0.1:19092`; остановка любого listener отменяет весь management
+  process. Публичным остаётся только nginx на `443/TCP`.
+- Reserved recovery path собран тем же controller из production recovery
+  coordinator. После доказательства владения expired node identity gateway
+  stage-ит полную следующую credential generation, активирует и проверяет
+  replacement configs, удерживает общий mutation lock до известного CAS
+  outcome и при определённом old-state исходе восстанавливает прежний generated
+  tree. Recovery-only adapter не подменяет отдельный make-before-break runtime
+  обычной online rotation.
 - После успешного join invite немедленно становится недействительным, gateway
   выдаёт индивидуальные node credentials, а последующее управление переходит
   в защищённый внутренний канал.

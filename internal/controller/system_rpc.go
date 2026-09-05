@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
@@ -35,7 +36,26 @@ func RunSystemController(ctx context.Context, paths store.Paths) error {
 	if err != nil {
 		return err
 	}
-	return runSystemManagement(ctx, controller.Serve, rpcServer.ListenAndServe)
+	publicEnrollment, err := newSystemPublicEnrollmentServer(controller, stateStore, paths)
+	if err != nil {
+		return err
+	}
+	return runSystemManagement(ctx, controller.Serve, rpcServer.ListenAndServe, publicEnrollment.ListenAndServe)
+}
+
+func newSystemPublicEnrollmentServer(
+	controller *Controller,
+	stateStore *store.StateStore,
+	paths store.Paths,
+) (*enrollment.PublicEnrollmentServer, error) {
+	if controller == nil || stateStore == nil {
+		return nil, fmt.Errorf("system public enrollment dependencies are incomplete")
+	}
+	secrets, err := store.NewSecretStore(paths)
+	if err != nil {
+		return nil, fmt.Errorf("create public enrollment secret store: %w", err)
+	}
+	return enrollment.NewSystemPublicEnrollmentServer(paths, stateStore, secrets, &controller.mutationMu)
 }
 
 func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore *store.StateStore, paths store.Paths) (*control.RPCServer, error) {

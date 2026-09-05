@@ -164,22 +164,37 @@ func (readiness *SystemGatewayJoinReadiness) renderCandidate(
 	candidate GatewayJoinCandidate,
 	credentials *gatewayJoinCredentialOverlay,
 ) (linuxplatform.RoleInstallationRequest, error) {
-	request, err := linuxplatform.RenderGatewayRoleInstallation(readiness.binaryPath)
+	return renderSystemGatewayCandidate(
+		ctx, readiness.paths, credentials, readiness.keyRunner, readiness.binaryPath,
+		candidate.State, candidate.TunnelServerCertificatePEM,
+	)
+}
+
+func renderSystemGatewayCandidate(
+	ctx context.Context,
+	paths store.Paths,
+	credentials NodeCredentialSecretStore,
+	keyRunner wireguard.Runner,
+	binaryPath string,
+	state model.State,
+	tunnelCertificatePEM []byte,
+) (linuxplatform.RoleInstallationRequest, error) {
+	request, err := linuxplatform.RenderGatewayRoleInstallation(binaryPath)
 	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, err
 	}
-	listeners, err := transport.NewGatewayListenerProvisioner(credentials, readiness.keyRunner, nil)
+	listeners, err := transport.NewGatewayListenerProvisioner(credentials, keyRunner, nil)
 	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, err
 	}
-	listenerFiles, err := listeners.Provision(ctx, candidate.State)
+	listenerFiles, err := listeners.Provision(ctx, state)
 	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, fmt.Errorf("render candidate gateway listeners: %w", err)
 	}
 	for _, file := range listenerFiles.ConfigFiles() {
 		request.Configs = append(request.Configs, linuxplatform.RoleConfigFile{Name: file.Name, Content: file.Content})
 	}
-	tunnelFiles, err := readiness.renderTunnelCandidate(ctx, candidate)
+	tunnelFiles, err := renderSystemGatewayTunnelCandidate(ctx, paths, credentials, state, tunnelCertificatePEM)
 	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, err
 	}
@@ -187,19 +202,22 @@ func (readiness *SystemGatewayJoinReadiness) renderCandidate(
 	return request, nil
 }
 
-func (readiness *SystemGatewayJoinReadiness) renderTunnelCandidate(
+func renderSystemGatewayTunnelCandidate(
 	ctx context.Context,
-	candidate GatewayJoinCandidate,
+	paths store.Paths,
+	secrets NodeCredentialSecretStore,
+	state model.State,
+	tunnelCertificatePEM []byte,
 ) ([]linuxplatform.RoleConfigFile, error) {
-	plan, err := tunnel.PlanFromState(candidate.State)
+	plan, err := tunnel.PlanFromState(state)
 	if err != nil {
 		return nil, err
 	}
-	component, err := systemGatewayJoinComponent(candidate.State.Components, tunnel.FRPProviderName)
+	component, err := systemGatewayJoinComponent(state.Components, tunnel.FRPProviderName)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := tunnel.NewFRPProvider(readiness.paths.Root, component, nil)
+	provider, err := tunnel.NewFRPProvider(paths.Root, component, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -211,24 +229,24 @@ func (readiness *SystemGatewayJoinReadiness) renderTunnelCandidate(
 	if !ok || frpCandidate.Descriptor().HostRole != model.RoleGateway {
 		return nil, fmt.Errorf("gateway tunnel provider returned an invalid candidate")
 	}
-	record, err := systemGatewayJoinTunnelCertificate(candidate.State)
+	record, err := systemGatewayJoinTunnelCertificate(state)
 	if err != nil {
 		return nil, err
 	}
-	privateKey, err := readiness.secrets.Get(record.PrivateKeyRef)
+	privateKey, err := secrets.Get(record.PrivateKeyRef)
 	if err != nil {
 		return nil, fmt.Errorf("read candidate tunnel private key: %w", err)
 	}
 	defer clear(privateKey)
-	if _, err := tls.X509KeyPair(candidate.TunnelServerCertificatePEM, privateKey); err != nil {
+	if _, err := tls.X509KeyPair(tunnelCertificatePEM, privateKey); err != nil {
 		return nil, fmt.Errorf("candidate tunnel certificate and private key do not match")
 	}
 	return []linuxplatform.RoleConfigFile{
 		{Name: tunnel.FRPServerConfigFileName, Content: frpCandidate.Bytes()},
 		{Name: tunnel.FRPServerReadyFileName, Content: []byte(fmt.Sprintf(
-			"schema_version=1\nstate_generation=%d\nconfig_sha256=%s\n", candidate.State.Generation, frpCandidate.Descriptor().ConfigHash,
+			"schema_version=1\nstate_generation=%d\nconfig_sha256=%s\n", state.Generation, frpCandidate.Descriptor().ConfigHash,
 		))},
-		{Name: tunnel.FRPServerCertificateName, Content: append([]byte(nil), candidate.TunnelServerCertificatePEM...)},
+		{Name: tunnel.FRPServerCertificateName, Content: append([]byte(nil), tunnelCertificatePEM...)},
 		{Name: tunnel.FRPServerPrivateKeyName, Content: append([]byte(nil), privateKey...)},
 	}, nil
 }

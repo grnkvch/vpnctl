@@ -154,6 +154,7 @@ func ensureJoinFixtureFRPComponent(fixture *joinFixture) {
 type gatewayJoinReadinessProbeRunner struct {
 	systemctl        [][]string
 	failTunnelHealth bool
+	peerPublicKey    string
 }
 
 func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
@@ -173,7 +174,11 @@ func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command li
 	case "ip -4 -o address show dev vpnctl-wg":
 		return linuxplatform.ProbeResult{Stdout: []byte("7: vpnctl-wg inet 10.66.0.1/24 scope global vpnctl-wg\n7: vpnctl-wg inet 10.67.0.1/24 scope global vpnctl-wg\n")}, nil
 	case "wg show vpnctl-wg allowed-ips":
-		return linuxplatform.ProbeResult{Stdout: []byte(testNodeWireGuardPublic() + "\t10.67.0.2/32\n")}, nil
+		peer := runner.peerPublicKey
+		if peer == "" {
+			peer = testNodeWireGuardPublic()
+		}
+		return linuxplatform.ProbeResult{Stdout: []byte(peer + "\t10.67.0.2/32\n")}, nil
 	case "ss -H -lunp sport = :8443":
 		return linuxplatform.ProbeResult{}, nil
 	case "ss -H -ltnp sport = :8443":
