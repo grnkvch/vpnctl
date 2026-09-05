@@ -30,6 +30,10 @@ restricted_node_unit=vpnctl-v2-spike-restricted-node.service
 restricted_echo_unit=vpnctl-v2-spike-echo.service
 restricted_udp_unit=vpnctl-v2-spike-udp-echo.service
 tunnel_auth_unit=vpnctl-v2-spike-tunnel-auth.service
+capacity_fault_restart_job=vpnctl-v2-capacity-frps-restart
+capacity_fault_dropin_dir=/run/systemd/system/$tunnel_server_unit.d
+capacity_fault_dropin=$capacity_fault_dropin_dir/vpnctl-v2-capacity-fault.conf
+capacity_fault_dropin_sha256=9b6943ff77b31e063152214a3aa57a6f73782b14434700170a0f30ca70ef2524
 gateway_initial=
 node_initial=
 gateway_started=false
@@ -150,6 +154,30 @@ path_owned() {
     guest "$instance" sudo grep -Fxq "$owner" "$owner_path"
 }
 
+cleanup_capacity_fault() {
+  local actual_sha256
+  guest "$gateway_instance" sudo systemctl stop \
+    "$capacity_fault_restart_job.timer" "$capacity_fault_restart_job.service" >/dev/null 2>&1 || true
+  guest "$gateway_instance" sudo systemctl reset-failed \
+    "$capacity_fault_restart_job.timer" "$capacity_fault_restart_job.service" >/dev/null 2>&1 || true
+  if guest "$gateway_instance" sudo test -e "$capacity_fault_dropin" ||
+     guest "$gateway_instance" sudo test -L "$capacity_fault_dropin"; then
+    if ! guest "$gateway_instance" sudo test -f "$capacity_fault_dropin" ||
+       guest "$gateway_instance" sudo test -L "$capacity_fault_dropin"; then
+      echo "refusing cleanup of unsafe capacity fault drop-in" >&2
+      return 3
+    fi
+    actual_sha256=$(guest "$gateway_instance" sudo sha256sum "$capacity_fault_dropin" | awk '{print $1}')
+    if [ "$actual_sha256" != "$capacity_fault_dropin_sha256" ]; then
+      echo "refusing cleanup of changed capacity fault drop-in" >&2
+      return 3
+    fi
+    guest "$gateway_instance" sudo rm -f -- "$capacity_fault_dropin"
+    guest "$gateway_instance" sudo rmdir "$capacity_fault_dropin_dir" >/dev/null 2>&1 || true
+  fi
+  guest "$gateway_instance" sudo systemctl daemon-reload
+}
+
 cleanup_pair_if_fully_owned() {
   local script=$1 path=$2 owner_path=$3 owner=$4
   local gateway_owned=false node_owned=false
@@ -174,6 +202,7 @@ cleanup_capacity_instance() {
   fi
   case "$role" in
     gateway)
+      cleanup_capacity_fault || return
       guest "$instance" sudo systemctl stop "$controller_unit" >/dev/null 2>&1 || true
       if guest "$instance" sudo test -x /usr/local/libexec/vpnctl-v2-capacity/clients; then
         guest "$instance" sudo /usr/local/libexec/vpnctl-v2-capacity/clients cleanup-gateway
@@ -308,8 +337,17 @@ cleanup_on_exit() {
 }
 
 assert_path_absent() {
-  if guest "$1" sudo test -e "$2"; then
+  if guest "$1" sudo test -e "$2" || guest "$1" sudo test -L "$2"; then
     echo "capacity path remains on $1: $2" >&2
+    exit 3
+  fi
+}
+
+assert_transient_unit_absent() {
+  local load_state
+  load_state=$(guest "$gateway_instance" systemctl show --value -p LoadState "$1")
+  if [ "$load_state" != not-found ]; then
+    echo "capacity transient unit remains: $1 ($load_state)" >&2
     exit 3
   fi
 }
@@ -344,6 +382,9 @@ assert_clean() {
   fi
   assert_path_absent "$node_instance" "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
   assert_path_absent "$node_instance" "/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin"
+  assert_path_absent "$gateway_instance" "$capacity_fault_dropin"
+  assert_transient_unit_absent "$capacity_fault_restart_job.timer"
+  assert_transient_unit_absent "$capacity_fault_restart_job.service"
   for package in nginx nginx-common; do
     if guest "$gateway_instance" dpkg-query -W "$package" >/dev/null 2>&1; then
       echo "owned capacity nginx package remains: $package" >&2

@@ -78,7 +78,10 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
-		"systemctl stop --no-block", "fault_active_state=$(systemctl show", "--kill-whom=all --signal=KILL",
+		"runtime_dropin_directory=/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d",
+		"runtime_dropin=$runtime_dropin_directory/vpnctl-v2-capacity-fault.conf",
+		"printf '[Service]\\nRestart=no\\n'", "FRPS temporary restart policy was not applied",
+		"restore_restart_policy", "--kill-whom=all --signal=KILL",
 		"down_started=$(monotonic)", "systemd-run --quiet --collect", "--timer-property=AccuracySec=10ms", "unavailable_status: $unavailable_probe.status",
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
@@ -91,6 +94,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)
 		}
+	}
+	restartTimer := strings.Index(faultHelper, "systemd-run --quiet --collect")
+	downStarted := strings.Index(faultHelper, "down_started=$(monotonic)")
+	hardKill := strings.LastIndex(faultHelper, "systemctl kill --kill-whom=all --signal=KILL")
+	if restartTimer < 0 || downStarted < 0 || hardKill < 0 || !(restartTimer < downStarted && downStarted < hardKill) {
+		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))
@@ -110,6 +119,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
 		"status: \"candidate\"", "finalize_summary", ".status = \"passed\"",
+		"cleanup_capacity_fault", "capacity_fault_dropin_dir=/run/systemd/system/$tunnel_server_unit.d",
+		"capacity_fault_dropin=$capacity_fault_dropin_dir/vpnctl-v2-capacity-fault.conf",
+		"assert_transient_unit_absent \"$capacity_fault_restart_job.timer\"",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {

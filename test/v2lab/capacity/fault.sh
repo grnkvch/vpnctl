@@ -9,7 +9,13 @@ recovery_limit_seconds=
 restart_job=vpnctl-v2-capacity-frps-restart
 restart_job_armed=false
 restore_required=false
-restart_advance_seconds=0.1
+restart_advance_seconds=0.2
+runtime_dropin_directory=/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d
+runtime_dropin=$runtime_dropin_directory/vpnctl-v2-capacity-fault.conf
+runtime_dropin_installed=false
+runtime_dropin_directory_created=false
+runtime_dropin_sha256=9b6943ff77b31e063152214a3aa57a6f73782b14434700170a0f30ca70ef2524
+original_restart=
 first_recovery_seconds=null
 last_recovery_seconds=null
 maximum_stable_recovery_probes=0
@@ -76,15 +82,49 @@ recover() {
     --stable-probes 5 --probe-interval 0.1
 }
 
+restore_restart_policy() {
+  local actual_sha256 current_restart
+  if [ "$runtime_dropin_installed" != true ]; then
+    return
+  fi
+  if [ ! -f "$runtime_dropin" ] || [ -L "$runtime_dropin" ]; then
+    echo 'refusing to remove changed FRPS fault drop-in type' >&2
+    return 3
+  fi
+  actual_sha256=$(sha256sum "$runtime_dropin" | awk '{print $1}')
+  if [ "$actual_sha256" != "$runtime_dropin_sha256" ]; then
+    echo 'refusing to remove changed FRPS fault drop-in contents' >&2
+    return 3
+  fi
+  rm -f -- "$runtime_dropin"
+  runtime_dropin_installed=false
+  if [ "$runtime_dropin_directory_created" = true ]; then
+    rmdir "$runtime_dropin_directory" 2>/dev/null || true
+    runtime_dropin_directory_created=false
+  fi
+  systemctl daemon-reload
+  current_restart=$(systemctl show --value -p Restart "$unit")
+  if [ "$current_restart" != "$original_restart" ]; then
+    echo 'FRPS restart policy was not restored' >&2
+    return 3
+  fi
+}
+
 cleanup() {
-  local status=$?
+  local status=$? cleanup_status=0
+  trap - EXIT INT TERM
+  set +e
   if [ "$restart_job_armed" = true ]; then
     systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
     systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
     restart_job_armed=false
   fi
+  restore_restart_policy || cleanup_status=$?
   if [ "$restore_required" = true ]; then
-    systemctl start "$unit" >/dev/null 2>&1 || true
+    systemctl start "$unit" >/dev/null 2>&1 || cleanup_status=$?
+  fi
+  if [ "$status" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then
+    status=$cleanup_status
   fi
   exit "$status"
 }
@@ -112,19 +152,42 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-stop_started=$(monotonic)
-systemctl stop --no-block "$unit"
-restore_required=true
-sleep 0.25
-down_started=$(monotonic)
-fault_active_state=$(systemctl show --value -p ActiveState "$unit")
-if [ "$fault_active_state" != inactive ] && [ "$fault_active_state" != failed ]; then
-  systemctl kill --kill-whom=all --signal=KILL "$unit" >/dev/null
+original_restart=$(systemctl show --value -p Restart "$unit")
+if [ "$original_restart" != on-failure ]; then
+  echo 'unexpected FRPS restart policy' >&2
+  exit 3
 fi
+if [ -L "$runtime_dropin_directory" ] || { [ -e "$runtime_dropin_directory" ] && [ ! -d "$runtime_dropin_directory" ]; }; then
+  echo 'refusing unsafe FRPS runtime drop-in directory' >&2
+  exit 3
+fi
+if [ -e "$runtime_dropin" ] || [ -L "$runtime_dropin" ]; then
+  echo 'refusing existing FRPS capacity fault drop-in' >&2
+  exit 3
+fi
+if [ ! -d "$runtime_dropin_directory" ]; then
+  mkdir -- "$runtime_dropin_directory"
+  runtime_dropin_directory_created=true
+fi
+(
+  umask 022
+  set -o noclobber
+  printf '[Service]\nRestart=no\n' > "$runtime_dropin"
+)
+runtime_dropin_installed=true
+systemctl daemon-reload
+[ "$(systemctl show --value -p Restart "$unit")" = no ] || {
+  echo 'FRPS temporary restart policy was not applied' >&2
+  exit 3
+}
 systemd-run --quiet --collect --unit="$restart_job" \
   --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \
   /bin/systemctl start "$unit"
 restart_job_armed=true
+restore_required=true
+down_started=$(monotonic)
+stop_started=$down_started
+systemctl kill --kill-whom=all --signal=KILL "$unit" >/dev/null
 
 unavailable_probe=$(probe 2>/dev/null || true)
 unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
@@ -162,6 +225,7 @@ restart_started=$(awk -v value="$restart_started_microseconds" 'BEGIN {printf "%
 systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 restart_job_armed=false
+restore_restart_policy
 restore_required=false
 if [ "$unavailable_status" != 503 ]; then
   emit_result failed false

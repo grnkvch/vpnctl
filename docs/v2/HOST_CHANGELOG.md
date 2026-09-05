@@ -657,6 +657,42 @@ This journal records development-host mutations made while implementing and vali
   and packages, and returned both VMs to `Stopped`. No manual rollback remains;
   the next clean repeat retains the same exact mutation boundary.
 
+### Corrected hard-kill result and deterministic restart-policy plan
+
+- The clean-source run at commit
+  `1ba956d560d3d57859dddf1367d68d03afcb06c6` completed the full 300-second
+  profile and correctly retained `candidate` status at
+  `artifacts/v2lab/capacity-e2e/run-20260905T074251Z/summary.json` when its
+  final hard assertion failed. Controller idle RSS was 11,628,544 bytes;
+  webhook delivery was 2911/3000 with all 89 expected `503` responses inside
+  the accepted window and p95/p99 85.219/235.348 ms; Bot API-like delivery was
+  1500/1500 with p95/p99 428.243/906.040 ms; all five clients had zero packet
+  loss; and the exact 40/5 and 64/8 limits passed. Gateway/node average CPU was
+  38.681/53.478%, minimum available memory 252,891,136/192,921,600 bytes,
+  maximum swap 43,675,648/14,036,992 bytes, disk growth 102,400/4,096 bytes,
+  with no OOM or deadlock.
+- Reconnect itself passed: first HTTPS success arrived at 3.852 seconds and
+  five stable successes by 4.676 seconds, with the tunnel-client service PID
+  unchanged and one child recycle. The sole failed bound was actual FRPS down
+  time, 4.289 seconds instead of 2.75--3.50 seconds. Correct `--kill-whom=all`
+  terminated the cgroup, but the preceding graceful stop job still took 3.568
+  seconds and serialized the transient start behind it. No acceptance limit is
+  changed.
+- The next run temporarily overrides only the exact owned FRPS unit with
+  `/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d/vpnctl-v2-capacity-fault.conf`
+  containing exactly `[Service]` and `Restart=no`. It verifies the original
+  `Restart=on-failure`, arms the exact collected restart timer before the
+  measured KILL, and restores/verifies the original policy after activation.
+  The timer is advanced by 200 ms so the measured kill-to-active interval,
+  including service startup on the constrained host, targets the unchanged
+  2.75--3.50-second window.
+- The helper trap and parent owner cleanup both stop/reset only
+  `vpnctl-v2-capacity-frps-restart.timer/service`, remove the drop-in only when
+  it is a regular file with the exact expected SHA-256, remove its directory
+  only if empty, daemon-reload, and restore FRPS when required. Preflight and
+  postflight require the exact file and transient units absent. The preceding
+  run returned both fixtures to verified `Stopped`; no manual rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
