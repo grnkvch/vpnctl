@@ -2,6 +2,31 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — stable reverse-tunnel TLS identity
+
+### Planned reversible validation
+
+- Add the missing lifecycle primitive for the shared gateway frps TLS identity.
+  The first private-node join can create one self-signed Ed25519 server leaf
+  for exact name `vpnctl-tunnel-gateway`; later joins validate and reuse the
+  same generation-1 certificate and key.
+- The certificate and PKCS#8 key are written through owner-create-only secret
+  storage. Until its metadata is committed into gateway state, the caller owns
+  both references and can remove them in reverse order after any failed join.
+- Validation is source-only with an in-memory secret store. It does not write a
+  real certificate, touch generated config, bind a tunnel port, start frp, or
+  mutate any host/VM state. Repository rollback removes this source slice; no
+  host rollback is needed.
+
+### Acceptance
+
+- Tests prove a fresh identity has an exact self-signed Ed25519 server-auth
+  profile and matching PKCS#8 key, a committed identity is reused byte-for-byte,
+  stored-key tampering is rejected, and a partial two-secret write is rolled
+  back completely.
+- The full Go suite and `go vet ./...` passed. No production secret, file,
+  service, listener, host, or VM was touched, so no host rollback remains.
+
 ## 2026-09-06 — bounded enrollment loopback server
 
 ### Planned reversible validation
