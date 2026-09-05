@@ -2,6 +2,64 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — planned sustained minimum-gateway capacity E2E
+
+### Planned reversible lab mutations
+
+- Task 16.9 defines the previously qualitative several-hundred-user target as
+  300 logical Telegram users for a reproducible five-minute workload: 10
+  IP-only HTTPS webhook requests/s with 512-byte Telegram-shaped bodies, five
+  selected Bot API-like requests/s through the restricted transport, and five
+  simultaneous WireGuard clients sending one probe/s. The same run proves the
+  accepted 40-request per-expose and 64-request gateway ingress limits, stops
+  FRP for three seconds under load, and requires bounded automatic reconnect.
+- The only mutable machines are the exact existing `vpnctl-v2-gateway` and
+  `vpnctl-v2-node` Lima fixtures after revalidating their QEMU/amd64, Ubuntu
+  24.04, 1-vCPU/512-MiB/10-GiB, pinned image digest, and rootless `user-v2`
+  network contract. Read-only discovery found both fixtures `Stopped`; the
+  wrapper records and restores those exact states. The unrelated
+  `realty-front-docker-vm`, macOS networking, public VPSs, devices, Telegram,
+  and every external provider remain outside scope.
+- Existing child fixtures retain their exact owner markers and cleanup:
+  `vpnctl-v2-restricted-spike-v1`, `vpnctl-v2-tunnel-spike-v1`, and
+  `vpnctl-v2-ingress-spike-v1`. They may create only their documented pinned
+  Mihomo 1.19.17, FRP 0.69.0, nginx 1.24.0, fixed lab listeners, configs,
+  units, generated credentials/certificates, and the ingress-owned nginx
+  packages. Both provider archives must already be cached with matching
+  checksums. The composed route changes only the ingress-owned upstream from
+  loopback `18081` to the FRP loopback mapping `18111`, stops the unused local
+  receiver, and replaces the tunnel-owned node test backend with an explicitly
+  capacity-owned HTTP receiver for the duration of the run.
+- New capacity resources use exact owner `vpnctl-v2-capacity-v1` under
+  `/etc/vpnctl-v2-capacity`, `/usr/local/libexec/vpnctl-v2-capacity`, and
+  `/var/lib/vpnctl-v2-capacity`. Gateway scope is one `v2capwg` interface on
+  UDP/51820 with `10.66.0.1` and `10.67.0.1`, five peer records, and
+  `vpnctl-v2-capacity-controller.service`. Its separately initialized helper
+  runs the production controller's Unix and mTLS RPC servers, so idle RSS is
+  measured without PKI-generation heap residue. Node scope is five exact
+  `v2capc1`–`v2capc5` namespaces/veth pairs, the owner-only
+  `ip/vpnctl_v2_capacity_clients` NAT table, temporary forwarding enabled from
+  a saved exact prior value, and `vpnctl-v2-capacity-backend.service`.
+- The gateway sampler is intentionally included in whole-host memory/CPU
+  totals. Acceptance requires controller idle RSS at most 20 MiB, average CPU
+  at most 85%, at least 64 MiB `MemAvailable`, no more than 512 MiB swap use,
+  at least 512 MiB free disk, at most 64 MiB sustained-run disk growth, zero
+  unit OOM kills, no workload deadlock, webhook p95/p99 at most 1/2 seconds,
+  Bot API-like p95/p99 at most 1/2 seconds, zero client packet loss, no webhook
+  failure outside the bounded injected reconnect window, and recovery within
+  eight seconds of FRP restart.
+- Host build output is confined to one exact
+  `/private/tmp/vpnctl-v2-capacity.*` directory plus the existing disposable
+  Go cache. Sanitized results are retained only in ignored
+  `artifacts/v2lab/capacity-e2e/run-*`; no credential is copied there (the
+  retained peer file contains public keys only). Every guest copy uses a fixed
+  `/tmp` name and is removed by the armed trap. Interrupted-run cleanup first
+  requires each exact owner marker, removes only its unit/process/interface/
+  namespace/table/path, restores the saved forwarding value, then invokes the
+  child owner-uninstalls and restores both VM states. Partial or foreign state
+  is rejected. Manual rollback uses those same owner-checked operations;
+  repository rollback is ordinary `git revert` of the task commits.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

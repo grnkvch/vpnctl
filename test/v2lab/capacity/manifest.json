@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "status": "development-gate",
+  "profile": {
+    "logical_telegram_users": 300,
+    "duration_seconds": 300,
+    "webhook_requests_per_second": 10,
+    "bot_api_requests_per_second": 5,
+    "webhook_body_bytes": 512,
+    "personal_clients": 5,
+    "client_probe_interval_seconds": 1
+  },
+  "target": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64",
+    "vcpu": 1,
+    "memory_bytes": 536870912,
+    "disk_bytes": 10737418240,
+    "managed_swap_bytes": 1073741824
+  },
+  "bounds": {
+    "controller_idle_rss_bytes": 20971520,
+    "minimum_mem_available_bytes": 67108864,
+    "maximum_swap_used_bytes": 536870912,
+    "maximum_average_cpu_percent": 85,
+    "minimum_free_disk_bytes": 536870912,
+    "maximum_disk_growth_bytes": 67108864,
+    "webhook_successful_requests_minimum": 2950,
+    "webhook_failures_outside_reconnect_window": 0,
+    "webhook_success_p95_ms": 1000,
+    "webhook_success_p99_ms": 2000,
+    "bot_api_success_p95_ms": 1000,
+    "bot_api_success_p99_ms": 2000,
+    "client_packet_loss_percent": 0,
+    "tunnel_reconnect_seconds": 8,
+    "per_expose_concurrent_requests": 40,
+    "gateway_concurrent_requests": 64
+  },
+  "fault": {
+    "frps_stop_after_seconds": 145,
+    "frps_down_seconds": 3,
+    "accepted_failure_window_start_seconds": 135,
+    "accepted_failure_window_end_seconds": 175
+  }
+}
