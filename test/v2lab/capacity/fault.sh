@@ -231,7 +231,6 @@ if [ "$original_restart" != on-failure ]; then
   echo 'unexpected FRPS restart policy' >&2
   exit 3
 fi
-prepare_armed_probe
 if [ -L "$runtime_dropin_directory" ] || { [ -e "$runtime_dropin_directory" ] && [ ! -d "$runtime_dropin_directory" ]; }; then
   echo 'refusing unsafe FRPS runtime drop-in directory' >&2
   exit 3
@@ -255,6 +254,7 @@ systemctl daemon-reload
   echo 'FRPS temporary restart policy was not applied' >&2
   exit 3
 }
+prepare_armed_probe
 fault_stage=armed
 systemd-run --quiet --collect --unit="$restart_job" \
   --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \

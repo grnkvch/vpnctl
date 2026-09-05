@@ -104,6 +104,11 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	if restartTimer < 0 || downStarted < 0 || hardKill < 0 || !(restartTimer < downStarted && downStarted < hardKill) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
+	temporaryPolicyApplied := strings.Index(faultHelper, "FRPS temporary restart policy was not applied")
+	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
+	if temporaryPolicyApplied < 0 || armedProbe < 0 || !(temporaryPolicyApplied < armedProbe && armedProbe < restartTimer) {
+		t.Fatal("capacity HTTPS probe must be armed after slow policy setup and immediately before the restart timer")
+	}
 	stoppedCheck := strings.Index(faultHelper, "stop_state=")
 	unavailableProbe := strings.Index(faultHelper, "run_armed_probe\n")
 	if stoppedCheck < 0 || unavailableProbe < 0 || !(hardKill < stoppedCheck && stoppedCheck < unavailableProbe) {

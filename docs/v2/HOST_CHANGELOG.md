@@ -772,6 +772,29 @@ This journal records development-host mutations made while implementing and vali
   run removed all capacity/provider resources and packages and returned both
   fixtures to `Stopped`; no manual rollback remains.
 
+### Pre-armed probe lifetime result and final ordering correction
+
+- The clean-source run at commit
+  `112bbb12da97646b2cc7ad79c91304626ac7cdf6` again passed composition and
+  connection-limit gates, observed FRPS stopped, and recorded actual down time
+  `2.981s` inside the unchanged hard bound. Its typed failed evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T090738Z/reconnect.json` shows the
+  pre-established TLS connection closed with `SSLEOFError` in 8ms when the
+  triggered request began; no summary or capacity acceptance is claimed.
+- The pre-armed connection had been opened before the constrained gateway ran
+  filesystem checks, wrote the runtime drop-in, daemon-reloaded systemd,
+  verified `Restart=no`, and armed the timer. Those control operations can
+  exceed nginx's ten-second client-header timeout under sustained one-vCPU
+  load, so nginx correctly closed the idle TLS client before the fault. This
+  is a fixture ordering defect rather than an ingress or reconnect failure.
+- The TLS arm now occurs after all restart-policy setup/verification and
+  immediately before `systemd-run`, the monotonic timestamp, and KILL. No HTTP
+  bytes are sent until stopped-state is observed. The same 30-second process
+  bound, `503` requirement, actual down-time gate, recovery gate, owner paths,
+  and cleanup apply. Automatic cleanup from the failed run removed every exact
+  runtime/provider/package resource and returned both fixtures to `Stopped`;
+  no manual rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
