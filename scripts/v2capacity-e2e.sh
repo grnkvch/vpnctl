@@ -511,7 +511,7 @@ probe_webhook() {
 }
 
 run_connection_limits() {
-  local gateway_ip attempt active
+  local gateway_ip attempt active connection_count limit_pid
   gateway_ip=$(lab_ip "$gateway_instance")
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/ingress-load load \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt \
@@ -527,11 +527,36 @@ run_connection_limits() {
     sleep 0.25
   done
   [ "$active" -eq 0 ] || { echo "capacity backend did not become idle between limit cases" >&2; exit 1; }
-  sleep 1
+  connection_count=0
+  for attempt in $(seq 1 80); do
+    connection_count=$(guest "$gateway_instance" sudo ss -H -tan state established 'sport = :443' | wc -l | tr -d ' ')
+    if [ "$connection_count" -eq 0 ]; then
+      break
+    fi
+    sleep 0.25
+  done
+  guest "$gateway_instance" sudo ss -H -tan state established 'sport = :443' \
+    > "$run_root/gateway-limit-before-connections.txt"
+  [ "$connection_count" -eq 0 ] || { echo "HTTPS ingress did not become quiescent between limit cases" >&2; exit 1; }
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/ingress-load load \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt \
     --requests 72 --delay-ms 5000 --body-bytes 32 --timeout 20 --path /load/a --path /load/b \
-    > "$run_root/gateway-limit.json"
+    > "$run_root/gateway-limit.json" &
+  limit_pid=$!
+  background_pids+=("$limit_pid")
+  active=0
+  for attempt in $(seq 1 100); do
+    active=$(guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status | jq -er '.active_requests')
+    if [ "$active" -ge 60 ]; then
+      break
+    fi
+    sleep 0.05
+  done
+  guest "$gateway_instance" sudo ss -H -tan state established 'sport = :443' \
+    > "$run_root/gateway-limit-during-connections.txt"
+  [ "$active" -ge 60 ] || { echo "global limit case did not reach concurrent upstream load" >&2; exit 1; }
+  wait "$limit_pid"
+  background_pids=()
   guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status \
     > "$run_root/gateway-limit-backend.json"
   jq -e '.responses == 72 and (.errors | length) == 0 and .status_counts["200"] == 64 and .status_counts["503"] == 8' \

@@ -234,6 +234,25 @@ This journal records development-host mutations made while implementing and vali
   requires exactly 64 HTTP 200 and eight HTTP 503 results; no retry or relaxed
   acceptance is introduced.
 
+### Reproduced occupied gateway slot and connection snapshot
+
+- The clean-source run at commit
+  `f9a64316629d1da465bc45b1c019df36f74c34d5` again passed composition,
+  controller idle RSS (11,776,000 bytes), and exact per-expose 40/5. With the
+  established five-second hold, the global case again returned 63/9; its new
+  backend snapshot independently recorded a maximum of exactly 63 active
+  handlers. Sustained load therefore did not start, and the 64-request product
+  limit remains unchanged. Evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T020804Z`.
+- Owner cleanup removed all capacity/provider/package state and the host build
+  root, then restored both fixtures to verified `Stopped`. The next run now
+  requires zero established downstream TCP/443 connections after the first
+  burst, starts the global burst under the existing trap, waits until at least
+  60 backend handlers are live, and records bounded before/during gateway
+  socket snapshots. It still requires the exact 64/8 result. This distinguishes
+  a lingering request from FRP or nginx admission behavior without accepting
+  either as reduced capacity.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
