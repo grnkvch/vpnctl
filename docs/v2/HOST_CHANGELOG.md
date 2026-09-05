@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public v2 entrypoint cutover, validation, and node inspection
+
+### Source-only implementation boundary
+
+- The release entrypoint no longer falls through to the overlapping v1
+  `init`, `apply`, or `client` implementation and no longer exposes the v1-only
+  `setup`, `server`, `ruleset`, or `--state-dir` surface. The original v1
+  dispatcher remains package-private solely for its regression suite and the
+  standalone migration code path. Root and command-path help are derived from
+  the frozen v2 registry, including `vpnctl help transport switch`.
+- `vpnctl validate` now loads and strictly validates the authoritative v2
+  state and emits the frozen `validation-v1` result without exposing decoder
+  details. `vpnctl node list/show` now pass through the registry role gate
+  before opening the gateway catalog and emit only the existing secret-free
+  node projections.
+- Changes are confined to repository source/tests and ordinary disposable Go
+  build cache. They do not initialize vpnctl, mutate a VM, invoke a system
+  command, install a package, contact the network, or alter host firewall,
+  routing, DNS, swap, services, certificates, or `/etc`/`/var` state. Host
+  rollback is unnecessary; repository rollback is one ordinary `git revert`
+  of the implementation commit.
+
+### Acceptance
+
+- CLI and regression suites pass with real local TCP/Unix socket integration
+  enabled. Tests prove the public help contains the v2 families, omits legacy
+  roots, rejects legacy invocations instead of executing them, validates both
+  healthy and invalid state through the stable JSON envelope, and rejects
+  node inspection on the node role before constructing a gateway catalog.
+
 ## 2026-09-05 — v2.0 operator documentation and executable examples
 
 ### Source-only validation boundary

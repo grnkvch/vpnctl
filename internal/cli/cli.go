@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/app"
@@ -47,6 +48,12 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isDNSInvocation(args) {
 		return executeDNS(args, stdout, stderr)
 	}
+	if isValidateInvocation(args) {
+		return executeValidate(args, stdout, stderr)
+	}
+	if isNodeCatalogInvocation(args) {
+		return executeNodeCatalog(args, stdout, stderr)
+	}
 	if isInviteInvocation(args) {
 		return executeInvite(args, stdout, stderr)
 	}
@@ -77,6 +84,39 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isPurgeInvocation(args) {
 		return executePurge(args, stdout, stderr)
 	}
+	if len(args) == 0 {
+		printHelp(stdout)
+		return ExitSuccess
+	}
+	switch args[0] {
+	case "help":
+		return executeHelp(args[1:], stdout, stderr)
+	case "-h", "--help":
+		if len(args) != 1 {
+			fmt.Fprintf(stderr, "%s does not accept arguments\n", args[0])
+			return ExitValidation
+		}
+		printHelp(stdout)
+		return ExitSuccess
+	case "version", "-v", "--version":
+		if len(args) != 1 {
+			fmt.Fprintf(stderr, "%s does not accept arguments\n", args[0])
+			return ExitValidation
+		}
+		fmt.Fprintf(stdout, "vpnctl %s\n", version)
+		return ExitSuccess
+	default:
+		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
+		printHelp(stderr)
+		return ExitValidation
+	}
+}
+
+// executeLegacyV1 retains the original local-state CLI solely for its v1
+// regression suite and the standalone migration implementation. The v2
+// binary must never fall through to these overlapping command names: doing
+// so could apply v1 semantics to a host initialized with the v2 state model.
+func executeLegacyV1(args []string, stdout io.Writer, stderr io.Writer) int {
 	stateDir := state.DefaultDir
 	args, ok := parseGlobalFlags(args, &stateDir, stderr)
 	if !ok {
@@ -84,13 +124,13 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if len(args) == 0 {
-		printHelp(stdout)
+		printLegacyHelp(stdout)
 		return 0
 	}
 
 	switch args[0] {
 	case "help", "-h", "--help":
-		printHelp(stdout)
+		printLegacyHelp(stdout)
 		return 0
 	case "init":
 		return executeInit(args[1:], stateDir, stdout, stderr)
@@ -109,7 +149,7 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
-		printHelp(stderr)
+		printLegacyHelp(stderr)
 		return 2
 	}
 }
@@ -901,8 +941,113 @@ func parseFlags(fs *flag.FlagSet, args []string, stderr io.Writer) error {
 	return nil
 }
 
+func executeHelp(args []string, stdout io.Writer, stderr io.Writer) int {
+	for _, argument := range args {
+		if strings.HasPrefix(argument, "-") {
+			fmt.Fprintf(stderr, "unsupported help option %s\n", argument)
+			return ExitValidation
+		}
+	}
+	if len(args) == 0 {
+		printHelp(stdout)
+		return ExitSuccess
+	}
+
+	matches := matchingHelpCommands(args)
+	if len(matches) == 0 {
+		fmt.Fprintf(stderr, "unknown command path: %s\n", strings.Join(args, " "))
+		return ExitValidation
+	}
+	fmt.Fprintf(stdout, "vpnctl %s\n\n", strings.Join(args, " "))
+	fmt.Fprintln(stdout, "Usage:")
+	for _, spec := range matches {
+		fmt.Fprintf(stdout, "  vpnctl %s\n", spec.Syntax)
+	}
+	fmt.Fprintf(stdout, "\nAvailable on: %s\n", helpRoles(matches))
+	return ExitSuccess
+}
+
+func matchingHelpCommands(path []string) []CommandSpec {
+	registry := V2CommandRegistry()
+	matches := make([]CommandSpec, 0)
+	for _, spec := range registry.Commands() {
+		words := strings.Fields(spec.Syntax)
+		if len(words) < len(path) {
+			continue
+		}
+		matched := true
+		for index, requested := range path {
+			if words[index] != requested {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			matches = append(matches, spec)
+		}
+	}
+	return matches
+}
+
+func helpRoles(specs []CommandSpec) string {
+	roles := make(map[HostRole]bool, 3)
+	for _, spec := range specs {
+		for _, role := range spec.Roles {
+			roles[role] = true
+		}
+	}
+	ordered := make([]string, 0, len(roles))
+	for _, role := range []HostRole{RoleUninitialized, RoleGateway, RoleNode} {
+		if roles[role] {
+			ordered = append(ordered, string(role))
+		}
+	}
+	return strings.Join(ordered, ", ")
+}
+
 func printHelp(w io.Writer) {
-	fmt.Fprint(w, `vpnctl manages a personal WireGuard VPN.
+	descriptions := map[string]string{
+		"apply": "Apply registered pending changes", "backup": "Create an encrypted gateway backup",
+		"cert": "Manage the public ingress certificate", "client": "Manage personal client devices",
+		"confirm": "Confirm a watchdog transaction", "dns": "Manage role-owned IPv4 DNS",
+		"doctor": "Run bounded active diagnostics", "expose": "Manage node webhook ingress",
+		"help": "Show command help", "init": "Initialize this host as gateway or node",
+		"invite": "Issue or cancel node enrollment", "join": "Enroll this private node",
+		"log": "Manage temporary local logging", "node": "Manage private nodes",
+		"plan": "Show pending changes and owned drift", "policy": "Assign routing presets",
+		"preset": "Inspect and update routing presets", "purge": "Irreversibly remove vpnctl",
+		"repair": "Repair vpnctl-owned drift", "restore": "Restore an encrypted gateway backup",
+		"status": "Show passive role status", "transport": "Test and manually switch node transport",
+		"trust": "Manage internal control trust", "uninstall": "Remove runtime and preserve state",
+		"update": "Update or roll back this host", "validate": "Validate authoritative state",
+		"version": "Show version information",
+	}
+	roots := make(map[string]struct{})
+	for _, spec := range V2CommandRegistry().Commands() {
+		root := strings.Fields(spec.Syntax)[0]
+		roots[root] = struct{}{}
+	}
+	ordered := make([]string, 0, len(roots))
+	for root := range roots {
+		ordered = append(ordered, root)
+	}
+	sort.Strings(ordered)
+
+	fmt.Fprint(w, `vpnctl manages a dedicated v2 gateway or private node.
+
+Usage:
+  vpnctl <command> [options]
+  vpnctl help <command...>
+
+Commands:
+`)
+	for _, root := range ordered {
+		fmt.Fprintf(w, "  %-11s %s\n", root, descriptions[root])
+	}
+}
+
+func printLegacyHelp(w io.Writer) {
+	fmt.Fprint(w, `vpnctl v1 manages a local WireGuard configuration.
 
 Usage:
   vpnctl [--state-dir <path>] <command>
@@ -911,14 +1056,6 @@ Commands:
   init       Initialize local vpnctl state
   setup      Preview or perform one-shot server setup
   apply      Apply current server config to the local system
-  confirm    Confirm a lockout-risk transaction from a new SSH session
-  dns        Show or change role-owned IPv4 DNS upstreams
-  cert       Inspect or export the gateway public ingress certificate
-  log        Inspect or temporarily enable expanded local logging
-  backup     Create an encrypted portable gateway backup
-  update     Update or roll back the local vpnctl release
-	  uninstall Remove managed runtime while preserving recoverable state
-	  purge     Irreversibly remove managed runtime and state
   server     Manage server settings
   client     Manage clients
   ruleset    Manage routing rulesets

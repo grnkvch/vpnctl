@@ -22,7 +22,7 @@ func TestExecuteWithoutArgsPrintsHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if !strings.Contains(stdout.String(), "vpnctl manages a personal WireGuard VPN") {
+	if !strings.Contains(stdout.String(), "vpnctl manages a dedicated v2 gateway or private node") {
 		t.Fatalf("expected help output, got %q", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -39,7 +39,7 @@ func TestExecuteGlobalHelpPrintsHelpOnce(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if got := strings.Count(stdout.String(), "vpnctl manages a personal WireGuard VPN"); got != 1 {
+	if got := strings.Count(stdout.String(), "vpnctl manages a dedicated v2 gateway or private node"); got != 1 {
 		t.Fatalf("expected help once, got %d occurrences in %q", got, stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -81,13 +81,60 @@ func TestExecuteUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteHelpUsesFrozenV2RegistryAndHidesLegacySurface(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := Execute([]string{"help", "transport", "switch"}, &stdout, &stderr); code != ExitSuccess {
+		t.Fatalf("Execute(help transport switch) code = %d, stderr = %q", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "vpnctl transport switch <transport>") || !strings.Contains(got, "Available on: node") {
+		t.Fatalf("specific help does not describe the frozen command: %q", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute(nil, &stdout, &stderr); code != ExitSuccess {
+		t.Fatalf("Execute(root help) code = %d", code)
+	}
+	for _, forbidden := range []string{"setup", "server", "ruleset", "--state-dir"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Errorf("public v2 help exposes legacy surface %q: %q", forbidden, stdout.String())
+		}
+	}
+	for _, required := range []string{"node", "preset", "transport", "expose", "trust"} {
+		if !strings.Contains(stdout.String(), required) {
+			t.Errorf("public v2 help omits command family %q: %q", required, stdout.String())
+		}
+	}
+}
+
+func TestExecuteNeverFallsThroughToLegacyCommands(t *testing.T) {
+	for _, args := range [][]string{
+		{"setup", "--endpoint", "203.0.113.10", "--dry-run"},
+		{"server", "show"},
+		{"ruleset", "list"},
+		{"client", "create", "iphone"},
+		{"init"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if code := Execute(args, &stdout, &stderr); code != ExitValidation {
+			t.Errorf("Execute(%v) code = %d, want %d", args, code, ExitValidation)
+		}
+		if strings.Contains(stdout.String()+stderr.String(), "v1 manages") {
+			t.Errorf("Execute(%v) reached legacy dispatcher: stdout=%q stderr=%q", args, stdout.String(), stderr.String())
+		}
+	}
+}
+
 func TestExecuteInitCreatesStateLayout(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"init"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"init"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -111,7 +158,7 @@ func TestExecuteInitIsIdempotent(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected first init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
@@ -123,7 +170,7 @@ func TestExecuteInitIsIdempotent(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected second init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
@@ -142,7 +189,7 @@ func TestExecuteInitSupportsCustomStateDir(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"--state-dir", "custom-state", "init"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"--state-dir", "custom-state", "init"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -157,7 +204,7 @@ func TestExecuteSetupDryRunPrintsPlanWithoutCreatingState(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"setup", "--endpoint", "198.211.99.116", "--dry-run"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"setup", "--endpoint", "198.211.99.116", "--dry-run"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -188,7 +235,7 @@ func TestExecuteSetupRequiresEndpoint(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"setup", "--dry-run"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"setup", "--dry-run"}, &stdout, &stderr)
 
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d", code)
@@ -202,7 +249,7 @@ func TestExecuteSetupDryRunUsesCustomFlags(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{
+	code := executeLegacyV1([]string{
 		"--state-dir", "custom-state",
 		"setup",
 		"--endpoint", "vpn.example.com",
@@ -254,7 +301,7 @@ func TestExecuteSetupRunsSetup(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"setup", "--endpoint", "198.211.99.116"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"setup", "--endpoint", "198.211.99.116"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -287,7 +334,7 @@ func TestExecuteApplyDryRunRunsApply(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"apply", "--dry-run"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"apply", "--dry-run"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -317,7 +364,7 @@ func TestExecuteApplyPrintsSummary(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"apply"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"apply"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d, stderr %q", code, stderr.String())
@@ -339,7 +386,7 @@ func TestExecuteServerInitWritesState(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{
+	code := executeLegacyV1([]string{
 		"server", "init",
 		"--endpoint", "198.211.99.116",
 		"--subnet", "10.10.10.0/24",
@@ -375,7 +422,7 @@ func TestExecuteServerShowPrintsNonSecretState(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{
+	if code := executeLegacyV1([]string{
 		"server", "init",
 		"--endpoint", "198.211.99.116",
 		"--dns", "1.1.1.1,8.8.8.8",
@@ -386,7 +433,7 @@ func TestExecuteServerShowPrintsNonSecretState(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"server", "show"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"server", "show"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected server show to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -415,13 +462,13 @@ func TestExecuteServerInitRequiresForceToOverwrite(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected first server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"server", "init", "--endpoint", "203.0.113.10"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"server", "init", "--endpoint", "203.0.113.10"}, &stdout, &stderr)
 
 	if code != 1 {
 		t.Fatalf("expected exit code 1, got %d", code)
@@ -432,7 +479,7 @@ func TestExecuteServerInitRequiresForceToOverwrite(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"server", "init", "--endpoint", "203.0.113.10", "--force"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"server", "init", "--endpoint", "203.0.113.10", "--force"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected force server init to succeed, got %d, stderr %q", code, stderr.String())
@@ -443,7 +490,7 @@ func TestExecuteServerInitValidatesEndpoint(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"server", "init"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"server", "init"}, &stdout, &stderr)
 
 	if code != 1 {
 		t.Fatalf("expected exit code 1, got %d", code)
@@ -460,13 +507,13 @@ func TestExecuteClientCreateWritesState(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{
+	code := executeLegacyV1([]string{
 		"client", "create", "macbook",
 		"--name", "Work MacBook",
 		"--platform", "macos",
@@ -508,13 +555,13 @@ func TestExecuteClientCreateAllowsFlagsBeforeID(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"client", "create", "--platform", "ios", "iphone"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "create", "--platform", "ios", "iphone"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
@@ -531,23 +578,23 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Execute([]string{"client", "create", "iphone", "--platform", "ios", "--tags", "phone,personal"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"client", "create", "iphone", "--platform", "ios", "--tags", "phone,personal"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected iphone create to succeed, got %d, stderr %q", code, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Execute([]string{"client", "create", "macbook", "--platform", "macos"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"client", "create", "macbook", "--platform", "macos"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected macbook create to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"client", "list"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "list"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client list to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -562,7 +609,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "show", "iphone"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client show to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -585,7 +632,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 	restoreRotated := stubClientKeyGenerator(rotatedClientKeyGenerator())
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "rotate-keys", "iphone", "--yes"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "rotate-keys", "iphone", "--yes"}, &stdout, &stderr)
 	restoreRotated()
 	if code != 0 {
 		t.Fatalf("expected client rotate-keys to succeed, got %d, stderr %q", code, stderr.String())
@@ -599,7 +646,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "show", "iphone"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected rotated client show to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -609,7 +656,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "revoke", "iphone", "--reason", "lost"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "revoke", "iphone", "--reason", "lost"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client revoke to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -619,7 +666,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "show", "iphone"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "show", "iphone"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected revoked client show to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -634,7 +681,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "list"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "list"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client list to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -647,7 +694,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "list", "--all"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "list", "--all"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client list --all to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -657,7 +704,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "delete", "macbook"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "delete", "macbook"}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("expected client delete without --yes to fail, got %d", code)
 	}
@@ -667,7 +714,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "delete", "macbook", "--yes"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "delete", "macbook", "--yes"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client delete to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -680,7 +727,7 @@ func TestExecuteClientListShowAndRevoke(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"client", "list", "--all"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"client", "list", "--all"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected client list --all after delete to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -696,7 +743,7 @@ func TestExecuteClientExportWireGuardWritesConfig(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 	st, err := state.Load(".vpnctl")
@@ -709,13 +756,13 @@ func TestExecuteClientExportWireGuardWritesConfig(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"client", "export", "iphone", "--type", "wireguard"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "export", "iphone", "--type", "wireguard"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected client export to succeed, got %d, stderr %q", code, stderr.String())
@@ -745,7 +792,7 @@ func TestExecuteClientExportClashWritesProfileAndWarning(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"server", "init", "--endpoint", "198.211.99.116"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected server init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 	st, err := state.Load(".vpnctl")
@@ -758,13 +805,13 @@ func TestExecuteClientExportClashWritesProfileAndWarning(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"client", "create", "iphone"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected client create to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"client", "export", "iphone", "--type", "clash", "--ruleset", "default"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "export", "iphone", "--type", "clash", "--ruleset", "default"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected clash export to succeed, got %d, stderr %q", code, stderr.String())
@@ -798,7 +845,7 @@ func TestExecuteClientExportRequiresType(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"client", "export", "iphone"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "export", "iphone"}, &stdout, &stderr)
 
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d", code)
@@ -826,7 +873,7 @@ func TestExecuteClientExportWireGuardWithQRUsesExporter(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"client", "export", "iphone", "--type", "wireguard", "--qr"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "export", "iphone", "--type", "wireguard", "--qr"}, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected client export --qr to succeed, got %d, stderr %q", code, stderr.String())
@@ -845,7 +892,7 @@ func TestExecuteClientExportRejectsQRForClash(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"client", "export", "iphone", "--type", "clash", "--qr"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "export", "iphone", "--type", "clash", "--qr"}, &stdout, &stderr)
 
 	if code != 2 {
 		t.Fatalf("expected usage exit code, got %d", code)
@@ -860,7 +907,7 @@ func TestExecuteRulesetAddShowAndList(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Execute([]string{
+	code := executeLegacyV1([]string{
 		"ruleset", "add", "custom-ai",
 		"--domain", "ChatGPT.com, openai.com,claude.ai",
 		"--name", "Custom AI",
@@ -890,7 +937,7 @@ func TestExecuteRulesetAddShowAndList(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"ruleset", "show", "custom-ai"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"ruleset", "show", "custom-ai"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected ruleset show to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -900,7 +947,7 @@ func TestExecuteRulesetAddShowAndList(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"ruleset", "list"}, &stdout, &stderr)
+	code = executeLegacyV1([]string{"ruleset", "list"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected ruleset list to succeed, got %d, stderr %q", code, stderr.String())
 	}
@@ -915,7 +962,7 @@ func TestExecuteRulesetAddRejectsInvalidType(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Execute([]string{"ruleset", "add", "bad", "--type", "ip-cidr", "--domain", "chatgpt.com"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"ruleset", "add", "bad", "--type", "ip-cidr", "--domain", "chatgpt.com"}, &stdout, &stderr)
 
 	if code != 1 {
 		t.Fatalf("expected exit code 1, got %d", code)
@@ -932,13 +979,13 @@ func TestExecuteClientCreateRequiresServer(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := Execute([]string{"init"}, &stdout, &stderr); code != 0 {
+	if code := executeLegacyV1([]string{"init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("expected init to succeed, got %d, stderr %q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code := Execute([]string{"client", "create", "iphone"}, &stdout, &stderr)
+	code := executeLegacyV1([]string{"client", "create", "iphone"}, &stdout, &stderr)
 
 	if code != 1 {
 		t.Fatalf("expected exit code 1, got %d", code)
