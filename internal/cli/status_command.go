@@ -155,15 +155,7 @@ func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion 
 	if !ok {
 		return nil, fmt.Errorf("status requires an initialized host role")
 	}
-	convergence, err := operations.NewFileConvergenceSnapshotSource(paths.ConvergenceFile)
-	if err != nil {
-		return nil, err
-	}
-	owned, err := operations.NewSystemOwnedResourceDiscoverer(paths.Root, linuxplatform.OSProbeRunner{})
-	if err != nil {
-		return nil, err
-	}
-	planner, err := operations.NewConvergencePlanner(convergence, owned)
+	planner, err := buildSystemConvergencePlanner(paths)
 	if err != nil {
 		return nil, err
 	}

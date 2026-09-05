@@ -2,6 +2,33 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — public strict convergence plan
+
+### Planned reversible validation
+
+- Expose `vpnctl plan [--json]` for initialized gateway and node roles through
+  the strict persisted snapshot plus owned file/unit observation stack. It is
+  read-only and does not accept a redundant dry-run mode.
+- Argument and role checks precede planner construction. Missing snapshot,
+  invalid convergence state, unsupported resource kinds, cancellation, and
+  observation failure receive distinct stable categories; none can be emitted
+  as an empty successful plan.
+- Tests inject the planner boundary or use missing/malformed snapshots under
+  temporary roots. No production path, service, listener, firewall, route,
+  DNS, HTTP, webhook, or provider is changed; repository rollback is limited
+  to this commit and no host rollback is needed.
+
+### Acceptance
+
+- Global/local JSON parsing, public dispatch, initialized role gating, no-op
+  output, and pre-read argument rejection pass. Real missing and malformed
+  temporary snapshots produce `unavailable` and `validation` respectively,
+  with complete empty plan arrays rather than a false successful result.
+- The complete Go suite, `go vet ./...`, formatting/diff checks, and strict
+  OpenSpec validation passed. Only temporary fixtures and the existing suite's
+  disposable local sockets were used; no persistent host mutation or rollback
+  remains.
+
 ## 2026-09-06 — production owned-unit drift observation
 
 ### Planned reversible validation

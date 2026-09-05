@@ -94,3 +94,10 @@ load/active/sub-state and `systemctl is-enabled` output. Missing unit files are
 Unsafe unit paths are never handed to systemctl, and the adapter has no
 start/stop/reload/enable capability. State and network resources remain typed
 unsupported until equivalent ownership-aware readers exist.
+
+`vpnctl plan [--json]` is wired to this exact production read stack for both
+initialized roles. It performs role and argument validation before constructing
+the reader. Missing snapshot storage is `unavailable`, invalid storage is
+`validation`, unsupported applied resource kinds are explicitly unavailable,
+and observation failures never become an empty successful plan. The command
+has no dry-run flag because planning is already read-only.
