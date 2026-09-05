@@ -22,6 +22,10 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(profile["duration_seconds"] * profile["webhook_requests_per_second"], 3000)
         self.assertEqual(profile["duration_seconds"] * profile["bot_api_requests_per_second"], 1500)
         self.assertEqual(profile["personal_clients"], 5)
+        self.assertEqual(manifest["bounds"]["webhook_steady_state_success_p95_ms"], 1000)
+        self.assertEqual(manifest["bounds"]["webhook_steady_state_success_p99_ms"], 2000)
+        self.assertEqual(manifest["bounds"]["bot_api_success_p95_ms"], 1000)
+        self.assertEqual(manifest["bounds"]["bot_api_success_p99_ms"], 2000)
         self.assertLess(manifest["fault"]["accepted_failure_window_start_seconds"], manifest["fault"]["frps_stop_after_seconds"])
         self.assertGreater(manifest["fault"]["accepted_failure_window_end_seconds"], manifest["fault"]["frps_stop_after_seconds"])
 

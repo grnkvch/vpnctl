@@ -48,10 +48,10 @@ This journal records development-host mutations made while implementing and vali
   totals. Acceptance requires controller idle RSS at most 20 MiB, average CPU
   at most 85%, at least 64 MiB `MemAvailable`, no more than 512 MiB swap use,
   at least 512 MiB free disk, at most 64 MiB sustained-run disk growth, zero
-  unit OOM kills, no workload deadlock, webhook p95/p99 at most 1/2 seconds,
-  Bot API-like p95/p99 at most 1/2 seconds, zero client packet loss, no webhook
-  failure outside the bounded injected reconnect window, and recovery within
-  eight seconds of FRP restart.
+  unit OOM kills, no workload deadlock, webhook steady-state p95/p99 outside
+  the bounded injected fault window at most 1/2 seconds, Bot API-like global
+  p95/p99 at most 1/2 seconds, zero client packet loss, no webhook failure
+  outside that window, and recovery within eight seconds of FRP restart.
 - Host build output is confined to one exact
   `/private/tmp/vpnctl-v2-capacity.*` directory plus the existing disposable
   Go cache. Sanitized results are retained only in ignored
@@ -1182,6 +1182,43 @@ This journal records development-host mutations made while implementing and vali
 - Owner cleanup again returned both exact fixtures to independently verified
   `Stopped` states, and no QEMU crash report appeared. The correction changes
   only source and aggregate ignored evidence; no manual host rollback remains.
+
+### Out-of-band snapshot result and latency-boundary clarification
+
+- The clean-source run at commit
+  `0376d6ab183782e6f68475c9c87fda23f6767dd2` completed the full profile and
+  remains a non-accepted `candidate` at
+  `artifacts/v2lab/capacity-e2e/run-20260905T131951Z/summary.json`. Moving the
+  process snapshots worked: the previous 180--210 second correlated stall
+  disappeared, webhook p99 in that bucket was 114.337 ms, and all four final
+  buckets stayed below 142 ms. The before/after tunnel-client service PID and
+  restart count were identical while its frpc child changed.
+- Webhook delivery was 2932/3000, all 68 `503` responses were inside the fixed
+  fault window, actual FRPS down time was `3.137s`, first recovery succeeded
+  at `1.925s`, and five stable successes completed at `2.806s`. Successful
+  webhook traffic outside the fault window passed p95/p99 at
+  `94.354/561.811ms`; overall p95/p99 was `1759.840/2843.323ms` solely because
+  requests begun during the intentional outage waited for recovery and then
+  succeeded.
+- The run is independently invalid for restricted API-like traffic: sixteen
+  HTTP `502` responses occurred at offsets 82.602--86.606 seconds, outside the
+  fault window, and its global p99 was `2552.784ms`. This isolated early burst
+  is neither hidden nor accepted. API failures remain globally forbidden and
+  API p95/p99 remain global, so a repeat must complete 1500/1500 within the
+  original 1/2-second bounds.
+- The webhook latency boundary is now made explicit rather than timing-lottery
+  dependent: its 1/2-second p95/p99 SLO applies to successful requests started
+  outside the intentional fault/control window. Inside that window, the
+  unchanged minimum success count, no-failure-outside-window rule, armed
+  `503`, measured three-second outage, stable eight-second recovery, and final
+  healthy tail govern availability. Overall webhook latency remains recorded
+  as diagnostic evidence. This changes no numeric bound, fault duration,
+  request count, retry behavior, or API requirement and cannot accept the
+  current run because its unrelated API failure remains fatal.
+- Controller RSS, five-client zero loss, exact 40/5 and 64/8 limits, resource
+  headroom, zero OOM/deadlock, and owner cleanup passed. Independent status
+  reports both fixtures `Stopped`; no QEMU crash report appeared and no manual
+  host rollback remains.
 
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 

@@ -28,10 +28,14 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			ManagedSwapBytes int `json:"managed_swap_bytes"`
 		} `json:"target"`
 		Bounds struct {
-			ControllerRSS         int `json:"controller_idle_rss_bytes"`
-			WebhookSuccessMinimum int `json:"webhook_successful_requests_minimum"`
-			PerExposeConcurrent   int `json:"per_expose_concurrent_requests"`
-			GatewayConcurrent     int `json:"gateway_concurrent_requests"`
+			ControllerRSS          int `json:"controller_idle_rss_bytes"`
+			WebhookSuccessMinimum  int `json:"webhook_successful_requests_minimum"`
+			WebhookSteadyP95Millis int `json:"webhook_steady_state_success_p95_ms"`
+			WebhookSteadyP99Millis int `json:"webhook_steady_state_success_p99_ms"`
+			BotAPIGlobalP95Millis  int `json:"bot_api_success_p95_ms"`
+			BotAPIGlobalP99Millis  int `json:"bot_api_success_p99_ms"`
+			PerExposeConcurrent    int `json:"per_expose_concurrent_requests"`
+			GatewayConcurrent      int `json:"gateway_concurrent_requests"`
 		} `json:"bounds"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
@@ -46,6 +50,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatalf("unexpected minimum host target: %+v", manifest.Target)
 	}
 	if manifest.Bounds.ControllerRSS != 20*1024*1024 || manifest.Bounds.WebhookSuccessMinimum != 2890 ||
+		manifest.Bounds.WebhookSteadyP95Millis != 1000 || manifest.Bounds.WebhookSteadyP99Millis != 2000 ||
+		manifest.Bounds.BotAPIGlobalP95Millis != 1000 || manifest.Bounds.BotAPIGlobalP99Millis != 2000 ||
 		manifest.Bounds.PerExposeConcurrent != 40 ||
 		manifest.Bounds.GatewayConcurrent != 64 {
 		t.Fatalf("unexpected capacity bounds: %+v", manifest.Bounds)
@@ -158,6 +164,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".reconnect.status == \"passed\"",
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
+		".workload.webhook.latency_by_fault_window.outside.latency_ms.p95",
+		".workload.webhook.latency_by_fault_window.outside.latency_ms.p99",
+		".workload.bot_api.latency_ms.p95", ".workload.bot_api.latency_ms.p99",
 		"status: \"candidate\"", "finalize_summary", ".status = \"passed\"",
 		"cleanup_capacity_fault", "capacity_fault_dropin_dir=/run/systemd/system/$tunnel_server_unit.d",
 		"capacity_fault_dropin=$capacity_fault_dropin_dir/vpnctl-v2-capacity-fault.conf",

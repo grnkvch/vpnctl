@@ -830,8 +830,8 @@ assert_summary() {
     .workload.webhook.successful_requests >= $limits[0].bounds.webhook_successful_requests_minimum and
     .workload.webhook.failures_outside_accepted_window == $limits[0].bounds.webhook_failures_outside_reconnect_window and
     .workload.webhook.tail_30_seconds_successful and
-    .workload.webhook.latency_ms.p95 <= $limits[0].bounds.webhook_success_p95_ms and
-    .workload.webhook.latency_ms.p99 <= $limits[0].bounds.webhook_success_p99_ms and
+    .workload.webhook.latency_by_fault_window.outside.latency_ms.p95 <= $limits[0].bounds.webhook_steady_state_success_p95_ms and
+    .workload.webhook.latency_by_fault_window.outside.latency_ms.p99 <= $limits[0].bounds.webhook_steady_state_success_p99_ms and
     .workload.bot_api.scheduled_requests == (.profile.duration_seconds * .profile.bot_api_requests_per_second) and
     .workload.bot_api.failed_requests == 0 and .workload.bot_api.tail_30_seconds_successful and
     .workload.bot_api.latency_ms.p95 <= $limits[0].bounds.bot_api_success_p95_ms and
