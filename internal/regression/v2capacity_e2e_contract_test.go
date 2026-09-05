@@ -28,9 +28,10 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			ManagedSwapBytes int `json:"managed_swap_bytes"`
 		} `json:"target"`
 		Bounds struct {
-			ControllerRSS       int `json:"controller_idle_rss_bytes"`
-			PerExposeConcurrent int `json:"per_expose_concurrent_requests"`
-			GatewayConcurrent   int `json:"gateway_concurrent_requests"`
+			ControllerRSS         int `json:"controller_idle_rss_bytes"`
+			WebhookSuccessMinimum int `json:"webhook_successful_requests_minimum"`
+			PerExposeConcurrent   int `json:"per_expose_concurrent_requests"`
+			GatewayConcurrent     int `json:"gateway_concurrent_requests"`
 		} `json:"bounds"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
@@ -44,7 +45,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		manifest.Target.DiskBytes != 10*1024*1024*1024 || manifest.Target.ManagedSwapBytes != 1024*1024*1024 {
 		t.Fatalf("unexpected minimum host target: %+v", manifest.Target)
 	}
-	if manifest.Bounds.ControllerRSS != 20*1024*1024 || manifest.Bounds.PerExposeConcurrent != 40 ||
+	if manifest.Bounds.ControllerRSS != 20*1024*1024 || manifest.Bounds.WebhookSuccessMinimum != 2890 ||
+		manifest.Bounds.PerExposeConcurrent != 40 ||
 		manifest.Bounds.GatewayConcurrent != 64 {
 		t.Fatalf("unexpected capacity bounds: %+v", manifest.Bounds)
 	}
@@ -64,9 +66,10 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"--requests 72 --delay-ms 5000", "gateway-limit-before-connections.txt",
 		"gateway-limit-during-connections.txt", ".status_counts[\"200\"] == 64",
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
+		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "systemctl stop --no-block", "--kill-who=main --signal=KILL",
 		"FRP server did not stop within the bounded fault-injection window", "stop_seconds: $stop_seconds",
-		"recovered_without_client_restart: true",
+		"stable_recovery_probes: 5", "recovered_without_client_restart: true",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {

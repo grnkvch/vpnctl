@@ -25,7 +25,7 @@
     "maximum_average_cpu_percent": 85,
     "minimum_free_disk_bytes": 536870912,
     "maximum_disk_growth_bytes": 67108864,
-    "webhook_successful_requests_minimum": 2950,
+    "webhook_successful_requests_minimum": 2890,
     "webhook_failures_outside_reconnect_window": 0,
     "webhook_success_p95_ms": 1000,
     "webhook_success_p99_ms": 2000,

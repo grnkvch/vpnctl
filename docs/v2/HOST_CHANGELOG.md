@@ -319,6 +319,64 @@ This journal records development-host mutations made while implementing and vali
   the next clean-source run repeats the full gate against unchanged acceptance
   criteria.
 
+### Bounded-stop result and planned prior-boot diagnosis
+
+- The clean-source repeat at commit
+  `47b521b99b6b776742e1dd444fe810ffa1855e32` again passed exact 40/5 and
+  64/8 ingress admission with 64 active backend handlers, controller RSS,
+  five-client zero-loss probes, gateway resource bounds, and zero OOM kills.
+  Its bounded FRPS stop completed in 0.001 seconds and the first post-start
+  probe succeeded in 0.001 seconds, but this single response was not stable:
+  the scheduled webhook load continued receiving 503 through offset 159.122
+  and finished 2838/3000. A separate late restricted Bot API-like degradation
+  at offsets 253.403–287.680 produced 1446/1500 successes. Evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T031659Z`; neither failure is
+  accepted or excluded from its existing bound.
+- The run's owner cleanup again removed every capacity/provider/package and
+  exact temporary resource and restored both fixtures to verified `Stopped`.
+  To distinguish FRPC retry/readiness timing from a restricted-provider
+  restart or host-emulation stall, the next diagnostic action may start only
+  these same two contract-matching fixtures, read only the previous boot's
+  synthetic tunnel/restricted unit journals and unit lifecycle metadata, and
+  immediately stop both machines. It installs or changes no guest resource.
+  Rollback is the exact pair of `limactl stop` operations; the investigation
+  result and verified restored states will be appended before source commit.
+
+### Prior-boot diagnosis and production-default load correction
+
+- The exact gateway and node fixtures were started one at a time only for
+  read-only `journalctl -b -1` inspection, after reusing Lima's ordinary
+  contract checks, and were each immediately stopped. No guest file, unit,
+  package, listener, route, firewall rule, or application state was installed
+  or changed. Final Lima status returned both machines to `Stopped`; these two
+  exact stop operations completed the planned rollback.
+- Gateway lifecycle evidence showed FRPS inactive at 06:30:22.691, restarted
+  at 06:30:31.289, and receiving the unchanged node Login at 06:30:38.270.
+  Node evidence showed retry attempts at 06:30:22.680, 06:30:24.792,
+  06:30:29.093, and 06:30:38.300, with successful Login at 06:30:38.452.
+  Thus actual reconnect after FRPS start was 7.163 seconds, within the fixed
+  eight-second bound. The harness delayed start by running its roughly
+  two-second unavailable HTTP probe before, rather than inside, the explicit
+  three-second down interval; its first success also did not prove stability.
+- Neither FRPC nor either Mihomo service restarted during the late Bot API-like
+  failure. At the same timestamps the node recorded both restricted dial
+  deadlines and delayed FRP work-connection failures, demonstrating a shared
+  guest scheduling/processing stall. The spike configurations were still at
+  temporary `info` logging and wrote a line per FRPS user connection and per
+  ShadowTLS handshake, unlike production renderers (`error` for FRP and
+  `silent` for Mihomo). Capacity acceptance must exercise those production
+  defaults rather than the diagnostic spike verbosity.
+- The composed capacity setup now changes only its owner-disposable copies to
+  exact production logging levels, validates all four edited configs with the
+  pinned binaries, and restarts only their exact owned units before load. The
+  unavailable probe duration is deducted from the unchanged three-second
+  down interval, and recovery requires five consecutive valid requests. The
+  success floor is corrected from the internally inconsistent 2950 to 2890:
+  3000 scheduled requests minus exactly 10 requests/s times the allowed
+  three-second outage plus eight-second reconnect bound. Failures outside the
+  narrow accepted window, unstable tail recovery, and latency bounds remain
+  independently fatal; no transport or resource limit is weakened.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

@@ -445,6 +445,33 @@ compose_ingress_tunnel() {
   "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
   "$repository_root/scripts/v2ingress-spike.sh" prepare "$gateway_ip" > "$run_root/ingress-prepare.log"
 
+  [ "$(guest "$gateway_instance" sudo grep -Fxc 'log-level: info' /etc/vpnctl-v2-spike/restricted/gateway.yaml)" -eq 1 ]
+  [ "$(guest "$node_instance" sudo grep -Fxc 'log-level: info' /etc/vpnctl-v2-spike/restricted/node.yaml)" -eq 1 ]
+  [ "$(guest "$gateway_instance" sudo grep -Fxc 'log.level = "info"' /etc/vpnctl-v2-spike/tunnel/frps.toml)" -eq 1 ]
+  [ "$(guest "$node_instance" sudo grep -Fxc 'log.level = "info"' /etc/vpnctl-v2-spike/tunnel/frpc.toml)" -eq 1 ]
+  guest "$gateway_instance" sudo sed -i 's/^log-level: info$/log-level: silent/' \
+    /etc/vpnctl-v2-spike/restricted/gateway.yaml
+  guest "$node_instance" sudo sed -i 's/^log-level: info$/log-level: silent/' \
+    /etc/vpnctl-v2-spike/restricted/node.yaml
+  guest "$gateway_instance" sudo sed -i 's/^log.level = "info"$/log.level = "error"/' \
+    /etc/vpnctl-v2-spike/tunnel/frps.toml
+  guest "$node_instance" sudo sed -i 's/^log.level = "info"$/log.level = "error"/' \
+    /etc/vpnctl-v2-spike/tunnel/frpc.toml
+  guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-spike/mihomo -t \
+    -d /var/lib/vpnctl-v2-spike-gateway -f /etc/vpnctl-v2-spike/restricted/gateway.yaml \
+    > "$run_root/restricted-gateway-production-log-validation.txt" 2>&1
+  guest "$node_instance" sudo /usr/local/libexec/vpnctl-v2-spike/mihomo -t \
+    -d /var/lib/vpnctl-v2-spike-node -f /etc/vpnctl-v2-spike/restricted/node.yaml \
+    > "$run_root/restricted-node-production-log-validation.txt" 2>&1
+  guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-spike/frps verify \
+    -c /etc/vpnctl-v2-spike/tunnel/frps.toml \
+    > "$run_root/frps-production-log-validation.txt" 2>&1
+  guest "$node_instance" sudo /usr/local/libexec/vpnctl-v2-spike/frpc verify \
+    -c /etc/vpnctl-v2-spike/tunnel/frpc.toml \
+    > "$run_root/frpc-production-log-validation.txt" 2>&1
+  guest "$gateway_instance" sudo systemctl restart "$restricted_gateway_unit" "$tunnel_server_unit"
+  guest "$node_instance" sudo systemctl restart "$restricted_node_unit"
+
   guest "$node_instance" sudo install -m 0755 /tmp/webhook_receiver.py \
     /usr/local/libexec/vpnctl-v2-capacity/webhook-receiver
   guest "$node_instance" sudo install -m 0755 /tmp/load.py /usr/local/libexec/vpnctl-v2-capacity/load
@@ -607,8 +634,8 @@ start_loads() {
 }
 
 inject_reconnect() {
-  local down_seconds attempt unavailable=false recovered=false stop_state
-  local stop_started stop_finished recovery_started recovery_finished
+  local down_seconds attempt unavailable=false recovered=false stop_state probe_output remaining stable=0
+  local stop_started stop_finished unavailable_started unavailable_finished recovery_started recovery_finished
   down_seconds=$(value '.fault.frps_down_seconds')
   stop_started=$(python3 -c 'import time; print(time.monotonic())')
   guest "$gateway_instance" sudo systemctl stop --no-block "$tunnel_server_unit"
@@ -627,30 +654,37 @@ inject_reconnect() {
     exit 1
   }
   stop_finished=$(python3 -c 'import time; print(time.monotonic())')
-  for attempt in $(seq 1 20); do
-    if [ "$(probe_webhook 2>/dev/null | jq -r '.status' || true)" = 503 ]; then
-      unavailable=true
-      break
-    fi
-    sleep 0.1
-  done
+  unavailable_started=$(python3 -c 'import time; print(time.monotonic())')
+  probe_output=$(probe_webhook 2>/dev/null || true)
+  unavailable_finished=$(python3 -c 'import time; print(time.monotonic())')
+  if [ "$(printf '%s\n' "$probe_output" | jq -r '.status' 2>/dev/null || true)" = 503 ]; then
+    unavailable=true
+  fi
+  printf '%s\n' "$probe_output" > "$run_root/reconnect-unavailable-probe.json"
   [ "$unavailable" = true ] || { echo "ingress did not become 503 while frps was stopped" >&2; exit 1; }
-  sleep "$down_seconds"
+  remaining=$(awk -v duration="$down_seconds" -v start="$unavailable_started" -v finish="$unavailable_finished" \
+    'BEGIN {value=duration-(finish-start); if (value < 0) value=0; printf "%.3f", value}')
+  sleep "$remaining"
   guest "$gateway_instance" sudo systemctl start "$tunnel_server_unit"
   recovery_started=$(python3 -c 'import time; print(time.monotonic())')
-  for attempt in $(seq 1 40); do
+  for attempt in $(seq 1 100); do
     if probe_webhook 2>/dev/null | jq -e '.status == 200 and .ok == true' >/dev/null; then
-      recovered=true
-      break
+      stable=$((stable + 1))
+      if [ "$stable" -eq 5 ]; then
+        recovered=true
+        break
+      fi
+    else
+      stable=0
     fi
-    sleep 0.25
+    sleep 0.1
   done
   recovery_finished=$(python3 -c 'import time; print(time.monotonic())')
   [ "$recovered" = true ] || { echo "FRP did not reconnect under sustained load" >&2; exit 1; }
   jq -n --argjson down_seconds "$down_seconds" \
     --argjson stop_seconds "$(awk -v start="$stop_started" -v finish="$stop_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
     --argjson recovery_seconds "$(awk -v start="$recovery_started" -v finish="$recovery_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
-    '{unavailable_status: 503, stop_seconds: $stop_seconds, down_seconds: $down_seconds, recovery_seconds: $recovery_seconds, recovered_without_client_restart: true}' \
+    '{unavailable_status: 503, stop_seconds: $stop_seconds, down_seconds: $down_seconds, recovery_seconds: $recovery_seconds, stable_recovery_probes: 5, recovered_without_client_restart: true}' \
     > "$run_root/reconnect.json"
 }
 
