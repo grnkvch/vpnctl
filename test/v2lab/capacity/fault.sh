@@ -22,6 +22,13 @@ maximum_stable_recovery_probes=0
 recovery_probe_attempts=0
 successful_recovery_probes=0
 recovery_seconds=0
+unavailable_probe='{"status":null,"ok":false,"error":"fault_incomplete"}'
+stop_started=0
+stop_finished=0
+down_started=0
+restart_started=0
+result_emitted=false
+fault_stage=preflight
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -37,8 +44,10 @@ delta() {
 
 emit_result() {
   local result_status=$1 stable_recovery=$2
+  result_emitted=true
   jq -n \
     --arg status "$result_status" \
+    --arg fault_stage "$fault_stage" \
     --argjson unavailable_probe "$unavailable_probe" \
     --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
     --argjson requested_down_seconds "$down_seconds" \
@@ -53,6 +62,7 @@ emit_result() {
     --argjson stable_recovery "$stable_recovery" \
     '{
       status: $status,
+      fault_stage: $fault_stage,
       unavailable_status: $unavailable_probe.status,
       unavailable_probe: $unavailable_probe,
       stop_seconds: $stop_seconds,
@@ -126,6 +136,9 @@ cleanup() {
   if [ "$status" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then
     status=$cleanup_status
   fi
+  if [ "$status" -ne 0 ] && [ "$result_emitted" != true ]; then
+    emit_result failed false || true
+  fi
   exit "$status"
 }
 
@@ -180,6 +193,7 @@ systemctl daemon-reload
   echo 'FRPS temporary restart policy was not applied' >&2
   exit 3
 }
+fault_stage=armed
 systemd-run --quiet --collect --unit="$restart_job" \
   --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \
   /bin/systemctl start "$unit"
@@ -187,10 +201,10 @@ restart_job_armed=true
 restore_required=true
 down_started=$(monotonic)
 stop_started=$down_started
+restart_started=$down_started
 systemctl kill --kill-whom=main --signal=KILL "$unit" >/dev/null
+fault_stage=killed
 
-unavailable_probe=$(probe 2>/dev/null || true)
-unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
 stop_state=
 for _attempt in $(seq 1 20); do
   stop_state=$(systemctl show --value -p ActiveState "$unit")
@@ -204,6 +218,10 @@ if [ "$stop_state" != inactive ] && [ "$stop_state" != failed ]; then
   exit 1
 fi
 stop_finished=$(monotonic)
+fault_stage=stopped
+unavailable_probe=$(probe 2>/dev/null || true)
+unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
+fault_stage=unavailable_probed
 restart_state=
 for _attempt in $(seq 1 120); do
   restart_state=$(systemctl show --value -p ActiveState "$unit")
@@ -222,6 +240,7 @@ if ! [[ "$restart_started_microseconds" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 restart_started=$(awk -v value="$restart_started_microseconds" 'BEGIN {printf "%.9f", value/1000000}')
+fault_stage=restarted
 systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 restart_job_armed=false
@@ -261,4 +280,5 @@ if [ "$recovery_status" != passed ]; then
   exit 1
 fi
 
+fault_stage=recovered
 emit_result passed true

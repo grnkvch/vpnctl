@@ -85,6 +85,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"down_started=$(monotonic)", "systemd-run --quiet --collect", "--timer-property=AccuracySec=10ms", "unavailable_status: $unavailable_probe.status",
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
+		"fault_stage: $fault_stage", "result_emitted=false", "fault_incomplete",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
@@ -100,6 +101,11 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	hardKill := strings.LastIndex(faultHelper, "systemctl kill --kill-whom=main --signal=KILL")
 	if restartTimer < 0 || downStarted < 0 || hardKill < 0 || !(restartTimer < downStarted && downStarted < hardKill) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
+	}
+	stoppedCheck := strings.Index(faultHelper, "stop_state=")
+	unavailableProbe := strings.Index(faultHelper, "unavailable_probe=$(probe")
+	if stoppedCheck < 0 || unavailableProbe < 0 || !(hardKill < stoppedCheck && stoppedCheck < unavailableProbe) {
+		t.Fatal("capacity fault helper must observe the stopped state before the slower HTTPS probe")
 	}
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))

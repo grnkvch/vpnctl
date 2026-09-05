@@ -719,6 +719,29 @@ This journal records development-host mutations made while implementing and vali
   kill-to-active interval, cleanup, recovery, and every acceptance bound remain
   unchanged.
 
+### MainPID fault observation-order result and correction
+
+- The clean-source run at commit
+  `a6bb6f75f21ed1d09bfd9a53fc173fff73fe6bde` again passed composed readiness
+  and both exact connection-limit gates, then successfully issued the MainPID
+  kill at 145 seconds. It aborted because the helper performed its HTTPS
+  unavailable probe before polling `ActiveState`; on the loaded one-vCPU host,
+  the polling series then observed only the already restarted `active` state
+  after the transient 2.8-second timer fired. The empty reconnect files under
+  `artifacts/v2lab/capacity-e2e/run-20260905T082807Z` are diagnostic only; no
+  summary or capacity acceptance is claimed.
+- Automatic cleanup checksum-verified and removed the exact runtime drop-in,
+  stopped/reset the transient units, restored the original restart policy,
+  owner-uninstalled all capacity/provider resources and packages, and returned
+  both fixtures to `Stopped`. The following clean preflight remains the
+  independent absence check; no manual rollback is required.
+- The corrected helper polls the immediate `inactive`/`failed` state directly
+  after successful KILL and only then performs the slower HTTPS `503` probe.
+  It also records a typed fault stage and emits one typed failed JSON result
+  from its EXIT trap if an unexpected error occurs before the ordinary result,
+  eliminating empty reconnect evidence. Timer ordering, actual kill-to-active
+  measurement, workload, and every acceptance bound remain unchanged.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
