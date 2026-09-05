@@ -742,6 +742,36 @@ This journal records development-host mutations made while implementing and vali
   eliminating empty reconnect evidence. Timer ordering, actual kill-to-active
   measurement, workload, and every acceptance bound remain unchanged.
 
+### Stopped-state result and pre-armed HTTPS probe plan
+
+- The clean-source run at commit
+  `4cd2f7ec0a5865596f44af807aedb9d4551da38c` proved the corrected fault
+  timing: typed evidence under
+  `artifacts/v2lab/capacity-e2e/run-20260905T084736Z/reconnect.json` records
+  immediate stage `stopped`, actual kill-to-active down time `3.136s` inside
+  the unchanged 2.75--3.50-second window, stable tunnel-client service PID,
+  and exactly one frpc child recycle. The run is not accepted because the
+  subsequently started one-shot HTTPS unavailable probe timed out after
+  1.329 seconds and returned status zero instead of the required nginx `503`;
+  no final summary was written.
+- The timeout is measurement startup/TLS skew under the loaded one-vCPU host,
+  not an outage-bound failure. The next fixture starts one bounded Python probe
+  before changing FRPS: it establishes TLS to nginx, creates its exact ready
+  marker, and waits at most 30 seconds for an exact trigger file. After KILL
+  and immediate stopped-state observation, the shell creates that trigger and
+  the same HTTPS request begins on the already established connection. This
+  removes interpreter and TLS-handshake time from the three-second fault
+  interval without changing the request, expected `503`, or production path.
+- The probe runtime is confined to exact owner-scoped directory
+  `/var/lib/vpnctl-v2-capacity/fault-probe` with `ready`, `trigger`, and
+  `result.json`; the helper removes only those files and the now-empty
+  directory. Its EXIT trap kills/waits the exact child PID, and the existing
+  parent cleanup removes the whole owner-verified
+  `/var/lib/vpnctl-v2-capacity` boundary after stopping its services. The probe
+  also self-terminates after 30 seconds if its parent disappears. The failed
+  run removed all capacity/provider resources and packages and returned both
+  fixtures to `Stopped`; no manual rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

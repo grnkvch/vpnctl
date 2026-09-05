@@ -86,6 +86,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 		"fault_stage: $fault_stage", "result_emitted=false", "fault_incomplete",
+		"load armed-probe", "prepare_armed_probe", "run_armed_probe", "cleanup_armed_probe",
+		"armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe", "--trigger-timeout 30",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
@@ -103,7 +105,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
 	stoppedCheck := strings.Index(faultHelper, "stop_state=")
-	unavailableProbe := strings.Index(faultHelper, "unavailable_probe=$(probe")
+	unavailableProbe := strings.Index(faultHelper, "run_armed_probe\n")
 	if stoppedCheck < 0 || unavailableProbe < 0 || !(hardKill < stoppedCheck && stoppedCheck < unavailableProbe) {
 		t.Fatal("capacity fault helper must observe the stopped state before the slower HTTPS probe")
 	}
@@ -117,6 +119,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
 		"./test/v2lab/capacity/tunnel_client", "webServer.user = \"vpnctl\"",
+		"/var/lib/vpnctl-v2-capacity",
 		"capacity_admin_password=b29cf595a13d39c8445e2d42b6a5d8e7a50772b7703b26f9f7d8da9f45f4c485",
 		"/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin",
 		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",

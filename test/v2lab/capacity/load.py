@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import concurrent.futures
 import hashlib
 import http.client
 import json
 import math
+import pathlib
 import socket
 import ssl
 import statistics
+import sys
 import time
 
 
@@ -30,9 +34,15 @@ def telegram_body(index: int, size: int) -> bytes:
     return encoded
 
 
-def webhook_request(args: argparse.Namespace, index: int, started: float) -> dict[str, object]:
-    context = ssl.create_default_context(cafile=args.certificate)
-    connection = http.client.HTTPSConnection(args.public_ip, 443, timeout=args.timeout, context=context)
+def webhook_request(
+    args: argparse.Namespace,
+    index: int,
+    started: float,
+    connection: http.client.HTTPSConnection | None = None,
+) -> dict[str, object]:
+    if connection is None:
+        context = ssl.create_default_context(cafile=args.certificate)
+        connection = http.client.HTTPSConnection(args.public_ip, 443, timeout=args.timeout, context=context)
     before = time.monotonic()
     try:
         body = telegram_body(index, args.body_bytes)
@@ -67,6 +77,37 @@ def webhook_request(args: argparse.Namespace, index: int, started: float) -> dic
         }
     finally:
         connection.close()
+
+
+def wait_for_trigger(
+    trigger_file: pathlib.Path,
+    timeout: float,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> None:
+    deadline = clock() + timeout
+    while not trigger_file.exists():
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise TimeoutError("armed probe trigger was not created")
+        sleeper(min(0.01, remaining))
+
+
+def run_armed_probe(args: argparse.Namespace) -> dict[str, object]:
+    trigger_file = pathlib.Path(args.trigger_file)
+    ready_file = pathlib.Path(args.ready_file)
+    if trigger_file.exists() or ready_file.exists():
+        raise FileExistsError("armed probe synchronization file already exists")
+    context = ssl.create_default_context(cafile=args.certificate)
+    connection = http.client.HTTPSConnection(args.public_ip, 443, timeout=args.timeout, context=context)
+    try:
+        connection.connect()
+        ready_file.touch(mode=0o600, exist_ok=False)
+        wait_for_trigger(trigger_file, args.trigger_timeout)
+        return webhook_request(args, 0, time.monotonic(), connection)
+    except Exception:
+        connection.close()
+        raise
 
 
 def proxy_api_request(args: argparse.Namespace, _index: int, started: float) -> dict[str, object]:
@@ -243,6 +284,14 @@ def main() -> None:
     probe.add_argument("--certificate", required=True)
     probe.add_argument("--body-bytes", type=int, default=128)
     probe.add_argument("--timeout", type=float, default=5.0)
+    armed_probe = commands.add_parser("armed-probe")
+    armed_probe.add_argument("--public-ip", required=True)
+    armed_probe.add_argument("--certificate", required=True)
+    armed_probe.add_argument("--body-bytes", type=int, default=128)
+    armed_probe.add_argument("--timeout", type=float, default=2.0)
+    armed_probe.add_argument("--trigger-file", required=True)
+    armed_probe.add_argument("--ready-file", required=True)
+    armed_probe.add_argument("--trigger-timeout", type=float, default=30.0)
     recover = commands.add_parser("recover")
     recover.add_argument("--public-ip", required=True)
     recover.add_argument("--certificate", required=True)
@@ -261,6 +310,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "probe":
         print(json.dumps(webhook_request(args, 0, time.monotonic()), separators=(",", ":"), sort_keys=True))
+        return
+    if args.command == "armed-probe":
+        if args.timeout <= 0 or args.trigger_timeout <= 0:
+            raise ValueError("armed probe bounds are invalid")
+        print(json.dumps(run_armed_probe(args), separators=(",", ":"), sort_keys=True))
         return
     if args.command == "recover":
         if args.started_monotonic <= 0 or args.recovery_limit_seconds <= 0 or args.stable_probes < 1 or args.probe_interval < 0:

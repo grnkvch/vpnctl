@@ -55,6 +55,19 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(result["first_recovery_seconds"], 2.0)
         self.assertEqual(result["last_recovery_seconds"], 6.2)
 
+    def test_armed_probe_waits_for_trigger_without_startup_in_fault_window(self):
+        clock = FakeClock()
+        trigger = TriggerPath(clock, visible_at=0.03)
+        MODULE.wait_for_trigger(trigger, 1.0, clock, clock.sleep)
+        self.assertAlmostEqual(clock.value, 0.03)
+
+    def test_armed_probe_trigger_wait_is_bounded(self):
+        clock = FakeClock()
+        trigger = TriggerPath(clock, visible_at=2.0)
+        with self.assertRaises(TimeoutError):
+            MODULE.wait_for_trigger(trigger, 0.025, clock, clock.sleep)
+        self.assertAlmostEqual(clock.value, 0.025)
+
 
 class FakeClock:
     def __init__(self):
@@ -76,6 +89,15 @@ class RecoveryOperation:
         duration, successful = self.outcomes[min(index, len(self.outcomes) - 1)]
         self.clock.value += duration
         return {"ok": successful, "status": 200 if successful else 503}
+
+
+class TriggerPath:
+    def __init__(self, clock, visible_at):
+        self.clock = clock
+        self.visible_at = visible_at
+
+    def exists(self):
+        return self.clock.value >= self.visible_at
 
 
 def recovery_args():

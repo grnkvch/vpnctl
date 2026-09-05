@@ -29,6 +29,9 @@ down_started=0
 restart_started=0
 result_emitted=false
 fault_stage=preflight
+armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe
+armed_probe_pid=
+armed_probe_root_created=false
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -80,9 +83,66 @@ emit_result() {
     }'
 }
 
-probe() {
-  python3 /usr/local/libexec/vpnctl-v2-capacity/load probe \
-    --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1
+prepare_armed_probe() {
+  local armed_ready=false
+  if [ -e "$armed_probe_root" ] || [ -L "$armed_probe_root" ]; then
+    echo 'refusing existing armed probe runtime' >&2
+    return 3
+  fi
+  mkdir -m 0700 -- "$armed_probe_root"
+  armed_probe_root_created=true
+  python3 /usr/local/libexec/vpnctl-v2-capacity/load armed-probe \
+    --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 2 \
+    --trigger-file "$armed_probe_root/trigger" --ready-file "$armed_probe_root/ready" \
+    --trigger-timeout 30 > "$armed_probe_root/result.json" &
+  armed_probe_pid=$!
+  for _attempt in $(seq 1 200); do
+    if [ -f "$armed_probe_root/ready" ] && [ ! -L "$armed_probe_root/ready" ]; then
+      armed_ready=true
+      break
+    fi
+    if ! kill -0 "$armed_probe_pid" 2>/dev/null; then
+      wait "$armed_probe_pid" || true
+      armed_probe_pid=
+      echo 'armed HTTPS probe exited before readiness' >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  if [ "$armed_ready" != true ]; then
+    echo 'armed HTTPS probe did not become ready' >&2
+    return 1
+  fi
+}
+
+run_armed_probe() {
+  : > "$armed_probe_root/trigger"
+  if ! wait "$armed_probe_pid"; then
+    armed_probe_pid=
+    echo 'armed HTTPS probe failed' >&2
+    return 1
+  fi
+  armed_probe_pid=
+  unavailable_probe=$(cat "$armed_probe_root/result.json")
+}
+
+cleanup_armed_probe() {
+  local cleanup_status=0
+  if [ -n "$armed_probe_pid" ]; then
+    kill "$armed_probe_pid" >/dev/null 2>&1 || true
+    wait "$armed_probe_pid" >/dev/null 2>&1 || true
+    armed_probe_pid=
+  fi
+  if [ "$armed_probe_root_created" = true ]; then
+    if [ ! -d "$armed_probe_root" ] || [ -L "$armed_probe_root" ]; then
+      echo 'refusing cleanup of changed armed probe runtime type' >&2
+      return 3
+    fi
+    rm -f -- "$armed_probe_root/trigger" "$armed_probe_root/ready" "$armed_probe_root/result.json" || cleanup_status=$?
+    rmdir "$armed_probe_root" || cleanup_status=$?
+    armed_probe_root_created=false
+  fi
+  return "$cleanup_status"
 }
 
 recover() {
@@ -129,6 +189,7 @@ cleanup() {
     systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
     restart_job_armed=false
   fi
+  cleanup_armed_probe || cleanup_status=$?
   restore_restart_policy || cleanup_status=$?
   if [ "$restore_required" = true ]; then
     systemctl start "$unit" >/dev/null 2>&1 || cleanup_status=$?
@@ -170,6 +231,7 @@ if [ "$original_restart" != on-failure ]; then
   echo 'unexpected FRPS restart policy' >&2
   exit 3
 fi
+prepare_armed_probe
 if [ -L "$runtime_dropin_directory" ] || { [ -e "$runtime_dropin_directory" ] && [ ! -d "$runtime_dropin_directory" ]; }; then
   echo 'refusing unsafe FRPS runtime drop-in directory' >&2
   exit 3
@@ -219,8 +281,9 @@ if [ "$stop_state" != inactive ] && [ "$stop_state" != failed ]; then
 fi
 stop_finished=$(monotonic)
 fault_stage=stopped
-unavailable_probe=$(probe 2>/dev/null || true)
+run_armed_probe
 unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
+cleanup_armed_probe
 fault_stage=unavailable_probed
 restart_state=
 for _attempt in $(seq 1 120); do
