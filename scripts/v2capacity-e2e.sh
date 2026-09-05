@@ -91,8 +91,8 @@ start_fixture() {
   if instance_running "$instance"; then
     return
   fi
-  limactl start --tty=false "$instance"
   printf -v "$marker" '%s' true
+  limactl start --tty=false "$instance"
   assert_instance_contract "$instance"
   instance_running "$instance" || { echo "fixture did not become ready: $instance" >&2; exit 4; }
 }
@@ -241,10 +241,10 @@ stop_background() {
 
 restore_fixture_states() {
   local result=0
-  if [ "$node_started" = true ] && instance_running "$node_instance"; then
+  if [ "$node_started" = true ] && [ "$(instance_status "$node_instance")" != Stopped ]; then
     limactl stop "$node_instance" >/dev/null || result=$?
   fi
-  if [ "$gateway_started" = true ] && instance_running "$gateway_instance"; then
+  if [ "$gateway_started" = true ] && [ "$(instance_status "$gateway_instance")" != Stopped ]; then
     limactl stop "$gateway_instance" >/dev/null || result=$?
   fi
   return "$result"

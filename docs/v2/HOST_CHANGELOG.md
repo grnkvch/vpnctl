@@ -145,6 +145,27 @@ This journal records development-host mutations made while implementing and vali
   results with the gateway services while gateway sizing thresholds remain
   scoped to the specified 1-vCPU/512-MiB target.
 
+### Node boot timeout and start-state cleanup correction
+
+- The clean-source run at commit
+  `4d8c78dc4130be36ed82f0d9192b64a6c2fd2f3c` stopped before clean-state
+  inspection or any vpnctl/provider installation. Gateway became ready, while
+  node `cloud-final` was still actively executing its image-defined
+  `apt-get update` when Lima exhausted its start timeout. Read-only systemd
+  inspection showed the update process running and no failed job. The
+  incomplete host-only evidence is retained at
+  `artifacts/v2lab/capacity-e2e/run-20260905T010201Z`.
+- The EXIT trap removed the exact host build root and stopped gateway, but
+  initially left node running because the run-owned state flag was assigned
+  only after `limactl start` returned successfully. Node had not received any
+  capacity resource; it was explicitly stopped with `limactl stop
+  vpnctl-v2-node` and both fixtures were verified back at their original
+  `Stopped` state. No capacity result or relaxed bound was recorded.
+- The run-owned flag is now armed immediately before each exact start command,
+  and rollback stops a run-started fixture whenever its status is anything
+  other than `Stopped`. Thus a timeout after QEMU starts, including a
+  transitional status, remains reversible by the same trap.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
