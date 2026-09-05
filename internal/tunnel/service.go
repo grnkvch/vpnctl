@@ -35,10 +35,11 @@ func (OSFRPProcessRunner) Run(ctx context.Context, name string, arguments []stri
 }
 
 type FRPService struct {
-	paths   store.Paths
-	role    model.Role
-	probe   linuxplatform.ProbeRunner
-	process FRPProcessRunner
+	paths          store.Paths
+	role           model.Role
+	probe          linuxplatform.ProbeRunner
+	process        FRPProcessRunner
+	recoveryStatus FRPClientStatusSource
 }
 
 func NewFRPService(paths store.Paths, role model.Role, probe linuxplatform.ProbeRunner, process FRPProcessRunner) (*FRPService, error) {
@@ -57,7 +58,11 @@ func NewFRPService(paths store.Paths, role model.Role, probe linuxplatform.Probe
 		paths.ConfigDir != wantConfigDir || paths.StateDir != wantStateDir {
 		return nil, fmt.Errorf("frp service paths are invalid")
 	}
-	return &FRPService{paths: paths, role: role, probe: probe, process: process}, nil
+	service := &FRPService{paths: paths, role: role, probe: probe, process: process}
+	if role == model.RoleNode {
+		service.recoveryStatus = NewFRPHTTPStatusSource()
+	}
+	return service, nil
 }
 
 func RunFRPServerService(ctx context.Context, paths store.Paths, probe linuxplatform.ProbeRunner, process FRPProcessRunner) error {
@@ -77,13 +82,14 @@ func RunFRPClientService(ctx context.Context, paths store.Paths, probe linuxplat
 }
 
 // Run accepts only vpnctl's canonical configuration and an exact pinned frp
-// binary before replacing the service process. frp output is discarded because
+// binary before starting the provider child. frp output is discarded because
 // tunnel logging is disabled unless a later temporary logging opt-in enables it.
 func (service *FRPService) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("context is required")
 	}
-	if service == nil || service.probe == nil || service.process == nil {
+	if service == nil || service.probe == nil || service.process == nil ||
+		service.role == model.RoleNode && service.recoveryStatus == nil {
 		return fmt.Errorf("frp service is incomplete")
 	}
 	select {
@@ -96,6 +102,8 @@ func (service *FRPService) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer clear(content)
+	var clientRecovery FRPClientRecoveryProber
 	if service.role == model.RoleGateway {
 		if err := ValidateFRPServerConfig(content); err != nil {
 			return fmt.Errorf("validate frp server config: %w", err)
@@ -109,19 +117,29 @@ func (service *FRPService) Run(ctx context.Context) error {
 			return err
 		}
 	} else {
-		if err := ValidateFRPClientConfig(content); err != nil {
-			return fmt.Errorf("validate frp client config: %w", err)
+		document, parseErr := parseFRPClientConfig(content)
+		if parseErr != nil {
+			return fmt.Errorf("validate frp client config: %w", parseErr)
 		}
 		certificatePath := filepath.Join(service.paths.ConfigDir, "generated", "node", FRPServerCertificateName)
 		if _, err := readFRPServiceFile(certificatePath, false, 64<<10, "trusted certificate"); err != nil {
 			return err
 		}
+		recovery, recoveryErr := newFRPClientStatusRecoveryProber(document, service.recoveryStatus)
+		if recoveryErr != nil {
+			return fmt.Errorf("prepare frp client recovery: %w", recoveryErr)
+		}
+		clientRecovery = recovery
 	}
 	if err := ValidatePinnedFRPConfig(ctx, service.probe, binaryPath, configPath); err != nil {
 		return err
 	}
 	_ = observability.EmitCode(ctx, observability.TunnelServiceStarted)
-	err = service.process.Run(ctx, binaryPath, []string{"-c", configPath})
+	if service.role == model.RoleNode && clientRecovery != nil {
+		err = RunFRPClientProcessWithRecovery(ctx, service.process, binaryPath, []string{"-c", configPath}, clientRecovery)
+	} else {
+		err = service.process.Run(ctx, binaryPath, []string{"-c", configPath})
+	}
 	if ctx.Err() != nil {
 		_ = observability.EmitCode(context.WithoutCancel(ctx), observability.TunnelServiceStopped)
 		return nil

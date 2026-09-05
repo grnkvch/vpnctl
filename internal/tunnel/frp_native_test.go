@@ -538,15 +538,26 @@ func TestFRPNativeReadinessRecoversWithoutStandbyAfterGatewayUpstreamAndClientRe
 	if err != nil {
 		t.Fatal(err)
 	}
+	document, err := parseFRPClientConfig(candidate.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryProber, err := newFRPClientStatusRecoveryProber(document, NewFRPHTTPStatusSource())
+	if err != nil {
+		t.Fatal(err)
+	}
 	expose := testExpose(testExposeA, testNodeA, "first", 20000, model.ExposeReady)
 	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 30*time.Second)
+	waitForNativeRecoveryState(t, recoveryProber, FRPClientRecoveryConnected, 5*time.Second)
 	waitForNativeEstablishedTunnel(t, FRPServerPort, 2)
 
 	stopServer()
 	waitForNativeTunnelReadiness(t, gate, candidate, expose, false, 10*time.Second)
+	waitForNativeRecoveryState(t, recoveryProber, FRPClientRecoveryUnavailable, 5*time.Second)
 	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
 	startServer()
 	waitForNativeTunnelReadiness(t, gate, candidate, expose, true, 30*time.Second)
+	waitForNativeRecoveryState(t, recoveryProber, FRPClientRecoveryConnected, 5*time.Second)
 	if clientCommand.Process.Pid != clientPID || clientCommand.Process.Signal(syscall.Signal(0)) != nil {
 		t.Fatal("gateway restart replaced or stopped frpc")
 	}
@@ -556,6 +567,7 @@ func TestFRPNativeReadinessRecoversWithoutStandbyAfterGatewayUpstreamAndClientRe
 		t.Fatal(err)
 	}
 	waitForNativeTunnelReadiness(t, gate, candidate, expose, false, 5*time.Second)
+	waitForNativeRecoveryState(t, recoveryProber, FRPClientRecoveryConnected, 5*time.Second)
 	waitForNativeTCPListenerClosed(t, "127.0.0.1:20000")
 	backend, err = net.Listen("tcp4", "127.0.0.1:3000")
 	if err != nil {
@@ -900,6 +912,25 @@ func waitForNativeTunnelReadiness(
 	}
 	t.Fatalf("native tunnel readiness did not become ready=%t: result=%+v err=%v", wantReady, last, lastErr)
 	return TunnelReadinessResult{}
+}
+
+func waitForNativeRecoveryState(
+	t *testing.T,
+	prober FRPClientRecoveryProber,
+	want FRPClientRecoveryState,
+	timeout time.Duration,
+) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := FRPClientRecoveryIndeterminate
+	for time.Now().Before(deadline) {
+		last = prober.RecoveryState(context.Background())
+		if last == want {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("native frpc recovery state = %v, want %v", last, want)
 }
 
 func waitForNativeEstablishedTunnel(t *testing.T, port, wantEntries int) {

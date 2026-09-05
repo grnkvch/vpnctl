@@ -35,6 +35,9 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 			NormalizedLoginPoolCount int    `json:"normalized_login_pool_count"`
 			PoolEnforcement          string `json:"pool_enforcement"`
 			TLSServer                string `json:"tls_server_name"`
+			CorrectiveRecycleDelay   int    `json:"corrective_recycle_delay_seconds"`
+			CorrectiveRecyclePoll    int    `json:"corrective_recycle_poll_milliseconds"`
+			CorrectiveRecycleLimit   int    `json:"corrective_recycle_limit_per_outage"`
 			RevokeBound              int    `json:"revoke_bound_seconds"`
 		} `json:"transport"`
 	}
@@ -53,6 +56,8 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 		manifest.Transport.NormalizedLoginPoolCount != 1 || manifest.Transport.PoolEnforcement != "login-plugin-rewrite" ||
 		manifest.Transport.WireProtocol != "v1" || manifest.Transport.DialServerTimeout != 2 ||
 		manifest.Transport.TLSServer != "vpnctl-tunnel-gateway" ||
+		manifest.Transport.CorrectiveRecycleDelay != 5 || manifest.Transport.CorrectiveRecyclePoll != 250 ||
+		manifest.Transport.CorrectiveRecycleLimit != 1 ||
 		manifest.Transport.RevokeBound <= 0 {
 		t.Fatalf("unexpected tunnel transport contract: %+v", manifest.Transport)
 	}

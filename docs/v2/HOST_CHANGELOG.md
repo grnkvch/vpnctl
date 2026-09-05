@@ -451,6 +451,55 @@ This journal records development-host mutations made while implementing and vali
   loop: no standby dial, process restart, or public CLI option is introduced.
   All changes remain source-only until the next clean capacity run.
 
+### Two-second dial result and planned one-shot recovery guard
+
+- The clean-source run at commit
+  `518ad663c9fd9410bfeb66599ee25bd54bf924f1` retained the fixed three-second
+  guest-local outage but still failed the eight-second reconnect gate. Its
+  typed evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T045001Z/reconnect.json` records
+  `3.540s` measured down time and no stable recovery by `8.800s`. The helper
+  EXIT path restored FRPS; parent owner cleanup removed all capacity and child
+  fixture resources/packages and returned both VMs to their prior `Stopped`
+  state. Load JSON written after the reconnect abort is partial teardown
+  diagnostics and is not capacity evidence.
+- The two-second dial timeout alone cannot constrain pinned frpc's hard-coded
+  retry sleep after an accepted ShadowTLS/SOCKS connection fails beyond the
+  outer endpoint. The production correction keeps the systemd node service as
+  the stable supervisor and continues to use one active frpc child. It observes
+  only the authenticated loopback admin status and distinguishes transport
+  loss from a local-upstream `check failed` state. After a previously connected
+  tunnel remains unavailable for five seconds, the supervisor may recycle the
+  child exactly once for that outage. Readiness re-arms the one-shot guard; if
+  it does not recover, provider-owned indefinite bounded exponential retry
+  continues unchanged. No standby, direct fallback, second provider
+  connection, logical identity change, or public CLI setting is added.
+- The next clean capacity run may add only one source-built helper at node paths
+  `/tmp/tunnel-client` and
+  `/usr/local/libexec/vpnctl-v2-capacity/tunnel-client`, plus owner-scoped
+  drop-in
+  `/etc/systemd/system/vpnctl-v2-spike-tunnel-client.service.d/vpnctl-v2-capacity-client.conf`.
+  The disposable spike frpc config changes its local admin user/password to the
+  production-compatible fixed synthetic capacity values before pinned config
+  verification; this changes no tunnel credential and opens no new listener.
+  The helper imports and runs the production recovery supervisor around the
+  exact pinned frpc child, so sustained memory/task measurements include its
+  overhead.
+- Fault timing now starts at the explicit FRPS `KILL`, schedules restart
+  concurrently before waiting for systemd's stop job, and performs the required
+  unavailable probe while that timer is already running. A documented 100-ms
+  wake-up advance compensates for the constrained one-vCPU scheduler; the
+  measured interval, not the requested sleep, must still remain inside the
+  unchanged `2.75--3.50s` acceptance range. This removes the prior stop-job
+  latency from the three-second outage budget and does not increase the
+  allowed webhook-failure window.
+- Cleanup first stops the exact tunnel-client unit, removes the exact drop-in,
+  helper and temporary copy under the existing `vpnctl-v2-capacity-v1` owner
+  boundary, reloads systemd, and then invokes the existing tunnel owner
+  uninstall. It restores both fixture states and refuses partial/foreign
+  ownership as before. Repository rollback is an ordinary revert of the
+  recovery/capacity commit; no manual host rollback should remain.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

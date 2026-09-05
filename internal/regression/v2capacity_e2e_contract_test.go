@@ -59,11 +59,29 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			t.Errorf("capacity backend drop-in is missing %q", required)
 		}
 	}
+	clientDropIn := readContractFile(t, filepath.Join(fixtureRoot, "vpnctl-v2-capacity-client.conf"))
+	for _, required := range []string{
+		"ExecStart=", "/usr/local/libexec/vpnctl-v2-capacity/tunnel-client --gateway-ip @GATEWAY_IP@",
+	} {
+		if !strings.Contains(clientDropIn, required) {
+			t.Errorf("capacity client drop-in is missing %q", required)
+		}
+	}
+	clientHelper := readContractFile(t, filepath.Join(fixtureRoot, "tunnel_client", "main.go"))
+	for _, required := range []string{
+		"tunnel.NewFRPClientStatusRecoveryProber", "tunnel.RunFRPClientProcessWithRecovery",
+		"cacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+	} {
+		if !strings.Contains(clientHelper, required) {
+			t.Errorf("capacity client helper is missing %q", required)
+		}
+	}
 	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
 		"systemctl stop --no-block", "--kill-who=main --signal=KILL",
-		"sleep \"$down_seconds\"", "restart_pid=$!", "unavailable_status: $unavailable_probe.status",
+		"down_started=$(monotonic)", "sleep \"$scheduled_down_seconds\"", "restart_pid=$!", "unavailable_status: $unavailable_probe.status",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
+		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)
@@ -78,6 +96,10 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
+		"./test/v2lab/capacity/tunnel_client", "webServer.user = \"vpnctl\"",
+		"/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin",
+		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",
+		"recovered_without_client_service_restart:",
 		".reconnect.status == \"passed\"",
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",

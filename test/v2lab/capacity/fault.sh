@@ -9,6 +9,7 @@ recovery_limit_seconds=
 restart_pid=
 restart_timing_file=
 restore_required=false
+restart_advance_seconds=0.1
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -23,25 +24,27 @@ delta() {
 }
 
 emit_result() {
-  local result_status=$1 recovered=$2
+  local result_status=$1 stable_recovery=$2
   jq -n \
     --arg status "$result_status" \
     --argjson unavailable_probe "$unavailable_probe" \
     --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
     --argjson requested_down_seconds "$down_seconds" \
+    --argjson scheduled_down_seconds "$scheduled_down_seconds" \
     --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
     --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
-    --argjson recovered "$recovered" \
+    --argjson stable_recovery "$stable_recovery" \
     '{
       status: $status,
       unavailable_status: $unavailable_probe.status,
       unavailable_probe: $unavailable_probe,
       stop_seconds: $stop_seconds,
       requested_down_seconds: $requested_down_seconds,
+      scheduled_down_seconds: $scheduled_down_seconds,
       down_seconds: $down_seconds,
       recovery_seconds: $recovery_seconds,
       stable_recovery_probes: 5,
-      recovered_without_client_restart: $recovered
+      stable_recovery_observed: $stable_recovery
     }'
 }
 
@@ -79,6 +82,9 @@ done
 [ -n "$public_ip" ] && [ -f "$certificate" ] || { usage >&2; exit 2; }
 awk -v value="$down_seconds" 'BEGIN {exit !(value > 0)}'
 awk -v value="$recovery_limit_seconds" 'BEGIN {exit !(value > 0)}'
+scheduled_down_seconds=$(awk -v value="$down_seconds" -v advance="$restart_advance_seconds" '
+  BEGIN {value -= advance; if (value <= 0) exit 1; printf "%.3f", value}
+')
 
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -88,7 +94,20 @@ stop_started=$(monotonic)
 systemctl stop --no-block "$unit"
 restore_required=true
 sleep 0.25
+down_started=$(monotonic)
 systemctl kill --kill-who=main --signal=KILL "$unit" >/dev/null 2>&1 || true
+restart_timing_file=$(mktemp /run/vpnctl-v2-capacity-restart.XXXXXX)
+(
+  sleep "$scheduled_down_seconds"
+  restart_started=$(monotonic)
+  systemctl start "$unit"
+  restart_finished=$(monotonic)
+  printf '%s %s\n' "$restart_started" "$restart_finished" > "$restart_timing_file"
+) &
+restart_pid=$!
+
+unavailable_probe=$(probe 2>/dev/null || true)
+unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
 stop_state=
 for _attempt in $(seq 1 20); do
   stop_state=$(systemctl show --value -p ActiveState "$unit")
@@ -102,20 +121,6 @@ if [ "$stop_state" != inactive ] && [ "$stop_state" != failed ]; then
   exit 1
 fi
 stop_finished=$(monotonic)
-
-restart_timing_file=$(mktemp /run/vpnctl-v2-capacity-restart.XXXXXX)
-down_started=$(monotonic)
-(
-  sleep "$down_seconds"
-  restart_started=$(monotonic)
-  systemctl start "$unit"
-  restart_finished=$(monotonic)
-  printf '%s %s\n' "$restart_started" "$restart_finished" > "$restart_timing_file"
-) &
-restart_pid=$!
-
-unavailable_probe=$(probe 2>/dev/null || true)
-unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
 
 wait "$restart_pid"
 restart_pid=

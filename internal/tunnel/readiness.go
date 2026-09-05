@@ -34,19 +34,22 @@ const (
 var ErrTunnelNotReady = errors.New("node tunnel is not ready")
 
 // FRPReconnectContract records the retry behavior of the exact pinned frpc
-// release. The retry loop remains provider-owned; vpnctl validates and tests
-// this contract instead of adding a second dialer or a standby endpoint.
+// release plus vpnctl's one-shot recovery guard. The provider retains its
+// indefinite retry loop; vpnctl adds no second dialer or standby endpoint.
 type FRPReconnectContract struct {
-	DialServerTimeout time.Duration
-	InitialDelay      time.Duration
-	Factor            float64
-	Jitter            float64
-	InitialMaxDelay   time.Duration
-	ReconnectMaxDelay time.Duration
-	FastRetryCount    int
-	FastRetryDelay    time.Duration
-	FastRetryWindow   time.Duration
-	FastRetryJitter   float64
+	DialServerTimeout      time.Duration
+	InitialDelay           time.Duration
+	Factor                 float64
+	Jitter                 float64
+	InitialMaxDelay        time.Duration
+	ReconnectMaxDelay      time.Duration
+	FastRetryCount         int
+	FastRetryDelay         time.Duration
+	FastRetryWindow        time.Duration
+	FastRetryJitter        float64
+	CorrectiveRecycleDelay time.Duration
+	CorrectiveRecyclePoll  time.Duration
+	CorrectiveRecycleLimit int
 }
 
 func PinnedFRPReconnectContract() FRPReconnectContract {
@@ -56,6 +59,8 @@ func PinnedFRPReconnectContract() FRPReconnectContract {
 		InitialMaxDelay: 10 * time.Second, ReconnectMaxDelay: 20 * time.Second,
 		FastRetryCount: 3, FastRetryDelay: 200 * time.Millisecond,
 		FastRetryWindow: time.Minute, FastRetryJitter: 0.5,
+		CorrectiveRecycleDelay: FRPClientRecoveryGuardDelay, CorrectiveRecyclePoll: FRPClientRecoveryPollInterval,
+		CorrectiveRecycleLimit: 1,
 	}
 }
 

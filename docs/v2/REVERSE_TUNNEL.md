@@ -92,10 +92,21 @@ standard or restricted transport and blocks it when that transport is down.
 
 Both service units discard output by default, use `Restart=on-failure`, and
 are ordered after their standard or active-routing dependencies without any
-controller lifecycle dependency. Gateway firewall input admits TCP `17000`
-only from active node overlay identities; it is not a public fixed listener. The accepted runtime
-gate reconfirmed one persistent connection for two exposes and 12 concurrent
-streams per expose, TLS refusal before credential disclosure, dynamic mapping,
+controller lifecycle dependency. The node unit keeps the vpnctl wrapper as its
+stable main process and one `frpc` child as the data-plane provider. After an
+already-connected tunnel remains transport-unavailable for five seconds, the
+wrapper may recycle that child once for the current outage; readiness re-arms
+the guard. The loopback status classifier treats `check failed` as a healthy
+control connection, so stopping a private application cannot restart the
+tunnel. If the one correction does not restore readiness, the current child
+continues frp's native indefinite bounded exponential retry. The guard does not
+dial, choose transport, or try standby, and it preserves node, credential,
+mapping, and expose identity.
+
+Gateway firewall input admits TCP `17000` only from active node overlay
+identities; it is not a public fixed listener. The accepted runtime gate
+reconfirmed one persistent connection for two exposes and 12 concurrent streams
+per expose, TLS refusal before credential disclosure, dynamic mapping,
 8-second reconnect, 2-second revoke, and a restricted steady state with no
 direct TCP `17000` packets.
 

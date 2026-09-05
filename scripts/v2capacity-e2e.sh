@@ -18,6 +18,8 @@ capacity_root=/etc/vpnctl-v2-capacity
 capacity_owner_path=$capacity_root/.owner
 controller_unit=vpnctl-v2-capacity-controller.service
 capacity_backend_dropin=vpnctl-v2-capacity-backend.conf
+capacity_client_dropin=vpnctl-v2-capacity-client.conf
+capacity_admin_password=cacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca
 tunnel_server_unit=vpnctl-v2-spike-tunnel-server.service
 tunnel_backend_unit=vpnctl-v2-spike-tunnel-backend.service
 tunnel_client_unit=vpnctl-v2-spike-tunnel-client.service
@@ -180,6 +182,7 @@ cleanup_capacity_instance() {
       fi
       ;;
     node)
+      guest "$instance" sudo systemctl stop "$tunnel_client_unit" >/dev/null 2>&1 || true
       if guest "$instance" sudo test -x /usr/local/libexec/vpnctl-v2-capacity/clients; then
         guest "$instance" sudo /usr/local/libexec/vpnctl-v2-capacity/clients cleanup-node
       else
@@ -187,8 +190,10 @@ cleanup_capacity_instance() {
         return 3
       fi
       guest "$instance" sudo rm -f \
-        "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
+        "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin" \
+        "/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin"
       guest "$instance" sudo rmdir "/etc/systemd/system/$tunnel_backend_unit.d" >/dev/null 2>&1 || true
+      guest "$instance" sudo rmdir "/etc/systemd/system/$tunnel_client_unit.d" >/dev/null 2>&1 || true
       ;;
     *) return 2 ;;
   esac
@@ -239,7 +244,7 @@ cleanup_guest_temporary() {
     /tmp/clients.sh /tmp/fault.sh /tmp/load.py /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" \
     /tmp/vpnctl-v2-capacity-peers.conf >/dev/null 2>&1 || true
   guest "$node_instance" sudo rm -f \
-    /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
+    /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py /tmp/tunnel-client "/tmp/$capacity_backend_dropin" "/tmp/$capacity_client_dropin" \
     /tmp/webhook_receiver.py /tmp/ingress_load.py /tmp/vpnctl-v2-capacity-gateway.crt \
     >/dev/null 2>&1 || true
 }
@@ -338,6 +343,7 @@ assert_clean() {
     exit 3
   fi
   assert_path_absent "$node_instance" "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
+  assert_path_absent "$node_instance" "/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin"
   for package in nginx nginx-common; do
     if guest "$gateway_instance" dpkg-query -W "$package" >/dev/null 2>&1; then
       echo "owned capacity nginx package remains: $package" >&2
@@ -352,7 +358,7 @@ assert_capacity_temporary_absent() {
     "/tmp/$controller_unit" /tmp/vpnctl-v2-capacity-peers.conf; do
     assert_path_absent "$gateway_instance" "$path"
   done
-  for path in /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
+  for path in /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py /tmp/tunnel-client "/tmp/$capacity_backend_dropin" "/tmp/$capacity_client_dropin" \
     /tmp/webhook_receiver.py /tmp/ingress_load.py /tmp/vpnctl-v2-capacity-gateway.crt; do
     assert_path_absent "$node_instance" "$path"
   done
@@ -372,11 +378,14 @@ record_fixture() {
   }' > "$2"
 }
 
-prepare_controller_binary() {
+prepare_capacity_binaries() {
   temporary_root=$(mktemp -d /private/tmp/vpnctl-v2-capacity.XXXXXX)
   env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOCACHE=/private/tmp/vpnctl-go-cache \
     go build -trimpath -ldflags '-s -w' -o "$temporary_root/controller" ./test/v2lab/capacity/controller
+  env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOCACHE=/private/tmp/vpnctl-go-cache \
+    go build -trimpath -ldflags '-s -w' -o "$temporary_root/tunnel-client" ./test/v2lab/capacity/tunnel_client
   shasum -a 256 "$temporary_root/controller" > "$run_root/controller.sha256"
+  shasum -a 256 "$temporary_root/tunnel-client" > "$run_root/tunnel-client.sha256"
 }
 
 copy_capacity_files() {
@@ -387,7 +396,7 @@ copy_capacity_files() {
   limactl copy --backend=scp \
     "$fixture_root/clients.sh" "$fixture_root/client_load.py" "$fixture_root/load.py" "$fixture_root/monitor.py" \
     "$fixture_root/$capacity_backend_dropin" "$repository_root/test/v2lab/ingress/webhook_receiver.py" \
-    "$repository_root/test/v2lab/ingress/ingress_load.py" "$node_instance:/tmp/"
+    "$repository_root/test/v2lab/ingress/ingress_load.py" "$temporary_root/tunnel-client" "$node_instance:/tmp/"
 }
 
 setup_clients() {
@@ -443,7 +452,7 @@ setup_controller() {
 }
 
 compose_ingress_tunnel() {
-  local gateway_ip attempt probe_output
+  local gateway_ip attempt probe_output client_dropin_path
   gateway_ip=$(lab_ip "$gateway_instance")
   "$repository_root/scripts/v2restricted-spike.sh" prepare > "$run_root/restricted-prepare.log"
   "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
@@ -460,6 +469,10 @@ compose_ingress_tunnel() {
   guest "$gateway_instance" sudo sed -i 's/^log.level = "info"$/log.level = "error"/' \
     /etc/vpnctl-v2-spike/tunnel/frps.toml
   guest "$node_instance" sudo sed -i 's/^log.level = "info"$/log.level = "error"/' \
+    /etc/vpnctl-v2-spike/tunnel/frpc.toml
+  guest "$node_instance" sudo sed -i \
+    -e 's/^webServer.user = "vpnctl-spike"$/webServer.user = "vpnctl"/' \
+    -e "s/^webServer.password = .*$/webServer.password = \"$capacity_admin_password\"/" \
     /etc/vpnctl-v2-spike/tunnel/frpc.toml
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-spike/mihomo -t \
     -d /var/lib/vpnctl-v2-spike-gateway -f /etc/vpnctl-v2-spike/restricted/gateway.yaml \
@@ -481,9 +494,16 @@ compose_ingress_tunnel() {
   guest "$node_instance" sudo install -m 0755 /tmp/load.py /usr/local/libexec/vpnctl-v2-capacity/load
   guest "$node_instance" sudo install -m 0755 /tmp/client_load.py /usr/local/libexec/vpnctl-v2-capacity/client-load
   guest "$node_instance" sudo install -m 0755 /tmp/ingress_load.py /usr/local/libexec/vpnctl-v2-capacity/ingress-load
+  guest "$node_instance" sudo install -m 0755 /tmp/tunnel-client /usr/local/libexec/vpnctl-v2-capacity/tunnel-client
   guest "$node_instance" sudo install -d -m 0755 "/etc/systemd/system/$tunnel_backend_unit.d"
   guest "$node_instance" sudo install -m 0644 "/tmp/$capacity_backend_dropin" \
     "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
+  client_dropin_path="$run_root/$capacity_client_dropin"
+  sed "s|@GATEWAY_IP@|$gateway_ip|g" "$fixture_root/$capacity_client_dropin" > "$client_dropin_path"
+  limactl copy --backend=scp "$client_dropin_path" "$node_instance:/tmp/$capacity_client_dropin"
+  guest "$node_instance" sudo install -d -m 0755 "/etc/systemd/system/$tunnel_client_unit.d"
+  guest "$node_instance" sudo install -m 0644 "/tmp/$capacity_client_dropin" \
+    "/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin"
   guest "$node_instance" sudo systemctl daemon-reload
   guest "$node_instance" sudo systemctl restart "$tunnel_backend_unit"
   guest "$node_instance" sudo systemctl restart "$tunnel_client_unit"
@@ -539,6 +559,27 @@ probe_webhook() {
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load probe \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt \
     --body-bytes 128 --timeout 5
+}
+
+tunnel_client_process_state() {
+  local service_pid service_restarts frpc_pid attempt
+  for attempt in $(seq 1 20); do
+    service_pid=$(guest "$node_instance" systemctl show --value -p MainPID "$tunnel_client_unit")
+    service_restarts=$(guest "$node_instance" systemctl show --value -p NRestarts "$tunnel_client_unit")
+    case "$service_pid:$service_restarts" in
+      :*|*:|*[!0-9:]*) ;;
+      *)
+        frpc_pid=$(guest "$node_instance" sudo pgrep -P "$service_pid" -x frpc || true)
+        case "$frpc_pid" in
+          ''|*[!0-9]*) ;;
+          *) printf '%s %s %s\n' "$service_pid" "$service_restarts" "$frpc_pid"; return ;;
+        esac
+        ;;
+    esac
+    sleep 0.1
+  done
+  echo 'expected one active tunnel client service and supervised frpc child' >&2
+  return 1
 }
 
 run_connection_limits() {
@@ -638,16 +679,41 @@ start_loads() {
 }
 
 inject_reconnect() {
-  local gateway_ip down_seconds recovery_limit
+  local gateway_ip down_seconds recovery_limit reconnect_base fault_status=0
+  local service_pid_before service_restarts_before frpc_pid_before
+  local service_pid_after service_restarts_after frpc_pid_after
   gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
   recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
+  read -r service_pid_before service_restarts_before frpc_pid_before < <(tunnel_client_process_state)
+  reconnect_base="$run_root/reconnect.base.json"
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/fault \
     --unit "$tunnel_server_unit" --public-ip "$gateway_ip" \
     --certificate /etc/vpnctl-v2-spike/ingress/gateway.crt \
     --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
-    > "$run_root/reconnect.json"
+    > "$reconnect_base" || fault_status=$?
+  read -r service_pid_after service_restarts_after frpc_pid_after < <(tunnel_client_process_state)
+  jq \
+    --argjson service_pid_before "$service_pid_before" \
+    --argjson service_restarts_before "$service_restarts_before" \
+    --argjson frpc_pid_before "$frpc_pid_before" \
+    --argjson service_pid_after "$service_pid_after" \
+    --argjson service_restarts_after "$service_restarts_after" \
+    --argjson frpc_pid_after "$frpc_pid_after" '
+    . + {
+      client_service_pid_before: $service_pid_before,
+      client_service_pid_after: $service_pid_after,
+      client_service_restarts_before: $service_restarts_before,
+      client_service_restarts_after: $service_restarts_after,
+      frpc_child_pid_before: $frpc_pid_before,
+      frpc_child_pid_after: $frpc_pid_after,
+      frpc_child_recycled: ($frpc_pid_before != $frpc_pid_after),
+      recovered_without_client_service_restart:
+        ($service_pid_before == $service_pid_after and $service_restarts_before == $service_restarts_after)
+    }' "$reconnect_base" > "$run_root/reconnect.json"
+  rm -f -- "$reconnect_base"
   jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
+  [ "$fault_status" -eq 0 ] || return "$fault_status"
 }
 
 wait_loads() {
@@ -726,6 +792,7 @@ assert_summary() {
     .reconnect.down_seconds >= ($limits[0].fault.frps_down_seconds - 0.25) and
     .reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5) and
     .reconnect.recovery_seconds <= $limits[0].bounds.tunnel_reconnect_seconds and
+    .reconnect.stable_recovery_observed and .reconnect.recovered_without_client_service_restart and
     .connection_limits.per_expose == {accepted: 40, rejected: 5} and
     .connection_limits.gateway.accepted == 64 and .connection_limits.gateway.rejected == 8 and
     .connection_limits.gateway.observed_maximum_active_upstreams >= 60 and
@@ -748,7 +815,7 @@ verify() {
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test/v2lab/capacity/test_load.py > "$run_root/source-tests.log" 2>&1
   bash -n "$fixture_root/fault.sh"
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./test/v2lab/capacity/controller > "$run_root/controller-build-test.log"
-  prepare_controller_binary
+  prepare_capacity_binaries
   trap cleanup_on_exit EXIT INT TERM
 
   assert_instance_contract "$gateway_instance"

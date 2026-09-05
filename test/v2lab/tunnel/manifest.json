@@ -25,6 +25,9 @@
     "tls_server_name": "vpnctl-tunnel-gateway",
     "heartbeat_interval_seconds": 1,
     "heartbeat_timeout_seconds": 4,
+    "corrective_recycle_delay_seconds": 5,
+    "corrective_recycle_poll_milliseconds": 250,
+    "corrective_recycle_limit_per_outage": 1,
     "revoke_bound_seconds": 6
   },
   "load": {

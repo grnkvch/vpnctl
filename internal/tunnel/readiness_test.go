@@ -27,7 +27,9 @@ func TestPinnedFRPReconnectAndUpstreamHealthContract(t *testing.T) {
 		contract.Factor != 2 || contract.Jitter != 0.1 ||
 		contract.InitialMaxDelay != 10*time.Second || contract.ReconnectMaxDelay != 20*time.Second ||
 		contract.FastRetryCount != 3 || contract.FastRetryDelay != 200*time.Millisecond ||
-		contract.FastRetryWindow != time.Minute || contract.FastRetryJitter != 0.5 {
+		contract.FastRetryWindow != time.Minute || contract.FastRetryJitter != 0.5 ||
+		contract.CorrectiveRecycleDelay != 5*time.Second || contract.CorrectiveRecyclePoll != 250*time.Millisecond ||
+		contract.CorrectiveRecycleLimit != 1 {
 		t.Fatalf("pinned reconnect contract = %+v", contract)
 	}
 	candidate := readinessCandidate(t, "/", 2, 9)
