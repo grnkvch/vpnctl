@@ -94,7 +94,7 @@ Both service units discard output by default, use `Restart=on-failure`, and
 are ordered after their standard or active-routing dependencies without any
 controller lifecycle dependency. The node unit keeps the vpnctl wrapper as its
 stable main process and one `frpc` child as the data-plane provider. After an
-already-connected tunnel remains transport-unavailable for five seconds, the
+already-connected tunnel remains transport-unavailable for two seconds, the
 wrapper may recycle that child once for the current outage; readiness re-arms
 the guard. The loopback status classifier treats `check failed` as a healthy
 control connection, so stopping a private application cannot restart the

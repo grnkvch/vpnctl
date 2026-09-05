@@ -521,6 +521,29 @@ This journal records development-host mutations made while implementing and vali
   both sides. The next clean repeat retains the already documented owner
   boundary and automatic rollback; it may make no additional host mutation.
 
+### Five-second guard result and planned two-second bound
+
+- The clean-source run at commit
+  `1431fae4363d8c59cd739f80b93f3d625486b29d` reached sustained workload and
+  the restricted-path FRPS fault. Diagnostic evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T055531Z/reconnect.json` records a
+  valid `503` during the outage, `3.610s` measured down time, unchanged
+  tunnel-client service PID and restart count, and exactly one frpc child
+  recycle (`2907` to `4692`). A stable response returned only after the fixed
+  eight-second gate, at `10.109s`, so the run is failed and its partial load
+  output is not capacity evidence.
+- This proves the supervisor integration and single-child correction work,
+  but a five-second guard consumes too much of the recovery budget before a
+  fresh restricted-path handshake. Production will use a two-second guard,
+  equal to the pinned server-dial timeout, while retaining the 250-ms poll,
+  one correction per confirmed outage, local-upstream exemption, and
+  provider-owned indefinite retry after that correction. There is still no
+  standby, direct fallback, second dialer, or logical identity change.
+- Failure cleanup removed all exact owner-scoped capacity and composed fixture
+  resources/packages and restored both VMs to their original `Stopped` state.
+  The next clean repeat has the same mutation and rollback boundary; no manual
+  cleanup or additional host action remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

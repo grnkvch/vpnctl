@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	FRPClientRecoveryGuardDelay   = 5 * time.Second
+	FRPClientRecoveryGuardDelay   = 2 * time.Second
 	FRPClientRecoveryPollInterval = 250 * time.Millisecond
 
 	frpClientRecoveryStopTimeout = 2 * time.Second
