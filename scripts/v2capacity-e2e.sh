@@ -9,6 +9,7 @@ artifact_root=$repository_root/artifacts/v2lab/capacity-e2e
 cache_root=$repository_root/artifacts/v2lab/cache
 gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
+fixture_start_timeout=20m
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 capacity_owner=vpnctl-v2-capacity-v1
 capacity_root=/etc/vpnctl-v2-capacity
@@ -92,7 +93,7 @@ start_fixture() {
     return
   fi
   printf -v "$marker" '%s' true
-  limactl start --tty=false "$instance"
+  limactl start --tty=false --timeout "$fixture_start_timeout" --progress "$instance"
   assert_instance_contract "$instance"
   instance_running "$instance" || { echo "fixture did not become ready: $instance" >&2; exit 4; }
 }

@@ -164,7 +164,10 @@ This journal records development-host mutations made while implementing and vali
 - The run-owned flag is now armed immediately before each exact start command,
   and rollback stops a run-started fixture whenever its status is anything
   other than `Stopped`. Thus a timeout after QEMU starts, including a
-  transitional status, remains reversible by the same trap.
+  transitional status, remains reversible by the same trap. The harness gives
+  the image-defined cold-boot provisioning up to 20 minutes and exposes its
+  progress; this changes only Lima orchestration and does not change the
+  five-minute workload or any capacity acceptance bound.
 
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
