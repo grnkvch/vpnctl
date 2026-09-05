@@ -11,6 +11,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -200,8 +201,16 @@ func buildSystemCommittedNodeActivator(
 	if err != nil {
 		return nil, err
 	}
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		return nil, err
+	}
+	convergence, err := operations.NewNodeServiceConvergencePublisher(convergenceStore, linuxplatform.DefaultVPNCTLBinaryPath)
+	if err != nil {
+		return nil, err
+	}
 	return &systemCommittedNodeActivator{
-		state: state, discoverer: discoverer, compiler: compiler, activator: activator,
+		state: state, discoverer: discoverer, compiler: compiler, activator: activator, convergence: convergence,
 	}, nil
 }
 
@@ -306,11 +315,16 @@ type nodeJoinConfigurationActivator interface {
 	Activate(context.Context, enrollment.NodeConfiguration) error
 }
 
+type nodeServiceConvergencePublisher interface {
+	PublishActiveNodeGeneration(context.Context, uint64, []linuxplatform.RoleConfigFile) error
+}
+
 type systemCommittedNodeActivator struct {
-	state      interface{ Load() (model.State, error) }
-	discoverer nodeJoinSnapshotDiscoverer
-	compiler   nodeJoinConfigurationCompiler
-	activator  nodeJoinConfigurationActivator
+	state       interface{ Load() (model.State, error) }
+	discoverer  nodeJoinSnapshotDiscoverer
+	compiler    nodeJoinConfigurationCompiler
+	activator   nodeJoinConfigurationActivator
+	convergence nodeServiceConvergencePublisher
 }
 
 func (runtime *systemCommittedNodeActivator) Activate(ctx context.Context, expectedGeneration uint64) error {
@@ -318,7 +332,10 @@ func (runtime *systemCommittedNodeActivator) Activate(ctx context.Context, expec
 	if err != nil {
 		return err
 	}
-	return runtime.activator.Activate(ctx, configuration)
+	if err := runtime.activator.Activate(ctx, configuration); err != nil {
+		return err
+	}
+	return runtime.publishConvergence(ctx, configuration)
 }
 
 func (runtime *systemCommittedNodeActivator) PlanRepair(ctx context.Context, expectedGeneration uint64) ([]CommittedNodeRepairArtifact, error) {
@@ -341,11 +358,14 @@ func (runtime *systemCommittedNodeActivator) ApplyRepair(
 	if !reflect.DeepEqual(committedNodeRepairArtifacts(configuration), expectedArtifacts) {
 		return ErrCommittedNodeRepairStale
 	}
-	return runtime.activator.Activate(ctx, configuration)
+	if err := runtime.activator.Activate(ctx, configuration); err != nil {
+		return err
+	}
+	return runtime.publishConvergence(ctx, configuration)
 }
 
 func (runtime *systemCommittedNodeActivator) compile(ctx context.Context, expectedGeneration uint64) (enrollment.NodeConfiguration, error) {
-	if ctx == nil || runtime == nil || runtime.state == nil || runtime.discoverer == nil || runtime.compiler == nil || runtime.activator == nil || expectedGeneration == 0 {
+	if ctx == nil || runtime == nil || runtime.state == nil || runtime.discoverer == nil || runtime.compiler == nil || runtime.activator == nil || runtime.convergence == nil || expectedGeneration == 0 {
 		return enrollment.NodeConfiguration{}, fmt.Errorf("committed node activation is incomplete")
 	}
 	state, err := runtime.state.Load()
@@ -367,6 +387,13 @@ func (runtime *systemCommittedNodeActivator) compile(ctx context.Context, expect
 		return enrollment.NodeConfiguration{}, fmt.Errorf("compiled node service generation changed before activation")
 	}
 	return configuration, nil
+}
+
+func (runtime *systemCommittedNodeActivator) publishConvergence(ctx context.Context, configuration enrollment.NodeConfiguration) error {
+	if err := runtime.convergence.PublishActiveNodeGeneration(ctx, configuration.StateGeneration(), configuration.ConfigFiles()); err != nil {
+		return errors.Join(operations.ErrNodeServiceConvergencePending, err)
+	}
+	return nil
 }
 
 func committedNodeRepairArtifacts(configuration enrollment.NodeConfiguration) []CommittedNodeRepairArtifact {

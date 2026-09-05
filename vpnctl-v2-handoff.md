@@ -27,6 +27,12 @@ gateway/current-node repair произвольного owned drift всё ещё
 config и четырёх staged inactive units. Ошибка после commit явно возвращает
 `init_convergence_pending` с `changed=true`; повторный init допубликовывает тот
 же baseline идемпотентно, не переустанавливая роль.
+Успешный node join после readiness переводит baseline CAS-ом в active
+generation: bootstrap, все standard/routing/DNS/tunnel artifacts, enabled unit
+files, `active/exited` guard и три `active/running` daemon-а. Partial activation
+baseline не продвигает. Тот же publication tail вызывается из local repair;
+поэтому missing metadata восстанавливается из committed state/secrets, а
+отличающийся same/newer baseline блокируется как conflict.
 
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.

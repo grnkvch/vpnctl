@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
@@ -136,7 +137,7 @@ func classifyRepairCommandError(err error) (output.ExitCategory, string, string)
 	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags), errors.Is(err, ErrInteractionRefused),
 		errors.Is(err, ErrCommittedNodeRepairInvalid), errors.Is(err, store.ErrStateNotFound):
 		return output.CategoryValidation, "repair_request_invalid", "repair requires a valid joined node generation"
-	case errors.Is(err, ErrCommittedNodeRepairStale), errors.Is(err, store.ErrStateConflict):
+	case errors.Is(err, ErrCommittedNodeRepairStale), errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict):
 		return output.CategoryConflict, "repair_plan_stale", "the committed generation changed after repair preview"
 	case errors.Is(err, enrollment.ErrNodeActivationPending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return output.CategoryUnavailable, "repair_activation_pending", "the committed node generation is still not ready; resolve the reported host issue and retry repair"

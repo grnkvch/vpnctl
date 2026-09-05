@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — joined-node active convergence generation
+
+### Planned reversible validation
+
+- Extend the node convergence compiler from the unjoined bootstrap baseline to
+  the complete joined runtime: immutable bootstrap, every generation-bound
+  standard/routing/DNS/tunnel config and readiness marker, four installed unit
+  files, enabled state, `active/exited` fail-closed guard, and three
+  `active/running` services. Persist hashes and public identifiers only.
+- Publish the active desired=applied generation strictly after the joined node
+  service activator passes readiness. A clean prior generation advances by
+  exact CAS; an already equal generation is a no-op; missing metadata can be
+  reconstructed by explicit repair; any different same/newer baseline is a
+  conflict. Partial activation never advances the baseline.
+- Reuse the same publication tail from `vpnctl repair`, so a join that committed
+  state and services but failed snapshot durability can be completed without a
+  second invite or enrollment exchange. Validation is source-only with
+  temporary roots and fake stores/configs; no production config, service,
+  tunnel, route, snapshot, host, or VM is changed.
+
+### Acceptance
+
+- Tests prove active unit runtime fingerprints, complete content-free config
+  coverage, generation-1-to-2 CAS, idempotent repeat, missing-baseline recovery,
+  changed same-generation refusal, and existing join/repair activation failure
+  semantics.
+- Focused and full Go suites, operations/CLI/enrollment race checks,
+  `go vet ./...`, strict OpenSpec validation, and diff checks passed.
+  Repository rollback removes this source slice; no host rollback is needed.
+
 ## 2026-09-05 — initial private-node convergence baseline
 
 ### Planned reversible validation

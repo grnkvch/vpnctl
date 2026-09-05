@@ -42,6 +42,13 @@ func NewFileConvergenceSnapshotStore(path string) (*FileConvergenceSnapshotStore
 	return newFileConvergenceSnapshotStore(path, nil)
 }
 
+func (store *FileConvergenceSnapshotStore) Read(ctx context.Context) (ConvergenceSnapshot, error) {
+	if store == nil || store.source == nil {
+		return ConvergenceSnapshot{}, fmt.Errorf("convergence snapshot store is incomplete")
+	}
+	return store.source.ReadConvergenceSnapshot(ctx)
+}
+
 func newFileConvergenceSnapshotStore(
 	path string,
 	hook func(convergenceSnapshotWriteStage) error,

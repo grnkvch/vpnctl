@@ -95,3 +95,96 @@ func TestStagedNodeRoleConvergenceSnapshotRejectsActivatingOrMalformedRequest(t 
 		t.Fatal("escaping node config was accepted")
 	}
 }
+
+func TestActiveNodeRoleConvergenceSnapshotCapturesEnabledRuntime(t *testing.T) {
+	t.Parallel()
+
+	request, _ := linuxplatform.RenderNodeRoleInstallation(linuxplatform.DefaultVPNCTLBinaryPath)
+	for index := range request.Units {
+		request.Units[index].Enable = true
+	}
+	request.Configs = append(request.Configs,
+		linuxplatform.RoleConfigFile{Name: "node-standard.ready", Content: []byte("generation=2\n")},
+		linuxplatform.RoleConfigFile{Name: "standard.conf", Content: []byte("private-key-not-serialized\n")},
+	)
+	snapshot, err := ActiveNodeRoleConvergenceSnapshot(2, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Applied.Resources) != 7 {
+		t.Fatalf("active node resource count = %d", len(snapshot.Applied.Resources))
+	}
+	encoded, _ := json.Marshal(snapshot)
+	if strings.Contains(string(encoded), "private-key-not-serialized") {
+		t.Fatalf("active snapshot exposed config material: %s", encoded)
+	}
+	for _, resource := range snapshot.Applied.Resources {
+		if resource.Key.Kind != ManagedResourceUnit {
+			continue
+		}
+		unit := request.Units[0]
+		for _, candidate := range request.Units {
+			if candidate.Name == resource.Key.ID {
+				unit = candidate
+				break
+			}
+		}
+		content := unit.Content
+		if content[len(content)-1] != '\n' {
+			content = append(append([]byte{}, content...), '\n')
+		}
+		subState := "running"
+		if unit.Name == "vpnctl-routing-guard.service" {
+			subState = "exited"
+		}
+		want, err := ManagedUnitRuntimeFingerprint(ManagedUnitRuntime{
+			FileType: "regular", Mode: "0644", ContentSHA256: ManagedFingerprint(content),
+			LoadState: "loaded", ActiveState: "active", SubState: subState, Enablement: "enabled",
+		})
+		if err != nil || resource.RuntimeSHA256 != want {
+			t.Fatalf("active unit resource %s = %+v, want %s (%v)", unit.Name, resource, want, err)
+		}
+	}
+}
+
+func TestNodeServiceConvergencePublisherAdvancesAndRecoversExactGeneration(t *testing.T) {
+	t.Parallel()
+
+	request, _ := linuxplatform.RenderNodeRoleInstallation(linuxplatform.DefaultVPNCTLBinaryPath)
+	configs := []linuxplatform.RoleConfigFile{{Name: "node-standard.ready", Content: []byte("generation=2\n")}}
+	for _, missing := range []bool{false, true} {
+		name := "advance"
+		if missing {
+			name = "recover-missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			path := newConvergenceSnapshotStorePath(t)
+			store, _ := NewFileConvergenceSnapshotStore(path)
+			if !missing {
+				initial, _ := StagedNodeRoleConvergenceSnapshot(1, request)
+				if err := store.Initialize(context.Background(), initial); err != nil {
+					t.Fatal(err)
+				}
+			}
+			publisher, err := NewNodeServiceConvergencePublisher(store, linuxplatform.DefaultVPNCTLBinaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := publisher.PublishActiveNodeGeneration(context.Background(), 2, configs); err != nil {
+				t.Fatal(err)
+			}
+			if err := publisher.PublishActiveNodeGeneration(context.Background(), 2, configs); err != nil {
+				t.Fatalf("idempotent active publish: %v", err)
+			}
+			got, err := store.Read(context.Background())
+			if err != nil || got.Applied.Generation != 2 || !reflect.DeepEqual(got.Desired, got.Applied) || len(got.Applied.Resources) != 6 {
+				t.Fatalf("active baseline = %+v, %v", got, err)
+			}
+			changed := cloneRoleConfigs(configs)
+			changed[0].Content = []byte("generation=2\nchanged=true\n")
+			if err := publisher.PublishActiveNodeGeneration(context.Background(), 2, changed); !errors.Is(err, ErrConvergenceSnapshotConflict) {
+				t.Fatalf("changed same-generation baseline error = %v", err)
+			}
+		})
+	}
+}

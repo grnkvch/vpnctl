@@ -84,9 +84,14 @@ Initial unjoined-node publication is connected to the successful
 `init --node` state commit. Its desired and applied manifests contain exactly
 the staged bootstrap config and four inactive/disabled unit files. A
 post-commit publication failure is explicit and a repeated init idempotently
-completes the same baseline. Joined-node, gateway, and later mutation/apply
-publication still have to be connected before the general production repair
-command can rely on the baseline for those generations.
+completes the same baseline. Successful node join now advances it by exact CAS
+only after all four data-plane units pass readiness. The new generation covers
+the bootstrap plus every standard/routing/DNS/tunnel config and readiness
+marker, enabled unit files, the `active/exited` fail-closed guard, and the three
+`active/running` services. Missing metadata can be reconstructed by explicit
+node repair; different same/newer metadata is never adopted. Gateway and later
+mutation/apply publication still have to be connected before the general
+production repair command can rely on those generations.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It
