@@ -140,7 +140,7 @@ func (provisioner *GatewayListenerProvisioner) Provision(ctx context.Context, st
 		{Name: StandardConfigFileName, Content: standardConfig.Bytes()},
 		{Name: RestrictedConfigFileName, Content: restrictedConfig.Bytes()},
 		{Name: GatewayStandardReadyFileName, Content: gatewayListenerReadyMarker(model.TransportStandard, model.ProtocolUDP, StandardUDPPort, standard.Generation, standardConfig.ConfigHash())},
-		{Name: GatewayRestrictedReadyFileName, Content: gatewayListenerReadyMarker(model.TransportRestricted, model.ProtocolTCP, RestrictedTCPPort, restricted.Generation, restrictedConfig.ConfigHash())},
+		{Name: GatewayRestrictedReadyFileName, Content: restrictedConfig.ReadyMarker()},
 	}
 	sort.Slice(files, func(left, right int) bool { return files[left].Name < files[right].Name })
 	publication, err := NewGatewayListenerInstallation(files)

@@ -172,12 +172,12 @@ func HandshakeHostShowOutput(view transport.HandshakeHostView) output.Result {
 		resource["prepared"] = view.Prepared.Hostname
 	}
 	if view.State == "prepared" {
-		resource["affected_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
-		resource["affected_clients"] = append([]string(nil), view.Impact.ClientIDs...)
+		resource["affected_nodes"] = append([]string{}, view.Impact.NodeIDs...)
+		resource["affected_clients"] = append([]string{}, view.Impact.ClientIDs...)
 	}
 	if view.State == "committed" {
-		resource["stale_nodes"] = append([]string(nil), view.Impact.NodeIDs...)
-		resource["stale_clients"] = append([]string(nil), view.Impact.ClientIDs...)
+		resource["stale_nodes"] = append([]string{}, view.Impact.NodeIDs...)
+		resource["stale_clients"] = append([]string{}, view.Impact.ClientIDs...)
 	}
 	if view.RollbackExpiresAt != nil {
 		resource["rollback_expires_at"] = view.RollbackExpiresAt.Format("2006-01-02T15:04:05Z07:00")
@@ -202,24 +202,24 @@ func HandshakeHostShowOutput(view transport.HandshakeHostView) output.Result {
 func handshakeHostPreparePlanOutput(plan transport.HandshakeHostPreparePlan) output.Result {
 	return output.NewResult("transport.host.prepare", output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": true, "current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
-		"generation": plan.NextStateGeneration, "affected_nodes": append([]string(nil), plan.Impact.NodeIDs...),
-		"affected_clients": append([]string(nil), plan.Impact.ClientIDs...),
+		"generation": plan.NextStateGeneration, "affected_nodes": append([]string{}, plan.Impact.NodeIDs...),
+		"affected_clients": append([]string{}, plan.Impact.ClientIDs...),
 	})
 }
 
 func handshakeHostCommitPlanOutput(plan transport.HandshakeHostCommitPlan) output.Result {
 	return output.NewResult("transport.host.commit", output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": true, "current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
-		"generation": plan.NextStateGeneration, "stale_nodes": append([]string(nil), plan.Impact.NodeIDs...),
-		"stale_clients": append([]string(nil), plan.Impact.ClientIDs...),
+		"generation": plan.NextStateGeneration, "stale_nodes": append([]string{}, plan.Impact.NodeIDs...),
+		"stale_clients": append([]string{}, plan.Impact.ClientIDs...),
 	})
 }
 
 func handshakeHostRollbackPlanOutput(plan transport.HandshakeHostRollbackPlan) output.Result {
 	return output.NewResult("transport.host.rollback", output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": true, "current": plan.Current.Hostname, "previous": plan.Previous.Hostname,
-		"generation": plan.NextStateGeneration, "stale_nodes": append([]string(nil), plan.Impact.NodeIDs...),
-		"stale_clients": append([]string(nil), plan.Impact.ClientIDs...),
+		"generation": plan.NextStateGeneration, "stale_nodes": append([]string{}, plan.Impact.NodeIDs...),
+		"stale_clients": append([]string{}, plan.Impact.ClientIDs...),
 	})
 }
 

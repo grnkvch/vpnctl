@@ -249,7 +249,7 @@ func (manager *HandshakeHostManager) Prepare(plan HandshakeHostPreparePlan) (Han
 	}
 	candidate := state
 	candidate.Generation = plan.NextStateGeneration
-	candidate.Operations = append([]model.Operation(nil), state.Operations...)
+	candidate.Operations = append([]model.Operation{}, state.Operations...)
 	if state.HandshakeHostChange != nil {
 		if plan.SupersedesOperationID != state.HandshakeHostChange.OperationID || state.HandshakeHostChange.State != model.HandshakeHostCommitted ||
 			state.HandshakeHostChange.RollbackExpiresAt == nil || manager.now().UTC().Before(*state.HandshakeHostChange.RollbackExpiresAt) {
@@ -276,7 +276,7 @@ func (manager *HandshakeHostManager) Prepare(plan HandshakeHostPreparePlan) (Han
 	change := model.HandshakeHostChange{
 		SchemaVersion: model.ResourceSchemaVersion, OperationID: plan.OperationID, State: model.HandshakeHostPrepared,
 		Previous: plan.Current, Candidate: plan.Candidate,
-		AffectedNodeIDs: append([]string(nil), plan.Impact.NodeIDs...), AffectedClientIDs: append([]string(nil), plan.Impact.ClientIDs...),
+		AffectedNodeIDs: append([]string{}, plan.Impact.NodeIDs...), AffectedClientIDs: append([]string{}, plan.Impact.ClientIDs...),
 		PreparedAt: plan.Candidate.SelectedAt,
 	}
 	candidate.HandshakeHostChange = &change
@@ -349,7 +349,7 @@ func (manager *HandshakeHostManager) Commit(ctx context.Context, plan HandshakeH
 	selection := plan.Candidate
 	candidate.HandshakeHost = &selection
 	candidate.Transports = transportsWithHandshakeHost(state.Transports, selection.Hostname)
-	candidate.Operations = append([]model.Operation(nil), state.Operations...)
+	candidate.Operations = append([]model.Operation{}, state.Operations...)
 	operationIndex := handshakeHostOperationIndex(candidate, plan.OperationID)
 	if operationIndex < 0 {
 		return HandshakeHostChangeResult{}, fmt.Errorf("prepared handshake-host operation is missing")
@@ -374,7 +374,7 @@ func (manager *HandshakeHostManager) Commit(ctx context.Context, plan HandshakeH
 	}
 	result := HandshakeHostChangeResult{
 		OperationID: plan.OperationID, StateGeneration: candidate.Generation, Active: selection, RollbackUntil: &expires,
-		StaleNodeIDs: append([]string(nil), committed.AffectedNodeIDs...), StaleClientIDs: append([]string(nil), committed.AffectedClientIDs...),
+		StaleNodeIDs: append([]string{}, committed.AffectedNodeIDs...), StaleClientIDs: append([]string{}, committed.AffectedClientIDs...),
 	}
 	if err := manager.state.Save(state.Generation, candidate); err != nil {
 		committedState, reconcileErr := manager.reconcileStateWrite(state, candidate, activation, err, "committed handshake-host replacement")
@@ -440,7 +440,7 @@ func (manager *HandshakeHostManager) Rollback(ctx context.Context, plan Handshak
 	candidate.HandshakeHost = &previous
 	candidate.HandshakeHostChange = nil
 	candidate.Transports = transportsWithHandshakeHost(state.Transports, previous.Hostname)
-	candidate.Operations = append([]model.Operation(nil), state.Operations...)
+	candidate.Operations = append([]model.Operation{}, state.Operations...)
 	operationIndex := handshakeHostOperationIndex(candidate, plan.OperationID)
 	if operationIndex < 0 {
 		return HandshakeHostChangeResult{}, fmt.Errorf("committed handshake-host operation is missing")
@@ -462,7 +462,7 @@ func (manager *HandshakeHostManager) Rollback(ctx context.Context, plan Handshak
 	}
 	result := HandshakeHostChangeResult{
 		OperationID: plan.OperationID, StateGeneration: candidate.Generation, Active: previous,
-		StaleNodeIDs: append([]string(nil), plan.Impact.NodeIDs...), StaleClientIDs: append([]string(nil), plan.Impact.ClientIDs...),
+		StaleNodeIDs: append([]string{}, plan.Impact.NodeIDs...), StaleClientIDs: append([]string{}, plan.Impact.ClientIDs...),
 	}
 	if err := manager.state.Save(state.Generation, candidate); err != nil {
 		committedState, reconcileErr := manager.reconcileStateWrite(state, candidate, activation, err, "handshake-host rollback")
@@ -594,11 +594,11 @@ func handshakeHostImpact(state model.State) HandshakeHostImpact {
 }
 
 func cloneHandshakeHostImpact(impact HandshakeHostImpact) HandshakeHostImpact {
-	return HandshakeHostImpact{NodeIDs: append([]string(nil), impact.NodeIDs...), ClientIDs: append([]string(nil), impact.ClientIDs...)}
+	return HandshakeHostImpact{NodeIDs: append([]string{}, impact.NodeIDs...), ClientIDs: append([]string{}, impact.ClientIDs...)}
 }
 
 func transportsWithHandshakeHost(values []model.Transport, hostname string) []model.Transport {
-	result := append([]model.Transport(nil), values...)
+	result := append([]model.Transport{}, values...)
 	for index := range result {
 		if result[index].Kind == model.TransportRestricted {
 			result[index].HandshakeHost = hostname

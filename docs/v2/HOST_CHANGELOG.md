@@ -2,6 +2,41 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — transactional gateway handshake-host runtime
+
+### Source-only implementation boundary
+
+- A production gateway runtime now stages the candidate restricted listener
+  under the vpnctl-owned generated gateway directory while holding a dedicated
+  activation lock. It rereads authoritative state, renders both current and
+  candidate publications from the existing root-only credential, and refuses
+  live config/readiness-marker drift before mutation.
+- The staged `restricted.yaml` is validated by both vpnctl and the exact pinned
+  Mihomo binary before publication. Activation uses same-filesystem atomic
+  replacement, restarts only `vpnctl-restricted.service`, and gates success on
+  active systemd state, a Mihomo TCP listener on `8443`, and absence of any UDP
+  listener on that port.
+- The exact previous config and readiness marker remain in a private staged
+  directory until authoritative commit. Restart/health failure restores and
+  rechecks the previous listener; successful commit removes the retained
+  generation. A crash-retained stage blocks another activation for explicit
+  repair instead of being silently overwritten.
+- Empty node/client fleets now retain non-null operation, transport, and impact
+  arrays through handshake-host transitions and JSON output.
+- Changes are confined to repository source, tests, and disposable Go build
+  cache. All filesystem/service activity in tests uses temporary roots and a
+  recording process runner; no systemctl command is executed. No external
+  host, VM, process, service, package, network, firewall, route, DNS, swap,
+  certificate, `/etc`, or `/var` resource was changed. Repository rollback is
+  one ordinary `git revert` of the implementation commit.
+
+### Acceptance
+
+- Controller, transport, CLI, and regression suites pass. Tests cover full
+  prepare/commit/rollback, exact live-generation restoration after a failed
+  restart, pinned-parser refusal without publication, live drift refusal, and
+  removal of completed stages.
+
 ## 2026-09-05 — failure-aware handshake-host activation contract
 
 ### Source-only implementation boundary

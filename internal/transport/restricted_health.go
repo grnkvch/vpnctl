@@ -42,37 +42,54 @@ func (observer *RestrictedGatewayHealthObserver) Observe(ctx context.Context, ex
 	if expected.RuntimeRole != RuntimeActive && expected.RuntimeRole != RuntimeStandby {
 		return Health{}, fmt.Errorf("restricted runtime role must be active or standby")
 	}
-	active, err := observer.query(ctx, "systemctl", "is-active", "--quiet", "vpnctl-restricted.service")
+	condition, code, err := observer.ObserveListener(ctx)
 	if err != nil {
 		return Health{}, err
 	}
+	return restrictedHealthResult(health, condition, code)
+}
+
+// ObserveListener passively verifies the one shared gateway listener without
+// requiring an arbitrary node/client identity. It is suitable for local
+// activation gates and never changes service or transport selection state.
+func (observer *RestrictedGatewayHealthObserver) ObserveListener(ctx context.Context) (HealthCondition, string, error) {
+	if ctx == nil {
+		return "", "", fmt.Errorf("context is required")
+	}
+	if observer == nil || observer.runner == nil {
+		return "", "", fmt.Errorf("restricted gateway health observer is incomplete")
+	}
+	active, err := observer.query(ctx, "systemctl", "is-active", "--quiet", "vpnctl-restricted.service")
+	if err != nil {
+		return "", "", err
+	}
 	if !active.available {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-service-unavailable")
+		return HealthUnavailable, "restricted-service-unavailable", nil
 	}
 	udp, err := observer.query(ctx, "ss", "-H", "-lunp", "sport = :8443")
 	if err != nil {
-		return Health{}, err
+		return "", "", err
 	}
 	if !udp.available {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-socket-observation-unavailable")
+		return HealthUnavailable, "restricted-socket-observation-unavailable", nil
 	}
 	if strings.TrimSpace(udp.output) != "" {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-native-udp-listener-present")
+		return HealthUnavailable, "restricted-native-udp-listener-present", nil
 	}
 	tcp, err := observer.query(ctx, "ss", "-H", "-ltnp", "sport = :8443")
 	if err != nil {
-		return Health{}, err
+		return "", "", err
 	}
 	if !tcp.available {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-socket-observation-unavailable")
+		return HealthUnavailable, "restricted-socket-observation-unavailable", nil
 	}
 	if strings.TrimSpace(tcp.output) == "" {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-tcp-listener-missing")
+		return HealthUnavailable, "restricted-tcp-listener-missing", nil
 	}
 	if !validRestrictedTCPListener(tcp.output) {
-		return restrictedHealthResult(health, HealthUnavailable, "restricted-tcp-listener-mismatch")
+		return HealthUnavailable, "restricted-tcp-listener-mismatch", nil
 	}
-	return restrictedHealthResult(health, HealthHealthy, "restricted-listener-healthy")
+	return HealthHealthy, "restricted-listener-healthy", nil
 }
 
 func validRestrictedTCPListener(output string) bool {

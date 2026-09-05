@@ -176,6 +176,15 @@ func (artifact GatewayRestrictedConfigArtifact) ConfigHash() string {
 	return hex.EncodeToString(digest[:])
 }
 
+// ReadyMarker binds the gateway restricted service guard to this exact
+// validated configuration and the create-once listener credential generation.
+func (artifact GatewayRestrictedConfigArtifact) ReadyMarker() []byte {
+	return gatewayListenerReadyMarker(
+		model.TransportRestricted, model.ProtocolTCP, RestrictedTCPPort,
+		RestrictedGatewayCredentialGen, artifact.ConfigHash(),
+	)
+}
+
 type RestrictedNodeCandidate struct {
 	content    []byte
 	descriptor CandidateDescriptor
