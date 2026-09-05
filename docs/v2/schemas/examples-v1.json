@@ -799,8 +799,12 @@
         "warnings": [],
         "requires_action": [],
         "data": {
-          "changed": false,
-          "generation": 1
+          "changed": true,
+          "generation": 10,
+          "current": "www.microsoft.com",
+          "candidate": "www.apple.com",
+          "affected_nodes": ["20000000-0000-4000-8000-000000000001"],
+          "affected_clients": ["30000000-0000-4000-8000-000000000001"]
         }
       }
     },

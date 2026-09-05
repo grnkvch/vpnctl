@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — staged public handshake-host replacement
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes gateway-only
+  `transport host prepare <host>`. Both dry-run and immediate modes probe
+  exactly the operator-supplied hostname, report the complete affected
+  node/client set, and never select a fallback candidate.
+- Immediate mode records only the reviewed pending operation and next
+  authoritative generation. It does not alter or restart the live restricted
+  listener; `commit` and `rollback` remain unavailable until their external
+  Mihomo publication path can report activation failures and restore the prior
+  serving generation.
+- Handshake-host operation results now include the required `changed` field,
+  and the strict `operation-v1` schema describes their bounded hostname,
+  impact, staleness, rollback, and health fields.
+- Changes are confined to repository source, schemas, tests, and disposable
+  Go build cache. Test fixtures use temporary roots and an in-memory manager;
+  they do not perform TLS probes. No external host, VM, service, package,
+  network, firewall, route, DNS, swap, certificate, `/etc`, or `/var` resource
+  was changed. Repository rollback is one ordinary `git revert` of the
+  implementation commit.
+
+### Acceptance
+
+- CLI and JSON Schema regression suites pass. Coverage proves dry-run
+  immutability, immediate pending-state staging, stable impact output, and
+  argument/role rejection before construction of any probe-capable object.
+
 ## 2026-09-05 — public pinned handshake-host inspection
 
 ### Source-only implementation boundary

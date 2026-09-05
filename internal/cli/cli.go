@@ -72,6 +72,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isPolicyInvocation(args) {
 		return executePolicy(args, stdout, stderr)
 	}
+	if isTransportHostPrepareInvocation(args) {
+		return executeTransportHostPrepare(args, stdout, stderr)
+	}
 	if isTransportHostShowInvocation(args) {
 		return executeTransportHostShow(args, stdout, stderr)
 	}

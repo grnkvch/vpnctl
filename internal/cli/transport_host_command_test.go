@@ -93,6 +93,76 @@ func TestExecuteTransportHostShowValidatesArgumentsBeforeViewer(t *testing.T) {
 	}
 }
 
+func TestExecuteTransportHostPrepareSupportsDryRunAndImmediateStaging(t *testing.T) {
+	originalPaths, originalRole, originalManager := transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager
+	t.Cleanup(func() {
+		transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager = originalPaths, originalRole, originalManager
+	})
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRecordingHandshakeHostGatewayManager()
+	transportHostSystemPaths = func() store.Paths { return paths }
+	transportHostLoadRole = func(store.Paths) (HostRole, error) { return RoleGateway, nil }
+	transportHostBuildManager = func(store.Paths) (HandshakeHostGatewayManager, error) { return manager, nil }
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"--json", "transport", "host", "prepare", "www.apple.com", "--dry-run"}, &stdout, &stderr)
+	if code != ExitSuccess || stderr.Len() != 0 || manager.planPrepareCalls != 1 || manager.prepareCalls != 0 {
+		t.Fatalf("dry-run prepare code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planPrepareCalls, manager.prepareCalls, stdout.String(), stderr.String())
+	}
+	for _, fragment := range []string{`"command":"transport.host.prepare"`, `"changed":true`, `"candidate":"www.apple.com"`, lifecycleCLINodeID, lifecycleCLIClientID} {
+		if !strings.Contains(stdout.String(), fragment) {
+			t.Fatalf("dry-run output lacks %q: %s", fragment, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	code = Execute([]string{"transport", "host", "prepare", "www.apple.com", "--json"}, &stdout, &stderr)
+	if code != ExitSuccess || stderr.Len() != 0 || manager.planPrepareCalls != 2 || manager.prepareCalls != 1 {
+		t.Fatalf("immediate prepare code=%d calls=%d/%d stdout=%q stderr=%q", code, manager.planPrepareCalls, manager.prepareCalls, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"pending"`) || !strings.Contains(stdout.String(), `"code":"commit_handshake_host"`) {
+		t.Fatalf("immediate prepare output = %s", stdout.String())
+	}
+}
+
+func TestExecuteTransportHostPrepareRejectsRoleAndArgumentsBeforeBuildingManager(t *testing.T) {
+	originalPaths, originalRole, originalManager := transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager
+	t.Cleanup(func() {
+		transportHostSystemPaths, transportHostLoadRole, transportHostBuildManager = originalPaths, originalRole, originalManager
+	})
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transportHostSystemPaths = func() store.Paths { return paths }
+	built := false
+	transportHostBuildManager = func(store.Paths) (HandshakeHostGatewayManager, error) {
+		built = true
+		return nil, errors.New("must not build")
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"transport", "host", "prepare", "www.apple.com", "extra", "--json"}, &stdout, &stderr)
+	if code != ExitValidation || built || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"code":"invalid_arguments"`) {
+		t.Fatalf("invalid prepare code=%d built=%t stdout=%q stderr=%q", code, built, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	code = Execute([]string{"transport", "host", "prepare", "WWW.Example.COM", "--json"}, &stdout, &stderr)
+	if code != ExitValidation || built || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"code":"invalid_arguments"`) {
+		t.Fatalf("non-canonical prepare code=%d built=%t stdout=%q stderr=%q", code, built, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	transportHostLoadRole = func(store.Paths) (HostRole, error) { return RoleNode, nil }
+	code = Execute([]string{"transport", "host", "prepare", "www.apple.com", "--json"}, &stdout, &stderr)
+	if code != ExitValidation || built || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"code":"transport_host_invalid"`) {
+		t.Fatalf("node prepare code=%d built=%t stdout=%q stderr=%q", code, built, stdout.String(), stderr.String())
+	}
+}
+
 type recordingHandshakeHostViewer struct {
 	view  transport.HandshakeHostView
 	err   error

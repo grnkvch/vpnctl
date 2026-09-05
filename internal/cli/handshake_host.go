@@ -154,7 +154,7 @@ func (workflow *HandshakeHostRecoveryWorkflow) Apply(ctx context.Context, _ Muta
 		return AppliedMutation{}, err
 	}
 	public := output.NewResult("transport.host.recover", output.StatusOK, output.CategorySuccess, output.SafeObject{
-		"active": result.Active.Hostname, "generation": result.StateGeneration,
+		"changed": true, "active": result.Active.Hostname, "generation": result.StateGeneration,
 		"credential_generation": result.CredentialGeneration, "health": string(result.Health.Condition),
 	})
 	if result.NodeID != "" {
@@ -201,7 +201,7 @@ func HandshakeHostShowOutput(view transport.HandshakeHostView) output.Result {
 
 func handshakeHostPreparePlanOutput(plan transport.HandshakeHostPreparePlan) output.Result {
 	return output.NewResult("transport.host.prepare", output.StatusOK, output.CategorySuccess, output.SafeObject{
-		"current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
+		"changed": true, "current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
 		"generation": plan.NextStateGeneration, "affected_nodes": append([]string(nil), plan.Impact.NodeIDs...),
 		"affected_clients": append([]string(nil), plan.Impact.ClientIDs...),
 	})
@@ -209,7 +209,7 @@ func handshakeHostPreparePlanOutput(plan transport.HandshakeHostPreparePlan) out
 
 func handshakeHostCommitPlanOutput(plan transport.HandshakeHostCommitPlan) output.Result {
 	return output.NewResult("transport.host.commit", output.StatusOK, output.CategorySuccess, output.SafeObject{
-		"current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
+		"changed": true, "current": plan.Current.Hostname, "candidate": plan.Candidate.Hostname,
 		"generation": plan.NextStateGeneration, "stale_nodes": append([]string(nil), plan.Impact.NodeIDs...),
 		"stale_clients": append([]string(nil), plan.Impact.ClientIDs...),
 	})
@@ -217,7 +217,7 @@ func handshakeHostCommitPlanOutput(plan transport.HandshakeHostCommitPlan) outpu
 
 func handshakeHostRollbackPlanOutput(plan transport.HandshakeHostRollbackPlan) output.Result {
 	return output.NewResult("transport.host.rollback", output.StatusOK, output.CategorySuccess, output.SafeObject{
-		"current": plan.Current.Hostname, "previous": plan.Previous.Hostname,
+		"changed": true, "current": plan.Current.Hostname, "previous": plan.Previous.Hostname,
 		"generation": plan.NextStateGeneration, "stale_nodes": append([]string(nil), plan.Impact.NodeIDs...),
 		"stale_clients": append([]string(nil), plan.Impact.ClientIDs...),
 	})
@@ -247,6 +247,7 @@ func handshakeHostChangeOutput(command string, change transport.HandshakeHostCha
 		data["rollback_expires_at"] = change.RollbackUntil.Format("2006-01-02T15:04:05Z07:00")
 	}
 	result := output.NewResult(command, status, output.CategorySuccess, data)
+	result.Data["changed"] = true
 	if change.OperationID != "" {
 		result.ResourceIDs["operation_id"] = change.OperationID
 	}

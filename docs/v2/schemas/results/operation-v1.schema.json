@@ -28,6 +28,34 @@
             "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
             "snapshot_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
             "generation": { "type": "integer", "minimum": 0 },
+            "current": { "type": "string", "minLength": 1, "maxLength": 253 },
+            "candidate": { "type": "string", "minLength": 1, "maxLength": 253 },
+            "previous": { "type": "string", "minLength": 1, "maxLength": 253 },
+            "active": { "type": "string", "minLength": 1, "maxLength": 253 },
+            "prepared": { "type": "string", "minLength": 1, "maxLength": 253 },
+            "rollback_expires_at": { "type": "string", "format": "date-time" },
+            "credential_generation": { "type": "integer", "minimum": 1 },
+            "health": { "enum": ["healthy", "degraded", "unavailable"] },
+            "affected_nodes": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "affected_clients": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "stale_nodes": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
+            "stale_clients": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              "uniqueItems": true
+            },
             "scope": { "enum": ["control", "transport", "routing", "dns", "tunnel", "ingress", "all"] },
             "disabled_ids": {
               "type": "array",
