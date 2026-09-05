@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — public passive status entry point
+
+### Planned reversible validation
+
+- Expose `vpnctl status [--all] [--json]` for initialized gateway and node
+  roles. It reads authoritative state and `systemctl show` process metadata
+  only; it does not generate DNS, transport, HTTP, webhook, or provider
+  traffic and has no state, file, unit, listener, firewall, or route mutation
+  capability.
+- Until production desired/applied manifest persistence is connected, the
+  convergence input fails explicitly. Status therefore remains useful but
+  degraded instead of fabricating an empty drift/pending result.
+- Validation uses injected state and unit observers under temporary roots.
+  Repository rollback is limited to this commit; no host rollback is needed.
+
+### Acceptance
+
+- The public entry point accepts global or local `--json`, optional `--all`,
+  rejects duplicate/unknown arguments before any host read, enforces the
+  initialized-role registry gate, and preserves the full JSON versus concise
+  human output contract.
+- Gateway control and every role-owned data-plane unit are derived only from
+  bounded passive systemd properties. Node gateway readiness is tied to its
+  selected transport process; absent cached control-session evidence remains
+  explicitly unavailable instead of being inferred from readable state.
+- The complete Go suite, `go vet ./...`, formatting/diff checks, and strict
+  OpenSpec validation passed. Tests opened only disposable local sockets used
+  by the existing integration suite; no persistent host resource changed and
+  no host rollback remains.
+
 ## 2026-09-05 — public handshake-host commit and rollback
 
 ### Source-only implementation boundary

@@ -48,6 +48,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isDNSInvocation(args) {
 		return executeDNS(args, stdout, stderr)
 	}
+	if isStatusInvocation(args) {
+		return executeStatus(args, stdout, stderr)
+	}
 	if isValidateInvocation(args) {
 		return executeValidate(args, stdout, stderr)
 	}
