@@ -10,6 +10,8 @@ cache_root=$repository_root/artifacts/v2lab/cache
 gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
 fixture_start_timeout=20m
+degraded_boot_attempts=120
+degraded_boot_interval_seconds=5
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 capacity_owner=vpnctl-v2-capacity-v1
 capacity_root=/etc/vpnctl-v2-capacity
@@ -93,9 +95,34 @@ start_fixture() {
     return
   fi
   printf -v "$marker" '%s' true
-  limactl start --tty=false --timeout "$fixture_start_timeout" --progress "$instance"
+  if ! limactl start --tty=false --timeout "$fixture_start_timeout" "$instance"; then
+    if ! instance_running "$instance"; then
+      echo "fixture start failed before reaching a running state: $instance" >&2
+      return 4
+    fi
+    echo "fixture entered running/degraded state; waiting for exact boot completion: $instance" >&2
+    wait_for_degraded_boot "$instance"
+  fi
   assert_instance_contract "$instance"
   instance_running "$instance" || { echo "fixture did not become ready: $instance" >&2; exit 4; }
+}
+
+wait_for_degraded_boot() {
+  local instance=$1 attempt command
+  for attempt in $(seq 1 "$degraded_boot_attempts"); do
+    if guest "$instance" sudo test -s /run/lima-boot-done; then
+      [ "$(guest "$instance" dpkg --print-architecture)" = amd64 ]
+      [ "$(guest "$instance" nproc)" -eq 1 ]
+      guest "$instance" grep -q '^VERSION_ID="24.04"$' /etc/os-release
+      for command in jq nft ss tc vmstat; do
+        guest "$instance" command -v "$command" >/dev/null
+      done
+      return
+    fi
+    sleep "$degraded_boot_interval_seconds"
+  done
+  echo "fixture provisioning did not complete after degraded start: $instance" >&2
+  return 4
 }
 
 assert_cached_archive() {

@@ -169,6 +169,26 @@ This journal records development-host mutations made while implementing and vali
   progress; this changes only Lima orchestration and does not change the
   five-minute workload or any capacity acceptance bound.
 
+### Gateway readiness timeout and bounded degraded-start fallback
+
+- The clean-source run at commit `9adb699` stopped before node startup,
+  clean-state inspection, or any vpnctl/provider installation. Gateway's
+  embedded legacy provision hook downloaded package indexes successfully but
+  the final large Ubuntu metadata file exceeded Lima's separate ten-minute
+  final-requirement window. Lima reported the already running VM as degraded;
+  the armed run-owned trap stopped it, and both fixtures and the exact host
+  build root were verified restored/absent. Incomplete host-only evidence is
+  at `artifacts/v2lab/capacity-e2e/run-20260905T011638Z`.
+- The checked-in template already makes provisioning one-time, but these two
+  older disposable fixtures retain their previously embedded networked hook.
+  Recreating them would still require the same first network provisioning and
+  is unnecessary. The harness now handles only the narrow case where
+  `limactl start` returns non-zero while the exact contract-matching fixture is
+  actually `Running`: it waits at most another ten minutes for the boot-scoped
+  `/run/lima-boot-done`, then independently revalidates Ubuntu 24.04 amd64,
+  one vCPU, and every required lab command. A non-running start failure or a
+  missing/invalid completion state remains fatal and is rolled back.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
