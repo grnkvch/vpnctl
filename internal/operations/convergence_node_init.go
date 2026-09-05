@@ -132,7 +132,7 @@ func nodeRoleConvergenceSnapshot(
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
-		revisionSHA256, err := nodeInitResourceRevision(generation, "unit", unit.Name, "0644", contentSHA256, activeState+"/"+subState+"/"+enablement)
+		revisionSHA256, err := roleConvergenceResourceRevision(generation, "unit", unit.Name, "0644", contentSHA256, activeState+"/"+subState+"/"+enablement)
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
@@ -151,7 +151,7 @@ func nodeRoleConvergenceSnapshot(
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
-		revisionSHA256, err := nodeInitResourceRevision(generation, "config", config.Name, "0600", contentSHA256, "present")
+		revisionSHA256, err := roleConvergenceResourceRevision(generation, "config", config.Name, "0600", contentSHA256, "present")
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
@@ -217,7 +217,7 @@ func (publisher *NodeServiceConvergencePublisher) PublishActiveNodeGeneration(
 	return err
 }
 
-func nodeInitResourceRevision(generation uint64, kind, name, mode, contentSHA256, expectedRuntime string) (string, error) {
+func roleConvergenceResourceRevision(generation uint64, kind, name, mode, contentSHA256, expectedRuntime string) (string, error) {
 	encoded, err := json.Marshal(struct {
 		Generation    uint64 `json:"generation"`
 		Kind          string `json:"kind"`

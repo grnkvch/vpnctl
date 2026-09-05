@@ -89,9 +89,15 @@ only after all four data-plane units pass readiness. The new generation covers
 the bootstrap plus every standard/routing/DNS/tunnel config and readiness
 marker, enabled unit files, the `active/exited` fail-closed guard, and the three
 `active/running` services. Missing metadata can be reconstructed by explicit
-node repair; different same/newer metadata is never adopted. Gateway and later
-mutation/apply publication still have to be connected before the general
-production repair command can rely on those generations.
+node repair; different same/newer metadata is never adopted. Gateway init now
+also publishes its exact generation-1 baseline after state and role
+installation but before network activation. It covers five enabled unit files,
+four bootstrap/controller/DNS files, and four fixed transport listener files;
+the condition-skipped tunnel server is inactive while the other initial
+services are active. Publication failure is an explicit committed repair state
+and cannot activate the network. A joined-node gateway generation, later
+mutation/apply publication, and a concrete gateway repair executor remain to
+be connected.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It

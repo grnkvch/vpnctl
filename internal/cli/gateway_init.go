@@ -362,6 +362,8 @@ func developmentComponentManifest() model.ComponentManifest {
 
 func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 	switch {
+	case errors.Is(err, lifecycle.ErrGatewayInitConvergencePending):
+		return output.CategoryUnavailable, "init_convergence_pending", "gateway state and services committed but convergence metadata is pending; run vpnctl repair"
 	case errors.Is(err, lifecycle.ErrGatewayRoleConflict), errors.Is(err, lifecycle.ErrGatewayInitConflict),
 		errors.Is(err, lifecycle.ErrGatewayLayoutConflict), errors.Is(err, linuxplatform.ErrGatewayPreflightConflict),
 		errors.Is(err, linuxplatform.ErrManagedSwapConflict):
@@ -379,8 +381,18 @@ func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 }
 
 func emitGatewayInitFailure(emitter *ResultEmitter, category output.ExitCategory, warningCode, warningMessage string) int {
-	result := output.NewResult("init.gateway", output.StatusFailed, category, output.SafeObject{"changed": false, "role": "gateway"})
+	changed := warningCode == "init_convergence_pending"
+	status := output.StatusFailed
+	if category == output.CategoryUnavailable || category == output.CategoryConflict {
+		status = output.StatusDegraded
+	}
+	result := output.NewResult("init.gateway", status, category, output.SafeObject{"changed": changed, "role": "gateway"})
 	result.Warnings = append(result.Warnings, output.Message{Code: warningCode, Message: singleLineGatewayInitMessage(warningMessage)})
+	if changed {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code: "repair_gateway_init", Message: "Reconcile the committed gateway service generation and convergence baseline.", Command: "vpnctl repair",
+		})
+	}
 	code, err := emitter.Emit(result)
 	if err != nil {
 		return ExitInternal

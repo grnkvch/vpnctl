@@ -265,6 +265,28 @@ func TestExecuteGatewayInitMapsPlanValidationWithoutApply(t *testing.T) {
 	}
 }
 
+func TestExecuteGatewayInitReportsCommittedConvergenceFailureAsRepairable(t *testing.T) {
+	initializer := &recordingGatewayInitializer{applyErr: errors.Join(lifecycle.ErrGatewayInitConvergencePending, errors.New("synthetic publication failure"))}
+	restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "")
+	defer restore()
+
+	var stdout, stderr bytes.Buffer
+	code := Execute([]string{"init", "--gateway", "--public-ip", "8.8.8.8", "--yes", "--json"}, &stdout, &stderr)
+	if code != ExitUnavailable || initializer.applyCalls != 1 || stderr.Len() != 0 {
+		t.Fatalf("Execute() code=%d apply=%d stdout=%q stderr=%q", code, initializer.applyCalls, stdout.String(), stderr.String())
+	}
+	var result output.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != output.StatusDegraded || result.Data["changed"] != true || len(result.Warnings) != 1 || result.Warnings[0].Code != "init_convergence_pending" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.RequiresAction) != 1 || result.RequiresAction[0].Command != "vpnctl repair" {
+		t.Fatalf("requires_action = %+v", result.RequiresAction)
+	}
+}
+
 func TestExecuteGatewayInitRejectsExistingNodeBeforeBuilder(t *testing.T) {
 	initializer := &recordingGatewayInitializer{}
 	restore := stubGatewayInitCommand(t, initializer, RoleNode, "")
@@ -290,6 +312,7 @@ type recordingGatewayInitializer struct {
 	planCalls        int
 	applyCalls       int
 	planErr          error
+	applyErr         error
 	offerManagedSwap bool
 	appliedPlan      lifecycle.GatewayInitPlan
 }
@@ -326,6 +349,9 @@ func (initializer *recordingGatewayInitializer) Plan(_ context.Context, input li
 func (initializer *recordingGatewayInitializer) Apply(_ context.Context, plan lifecycle.GatewayInitPlan) (lifecycle.GatewayInitResult, error) {
 	initializer.applyCalls++
 	initializer.appliedPlan = plan
+	if initializer.applyErr != nil {
+		return lifecycle.GatewayInitResult{}, initializer.applyErr
+	}
 	return lifecycle.GatewayInitResult{Changed: true, HostID: plan.HostID, TransactionID: "fw-ABC123", Network: plan.Network}, nil
 }
 

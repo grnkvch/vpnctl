@@ -87,6 +87,14 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway transport listener provisioner: %w", err)
 	}
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway convergence store: %w", err)
+	}
+	convergence, err := operations.NewGatewayInitializationConvergencePublisher(convergenceStore)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway convergence publisher: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
@@ -96,6 +104,6 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
 		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
 		PublicCertificate: publicCertificate,
-		HandshakeHosts:    handshakeHosts, Transports: listeners,
+		HandshakeHosts:    handshakeHosts, Transports: listeners, Convergence: convergence,
 	})
 }

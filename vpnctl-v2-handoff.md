@@ -9,6 +9,15 @@
 
 Последнее обновление: **2026-09-05**.
 
+Gateway `init` теперь также публикует первый content-free convergence baseline
+после commit state/role и до network activation. Generation 1 содержит ровно
+пять enabled unit-файлов, bootstrap/controller/DNS metadata и четыре transport
+listener artifact-а; условно пропущенный tunnel-server отмечен inactive, а
+остальные initial services — active. Ошибка publication не маскирует commit:
+watchdog откатывает сетевую область, CLI возвращает degraded/changed и требует
+`vpnctl repair`. Следующий implementation slice — active gateway generation
+после join и concrete gateway repair executor.
+
 Текущий implementation continuation: public `vpnctl repair` теперь
 диспетчеризуется на private node и закрывает emitted
 `join_activation_pending`. Preview без mutation компилирует точную committed
@@ -37,7 +46,7 @@ baseline не продвигает. Тот же publication tail вызывае�
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
 Proposal, десять capability specs, technical design и полный task graph готовы
-и проходят strict validation. После завершения task 13.5 выполнено `121/156`
+и проходят strict validation. Выполнено `155/156`
 задач: готовы baseline/contracts, blocking spikes, model/store/secrets,
 CLI/output/consent, host init, control plane, presets/policies/personal clients,
 оба transport-а, enrollment/identity lifecycle, node routing/DNS, production

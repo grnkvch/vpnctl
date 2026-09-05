@@ -15,6 +15,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -72,7 +73,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !result.Changed || result.HostID != gatewayTestHostID || result.TransactionID != "fw-ABC123" {
 		t.Fatalf("Apply() result = %+v", result)
 	}
-	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-mark"}
 	if !reflect.DeepEqual(harness.events.values, wantEvents) {
 		t.Fatalf("apply events = %v, want %v", harness.events.values, wantEvents)
 	}
@@ -226,7 +227,7 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic activation failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
 	}
@@ -238,6 +239,32 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	}
 	if harness.publicCertificate.rollbackCalls != 0 {
 		t.Fatalf("persisted public certificate was rolled back: %d", harness.publicCertificate.rollbackCalls)
+	}
+}
+
+func TestGatewayInitConvergenceFailureLeavesCommittedStateRepairable(t *testing.T) {
+	t.Parallel()
+
+	harness := newGatewayInitHarness(t)
+	harness.convergence.err = errors.New("synthetic convergence publication failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, ErrGatewayInitConvergencePending) ||
+		!strings.Contains(err.Error(), "synthetic convergence publication failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "watchdog-rollback"}
+	if !reflect.DeepEqual(harness.events.values, want) {
+		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
+	}
+	if harness.state.saveCalls != 1 || harness.roles.applyCalls != 1 || harness.convergence.calls != 1 || harness.network.calls != 0 {
+		t.Fatalf("convergence boundary calls: state=%d roles=%d convergence=%d network=%d", harness.state.saveCalls, harness.roles.applyCalls, harness.convergence.calls, harness.network.calls)
+	}
+	if harness.watchdog.rollbackID != "fw-ABC123" || harness.identity.rollbackCalls != 0 || harness.publicCertificate.rollbackCalls != 0 {
+		t.Fatalf("committed failure cleanup = watchdog:%q identity:%d certificate:%d", harness.watchdog.rollbackID, harness.identity.rollbackCalls, harness.publicCertificate.rollbackCalls)
 	}
 }
 
@@ -325,7 +352,7 @@ func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
-		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "roles-apply", "network-activate", "watchdog-mark"}
+		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-mark"}
 		if !reflect.DeepEqual(harness.events.values, want) {
 			t.Fatalf("accept events = %v, want %v", harness.events.values, want)
 		}
@@ -465,6 +492,14 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convergence, err := operations.NewGatewayInitializationConvergencePublisher(convergenceStore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events := &gatewayInitEvents{}
 	watchdog := &recordingGatewayWatchdog{events: events}
 	network := &recordingGatewayNetwork{events: events}
@@ -475,6 +510,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		PublicCertificate: publicCertificate,
 		HandshakeHosts:    &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
 		Transports:        listenerProvisioner,
+		Convergence:       convergence,
 		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:         func() (string, error) { return gatewayTestHostID, nil },
 	})
@@ -487,6 +523,11 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 	}
 	if _, err := initializer.Apply(context.Background(), plan); err != nil {
 		t.Fatal(err)
+	}
+	convergenceSource, _ := operations.NewFileConvergenceSnapshotSource(paths.ConvergenceFile)
+	convergenceSnapshot, err := convergenceSource.ReadConvergenceSnapshot(context.Background())
+	if err != nil || convergenceSnapshot.Applied.Generation != 1 || len(convergenceSnapshot.Applied.Resources) != 13 {
+		t.Fatalf("gateway convergence baseline = %+v, %v", convergenceSnapshot, err)
 	}
 	unitDir := filepath.Join(root, "etc", "systemd", "system")
 	for _, unit := range append(linuxplatform.RoleUnitNames(model.RoleGateway), linuxplatform.WatchdogServiceUnitName, linuxplatform.WatchdogTimerUnitName) {
@@ -686,6 +727,7 @@ type gatewayInitHarness struct {
 	publicCertificate *recordingGatewayPublicCertificate
 	handshakeHosts    *recordingGatewayHandshakeHosts
 	transports        *recordingGatewayTransports
+	convergence       *recordingGatewayInitConvergence
 	events            *gatewayInitEvents
 	idCalls           int
 }
@@ -720,13 +762,15 @@ func newGatewayInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *
 	publicCertificate := &recordingGatewayPublicCertificate{}
 	handshakeHosts := &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()}
 	transports := &recordingGatewayTransports{events: events}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, events: events}
+	convergence := &recordingGatewayInitConvergence{events: events}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, convergence: convergence, events: events}
 	runtime := GatewayInitRuntime{
 		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
 		PublicCertificate: publicCertificate,
 		HandshakeHosts:    handshakeHosts,
 		Transports:        transports,
+		Convergence:       convergence,
 		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:         func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
 	}
@@ -736,6 +780,26 @@ func newGatewayInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *
 	}
 	harness.initializer = initializer
 	return harness
+}
+
+type recordingGatewayInitConvergence struct {
+	events     *gatewayInitEvents
+	calls      int
+	generation uint64
+	request    linuxplatform.RoleInstallationRequest
+	err        error
+}
+
+func (publisher *recordingGatewayInitConvergence) PublishGatewayInitialization(
+	_ context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+) error {
+	publisher.events.add("convergence-publish")
+	publisher.calls++
+	publisher.generation = generation
+	publisher.request = request
+	return publisher.err
 }
 
 func newGatewaySystemRoot(t *testing.T) string {

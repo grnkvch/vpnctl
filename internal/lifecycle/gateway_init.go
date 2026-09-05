@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	ErrGatewayRoleConflict = errors.New("host is already initialized with another role")
-	ErrGatewayInitConflict = errors.New("gateway is already initialized with different inputs")
+	ErrGatewayRoleConflict           = errors.New("host is already initialized with another role")
+	ErrGatewayInitConflict           = errors.New("gateway is already initialized with different inputs")
+	ErrGatewayInitConvergencePending = errors.New("gateway initialization committed but convergence baseline is pending")
 )
 
 type GatewayInitInput struct {
@@ -129,6 +130,10 @@ type GatewayInitTransportProvisioner interface {
 	Rollback(context.Context, transport.GatewayListenerInstallation) error
 }
 
+type GatewayInitConvergencePublisher interface {
+	PublishGatewayInitialization(context.Context, uint64, linuxplatform.RoleInstallationRequest) error
+}
+
 type GatewayInitRuntime struct {
 	Paths             store.Paths
 	Snapshot          linuxplatform.HostSnapshot
@@ -146,6 +151,7 @@ type GatewayInitRuntime struct {
 	PublicCertificate GatewayInitPublicCertificateProvisioner
 	HandshakeHosts    GatewayInitHandshakeHostSelector
 	Transports        GatewayInitTransportProvisioner
+	Convergence       GatewayInitConvergencePublisher
 	Now               func() time.Time
 	NewHostID         model.UUIDGenerator
 }
@@ -155,7 +161,7 @@ type GatewayInitializer struct {
 }
 
 func NewGatewayInitializer(runtime GatewayInitRuntime) (*GatewayInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.PublicCertificate == nil || runtime.HandshakeHosts == nil || runtime.Transports == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.WatchdogUnits == nil || runtime.Watchdog == nil || runtime.Network == nil || runtime.Swap == nil || runtime.Identity == nil || runtime.PublicCertificate == nil || runtime.HandshakeHosts == nil || runtime.Transports == nil || runtime.Convergence == nil {
 		return nil, fmt.Errorf("gateway initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -499,6 +505,9 @@ func (initializer *GatewayInitializer) Apply(ctx context.Context, plan GatewayIn
 	statePersisted = true
 	if _, err := initializer.runtime.Roles.Apply(ctx, roleRequest); err != nil {
 		return fail(fmt.Errorf("install gateway services: %w", err))
+	}
+	if err := initializer.runtime.Convergence.PublishGatewayInitialization(ctx, candidate.Generation, roleRequest); err != nil {
+		return fail(errors.Join(ErrGatewayInitConvergencePending, err))
 	}
 	if err := initializer.runtime.Network.ActivateGateway(ctx, plan.firewall); err != nil {
 		return fail(fmt.Errorf("activate gateway network: %w", err))
