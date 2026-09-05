@@ -2,6 +2,31 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public pinned handshake-host inspection
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes gateway-only
+  `transport host show`. It constructs a capability-limited viewer, reads the
+  authoritative pinned hostname, and performs one bounded TLS probe against
+  exactly that hostname. The command has no candidate-list input and no
+  prepare, activation, state-write, or automatic fallback path.
+- Role and argument validation happen before the viewer is constructed.
+  Human and JSON results expose only the hostname, lifecycle/health state,
+  generation, impact IDs, and rollback metadata; credential material is not
+  part of the result contract.
+- Changes are confined to repository source/tests and disposable Go build
+  cache. Tests use an in-memory viewer and do not contact a hostname. No
+  external host, VM, service, package, network, firewall, route, DNS, swap,
+  certificate, `/etc`, or `/var` resource was changed. Repository rollback is
+  one ordinary `git revert` of the implementation commit.
+
+### Acceptance
+
+- CLI and transport suites pass. Coverage proves gateway dispatch, stable
+  secret-free JSON, node rejection before dependency construction, and
+  argument rejection before any probe-capable object is built.
+
 ## 2026-09-05 — public built-in preset update command
 
 ### Source-only implementation boundary
