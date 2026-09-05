@@ -83,6 +83,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
+		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
+		"recovery_probe_attempts: $recovery_probe_attempts",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)

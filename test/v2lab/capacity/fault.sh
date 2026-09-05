@@ -11,7 +11,10 @@ restart_timing_file=
 restore_required=false
 restart_advance_seconds=0.1
 first_recovery_seconds=null
+last_recovery_seconds=null
 maximum_stable_recovery_probes=0
+recovery_probe_attempts=0
+successful_recovery_probes=0
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -36,7 +39,10 @@ emit_result() {
     --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
     --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
     --argjson first_recovery_seconds "$first_recovery_seconds" \
+    --argjson last_recovery_seconds "$last_recovery_seconds" \
     --argjson maximum_stable_recovery_probes "$maximum_stable_recovery_probes" \
+    --argjson recovery_probe_attempts "$recovery_probe_attempts" \
+    --argjson successful_recovery_probes "$successful_recovery_probes" \
     --argjson stable_recovery "$stable_recovery" \
     '{
       status: $status,
@@ -48,7 +54,10 @@ emit_result() {
       down_seconds: $down_seconds,
       recovery_seconds: $recovery_seconds,
       first_recovery_seconds: $first_recovery_seconds,
+      last_recovery_seconds: $last_recovery_seconds,
       maximum_stable_recovery_probes: $maximum_stable_recovery_probes,
+      recovery_probe_attempts: $recovery_probe_attempts,
+      successful_recovery_probes: $successful_recovery_probes,
       stable_recovery_probes: 5,
       stable_recovery_observed: $stable_recovery
     }'
@@ -145,11 +154,14 @@ probe_output=
 deadline=$(awk -v start="$restart_started" -v limit="$recovery_limit_seconds" 'BEGIN {printf "%.9f", start+limit}')
 while awk -v now="$(monotonic)" -v deadline="$deadline" 'BEGIN {exit !(now <= deadline)}'; do
   probe_output=$(probe 2>/dev/null || true)
+  recovery_probe_attempts=$((recovery_probe_attempts + 1))
   if printf '%s\n' "$probe_output" | jq -e '.status == 200 and .ok == true' >/dev/null 2>&1; then
     observed_at=$(monotonic)
     if [ "$first_recovery_seconds" = null ]; then
       first_recovery_seconds=$(delta "$restart_started" "$observed_at")
     fi
+    last_recovery_seconds=$(delta "$restart_started" "$observed_at")
+    successful_recovery_probes=$((successful_recovery_probes + 1))
     stable=$((stable + 1))
     if [ "$stable" -gt "$maximum_stable_recovery_probes" ]; then
       maximum_stable_recovery_probes=$stable

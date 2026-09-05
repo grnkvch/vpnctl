@@ -570,6 +570,30 @@ This journal records development-host mutations made while implementing and vali
   returned both fixtures to `Stopped`; no manual rollback remains. The next
   clean repeat retains the same owner and rollback boundary.
 
+### One-second guard diagnostic result
+
+- The clean-source repeat at commit
+  `a8d07217786c28e0fe5f80c3850a44731db81a5f` again kept the tunnel-client
+  service PID/restart count stable and recycled exactly one frpc child under
+  the restricted FRPS fault. Evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T063743Z/reconnect.json` records a
+  valid `503`, `3.410s` down time, and the first recovered HTTPS `200` at
+  `5.438s` after FRPS restart, inside the unchanged eight-second data-plane
+  bound. Only two consecutive successful probes completed before the deadline,
+  so the required five-probe stability proof failed and the run is not
+  capacity evidence.
+- Production timing remains at the one-second guard while the fixture adds
+  scalar typed counters for total probe attempts, total successes, last
+  success time, and maximum consecutive successes. These counters add no
+  request, parser, subprocess, or production logging overhead and do not alter
+  the fault, deadline, five-probe pass condition, or load profile. The next
+  run will distinguish a late stable recovery from intermittent HTTP status or
+  timeout behavior before any further production change is considered.
+- The failure trap removed all exact owner-scoped resources and packages and
+  returned both fixtures to `Stopped`. No listener, unit, process, firewall
+  rule, temporary guest file, or manual rollback remains; the next repeat has
+  the same boundary.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
