@@ -144,6 +144,13 @@ func TestPolicyManagerRejectsInvalidFullReplacementWithoutMutation(t *testing.T)
 		t.Fatal("Commit(tampered desired policy) succeeded")
 	}
 	assertPolicyStateUnchanged(t, stateStore, paths, before, beforeBytes)
+	tampered = plan
+	tampered.Desired = cloneDesiredPolicy(plan.Desired)
+	tampered.Desired.EffectivePresets[0].SourceHash = strings.Repeat("f", 64)
+	if _, err := manager.Commit(tampered); err == nil {
+		t.Fatal("Commit(tampered effective preset snapshot) succeeded")
+	}
+	assertPolicyStateUnchanged(t, stateStore, paths, before, beforeBytes)
 	writeCatalogPreset(t, paths, "openai.yaml", append([]byte("# changed after planning\n"), policyPresetSources()["openai.yaml"]...))
 	if _, err := manager.Commit(plan); !errors.Is(err, ErrPolicyStalePlan) {
 		t.Fatalf("Commit(stale source plan) error = %v, want ErrPolicyStalePlan", err)
@@ -198,6 +205,9 @@ func TestNodePolicyCoordinatorKeepsDeferredPolicyPendingAndAppliesLatestExplicit
 		t.Fatalf("gateway/local policy generations = %d/%d, want 2/2 after applying the deferred desired state",
 			immediateResult.Gateway.Desired.GatewayPolicyGeneration, immediateResult.Local.PolicyGeneration)
 	}
+	if len(local.Presets) != 1 || local.Presets[0].Name != "openai" || local.Presets[0].Generation != 1 {
+		t.Fatalf("node effective preset snapshots = %#v, want only local openai generation 1", local.Presets)
+	}
 
 	if _, err := manager.PlanCurrentNodeSet("private-node", []string{"telegram"}, false); !errors.Is(err, ErrPolicyTargetNotFound) {
 		t.Fatalf("PlanCurrentNodeSet(name) error = %v, want authenticated immutable node ID", err)
@@ -221,6 +231,86 @@ func TestNodePolicyCoordinatorKeepsDeferredPolicyPendingAndAppliesLatestExplicit
 	local = loadPolicyState(t, localStore)
 	if local.Nodes[0].AssignedPresets == nil || len(local.Nodes[0].AssignedPresets) != 0 {
 		t.Fatalf("trust-only apply lost present empty assignment: %#v", local.Nodes[0].AssignedPresets)
+	}
+	if local.Presets == nil || len(local.Presets) != 0 {
+		t.Fatalf("cleared node retained effective preset snapshots: %#v", local.Presets)
+	}
+}
+
+func TestNodePolicySnapshotsPreserveCrossPresetReselection(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, localStore, _ := newNodePolicyFixture(t)
+	state := loadPolicyState(t, localStore)
+	alphaSelectors := canonicalPresetSelectors([]model.Selector{
+		{Kind: model.SelectorDomainSuffix, Value: "example.com"},
+		{Kind: model.SelectorDomainSuffix, Value: "private.example.com", Exclude: true},
+	})
+	betaSelectors := canonicalPresetSelectors([]model.Selector{
+		{Kind: model.SelectorDomain, Value: "api.private.example.com"},
+	})
+	alpha := catalogEffectivePreset("alpha", catalogPresetSource("alpha", alphaSelectors), alphaSelectors)
+	beta := catalogEffectivePreset("beta", catalogPresetSource("beta", betaSelectors), betaSelectors)
+	names := []string{"alpha", "beta"}
+	snapshots, err := EffectivePresetSnapshots([]model.Preset{beta, alpha}, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	presetMap := map[string]model.Preset{"alpha": alpha, "beta": beta}
+	selectors, effectiveHash, err := effectivePolicy(names, presetMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Nodes[0].AssignedPresets = append([]string{}, names...)
+	state.Presets = snapshots
+	state.Policies = []model.Policy{{
+		SchemaVersion: model.ResourceSchemaVersion, TargetKind: model.TargetNode, TargetID: policyNodeID,
+		PresetNames: append([]string{}, names...), Selectors: selectors, EffectiveHash: effectiveHash, Generation: 7,
+	}}
+	ir, generation, err := CompileCurrentNodePolicyMatcher(state)
+	if err != nil {
+		t.Fatalf("CompileCurrentNodePolicyMatcher() error = %v", err)
+	}
+	if generation != 7 || len(ir.Clauses) != 2 {
+		t.Fatalf("compiled node matcher generation/clauses = %d/%d", generation, len(ir.Clauses))
+	}
+	if selected, err := ir.SelectsDomain("other.private.example.com"); err != nil || selected {
+		t.Fatalf("alpha-local exclusion selected = %t, error = %v", selected, err)
+	}
+	if selected, err := ir.SelectsDomain("api.private.example.com"); err != nil || !selected {
+		t.Fatalf("beta cross-preset reselection selected = %t, error = %v", selected, err)
+	}
+
+	tampered := state
+	tampered.Presets = cloneEffectivePresets(state.Presets)
+	tampered.Presets[1].Selectors[0].Value = "attacker.example"
+	if _, _, err := CompileCurrentNodePolicyMatcher(tampered); err == nil {
+		t.Fatal("CompileCurrentNodePolicyMatcher() accepted a snapshot inconsistent with the flattened policy")
+	}
+}
+
+func TestNodePolicyApplierRefreshesSnapshotMetadataWithoutRoutingChange(t *testing.T) {
+	t.Parallel()
+
+	manager, _, applier, localStore, _ := newNodePolicyFixture(t)
+	plan, err := manager.PlanCurrentNodeSet(policyNodeID, []string{"telegram"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := cloneDesiredPolicy(plan.Desired)
+	desired.GatewayStateGeneration++
+	desired.EffectivePresets[0].SourceHash = strings.Repeat("f", 64)
+	result, err := applier.Apply(desired)
+	if err != nil {
+		t.Fatalf("Apply(metadata-only snapshot) error = %v", err)
+	}
+	if !result.Changed || result.RoutingChanged || result.PolicyGeneration != 1 {
+		t.Fatalf("Apply(metadata-only snapshot) = %#v", result)
+	}
+	state := loadPolicyState(t, localStore)
+	if state.Presets[0].SourceHash != strings.Repeat("f", 64) || state.Presets[0].Generation != 2 ||
+		state.Policies[0].Generation != 1 {
+		t.Fatalf("metadata-only snapshot state = presets:%#v policies:%#v", state.Presets, state.Policies)
 	}
 }
 
@@ -340,7 +430,8 @@ func newNodePolicyFixture(t *testing.T) (*PolicyManager, *store.StateStore, *Nod
 	local.Host.NodeCIDR = ""
 	local.Nodes = []model.Node{policyNode(true, gateway.Host.InitializedAt)}
 	local.Clients = []model.Client{}
-	local.Presets = []model.Preset{}
+	local.Presets = []model.Preset{telegram}
+	local.Presets[0].Generation = 1
 	local.Policies[0].Generation = 1
 	local.Exposes = []model.Expose{}
 	local.Certificates = []model.Certificate{}

@@ -391,6 +391,13 @@ vpnctl policy clear --client <name-or-id>
   счётчиками. Связь поколений отслеживается через
   `GatewayTrust.LastKnownGatewayGeneration`; gateway generation нельзя просто
   копировать в local policy generation после нескольких deferred замен.
+- Gateway → node policy handoff передаёт canonical effective snapshot каждого
+  назначенного preset, а не только их плоский union selectors. На node коллекция
+  `state.presets` содержит ровно эти applied snapshots и не является editable
+  gateway-каталогом. Это сохраняет границы `(include − exclude)` для каждого
+  preset и позволяет другому preset повторно выбрать исключённый первым traffic.
+  Плоский `Policy.Selectors` node восстанавливает и проверяет локально; wire не
+  дублирует каждый selector.
 - Policy plan привязан к gateway state generation и hash полного набора source
   preset-файлов. Он использует только последнее effective preset-состояние и не
   активирует валидные pending edits неявно. Selected preset обязан иметь один

@@ -38,7 +38,7 @@ type policyDesiredWire struct {
 	TargetKind              model.TargetKind `json:"target_kind"`
 	TargetID                string           `json:"target_id"`
 	PresetNames             []string         `json:"preset_names"`
-	Selectors               []model.Selector `json:"selectors"`
+	EffectivePresets        []model.Preset   `json:"effective_presets"`
 	EffectiveHash           string           `json:"effective_hash"`
 	GatewayPolicyGeneration uint64           `json:"gateway_policy_generation"`
 	GatewayStateGeneration  uint64           `json:"gateway_state_generation"`
@@ -84,19 +84,36 @@ type RemotePolicyPlan struct {
 func desiredPolicyToWire(desired routing.DesiredPolicy) policyDesiredWire {
 	return policyDesiredWire{
 		TargetKind: desired.TargetKind, TargetID: desired.TargetID,
-		PresetNames: append([]string{}, desired.PresetNames...), Selectors: append([]model.Selector{}, desired.Selectors...),
+		PresetNames: append([]string{}, desired.PresetNames...), EffectivePresets: clonePolicyPresets(desired.EffectivePresets),
 		EffectiveHash: desired.EffectiveHash, GatewayPolicyGeneration: desired.GatewayPolicyGeneration,
 		GatewayStateGeneration: desired.GatewayStateGeneration,
 	}
 }
 
-func (wire policyDesiredWire) domain() routing.DesiredPolicy {
+func (wire policyDesiredWire) domain() (routing.DesiredPolicy, error) {
+	selectors, effectiveHash, err := routing.ResolveEffectivePresetSnapshots(wire.PresetNames, wire.EffectivePresets)
+	if err != nil || effectiveHash != wire.EffectiveHash {
+		return routing.DesiredPolicy{}, fmt.Errorf("policy desired wire snapshots do not match its effective hash")
+	}
 	return routing.DesiredPolicy{
 		TargetKind: wire.TargetKind, TargetID: wire.TargetID,
-		PresetNames: append([]string{}, wire.PresetNames...), Selectors: append([]model.Selector{}, wire.Selectors...),
+		PresetNames: append([]string{}, wire.PresetNames...), EffectivePresets: clonePolicyPresets(wire.EffectivePresets),
+		Selectors:     selectors,
 		EffectiveHash: wire.EffectiveHash, GatewayPolicyGeneration: wire.GatewayPolicyGeneration,
 		GatewayStateGeneration: wire.GatewayStateGeneration,
+	}, nil
+}
+
+func clonePolicyPresets(values []model.Preset) []model.Preset {
+	if values == nil {
+		return nil
 	}
+	result := make([]model.Preset, len(values))
+	for index, value := range values {
+		value.Selectors = append([]model.Selector{}, value.Selectors...)
+		result[index] = value
+	}
+	return result
 }
 
 func policyPlanToWire(plan routing.PolicyReplacementPlan) (policyPlanWire, error) {
@@ -113,11 +130,15 @@ func policyPlanToWire(plan routing.PolicyReplacementPlan) (policyPlanWire, error
 }
 
 func (wire policyPlanWire) remote() (RemotePolicyPlan, error) {
+	desired, err := wire.Desired.domain()
+	if err != nil {
+		return RemotePolicyPlan{}, err
+	}
 	plan := RemotePolicyPlan{
 		Command: wire.Command, TargetID: wire.TargetID, TargetName: wire.TargetName,
 		PreviousPresetNames: append([]string{}, wire.PreviousPresetNames...), PresetNames: append([]string{}, wire.PresetNames...),
 		ExpectedStateGeneration: wire.ExpectedStateGeneration, NextStateGeneration: wire.NextStateGeneration,
-		Changed: wire.Changed, Deferred: wire.Deferred, Desired: wire.Desired.domain(), Fingerprint: wire.Fingerprint,
+		Changed: wire.Changed, Deferred: wire.Deferred, Desired: desired, Fingerprint: wire.Fingerprint,
 	}
 	if err := plan.Validate(); err != nil {
 		return RemotePolicyPlan{}, err
@@ -231,9 +252,13 @@ func (client *RemotePolicyGateway) Commit(ctx context.Context, plan RemotePolicy
 	if err != nil {
 		return routing.PolicyCommitResult{}, err
 	}
+	desired, err := response.Desired.domain()
+	if err != nil {
+		return routing.PolicyCommitResult{}, fmt.Errorf("gateway returned an invalid policy commit result")
+	}
 	result := routing.PolicyCommitResult{
 		Command: response.Command, Changed: response.Changed, Pending: response.Pending,
-		OperationID: response.OperationID, StateGeneration: response.StateGeneration, Desired: response.Desired.domain(),
+		OperationID: response.OperationID, StateGeneration: response.StateGeneration, Desired: desired,
 	}
 	if result.Command != plan.Command || result.StateGeneration != generation || result.Desired.TargetID != plan.TargetID ||
 		result.Desired.GatewayStateGeneration != generation || result.Pending != plan.Deferred ||

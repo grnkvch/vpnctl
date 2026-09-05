@@ -329,6 +329,12 @@ func TestNodeRoleStateBoundaries(t *testing.T) {
 		{name: "gateway-only host field", mutate: func(state *State) { state.Host.PublicIPv4 = "203.0.113.10" }, want: "gateway-only"},
 		{name: "gateway enrollment signer", mutate: func(state *State) { state.EnrollmentIdentity = gatewayState().EnrollmentIdentity }, want: "gateway-only"},
 		{name: "foreign policy", mutate: func(state *State) { state.Policies[0].TargetID = clientID }, want: "unknown node"},
+		{name: "missing effective preset snapshot", mutate: func(state *State) { state.Presets = []Preset{} }, want: "references unknown preset"},
+		{name: "extraneous effective preset snapshot", mutate: func(state *State) {
+			extra := state.Presets[0]
+			extra.Name = "openai"
+			state.Presets = append(state.Presets, extra)
+		}, want: "must exactly match"},
 		{name: "gateway idempotency history", mutate: func(state *State) {
 			state.Nodes[0].IdempotencyRecords = []IdempotencyRecord{idempotencyRecord(state.Generation, state.Host.InitializedAt)}
 		}, want: "gateway idempotency history"},
@@ -657,7 +663,7 @@ func nodeState() State {
 	state.EnrollmentIdentity = nil
 	state.DNS = &DNSUpstreamState{SchemaVersion: ResourceSchemaVersion, Scope: DNSUpstreamDirect, IPv4: []string{"192.0.2.53"}}
 	state.Clients = []Client{}
-	state.Presets = []Preset{}
+	state.Presets = state.Presets[:1]
 	state.Policies = state.Policies[:1]
 	state.Transports = state.Transports[:2]
 	state.Certificates = state.Certificates[1:]

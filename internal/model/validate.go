@@ -200,11 +200,9 @@ func (state State) Validate() error {
 		if !targetExists(policy.TargetKind, policy.TargetID, nodes, clients) {
 			return invalid(indexPath("policies", index)+".target_id", "references an unknown %s", policy.TargetKind)
 		}
-		if state.Host.Role == RoleGateway {
-			for _, name := range policy.PresetNames {
-				if _, found := presets[strings.ToLower(name)]; !found {
-					return invalid(indexPath("policies", index)+".preset_names", "references unknown preset %s", name)
-				}
+		for _, name := range policy.PresetNames {
+			if _, found := presets[strings.ToLower(name)]; !found {
+				return invalid(indexPath("policies", index)+".preset_names", "references unknown preset %s", name)
 			}
 		}
 		policies[key] = policy
@@ -216,6 +214,26 @@ func (state State) Validate() error {
 			}
 		} else if len(node.AssignedPresets) != 0 {
 			return invalid("nodes", "node %s has assigned presets without a policy", node.ID)
+		}
+	}
+	if state.Host.Role == RoleNode {
+		if len(state.Nodes) == 0 {
+			if len(state.Presets) != 0 {
+				return invalid("presets", "unjoined node cannot contain effective preset snapshots")
+			}
+		} else {
+			assigned := make(map[string]struct{}, len(state.Nodes[0].AssignedPresets))
+			for _, name := range state.Nodes[0].AssignedPresets {
+				assigned[strings.ToLower(name)] = struct{}{}
+			}
+			if len(state.Presets) != len(assigned) {
+				return invalid("presets", "node effective preset snapshots must exactly match its assignment")
+			}
+			for _, preset := range state.Presets {
+				if _, found := assigned[strings.ToLower(preset.Name)]; !found {
+					return invalid("presets", "node effective preset snapshot %s is not assigned", preset.Name)
+				}
+			}
 		}
 	}
 	for _, client := range state.Clients {
@@ -415,8 +433,8 @@ func (state State) Validate() error {
 		if len(state.Nodes) > 1 {
 			return invalid("nodes", "node host may contain at most one local node identity")
 		}
-		if len(state.Invites) != 0 || len(state.Clients) != 0 || len(state.Presets) != 0 || len(state.Backups) != 0 {
-			return invalid("host.role", "node state cannot contain gateway client, invite, preset, or backup collections")
+		if len(state.Invites) != 0 || len(state.Clients) != 0 || len(state.Backups) != 0 {
+			return invalid("host.role", "node state cannot contain gateway client, invite, or backup collections")
 		}
 		if len(state.Nodes) == 1 && state.Nodes[0].Gateway == nil {
 			return invalid("nodes[0].gateway", "joined local node requires gateway trust")

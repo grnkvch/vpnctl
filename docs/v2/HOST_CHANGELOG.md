@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — lossless private-node policy handoff
+
+### Planned reversible validation
+
+- Preserve each assigned preset's independent `include - exclude` boundary
+  across gateway-to-node join and policy RPC handoff. The signed/authenticated
+  payload carries canonical effective preset snapshots; flattened selectors are
+  derived on the node and are not duplicated on the wire.
+- A joined node stores exactly its assigned effective snapshots in the existing
+  state `presets` collection. They are applied input, not editable gateway
+  source files. Missing, extra, non-canonical, hash-inconsistent, or
+  selector-inconsistent snapshots fail before local state persistence.
+- Validation is source-only and uses Go temporary roots plus in-memory HTTPS/RPC
+  fixtures. No real vpnctl state, preset source, service, process, listener,
+  route, firewall, DNS, provider, gateway, node, or public endpoint is changed.
+  Repository rollback is limited to this commit; no host rollback is needed.
+
+### Acceptance
+
+- Join with an explicit preset persists one local generation-1 snapshot; empty
+  join persists a present empty collection. Immediate policy replacement swaps
+  only the assigned snapshots, clear removes them, and trust-only convergence
+  leaves routing state unchanged.
+- A regression fixture proves a domain excluded inside preset A remains direct
+  there but is selected when preset B explicitly includes it after the exact
+  snapshots cross the node handoff. Tampered snapshots are rejected instead of
+  being compiled into Mihomo matcher IR.
+- The complete Go suite, `go vet ./...`, formatting/diff checks, and strict
+  OpenSpec validation passed. All enrollment HTTPS, control RPC, and state
+  transitions stayed inside disposable test fixtures; no persistent host
+  mutation or rollback remains.
+
 ## 2026-09-06 — public strict convergence plan
 
 ### Planned reversible validation

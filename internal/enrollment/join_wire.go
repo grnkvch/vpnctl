@@ -15,6 +15,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 )
 
 const (
@@ -162,7 +163,7 @@ type NodeJoinAssignment struct {
 	CredentialGeneration          uint64              `json:"credential_generation"`
 	ActiveTransport               model.TransportKind `json:"active_transport"`
 	Presets                       []string            `json:"presets"`
-	Selectors                     []model.Selector    `json:"selectors"`
+	EffectivePresets              []model.Preset      `json:"effective_presets"`
 	PolicyEffectiveHash           string              `json:"policy_effective_hash,omitempty"`
 	CreatedAt                     time.Time           `json:"created_at"`
 	GatewayID                     string              `json:"gateway_id"`
@@ -199,18 +200,26 @@ func (assignment NodeJoinAssignment) Validate() error {
 		return fmt.Errorf("node join created_at must be canonical")
 	}
 	if len(assignment.Presets) == 0 {
-		if len(assignment.Selectors) != 0 || assignment.PolicyEffectiveHash != "" {
+		if len(assignment.EffectivePresets) != 0 || assignment.PolicyEffectiveHash != "" {
 			return fmt.Errorf("node join empty preset assignment cannot retain policy")
 		}
-	} else {
+	}
+	selectors, effectiveHash, err := routing.ResolveEffectivePresetSnapshots(assignment.Presets, assignment.EffectivePresets)
+	if err != nil {
+		return fmt.Errorf("node join effective preset snapshots: %w", err)
+	}
+	if len(assignment.Presets) != 0 {
 		policy := model.Policy{
 			SchemaVersion: model.ResourceSchemaVersion, TargetKind: model.TargetNode,
 			TargetID: assignment.NodeID, PresetNames: assignment.Presets,
-			Selectors: assignment.Selectors, EffectiveHash: assignment.PolicyEffectiveHash, Generation: 1,
+			Selectors: selectors, EffectiveHash: assignment.PolicyEffectiveHash, Generation: 1,
 		}
 		if err := policy.Validate(); err != nil {
 			return fmt.Errorf("node join policy: %w", err)
 		}
+	}
+	if assignment.PolicyEffectiveHash != "" && assignment.PolicyEffectiveHash != effectiveHash {
+		return fmt.Errorf("node join effective preset snapshots differ from its policy hash")
 	}
 	publicAddress, err := netip.ParseAddr(assignment.GatewayPublicIPv4)
 	if err != nil || !publicAddress.Is4() || !publicAddress.IsGlobalUnicast() || publicAddress.String() != assignment.GatewayPublicIPv4 {
@@ -483,9 +492,21 @@ func joinResponseMaterialHashNames() []string {
 
 func cloneNodeJoinAssignment(value NodeJoinAssignment) NodeJoinAssignment {
 	value.Presets = append([]string{}, value.Presets...)
-	value.Selectors = append([]model.Selector{}, value.Selectors...)
+	value.EffectivePresets = cloneJoinEffectivePresets(value.EffectivePresets)
 	value.MaterialHashes = cloneJoinStringMap(value.MaterialHashes)
 	return value
+}
+
+func cloneJoinEffectivePresets(values []model.Preset) []model.Preset {
+	if values == nil {
+		return nil
+	}
+	result := make([]model.Preset, len(values))
+	for index, value := range values {
+		value.Selectors = append([]model.Selector{}, value.Selectors...)
+		result[index] = value
+	}
+	return result
 }
 
 func cloneJoinStringMap(value map[string]string) map[string]string {

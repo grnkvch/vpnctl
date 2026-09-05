@@ -155,12 +155,16 @@ proven is retained for reconciliation rather than risking deletion of a
 committed identity.
 
 The signed response binds the assigned name/ID/IP, active transport, canonical
-preset names and effective selectors, control protocol and trust roots,
+preset names and one canonical effective snapshot per assigned preset, control
+protocol and trust roots,
 handshake-host identity/version, gateway state generation, and exact hashes of
 all delivered material. The node pins the enrollment DER-SPKI fingerprint from
 the invite, reconstructs the transcript, verifies the CA and leaf profile plus
 CSR public-key equality, and commits one local generation containing gateway
-trust, both transports, the optional policy, and public certificate metadata.
+trust, both transports, the optional policy, its exact assigned effective preset
+snapshots, and public certificate metadata. The flattened policy selector view
+is derived and verified on the node rather than duplicated on the wire, so
+per-preset exclusion boundaries survive enrollment.
 The CA, enrollment public key, node certificate, and restricted server
 credential use owner-create-only local references. Node control and WireGuard
 private keys never have a gateway storage path.

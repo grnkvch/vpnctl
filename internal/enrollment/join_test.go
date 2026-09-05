@@ -62,10 +62,11 @@ func TestAtomicJoinPublishesBothHostsAndConsumesInvite(t *testing.T) {
 				t.Fatalf("node state after join = generation %d nodes %+v transports %d certs %d", nodeState.Generation, nodeState.Nodes, len(nodeState.Transports), len(nodeState.Certificates))
 			}
 			if len(test.presets) == 0 {
-				if len(gateway.Policies) != 0 || len(nodeState.Policies) != 0 || len(result.Presets) != 0 {
+				if len(gateway.Policies) != 0 || len(nodeState.Policies) != 0 || len(nodeState.Presets) != 0 || len(result.Presets) != 0 {
 					t.Fatalf("empty assignment created policy: gateway=%+v node=%+v result=%+v", gateway.Policies, nodeState.Policies, result.Presets)
 				}
 			} else if !reflect.DeepEqual(result.Presets, []string{"telegram"}) || len(gateway.Policies) != 1 || len(nodeState.Policies) != 1 ||
+				len(nodeState.Presets) != 1 || nodeState.Presets[0].Name != "telegram" || nodeState.Presets[0].Generation != 1 ||
 				!reflect.DeepEqual(gateway.Policies[0].Selectors, nodeState.Policies[0].Selectors) {
 				t.Fatalf("explicit policy mismatch: result=%+v gateway=%+v node=%+v", result.Presets, gateway.Policies, nodeState.Policies)
 			}

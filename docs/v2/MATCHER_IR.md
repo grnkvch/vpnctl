@@ -13,6 +13,14 @@ product boundary, an IR match always means `gateway-or-block`; a miss means
 direct. All arrays and clauses are canonical, strictly sorted, independently
 owned, and validated against schema version 1 before target compilation.
 
+On a private node the compiler reads only the node-local applied preset
+snapshots delivered by the authenticated gateway. The collection must contain
+exactly one snapshot for every assigned preset; its derived flat selectors and
+effective hash must match the local policy record. Compilation fails closed on
+an absent, extra, non-canonical, or inconsistent snapshot. This makes the
+per-preset clauses recoverable after restart instead of trying to reconstruct
+them from a lossy union of selectors.
+
 Four projections are compiled from the same IR:
 
 - node routing gets ordered domain and longest-prefix address decisions for

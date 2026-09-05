@@ -144,6 +144,10 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 	if err != nil {
 		return PreparedEnrollmentArtifacts{}, fmt.Errorf("%w: %v", ErrPublicEnrollmentRejected, err)
 	}
+	effectivePresets, err := routing.EffectivePresetSnapshots(state.Presets, presetNames)
+	if err != nil {
+		return PreparedEnrollmentArtifacts{}, fmt.Errorf("%w: %v", ErrPublicEnrollmentRejected, err)
+	}
 	allocator, err := model.AddressAllocatorFromState(state)
 	if err != nil {
 		return PreparedEnrollmentArtifacts{}, err
@@ -193,7 +197,7 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 
 	resources, assignment, err := buildGatewayJoinResources(gatewayJoinResourceInput{
 		state: state, authorization: authorization, request: request, presetNames: presetNames,
-		selectors: selectors, policyHash: policyHash, overlayIPv4: overlayIPv4,
+		effectivePresets: effectivePresets, selectors: selectors, policyHash: policyHash, overlayIPv4: overlayIPv4,
 		gatewayOverlayIPv4: gatewayOverlayIPv4, preparedAt: preparedAt,
 		controlCA: authority.caRecord, controlCACertificatePEM: authority.caCertificatePEM,
 		issued: issued, enrollmentPublicKeyPEM: authority.enrollmentPublicKeyPEM,
@@ -349,6 +353,7 @@ type gatewayJoinResourceInput struct {
 	authorization             InviteAuthorization
 	request                   *NodeJoinRequest
 	presetNames               []string
+	effectivePresets          []model.Preset
 	selectors                 []model.Selector
 	policyHash                string
 	overlayIPv4               string
@@ -437,8 +442,9 @@ func buildGatewayJoinResources(input gatewayJoinResourceInput) (gatewayJoinResou
 	assignment := NodeJoinAssignment{
 		SchemaVersion: NodeJoinSchemaVersion, NodeID: node.ID, NodeName: node.Name, OverlayIPv4: node.OverlayIPv4,
 		CredentialGeneration: 1, ActiveTransport: node.ActiveTransport, Presets: append([]string{}, node.AssignedPresets...),
-		Selectors: append([]model.Selector{}, input.selectors...), CreatedAt: input.preparedAt,
-		GatewayID: input.state.Host.ID, GatewayPublicIPv4: input.state.Host.PublicIPv4, NodeCIDR: input.state.Host.NodeCIDR,
+		EffectivePresets: cloneJoinEffectivePresets(input.effectivePresets),
+		CreatedAt:        input.preparedAt,
+		GatewayID:        input.state.Host.ID, GatewayPublicIPv4: input.state.Host.PublicIPv4, NodeCIDR: input.state.Host.NodeCIDR,
 		GatewayOverlayIPv4: input.gatewayOverlayIPv4, GatewayStateGeneration: nextGeneration,
 		ControlProtocol:               input.authorization.ControlProtocol,
 		EnrollmentFingerprint:         input.authorization.EnrollmentFingerprint,

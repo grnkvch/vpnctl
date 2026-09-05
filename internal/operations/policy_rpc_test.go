@@ -1,9 +1,11 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -50,6 +52,14 @@ func TestRemotePolicyGatewayPlansAndDurablyDefersOnAuthoritativeGateway(t *testi
 	}
 	if !plan.Changed || !plan.Deferred || plan.TargetID != policyRPCNodeID || plan.ExpectedStateGeneration != 1 || plan.NextStateGeneration != 2 {
 		t.Fatalf("remote plan = %+v", plan)
+	}
+	if len(plan.Desired.EffectivePresets) != 1 || plan.Desired.EffectivePresets[0].Name != "openai" ||
+		len(plan.Desired.Selectors) != 1 || plan.Desired.Selectors[0].Value != "openai.com" {
+		t.Fatalf("remote plan lost effective preset boundaries: %+v", plan.Desired)
+	}
+	wireJSON, err := json.Marshal(desiredPolicyToWire(plan.Desired))
+	if err != nil || bytes.Count(wireJSON, []byte(`"selectors"`)) != 1 {
+		t.Fatalf("policy wire duplicated or omitted preset selectors: %s, %v", wireJSON, err)
 	}
 	result, err := remote.Commit(context.Background(), plan)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
@@ -316,6 +317,10 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 	if err := validateNodeJoinAssignmentContext(token, installation, requestedTransport, requestedPresets, assignment); err != nil {
 		return verifiedLocalJoin{}, err
 	}
+	policySelectors, _, err := routing.ResolveEffectivePresetSnapshots(assignment.Presets, assignment.EffectivePresets)
+	if err != nil {
+		return verifiedLocalJoin{}, err
+	}
 	assignmentHash, err := assignment.SHA256()
 	if err != nil {
 		return verifiedLocalJoin{}, err
@@ -413,6 +418,7 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 		return verifiedLocalJoin{}, err
 	}
 	candidate.Nodes = []model.Node{node}
+	candidate.Presets = localJoinEffectivePresets(assignment.EffectivePresets)
 	candidate.Transports = transports
 	candidate.Certificates = []model.Certificate{caRecord, leafRecord}
 	candidate.HandshakeHost = &model.HandshakeHost{
@@ -423,7 +429,7 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 	if len(assignment.Presets) != 0 {
 		candidate.Policies = []model.Policy{{
 			SchemaVersion: model.ResourceSchemaVersion, TargetKind: model.TargetNode, TargetID: node.ID,
-			PresetNames: append([]string{}, assignment.Presets...), Selectors: append([]model.Selector{}, assignment.Selectors...),
+			PresetNames: append([]string{}, assignment.Presets...), Selectors: append([]model.Selector{}, policySelectors...),
 			EffectiveHash: assignment.PolicyEffectiveHash, Generation: 1,
 		}}
 	}
@@ -445,6 +451,14 @@ func (workflow *NodeJoinWorkflow) verifyAndBuildLocalJoin(
 			LocalStateGeneration:   candidate.Generation, ReplayHash: replayHash,
 		},
 	}, nil
+}
+
+func localJoinEffectivePresets(values []model.Preset) []model.Preset {
+	result := cloneJoinEffectivePresets(values)
+	for index := range result {
+		result[index].Generation = 1
+	}
+	return result
 }
 
 func validateFreshNodeJoinState(state model.State) error {

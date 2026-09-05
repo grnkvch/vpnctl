@@ -126,6 +126,16 @@ desired policy even when the gateway step is a semantic no-op. Gateway and local
 policy generations are independent monotonic counters; node trust records the
 last observed gateway state generation.
 
+The gateway-to-node handoff carries one canonical effective snapshot for every
+assigned preset. A joined node stores exactly those snapshots in its local
+`presets` collection; they are applied routing input, not an editable copy of
+the gateway source catalog. The node derives the flattened `Policy.Selectors`
+compatibility view and effective hash from the snapshots and rejects any
+mismatch before persistence. Sending selectors only inside their snapshots
+also avoids duplicating the potentially largest policy payload. This preserves
+each preset's independent `include - exclude` clause across join, immediate
+policy apply, restart, and later transport re-rendering.
+
 There is no incremental add/remove method, automatic default assignment, or
 automatic reconciliation path. The public registry contains only explicit
 policy show, full set, and clear commands for current-node and explicit-client

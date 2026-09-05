@@ -42,6 +42,7 @@ type DesiredPolicy struct {
 	TargetKind              model.TargetKind
 	TargetID                string
 	PresetNames             []string
+	EffectivePresets        []model.Preset
 	Selectors               []model.Selector
 	EffectiveHash           string
 	GatewayPolicyGeneration uint64
@@ -70,6 +71,53 @@ func ShowCurrentNodePolicy(state model.State) (PolicyView, error) {
 		return PolicyView{}, fmt.Errorf("current policy inspection requires one initialized node")
 	}
 	return policyView(state, model.TargetNode, state.Nodes[0].ID, state.Nodes[0].Name, state.Nodes[0].AssignedPresets)
+}
+
+// CompileCurrentNodePolicyMatcher reconstructs the provider-neutral matcher
+// from the node-local signed effective preset snapshots. It rejects flattened
+// policy data that cannot be proven to represent the same per-preset clauses.
+func CompileCurrentNodePolicyMatcher(state model.State) (MatcherIR, uint64, error) {
+	if err := state.Validate(); err != nil {
+		return MatcherIR{}, 0, fmt.Errorf("validate node policy state: %w", err)
+	}
+	if state.Host.Role != model.RoleNode || len(state.Nodes) != 1 {
+		return MatcherIR{}, 0, fmt.Errorf("node policy matcher requires one initialized node")
+	}
+	policy, found := findTargetPolicy(state.Policies, model.TargetNode, state.Nodes[0].ID)
+	if !found {
+		composition, err := NormalizePresetComposition([]PresetAST{})
+		if err != nil {
+			return MatcherIR{}, 0, err
+		}
+		ir, err := CompileMatcherIR(composition)
+		return ir, 0, err
+	}
+	if err := ValidateEffectivePresetSnapshots(
+		policy.PresetNames, policy.Selectors, policy.EffectiveHash, state.Presets,
+	); err != nil {
+		return MatcherIR{}, 0, fmt.Errorf("validate node effective preset snapshots: %w", err)
+	}
+	asts := make([]PresetAST, 0, len(state.Presets))
+	for _, preset := range state.Presets {
+		asts = append(asts, PresetAST{
+			SchemaVersion: PresetDocumentSchemaVersion,
+			Name:          preset.Name,
+			Selectors:     canonicalPresetSelectors(preset.Selectors),
+		})
+	}
+	composition, err := NormalizePresetComposition(asts)
+	if err != nil {
+		return MatcherIR{}, 0, fmt.Errorf("normalize node preset composition: %w", err)
+	}
+	ir, err := CompileMatcherIR(composition)
+	if err != nil {
+		return MatcherIR{}, 0, err
+	}
+	generation := policy.Generation
+	if len(ir.Clauses) == 0 {
+		generation = 0
+	}
+	return ir, generation, nil
 }
 
 func ShowClientPolicy(state model.State, reference string) (PolicyView, error) {
@@ -208,6 +256,100 @@ func ResolveEffectiveAssignment(presets []model.Preset, requested []string) ([]s
 		selectors = []model.Selector{}
 	}
 	return names, selectors, effectiveHash, nil
+}
+
+// EffectivePresetSnapshots returns the exact applied preset generations needed
+// to preserve per-preset include-minus-exclude boundaries on a private node.
+// The snapshots contain no secret material and are canonicalized for signed
+// gateway-to-node handoff.
+func EffectivePresetSnapshots(presets []model.Preset, names []string) ([]model.Preset, error) {
+	if presets == nil || names == nil {
+		return nil, fmt.Errorf("effective presets and assignment names must be present arrays")
+	}
+	effective := make(map[string]model.Preset, len(presets))
+	for _, preset := range presets {
+		if err := preset.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid effective preset %s: %w", preset.Name, err)
+		}
+		key := strings.ToLower(preset.Name)
+		if _, duplicate := effective[key]; duplicate {
+			return nil, fmt.Errorf("effective presets duplicate %s", preset.Name)
+		}
+		effective[key] = preset
+	}
+	result := make([]model.Preset, 0, len(names))
+	previous := ""
+	for index, name := range names {
+		key := strings.ToLower(name)
+		if err := validatePresetName(name); err != nil {
+			return nil, err
+		}
+		if index > 0 && previous >= key {
+			return nil, fmt.Errorf("effective preset assignment names must be strictly sorted and unique")
+		}
+		preset, found := effective[key]
+		if !found || preset.Name != name {
+			return nil, fmt.Errorf("policy references missing or non-canonical preset %s", name)
+		}
+		preset.Selectors = canonicalPresetSelectors(preset.Selectors)
+		result = append(result, preset)
+		previous = key
+	}
+	return result, nil
+}
+
+// ValidateEffectivePresetSnapshots proves that a signed node handoff retains
+// exactly the same effective policy while preserving each preset boundary.
+func ValidateEffectivePresetSnapshots(names []string, selectors []model.Selector, effectiveHash string, snapshots []model.Preset) error {
+	if selectors == nil {
+		return fmt.Errorf("effective policy names, selectors, and preset snapshots must be present arrays")
+	}
+	wantSelectors, wantHash, err := ResolveEffectivePresetSnapshots(names, snapshots)
+	if err != nil {
+		return err
+	}
+	hashMatches := effectiveHash == wantHash
+	// An enrollment with no policy has no materialized Policy resource and
+	// therefore carries no hash. A cleared, materialized policy uses the
+	// canonical empty-set hash; both represent the same empty composition.
+	if len(names) == 0 && effectiveHash == "" {
+		hashMatches = true
+	}
+	if !presetSelectorsEqual(selectors, wantSelectors) || !hashMatches {
+		return fmt.Errorf("effective policy preset snapshots differ from its selectors or hash")
+	}
+	return nil
+}
+
+// ResolveEffectivePresetSnapshots derives the flattened compatibility view
+// and its gateway hash without discarding the independently evaluated preset
+// clauses. Wire protocols send each selector only inside these snapshots.
+func ResolveEffectivePresetSnapshots(names []string, snapshots []model.Preset) ([]model.Selector, string, error) {
+	if names == nil || snapshots == nil {
+		return nil, "", fmt.Errorf("effective policy names and preset snapshots must be present arrays")
+	}
+	if len(names) != len(snapshots) {
+		return nil, "", fmt.Errorf("effective policy preset snapshots do not match its assignment")
+	}
+	canonical, err := EffectivePresetSnapshots(snapshots, names)
+	if err != nil {
+		return nil, "", err
+	}
+	if !reflect.DeepEqual(canonical, snapshots) {
+		return nil, "", fmt.Errorf("effective policy preset snapshots are not canonical")
+	}
+	presetMap := make(map[string]model.Preset, len(snapshots))
+	for _, preset := range snapshots {
+		presetMap[strings.ToLower(preset.Name)] = preset
+	}
+	selectors, effectiveHash, err := effectivePolicy(names, presetMap)
+	if err != nil {
+		return nil, "", err
+	}
+	if selectors == nil {
+		selectors = []model.Selector{}
+	}
+	return selectors, effectiveHash, nil
 }
 
 func (result PolicyCommitResult) OutputResult() output.Result {
@@ -536,6 +678,10 @@ func replacePolicyInGatewayState(state model.State, kind model.TargetKind, targe
 	if selectors == nil {
 		selectors = []model.Selector{}
 	}
+	effectivePresets, err := EffectivePresetSnapshots(state.Presets, names)
+	if err != nil {
+		return model.State{}, DesiredPolicy{}, false, err
+	}
 
 	policyIndex := -1
 	var currentPolicy model.Policy
@@ -560,7 +706,8 @@ func replacePolicyInGatewayState(state model.State, kind model.TargetKind, targe
 
 	desired := DesiredPolicy{
 		TargetKind: kind, TargetID: targetID,
-		PresetNames: append([]string{}, names...), Selectors: append([]model.Selector{}, selectors...),
+		PresetNames: append([]string{}, names...), EffectivePresets: cloneEffectivePresets(effectivePresets),
+		Selectors:     append([]model.Selector{}, selectors...),
 		EffectiveHash: effectiveHash, GatewayStateGeneration: state.Generation,
 	}
 	if policyIndex >= 0 {
@@ -694,8 +841,14 @@ func validatePolicyPlan(plan PolicyReplacementPlan) error {
 		return fmt.Errorf("policy clear plan cannot contain presets or a source snapshot")
 	}
 	if plan.Desired.TargetKind != plan.TargetKind || plan.Desired.TargetID != plan.TargetID ||
-		!equalPolicyPresetNames(plan.Desired.PresetNames, plan.PresetNames) || plan.Desired.PresetNames == nil || plan.Desired.Selectors == nil {
+		!equalPolicyPresetNames(plan.Desired.PresetNames, plan.PresetNames) || plan.Desired.PresetNames == nil ||
+		plan.Desired.EffectivePresets == nil || plan.Desired.Selectors == nil {
 		return fmt.Errorf("policy plan desired state does not match its target or preset set")
+	}
+	if err := ValidateEffectivePresetSnapshots(
+		plan.Desired.PresetNames, plan.Desired.Selectors, plan.Desired.EffectiveHash, plan.Desired.EffectivePresets,
+	); err != nil {
+		return fmt.Errorf("policy plan has invalid effective preset snapshots: %w", err)
 	}
 	probe := model.Policy{
 		SchemaVersion: model.ResourceSchemaVersion, TargetKind: plan.Desired.TargetKind, TargetID: plan.Desired.TargetID,
@@ -720,6 +873,10 @@ func validatePolicyPlan(plan PolicyReplacementPlan) error {
 	}
 	if err := plan.candidate.Validate(); err != nil {
 		return fmt.Errorf("invalid policy plan candidate: %w", err)
+	}
+	expectedPresets, err := EffectivePresetSnapshots(plan.candidate.Presets, plan.Desired.PresetNames)
+	if err != nil || !reflect.DeepEqual(expectedPresets, plan.Desired.EffectivePresets) {
+		return fmt.Errorf("policy plan effective preset snapshots differ from its candidate")
 	}
 	candidatePolicy, found := findTargetPolicy(plan.candidate.Policies, plan.TargetKind, plan.TargetID)
 	if plan.Desired.GatewayPolicyGeneration == 0 {
@@ -746,14 +903,30 @@ func findTargetPolicy(policies []model.Policy, kind model.TargetKind, id string)
 
 func cloneDesiredPolicy(desired DesiredPolicy) DesiredPolicy {
 	desired.PresetNames = append([]string(nil), desired.PresetNames...)
+	desired.EffectivePresets = cloneEffectivePresets(desired.EffectivePresets)
 	desired.Selectors = append([]model.Selector(nil), desired.Selectors...)
 	if desired.PresetNames == nil {
 		desired.PresetNames = []string{}
+	}
+	if desired.EffectivePresets == nil {
+		desired.EffectivePresets = []model.Preset{}
 	}
 	if desired.Selectors == nil {
 		desired.Selectors = []model.Selector{}
 	}
 	return desired
+}
+
+func cloneEffectivePresets(values []model.Preset) []model.Preset {
+	if values == nil {
+		return nil
+	}
+	result := make([]model.Preset, len(values))
+	for index, value := range values {
+		value.Selectors = append([]model.Selector{}, value.Selectors...)
+		result[index] = value
+	}
+	return result
 }
 
 type NodePolicyApplyResult struct {
@@ -789,6 +962,9 @@ func (applier *NodePolicyApplier) Apply(desired DesiredPolicy) (NodePolicyApplyR
 	if err := state.Validate(); err != nil {
 		return NodePolicyApplyResult{}, fmt.Errorf("validate node-local policy state: %w", err)
 	}
+	if _, _, err := CompileCurrentNodePolicyMatcher(state); err != nil {
+		return NodePolicyApplyResult{}, fmt.Errorf("validate current node-local matcher: %w", err)
+	}
 	if state.Host.Role != model.RoleNode || len(state.Nodes) != 1 || state.Nodes[0].ID != desired.TargetID || state.Nodes[0].Gateway == nil {
 		return NodePolicyApplyResult{}, fmt.Errorf("node-local state does not match desired policy target")
 	}
@@ -813,8 +989,13 @@ func (applier *NodePolicyApplier) Apply(desired DesiredPolicy) (NodePolicyApplyR
 		routingChanged = routingChanged || !equalPolicyPresetNames(current.PresetNames, desired.PresetNames) ||
 			!presetSelectorsEqual(current.Selectors, desired.Selectors) || current.EffectiveHash != desired.EffectiveHash
 	}
+	nextPresetSnapshots, err := reconcileLocalPresetSnapshots(state.Presets, desired.EffectivePresets)
+	if err != nil {
+		return NodePolicyApplyResult{}, err
+	}
+	snapshotsChanged := !reflect.DeepEqual(state.Presets, nextPresetSnapshots)
 	trustChanged := desired.GatewayStateGeneration > state.Nodes[0].Gateway.LastKnownGatewayGeneration
-	if !routingChanged && !trustChanged {
+	if !routingChanged && !snapshotsChanged && !trustChanged {
 		generation := uint64(0)
 		if policyIndex >= 0 {
 			generation = state.Policies[policyIndex].Generation
@@ -824,6 +1005,7 @@ func (applier *NodePolicyApplier) Apply(desired DesiredPolicy) (NodePolicyApplyR
 
 	candidate := state
 	candidate.Nodes = append([]model.Node{}, state.Nodes...)
+	candidate.Presets = cloneEffectivePresets(state.Presets)
 	candidate.Policies = append([]model.Policy{}, state.Policies...)
 	gateway := *state.Nodes[0].Gateway
 	candidate.Nodes[0].Gateway = &gateway
@@ -863,6 +1045,9 @@ func (applier *NodePolicyApplier) Apply(desired DesiredPolicy) (NodePolicyApplyR
 	} else if policyIndex >= 0 {
 		policyGeneration = state.Policies[policyIndex].Generation
 	}
+	if snapshotsChanged {
+		candidate.Presets = nextPresetSnapshots
+	}
 	if err := model.ValidateTransition(state, candidate); err != nil {
 		return NodePolicyApplyResult{}, fmt.Errorf("validate node-local policy transition: %w", err)
 	}
@@ -875,10 +1060,12 @@ func (applier *NodePolicyApplier) Apply(desired DesiredPolicy) (NodePolicyApplyR
 }
 
 func validateDesiredNodePolicy(desired DesiredPolicy) error {
-	if desired.TargetKind != model.TargetNode || desired.TargetID == "" || desired.PresetNames == nil || desired.Selectors == nil || desired.GatewayStateGeneration == 0 {
+	if desired.TargetKind != model.TargetNode || desired.TargetID == "" || desired.PresetNames == nil ||
+		desired.EffectivePresets == nil || desired.Selectors == nil || desired.GatewayStateGeneration == 0 {
 		return fmt.Errorf("desired node policy target, arrays, and gateway generation are required")
 	}
-	if desired.GatewayPolicyGeneration == 0 && (len(desired.PresetNames) != 0 || len(desired.Selectors) != 0) {
+	if desired.GatewayPolicyGeneration == 0 &&
+		(len(desired.PresetNames) != 0 || len(desired.EffectivePresets) != 0 || len(desired.Selectors) != 0) {
 		return fmt.Errorf("desired node policy without a gateway policy generation must be empty")
 	}
 	probe := model.Policy{
@@ -888,7 +1075,44 @@ func validateDesiredNodePolicy(desired DesiredPolicy) error {
 	if err := probe.Validate(); err != nil {
 		return fmt.Errorf("invalid desired node policy: %w", err)
 	}
+	if err := ValidateEffectivePresetSnapshots(
+		desired.PresetNames, desired.Selectors, desired.EffectiveHash, desired.EffectivePresets,
+	); err != nil {
+		return fmt.Errorf("invalid desired node preset snapshots: %w", err)
+	}
 	return nil
+}
+
+func reconcileLocalPresetSnapshots(current, desired []model.Preset) ([]model.Preset, error) {
+	if current == nil || desired == nil {
+		return nil, fmt.Errorf("current and desired node preset snapshots must be present arrays")
+	}
+	byName := make(map[string]model.Preset, len(current))
+	for _, preset := range current {
+		byName[strings.ToLower(preset.Name)] = preset
+	}
+	result := make([]model.Preset, 0, len(desired))
+	for _, incoming := range desired {
+		incoming.Selectors = append([]model.Selector{}, incoming.Selectors...)
+		previous, found := byName[strings.ToLower(incoming.Name)]
+		incoming.Generation = 1
+		if found {
+			unchanged := previous.SchemaVersion == incoming.SchemaVersion && previous.Name == incoming.Name &&
+				previous.SourceHash == incoming.SourceHash && previous.EffectiveHash == incoming.EffectiveHash &&
+				previous.AppliedAt.Equal(incoming.AppliedAt) && presetSelectorsEqual(previous.Selectors, incoming.Selectors)
+			if unchanged {
+				incoming.Generation = previous.Generation
+			} else {
+				next, err := model.NextGeneration(previous.Generation)
+				if err != nil {
+					return nil, fmt.Errorf("advance node preset snapshot %s: %w", incoming.Name, err)
+				}
+				incoming.Generation = next
+			}
+		}
+		result = append(result, incoming)
+	}
+	return result, nil
 }
 
 // ValidateDesiredNodePolicy validates the gateway-to-node policy handoff
