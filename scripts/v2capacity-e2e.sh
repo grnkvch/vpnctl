@@ -713,7 +713,7 @@ start_loads() {
   background_pids+=("$!")
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load api \
     --duration "$duration" --rate "$api_rate" --workers 24 --timeout 8 \
-    --failure-window-start -1 --failure-window-end -1 \
+    --failure-window-start "$fault_start" --failure-window-end "$fault_end" \
     --target http://127.0.0.1:18080/telegram-api.json --expected-sha256 "$expected_sha" \
     > "$run_root/api-load.json" &
   background_pids+=("$!")

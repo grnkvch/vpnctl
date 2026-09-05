@@ -22,6 +22,29 @@ def percentile(values: list[float], fraction: float) -> float:
     return round(ordered[max(0, math.ceil(len(ordered) * fraction) - 1)], 3)
 
 
+def latency_summary(results: list[dict[str, object]]) -> dict[str, float]:
+    latencies = [float(result["elapsed_ms"]) for result in results]
+    return {
+        "p50": percentile(latencies, 0.50),
+        "p95": percentile(latencies, 0.95),
+        "p99": percentile(latencies, 0.99),
+        "max": round(max(latencies), 3) if latencies else 0.0,
+    }
+
+
+def latency_by_fault_window(
+    successes: list[dict[str, object]], start: float, end: float
+) -> dict[str, object]:
+    inside = [result for result in successes if start <= float(result["offset_seconds"]) <= end]
+    outside = [
+        result for result in successes if not start <= float(result["offset_seconds"]) <= end
+    ]
+    return {
+        "inside": {"successful_requests": len(inside), "latency_ms": latency_summary(inside)},
+        "outside": {"successful_requests": len(outside), "latency_ms": latency_summary(outside)},
+    }
+
+
 def telegram_body(index: int, size: int) -> bytes:
     base = {"update_id": index + 1, "message": {"from": {"id": index % 300 + 1}, "text": "x"}}
     encoded = json.dumps(base, separators=(",", ":")).encode()
@@ -199,7 +222,6 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
     wall = time.monotonic() - started
     successes = [result for result in results if result["ok"]]
     failures = [result for result in results if not result["ok"]]
-    latencies = [float(result["elapsed_ms"]) for result in successes]
     status_counts: dict[str, int] = {}
     error_counts: dict[str, int] = {}
     for result in results:
@@ -226,12 +248,10 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
         "tail_30_seconds_successful": len(tail) > 0 and all(bool(value["ok"]) for value in tail),
         "status_counts": status_counts,
         "error_counts": error_counts,
-        "latency_ms": {
-            "p50": percentile(latencies, 0.50),
-            "p95": percentile(latencies, 0.95),
-            "p99": percentile(latencies, 0.99),
-            "max": round(max(latencies), 3) if latencies else 0.0,
-        },
+        "latency_ms": latency_summary(successes),
+        "latency_by_fault_window": latency_by_fault_window(
+            successes, args.failure_window_start, args.failure_window_end
+        ),
         "wall_seconds": round(wall, 3),
         "achieved_requests_per_second": round(requests / wall, 3),
     }

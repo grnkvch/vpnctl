@@ -1086,6 +1086,31 @@ This journal records development-host mutations made while implementing and vali
   recovery, workload latency, and every other acceptance bound remain
   unchanged. Repository rollback is the single correction commit.
 
+### Split-timeout candidate and latency-window instrumentation
+
+- The clean-source run at commit
+  `e6e6037edb79990216fd1dc4c2bfab4dc7292977` proved the split timeout: the
+  pre-armed TLS connection became ready, the triggered request returned `503`
+  in 57 ms, actual down time was `2.969s`, first recovery succeeded at `2.342s`,
+  and five stable successes completed at `3.911s`. It completed the full
+  profile and remains a non-accepted `candidate` at
+  `artifacts/v2lab/capacity-e2e/run-20260905T115948Z/summary.json`.
+- Webhook delivery passed its count at 2915/3000 with all 85 failures inside the
+  accepted window, but overall successful-response p95/p99 were
+  `3141.529/3943.714ms`. Bot API-like delivery was 1500/1500 with p95
+  `915.126ms`, but p99 `3071.848ms`. All five clients had zero loss; controller,
+  connection limits, CPU/memory/swap/disk, reconnect, OOM, deadlock, cleanup,
+  and restored `Stopped` states passed. No new QEMU crash report appeared.
+- Existing aggregate evidence cannot prove whether the latency tail belongs to
+  ordinary steady state or the intentionally injected fault/control interval.
+  The load reporter now retains the same overall latency metric plus separate
+  successful-request counts and p50/p95/p99/max inside and outside the fixed
+  `135--175s` fault window. Both webhook and Bot API use the same partition;
+  Bot API still requires zero failures globally. The next run continues to gate
+  on the original overall p95/p99 values, so this instrumentation cannot turn a
+  failure into a pass. It records no payload, path, credential, or per-request
+  event and changes no workload or acceptance bound.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

@@ -35,6 +35,20 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(MODULE.percentile([4, 1, 3, 2], 0.50), 2)
         self.assertEqual(MODULE.percentile([4, 1, 3, 2], 0.95), 4)
 
+    def test_success_latency_is_partitioned_by_fault_window(self):
+        results = [
+            {"elapsed_ms": 10.0, "offset_seconds": 10.0},
+            {"elapsed_ms": 20.0, "offset_seconds": 135.0},
+            {"elapsed_ms": 30.0, "offset_seconds": 155.0},
+            {"elapsed_ms": 40.0, "offset_seconds": 175.0},
+            {"elapsed_ms": 50.0, "offset_seconds": 200.0},
+        ]
+        summary = MODULE.latency_by_fault_window(results, 135.0, 175.0)
+        self.assertEqual(summary["inside"]["successful_requests"], 3)
+        self.assertEqual(summary["inside"]["latency_ms"]["p95"], 40.0)
+        self.assertEqual(summary["outside"]["successful_requests"], 2)
+        self.assertEqual(summary["outside"]["latency_ms"]["p95"], 50.0)
+
     def test_recovery_probe_reuses_one_process_and_requires_five_successes_before_deadline(self):
         clock = FakeClock()
         operation = RecoveryOperation(clock, [(0.2, False)] + [(0.2, True)] * 5)

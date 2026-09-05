@@ -168,4 +168,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			t.Errorf("capacity E2E harness is missing %q", required)
 		}
 	}
+	if strings.Count(harness, "--failure-window-start \"$fault_start\" --failure-window-end \"$fault_end\"") != 2 {
+		t.Fatal("capacity webhook and Bot API loads must record the same fault-window latency partition")
+	}
 }
