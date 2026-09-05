@@ -500,6 +500,27 @@ This journal records development-host mutations made while implementing and vali
   ownership as before. Repository rollback is an ordinary revert of the
   recovery/capacity commit; no manual host rollback should remain.
 
+### First recovery-guard composition result and fixture correction
+
+- The clean-source run at commit
+  `89a5251` stopped before workload generation while preparing the capacity
+  tunnel-client helper. The helper rejected its local authenticated status
+  target before spawning frpc because the fixed synthetic admin password in
+  the fixture was 62 characters, while the production constructor requires
+  exactly 64 lowercase hexadecimal characters. No capacity or reconnect
+  evidence is claimed from
+  `artifacts/v2lab/capacity-e2e/run-20260905T053435Z`.
+- The failure trap stopped only the owner-scoped services, removed the exact
+  capacity drop-in/helper and all tunnel/restricted/ingress fixture resources
+  and packages, and restored both fixtures to their preflight `Stopped` state.
+  No listener, unit, package, firewall rule, process, or temporary guest file
+  from the run remains; no manual rollback is required.
+- The source-only correction replaces that fixture value in both the frpc
+  rewrite and recovery helper with one explicit 64-character lowercase-hex
+  synthetic value. The regression contract requires the same exact value on
+  both sides. The next clean repeat retains the already documented owner
+  boundary and automatic rollback; it may make no additional host mutation.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

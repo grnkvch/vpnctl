@@ -70,7 +70,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	clientHelper := readContractFile(t, filepath.Join(fixtureRoot, "tunnel_client", "main.go"))
 	for _, required := range []string{
 		"tunnel.NewFRPClientStatusRecoveryProber", "tunnel.RunFRPClientProcessWithRecovery",
-		"cacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+		"b29cf595a13d39c8445e2d42b6a5d8e7a50772b7703b26f9f7d8da9f45f4c485",
 	} {
 		if !strings.Contains(clientHelper, required) {
 			t.Errorf("capacity client helper is missing %q", required)
@@ -97,6 +97,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
 		"./test/v2lab/capacity/tunnel_client", "webServer.user = \"vpnctl\"",
+		"capacity_admin_password=b29cf595a13d39c8445e2d42b6a5d8e7a50772b7703b26f9f7d8da9f45f4c485",
 		"/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin",
 		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",
 		"recovered_without_client_service_restart:",

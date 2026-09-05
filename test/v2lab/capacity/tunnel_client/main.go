@@ -15,7 +15,7 @@ import (
 const (
 	frpcBinaryPath = "/usr/local/libexec/vpnctl-v2-spike/frpc"
 	frpcConfigPath = "/etc/vpnctl-v2-spike/tunnel/frpc.toml"
-	adminPassword  = "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca"
+	adminPassword  = "b29cf595a13d39c8445e2d42b6a5d8e7a50772b7703b26f9f7d8da9f45f4c485"
 )
 
 func main() {
