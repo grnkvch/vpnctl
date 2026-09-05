@@ -9,6 +9,18 @@
 
 Последнее обновление: **2026-09-06**.
 
+Public `vpnctl transport test <standard|restricted>` и
+`vpnctl transport switch <standard|restricted>` теперь имеют строгий parser,
+role gate, v2 registry dispatch, JSON-safe evidence и общий mutation contract
+с explicit consent, `--dry-run` и `--defer`. Production planning читает точное
+joined-node state и не меняет его. Host transport provider и authoritative
+deferred writer пока намеренно закрыты typed
+`system transport runtime adapter is unavailable`: public команда не имитирует
+успешные probes/activation и не записывает selection до появления реального
+runtime. Следующий slice — подключить operation-bound deferred intent и
+production provider, сохранив четыре обязательные проверки и manual-only
+selection.
+
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
 через v2 registry и подключён к production state/network runtime. Closed runner
 выполняет DNS UDP/TCP, TCP readiness, IP-only TLS и reserved HTTPS health;

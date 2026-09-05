@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Public manual transport command boundary
+
+### Planned reversible validation
+
+- Route public `vpnctl transport test <standard|restricted>` and
+  `vpnctl transport switch <standard|restricted>` through the v2 registry.
+  Keep both commands node-only and require exactly one explicit transport;
+  support the common confirmation, `--dry-run`, and `--defer` contract for a
+  switch without adding automatic fallback.
+- Bind production planning to exact joined-node state. Until the concrete host
+  provider and authoritative deferred writer are connected, return one typed
+  unavailable result before any transport activation or state write rather
+  than fabricating probe success.
+- Validation uses only in-memory workflow doubles, Go temporary directories,
+  and `/private/tmp/vpnctl-go-cache`. It does not change a real transport,
+  state, config, unit, process, route, firewall, listener, host, VM, public
+  endpoint, webhook, or client.
+
+### Acceptance
+
+- Focused tests cover explicit target routing, schema-safe probe evidence,
+  mandatory UDP failure, dry-run/immediate/deferred mutation modes, role and
+  argument rejection before runtime construction, read-only production
+  planning, typed unavailable execution, and byte-identical state after a
+  failed production test.
+- The focused race suite, complete Go suite, `go vet ./...`, documentation
+  contract regression, strict OpenSpec validation, formatting, and diff checks
+  pass.
+- Concrete transport execution and gateway-backed deferred registration remain
+  the next implementation layer. Repository rollback removes this source and
+  documentation slice; no development-host rollback is needed.
+
 ## 2026-09-06 — Public bounded doctor runtime
 
 ### Planned reversible validation
