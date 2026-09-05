@@ -1,7 +1,10 @@
 package transport
 
 import (
+	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 )
@@ -42,5 +45,67 @@ func TestSwitchIntentTargetRejectsNonCanonicalOrInconsistentValues(t *testing.T)
 		if _, err := ParseSwitchIntentTarget(value); err == nil {
 			t.Fatalf("ParseSwitchIntentTarget(%q) succeeded", value)
 		}
+	}
+}
+
+func TestDeferredSwitchDesiredStateBuildsExactFinalNodeGeneration(t *testing.T) {
+	t.Parallel()
+	state := nodeTransportTestState(t)
+	state.Generation = 10
+	requestID := "22000000-0000-4000-8000-000000000010"
+	operationID, err := SwitchOperationID(requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewSwitchIntentTarget(state.Nodes[0].ID, model.TransportRestricted, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
+	steps := make([]model.OperationStep, len(SwitchOperationStepNames()))
+	for index, name := range SwitchOperationStepNames() {
+		steps[index] = model.OperationStep{Name: name, State: model.OperationPending, UpdatedAt: at}
+	}
+	operation := model.Operation{
+		SchemaVersion: model.ResourceSchemaVersion, ID: operationID, Type: model.OperationTransportSwitch,
+		State: model.OperationPending, TargetKind: "transport", TargetID: intent.String(), RequestID: requestID,
+		ExpectedGeneration: 20, DesiredGeneration: 22, Steps: steps, CreatedAt: at, UpdatedAt: at,
+	}
+	state.Operations = append(state.Operations, operation)
+	state.Nodes[0].Gateway.PendingRequestID = requestID
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	before := state
+	candidate, gotIntent, err := DeferredSwitchDesiredState(state, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotIntent != intent || candidate.Generation != 11 || candidate.Nodes[0].ActiveTransport != model.TransportRestricted ||
+		candidate.Nodes[0].Gateway.PendingRequestID != requestID || candidate.Operations[len(candidate.Operations)-1].State != model.OperationPending {
+		t.Fatalf("candidate=%+v intent=%+v", candidate, gotIntent)
+	}
+	if !reflect.DeepEqual(state, before) {
+		t.Fatal("desired-state construction mutated the retained pending state")
+	}
+	for _, configured := range candidate.Transports {
+		if configured.OwnerKind != model.TargetNode || configured.OwnerID != state.Nodes[0].ID {
+			continue
+		}
+		want := model.TransportStandby
+		if configured.Kind == model.TransportRestricted {
+			want = model.TransportActive
+		}
+		if configured.State != want {
+			t.Fatalf("%s state=%s, want %s", configured.Kind, configured.State, want)
+		}
+	}
+}
+
+func TestDeferredSwitchDesiredStateRejectsStaleMirror(t *testing.T) {
+	t.Parallel()
+	state := nodeTransportTestState(t)
+	if _, _, err := DeferredSwitchDesiredState(state, model.Operation{}); !errors.Is(err, ErrTransportSwitchStale) {
+		t.Fatalf("missing retained operation error=%v", err)
 	}
 }

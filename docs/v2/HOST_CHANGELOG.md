@@ -2,6 +2,43 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Deferred transport Desired publication
+
+### Planned reversible validation
+
+- After a confirmed gateway registration and durable node-side pending mirror,
+  reconstruct the exact final node generation without changing authoritative
+  selection or runtime. Compile the complete standard/routing/DNS/tunnel role
+  material for the explicit target, archive it before metadata publication,
+  and CAS one operation-bound `Desired N+2 / Applied N` snapshot.
+- Keep gateway and node generations as independent coordinates. The local
+  convergence binding uses the node `N -> N+2` range while preserving the
+  authoritative operation ID, request ID, type, and versioned target. Retry
+  the same deferred command to heal material or snapshot publication without
+  repeating the gateway mutation.
+- Validation uses only source files, in-memory doubles, Go temporary roots,
+  disposable `/private/tmp/vpnctl-go-cache`, and existing local test listeners.
+  It does not activate a transport, change a real service/config/state/route/
+  firewall, access a VM or public endpoint, register a webhook, or run Clash
+  Mi. No host rollback is required.
+
+### Acceptance
+
+- Tests cover exact `N+1 -> N+2` desired-state reconstruction, stale mirror
+  rejection, host-local projection of cross-host operation generations,
+  content-before-snapshot ordering, immutable desired-material recovery,
+  deterministic plan changes, unchanged Applied baseline, idempotent
+  publication, and failure recovery without a second gateway RPC.
+- The full ordinary Go suite and `go vet ./...` pass. The changed transport and
+  operations race suites pass; one unrelated controller-outage race case in a
+  concurrent CLI package run was flaky on its initial readiness assertion and
+  passed three focused repetitions unchanged. Strict OpenSpec, documentation,
+  formatting, and diff checks are recorded before commit.
+- `vpnctl plan` can now observe the registered switch. Runtime activation and
+  cross-host finalization remain unavailable until the current-node executor
+  is connected in the next slice. Repository rollback is this single source/
+  documentation commit; no development-host rollback is needed.
+
 ## 2026-09-06 — Gateway-authoritative deferred transport intent
 
 ### Planned reversible validation

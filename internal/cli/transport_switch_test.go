@@ -100,12 +100,16 @@ type transportSwitchAuthority struct {
 	calls   int
 	target  string
 	current string
+	err     error
 }
 
 func (authority *transportSwitchAuthority) RegisterPending(_ context.Context, plan MutationPlan) (DeferredReceipt, error) {
 	authority.calls++
 	authority.target, _ = plan.Result.Data["candidate"].(string)
 	authority.current, _ = plan.Result.Data["current"].(string)
+	if authority.err != nil {
+		return DeferredReceipt{}, authority.err
+	}
 	return DeferredReceipt{
 		CommandID: "transport.switch", OperationID: "30000000-0000-4000-8000-000000000001", AuthoritativeGeneration: 13,
 		Result: output.NewResult("transport.switch", output.StatusPending, output.CategorySuccess, output.SafeObject{

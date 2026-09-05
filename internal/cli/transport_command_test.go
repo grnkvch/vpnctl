@@ -95,6 +95,25 @@ func TestTransportSwitchCommandSupportsDryRunImmediateAndDeferredModes(t *testin
 	}
 }
 
+func TestTransportSwitchCommandReportsRegisteredIntentWhenDesiredPublicationIsPending(t *testing.T) {
+	_, restore := stubTransportCommand(t, RoleNode)
+	defer restore()
+	transportBuildSwitcher = func(store.Paths) (TransportSwitcher, error) {
+		return &recordingTransportSwitcher{plan: switchMutationPlan()}, nil
+	}
+	transportBuildAuthority = func(store.Paths) (AuthoritativeDeferredWriter, error) {
+		return &transportSwitchAuthority{err: ErrSystemTransportDesiredPublicationPending}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Execute([]string{"transport", "switch", "restricted", "--defer", "--yes", "--json"}, &stdout, &stderr); code != ExitUnavailable {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 || !strings.Contains(stdout.String(), `"code":"transport_switch_desired_pending"`) ||
+		!strings.Contains(stdout.String(), `"changed":true`) || !strings.Contains(stdout.String(), `"code":"retry_transport_switch_defer"`) {
+		t.Fatalf("stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
 func TestTransportCommandsRejectInvalidArgumentsAndRolesBeforeRuntimeBuild(t *testing.T) {
 	oldPaths, oldRole := transportSystemPaths, transportLoadRole
 	t.Cleanup(func() { transportSystemPaths, transportLoadRole = oldPaths, oldRole })
@@ -198,8 +217,10 @@ func TestSystemTransportDeferredWriterMirrorsConfirmedGatewayIntentWithoutChangi
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBuilder := transportBuildDeferredGateway
-	t.Cleanup(func() { transportBuildDeferredGateway = oldBuilder })
+	oldBuilder, oldDesiredBuilder := transportBuildDeferredGateway, transportBuildDeferredDesiredPublisher
+	t.Cleanup(func() {
+		transportBuildDeferredGateway, transportBuildDeferredDesiredPublisher = oldBuilder, oldDesiredBuilder
+	})
 	requestID := "73000000-0000-4000-8000-000000000011"
 	operationID, err := transport.SwitchOperationID(requestID)
 	if err != nil {
@@ -217,6 +238,13 @@ func TestSystemTransportDeferredWriterMirrorsConfirmedGatewayIntentWithoutChangi
 		}
 		return remote, nil
 	}
+	desired := &transportDeferredDesiredFixture{}
+	transportBuildDeferredDesiredPublisher = func(received store.Paths, receivedState *store.StateStore) (transportDeferredDesiredPublisher, error) {
+		if received != paths || receivedState == nil {
+			t.Fatalf("desired publisher inputs=%+v/%p, want %+v/non-nil", received, receivedState, paths)
+		}
+		return desired, nil
+	}
 	writer, err := buildSystemTransportDeferredWriter(paths)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +259,7 @@ func TestSystemTransportDeferredWriterMirrorsConfirmedGatewayIntentWithoutChangi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote.calls != 1 || remote.current != model.TransportRestricted || remote.target != model.TransportStandard ||
+	if remote.calls != 1 || desired.calls != 1 || remote.current != model.TransportRestricted || remote.target != model.TransportStandard ||
 		remote.expectedNodeGeneration != before.Generation || receipt.OperationID != remote.receipt.OperationID ||
 		receipt.AuthoritativeGeneration != remote.receipt.GatewayGeneration || receipt.Result.Status != output.StatusPending {
 		t.Fatalf("remote=%+v receipt=%+v", remote, receipt)
@@ -248,8 +276,55 @@ func TestSystemTransportDeferredWriterMirrorsConfirmedGatewayIntentWithoutChangi
 	retry := public
 	retry.Result.Data["generation"] = after.Generation + 1
 	second, err := writer.RegisterPending(context.Background(), retry)
-	if err != nil || second.OperationID != operationID || remote.calls != 1 {
-		t.Fatalf("retained retry=%+v err=%v remote calls=%d", second, err, remote.calls)
+	if err != nil || second.OperationID != operationID || remote.calls != 1 || desired.calls != 2 {
+		t.Fatalf("retained retry=%+v err=%v remote calls=%d desired calls=%d", second, err, remote.calls, desired.calls)
+	}
+}
+
+func TestSystemTransportDeferredWriterRecoversDesiredPublicationWithoutRepeatingGatewayMutation(t *testing.T) {
+	paths, stateStore := storeTransportCommandState(t)
+	before, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldGateway, oldDesired := transportBuildDeferredGateway, transportBuildDeferredDesiredPublisher
+	t.Cleanup(func() {
+		transportBuildDeferredGateway, transportBuildDeferredDesiredPublisher = oldGateway, oldDesired
+	})
+	requestID := "73000000-0000-4000-8000-000000000013"
+	operationID, _ := transport.SwitchOperationID(requestID)
+	remote := &transportDeferredGatewayFixture{receipt: transport.DeferredSwitchReceipt{
+		OperationID: operationID, RequestID: requestID, NodeID: before.Nodes[0].ID,
+		Current: model.TransportRestricted, Target: model.TransportStandard,
+		GatewayGeneration: 11, DesiredGatewayGeneration: 12,
+		ExpectedNodeGeneration: before.Generation, DesiredNodeGeneration: before.Generation + 2,
+	}}
+	desiredErr := errors.New("injected desired publication failure")
+	desired := &transportDeferredDesiredFixture{err: desiredErr}
+	transportBuildDeferredGateway = func(store.Paths) (transportDeferredGateway, error) { return remote, nil }
+	transportBuildDeferredDesiredPublisher = func(store.Paths, *store.StateStore) (transportDeferredDesiredPublisher, error) { return desired, nil }
+	writer, err := buildSystemTransportDeferredWriter(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := MutationPlan{Impact: ImpactAvailability, Result: output.NewResult(
+		"transport.switch", output.StatusOK, output.CategorySuccess,
+		output.SafeObject{
+			"changed": true, "current": "restricted", "candidate": "standard", "generation": before.Generation + 1,
+		},
+	)}
+	if _, err := writer.RegisterPending(context.Background(), public); !errors.Is(err, ErrSystemTransportDesiredPublicationPending) || !errors.Is(err, desiredErr) {
+		t.Fatalf("initial desired publication failure=%v", err)
+	}
+	pending, err := stateStore.Load()
+	if err != nil || pending.Generation != before.Generation+1 || pending.Nodes[0].Gateway.PendingRequestID != requestID {
+		t.Fatalf("retained pending state=%+v err=%v", pending, err)
+	}
+	desired.err = nil
+	public.Result.Data["generation"] = pending.Generation + 1
+	receipt, err := writer.RegisterPending(context.Background(), public)
+	if err != nil || receipt.OperationID != operationID || remote.calls != 1 || desired.calls != 2 {
+		t.Fatalf("publication recovery receipt=%+v err=%v remote=%d desired=%d", receipt, err, remote.calls, desired.calls)
 	}
 }
 
@@ -260,10 +335,11 @@ func TestTransportSwitchCommandUsesSystemGatewayDeferredRegistration(t *testing.
 		t.Fatal(err)
 	}
 	oldPaths, oldRole := transportSystemPaths, transportLoadRole
-	oldSwitcher, oldAuthority, oldRemote := transportBuildSwitcher, transportBuildAuthority, transportBuildDeferredGateway
+	oldSwitcher, oldAuthority, oldRemote, oldDesired := transportBuildSwitcher, transportBuildAuthority, transportBuildDeferredGateway, transportBuildDeferredDesiredPublisher
 	t.Cleanup(func() {
 		transportSystemPaths, transportLoadRole = oldPaths, oldRole
 		transportBuildSwitcher, transportBuildAuthority, transportBuildDeferredGateway = oldSwitcher, oldAuthority, oldRemote
+		transportBuildDeferredDesiredPublisher = oldDesired
 	})
 	transportSystemPaths = func() store.Paths { return paths }
 	transportLoadRole = func(store.Paths) (HostRole, error) { return RoleNode, nil }
@@ -281,11 +357,13 @@ func TestTransportSwitchCommandUsesSystemGatewayDeferredRegistration(t *testing.
 		ExpectedNodeGeneration: state.Generation, DesiredNodeGeneration: state.Generation + 2,
 	}}
 	transportBuildDeferredGateway = func(store.Paths) (transportDeferredGateway, error) { return remote, nil }
+	desired := &transportDeferredDesiredFixture{}
+	transportBuildDeferredDesiredPublisher = func(store.Paths, *store.StateStore) (transportDeferredDesiredPublisher, error) { return desired, nil }
 	var stdout, stderr bytes.Buffer
 	if code := Execute([]string{"--json", "transport", "switch", "standard", "--defer", "--yes"}, &stdout, &stderr); code != ExitSuccess {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if remote.calls != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"status":"pending"`) ||
+	if remote.calls != 1 || desired.calls != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"status":"pending"`) ||
 		!strings.Contains(stdout.String(), `"candidate":"standard"`) || !strings.Contains(stdout.String(), remote.receipt.OperationID) {
 		t.Fatalf("remote=%+v stdout=%s stderr=%s", remote, stdout.String(), stderr.String())
 	}
@@ -305,6 +383,19 @@ type transportDeferredGatewayFixture struct {
 	current                model.TransportKind
 	target                 model.TransportKind
 	expectedNodeGeneration uint64
+}
+
+type transportDeferredDesiredFixture struct {
+	err       error
+	calls     int
+	state     model.State
+	operation model.Operation
+}
+
+func (publisher *transportDeferredDesiredFixture) PublishDesired(_ context.Context, state model.State, operation model.Operation) error {
+	publisher.calls++
+	publisher.state, publisher.operation = state, operation
+	return publisher.err
 }
 
 func (gateway *transportDeferredGatewayFixture) RegisterDeferred(
@@ -345,6 +436,7 @@ func stubTransportCommand(t *testing.T, role HostRole) (store.Paths, func()) {
 	t.Helper()
 	oldPaths, oldRole := transportSystemPaths, transportLoadRole
 	oldTester, oldSwitcher, oldAuthority, oldTTY := transportBuildTester, transportBuildSwitcher, transportBuildAuthority, transportOpenTTY
+	oldDesired := transportBuildDeferredDesiredPublisher
 	paths, err := store.NewPaths(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -359,6 +451,7 @@ func stubTransportCommand(t *testing.T, role HostRole) (store.Paths, func()) {
 	return paths, func() {
 		transportSystemPaths, transportLoadRole = oldPaths, oldRole
 		transportBuildTester, transportBuildSwitcher, transportBuildAuthority, transportOpenTTY = oldTester, oldSwitcher, oldAuthority, oldTTY
+		transportBuildDeferredDesiredPublisher = oldDesired
 	}
 }
 
@@ -385,3 +478,4 @@ func storeTransportCommandState(t *testing.T) (store.Paths, *store.StateStore) {
 
 var _ transportTester = (*transportCommandTester)(nil)
 var _ transportDeferredGateway = (*transportDeferredGatewayFixture)(nil)
+var _ transportDeferredDesiredPublisher = (*transportDeferredDesiredFixture)(nil)

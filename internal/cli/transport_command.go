@@ -193,7 +193,8 @@ func executeTransportSwitch(args []string, stdout, stderr io.Writer) int {
 	outcome, err := V2CommandRegistry().RunMutation(context.Background(), request, terminal, workflow, authority)
 	if err != nil {
 		category, code, message := classifyTransportSwitchError(err)
-		changed := errors.Is(err, transport.ErrTransportSwitchCommitUncertain)
+		changed := errors.Is(err, transport.ErrTransportSwitchCommitUncertain) ||
+			errors.Is(err, ErrSystemTransportDesiredPublicationPending)
 		return emitTransportSwitchFailure(emitter, category, code, message, changed)
 	}
 	exit, err := emitter.Emit(outcome.Result)
@@ -325,6 +326,8 @@ func classifyTransportSwitchError(err error) (output.ExitCategory, string, strin
 		return output.CategoryConflict, "transport_switch_stale", "authoritative node state changed after the switch preview"
 	case errors.Is(err, transport.ErrTransportSwitchCommitUncertain):
 		return output.CategoryUnavailable, "transport_switch_uncertain", "the target may be active after an uncertain state commit; inspect status before retrying"
+	case errors.Is(err, ErrSystemTransportDesiredPublicationPending):
+		return output.CategoryUnavailable, "transport_switch_desired_pending", "the switch intent is registered, but local desired material is not published yet; retry the same deferred command"
 	case errors.Is(err, transport.ErrTransportSwitchTargetNotReady):
 		return output.CategoryUnavailable, "transport_target_not_ready", "the explicitly selected target failed a mandatory readiness check; the previous transport remains selected"
 	case errors.Is(err, ErrGatewayUnavailable), errors.Is(err, operations.ErrTransportSwitchGatewayUnavailable):
@@ -360,6 +363,11 @@ func emitTransportSwitchFailure(emitter *ResultEmitter, category output.ExitCate
 	if code == "transport_switch_uncertain" {
 		result.RequiresAction = append(result.RequiresAction, output.Action{
 			Code: "inspect_transport_switch", Message: "Inspect node status and active transport before deciding whether to retry.", Command: "vpnctl status --all",
+		})
+	}
+	if code == "transport_switch_desired_pending" {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code: "retry_transport_switch_defer", Message: "Retry the same transport switch with --defer after correcting the reported local issue.",
 		})
 	}
 	exit, err := emitter.Emit(result)

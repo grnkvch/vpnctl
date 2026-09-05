@@ -19,12 +19,18 @@ durable idempotency controller, а только после подтверждё�
 записывает node-side pending mirror; offline queue отсутствует. Stable request
 и operation IDs позволяют безопасно повторить команду после потерянного
 ответа, а active/standby остаются неизменными на обоих хостах. Pending mirror
-не даёт `vpnctl apply` ошибочно вернуть no-op, но operation-bound Desired
-material и executor пока не подключены, поэтому apply честно остаётся
-unavailable. Host transport provider для test/immediate switch также пока
-закрыт typed `system transport runtime adapter is unavailable`. Следующий
-slice — Desired publication и current-node cross-host executor с четырьмя
-обязательными проверками и manual-only selection.
+теперь детерминированно компилируется в финальную node generation `N+2` без
+активации: exact material сначала сохраняется в immutable archive, затем
+`convergence.json` получает локально привязанный `Desired N+2 / Applied N`.
+Gateway- и node-generation остаются разными координатами; identity/type/target
+authoritative operation при этом едины. Повтор той же deferred-команды
+допубликовывает material/snapshot без второго gateway mutation. `vpnctl plan`
+уже видит operation-bound diff, но current-node executor пока не подключён,
+поэтому `apply` честно остаётся unavailable. Host transport provider для
+test/immediate switch также пока закрыт typed
+`system transport runtime adapter is unavailable`. Следующий slice —
+current-node cross-host executor с четырьмя обязательными проверками и
+manual-only selection.
 
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
 через v2 registry и подключён к production state/network runtime. Closed runner
@@ -45,11 +51,11 @@ Public `vpnctl apply` теперь однозначно маршрутизиру
 стабильный no-op, удерживая exact authoritative state вместе с convergence
 plan; node дополнительно делает свежий authenticated gateway probe даже для
 no-op. TTY требуется только после полного availability/destructive preview.
-При этом operation-specific pending executors и mutation-side Desired
-publication ещё не подключены: наличие pending state возвращает явный
-`apply_convergence_unavailable`, а не ложный success по старому clean snapshot.
-Следующий implementation slice — связать deferred writer с operation-bound
-Desired material и затем подключить gateway/current-node executors.
+Transport-switch deferred writer уже публикует operation-bound Desired и
+exact staged material; operation-specific current-node executor ещё не
+подключён. Поэтому наличие pending state возвращает явный
+`apply_convergence_unavailable`, а не ложный success. Следующий implementation
+slice — подключить transport-switch apply executor и его cross-host finalize.
 
 Immutable applied-material foundation теперь подключён ко всем production
 publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в

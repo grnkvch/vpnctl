@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
@@ -427,4 +428,47 @@ func switchedNodeState(before model.State, nodeID string, previous, target model
 		return model.State{}, fmt.Errorf("build transport switch state: %w", err)
 	}
 	return candidate, nil
+}
+
+// DeferredSwitchDesiredState reconstructs the exact node-side state that a
+// previously registered transport-switch operation intends to make active.
+// The retained node state is the intermediate N+1 mirror; this function only
+// builds the final N+2 candidate and never persists or activates it.
+func DeferredSwitchDesiredState(
+	current model.State,
+	operation model.Operation,
+) (model.State, SwitchIntentTarget, error) {
+	if err := current.Validate(); err != nil {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("validate deferred transport switch state: %w", err)
+	}
+	retained, found, err := current.PendingNodeOperation()
+	if err != nil {
+		return model.State{}, SwitchIntentTarget{}, err
+	}
+	if !found || !reflect.DeepEqual(retained, operation) || operation.Type != model.OperationTransportSwitch ||
+		operation.State != model.OperationPending || operation.TargetKind != "transport" {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("%w: deferred transport switch operation is not the retained node request", ErrTransportSwitchStale)
+	}
+	intent, err := ParseSwitchIntentTarget(operation.TargetID)
+	if err != nil || intent.NodeID != current.Nodes[0].ID {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("%w: deferred transport switch target is invalid", ErrTransportSwitchStale)
+	}
+	pendingGeneration, pendingErr := model.NextGeneration(intent.ExpectedNodeGeneration)
+	desiredGeneration, desiredErr := model.NextGeneration(current.Generation)
+	if pendingErr != nil || desiredErr != nil || pendingGeneration != current.Generation ||
+		desiredGeneration != intent.DesiredNodeGeneration {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("%w: deferred transport switch node generations changed", ErrTransportSwitchStale)
+	}
+	node, transports, err := localNodeSwitchPair(current)
+	if err != nil || node.ID != intent.NodeID || node.ActiveTransport == intent.Target || transports[intent.Target].State != model.TransportStandby {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("%w: deferred transport switch selection changed", ErrTransportSwitchStale)
+	}
+	candidate, err := switchedNodeState(current, node.ID, node.ActiveTransport, intent.Target)
+	if err != nil {
+		return model.State{}, SwitchIntentTarget{}, err
+	}
+	if candidate.Generation != intent.DesiredNodeGeneration {
+		return model.State{}, SwitchIntentTarget{}, fmt.Errorf("%w: deferred transport switch candidate generation changed", ErrTransportSwitchStale)
+	}
+	return candidate, intent, nil
 }

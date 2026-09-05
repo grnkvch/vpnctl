@@ -251,6 +251,28 @@ func NewConvergenceManifest(generation uint64, resources []ManagedResource) (Con
 // in the pending state. Resource compilers supply the exact managed resources
 // affected by its retained desired intent.
 func BindPendingOperation(operation model.Operation, resources []ManagedResourceKey) (PendingOperation, error) {
+	return bindPendingOperationAtGenerations(operation, operation.ExpectedGeneration, operation.DesiredGeneration, resources)
+}
+
+// BindPendingOperationAtGenerations projects an authoritative cross-host
+// operation onto one host's local convergence generation range. Operation
+// identity, type, target, and pending state remain authoritative; only the
+// generation coordinates use the local applied/desired manifests.
+func BindPendingOperationAtGenerations(
+	operation model.Operation,
+	expectedGeneration uint64,
+	desiredGeneration uint64,
+	resources []ManagedResourceKey,
+) (PendingOperation, error) {
+	return bindPendingOperationAtGenerations(operation, expectedGeneration, desiredGeneration, resources)
+}
+
+func bindPendingOperationAtGenerations(
+	operation model.Operation,
+	expectedGeneration uint64,
+	desiredGeneration uint64,
+	resources []ManagedResourceKey,
+) (PendingOperation, error) {
 	if err := operation.Validate(); err != nil {
 		return PendingOperation{}, fmt.Errorf("validate authoritative operation: %w", err)
 	}
@@ -259,10 +281,10 @@ func BindPendingOperation(operation model.Operation, resources []ManagedResource
 	}
 	pending := PendingOperation{
 		ID: operation.ID, Type: string(operation.Type), TargetKind: operation.TargetKind, TargetID: operation.TargetID,
-		ExpectedGeneration: operation.ExpectedGeneration, DesiredGeneration: operation.DesiredGeneration,
+		ExpectedGeneration: expectedGeneration, DesiredGeneration: desiredGeneration,
 		Resources: append([]ManagedResourceKey(nil), resources...),
 	}
-	if err := pending.validate(operation.ExpectedGeneration, operation.DesiredGeneration); err != nil {
+	if err := pending.validate(expectedGeneration, desiredGeneration); err != nil {
 		return PendingOperation{}, fmt.Errorf("%w: bind operation %s: %v", ErrConvergencePlanInvalid, operation.ID, err)
 	}
 	sort.Slice(pending.Resources, func(left, right int) bool {

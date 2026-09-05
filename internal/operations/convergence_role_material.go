@@ -10,8 +10,10 @@ import (
 )
 
 // AppliedMaterialEnsurer is the mutation-only half of the immutable archive.
-// A convergence publisher must make the complete applied generation durable
-// before it makes the matching content-free manifest authoritative.
+// A convergence publisher makes exact material durable before publishing the
+// matching content-free manifest. Despite the historical Applied name, this
+// also safely stages a pending Desired generation; repair still loads only the
+// manifest currently recorded as Applied.
 type AppliedMaterialEnsurer interface {
 	Ensure(context.Context, ConvergenceManifest, *AppliedMaterialSet) (AppliedMaterialID, error)
 }

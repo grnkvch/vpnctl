@@ -209,6 +209,10 @@ func TestBindPendingOperationAcceptsOnlyAuthoritativePendingState(t *testing.T) 
 	if pending.ID != operation.ID || pending.Type != "apply" || len(pending.Resources) != 1 || pending.Resources[0] != key {
 		t.Fatalf("binding = %+v", pending)
 	}
+	local, err := BindPendingOperationAtGenerations(operation, 9, 11, []ManagedResourceKey{key})
+	if err != nil || local.ExpectedGeneration != 9 || local.DesiredGeneration != 11 || local.ID != operation.ID {
+		t.Fatalf("cross-host local binding = %+v, %v", local, err)
+	}
 	operation.State = model.OperationActive
 	operation.Steps = []model.OperationStep{{Name: "stage", State: model.OperationActive, UpdatedAt: now}}
 	if _, err := BindPendingOperation(operation, []ManagedResourceKey{key}); !errors.Is(err, ErrConvergencePlanInvalid) {
