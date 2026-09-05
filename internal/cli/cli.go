@@ -54,6 +54,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isPlanInvocation(args) {
 		return executePlan(args, stdout, stderr)
 	}
+	if isRepairInvocation(args) {
+		return executeRepair(args, stdout, stderr)
+	}
 	if isValidateInvocation(args) {
 		return executeValidate(args, stdout, stderr)
 	}

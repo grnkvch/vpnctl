@@ -2,6 +2,36 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — committed private-node repair command
+
+### Planned reversible validation
+
+- Connect the already registered public `vpnctl repair` command to a real
+  private-node recovery path instead of leaving the post-join required action
+  undispatchable. Read-only planning loads the exact committed node generation,
+  compiles all generated artifacts, and exposes only their names and SHA-256
+  fingerprints plus the four affected service units.
+- After mandatory confirmation, reload the authoritative generation, compile
+  once more, reject changed state or artifact fingerprints, then atomically
+  republish and verify the same standard, fail-closed routing, DNS, and reverse
+  tunnel service set used by successful join activation. `--dry-run` performs
+  no publication, service operation, or health mutation.
+- Validation is source-only with temporary state roots and fake activation,
+  prompt, systemd, discovery, and readiness boundaries. It does not publish a
+  production config, restart a real unit, change routing/DNS, open a tunnel, or
+  mutate either VM. Repository rollback removes this source slice; no host
+  rollback is needed.
+
+### Acceptance
+
+- Tests prove global/local JSON dispatch, zero-mutation dry-run, explicit TTY
+  or `--yes` consent, exact generation/artifact retention, stale-preview
+  refusal before activation, structured retry guidance, and preservation of
+  post-commit activation-pending semantics.
+- Focused and full Go suites, CLI race tests, `go vet ./...`, strict OpenSpec
+  validation, and diff checks passed. No production host resource changed, so
+  no host rollback remains.
+
 ## 2026-09-05 — controller-owned public join and recovery endpoint
 
 ### Planned reversible validation

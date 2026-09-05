@@ -7,7 +7,20 @@
 
 ## Актуальный snapshot решений
 
-Последнее обновление: **2026-09-04**.
+Последнее обновление: **2026-09-05**.
+
+Текущий implementation continuation: public `vpnctl repair` теперь
+диспетчеризуется на private node и закрывает emitted
+`join_activation_pending`. Preview без mutation компилирует точную committed
+generation и показывает только имена/SHA-256 всех generated artifacts и четыре
+затрагиваемых unit. После обязательного consent state и артефакты проверяются
+повторно; только затем тот же production activator атомарно публикует generation,
+запускает `standard -> guard -> routing -> tunnel` и выполняет readiness.
+Сменившийся state или candidate блокируется как stale, а повторный failure
+сохраняет fail-closed guard и возвращает явный retry action. Это первый
+production recovery layer для post-join node activation; общий
+gateway/current-node repair произвольного owned drift всё ещё требует
+подключения durable convergence snapshot writer и role-scoped executors.
 
 Стадия: discovery завершён и формализован в OpenSpec change
 `openspec/changes/vpnctl-v2`; реализация идёт в ветке `feat/vpnctl-v2`.
@@ -616,7 +629,9 @@ sudo vpnctl expose 3000 --path /telegram/webhook
   `standard -> guard -> routing -> tunnel`, затем проверяет exact routing/DNS
   candidate и единственное established frpc-соединение с gateway overlay.
   Ошибка после commit получает `join_activation_pending`, не удаляет identity
-  и не снимает уже установленный fail-closed guard; требуется local `repair`.
+  и не снимает уже установленный fail-closed guard; local `repair` повторно
+  компилирует exact generation, требует confirmation и активирует этот же
+  полный service set без нового invite или gateway enrollment exchange.
 - `join` разрешён только на initialized, но ещё не joined node. Повторный join
   подключённого node ничего не меняет и направляет пользователя к manual
   `transport switch`.

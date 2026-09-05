@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
@@ -162,6 +164,21 @@ func buildSystemNodeJoiner(paths store.Paths) (NodeJoiner, error) {
 	if err != nil {
 		return nil, err
 	}
+	activation, err := buildSystemCommittedNodeActivator(paths, state, secrets)
+	if err != nil {
+		return nil, err
+	}
+	return newSystemNodeJoiner(workflow, activation)
+}
+
+func buildSystemCommittedNodeActivator(
+	paths store.Paths,
+	state *store.StateStore,
+	secrets *store.SecretStore,
+) (*systemCommittedNodeActivator, error) {
+	if state == nil || secrets == nil {
+		return nil, fmt.Errorf("committed node activation stores are required")
+	}
 	discoverer, err := linuxplatform.NewDiscoverer(paths.Root)
 	if err != nil {
 		return nil, err
@@ -183,9 +200,9 @@ func buildSystemNodeJoiner(paths store.Paths) (NodeJoiner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSystemNodeJoiner(workflow, &systemCommittedNodeActivator{
+	return &systemCommittedNodeActivator{
 		state: state, discoverer: discoverer, compiler: compiler, activator: activator,
-	})
+	}, nil
 }
 
 func classifyJoinError(err error) (output.ExitCategory, string, string) {
@@ -297,28 +314,69 @@ type systemCommittedNodeActivator struct {
 }
 
 func (runtime *systemCommittedNodeActivator) Activate(ctx context.Context, expectedGeneration uint64) error {
+	configuration, err := runtime.compile(ctx, expectedGeneration)
+	if err != nil {
+		return err
+	}
+	return runtime.activator.Activate(ctx, configuration)
+}
+
+func (runtime *systemCommittedNodeActivator) PlanRepair(ctx context.Context, expectedGeneration uint64) ([]CommittedNodeRepairArtifact, error) {
+	configuration, err := runtime.compile(ctx, expectedGeneration)
+	if err != nil {
+		return nil, err
+	}
+	return committedNodeRepairArtifacts(configuration), nil
+}
+
+func (runtime *systemCommittedNodeActivator) ApplyRepair(
+	ctx context.Context,
+	expectedGeneration uint64,
+	expectedArtifacts []CommittedNodeRepairArtifact,
+) error {
+	configuration, err := runtime.compile(ctx, expectedGeneration)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(committedNodeRepairArtifacts(configuration), expectedArtifacts) {
+		return ErrCommittedNodeRepairStale
+	}
+	return runtime.activator.Activate(ctx, configuration)
+}
+
+func (runtime *systemCommittedNodeActivator) compile(ctx context.Context, expectedGeneration uint64) (enrollment.NodeConfiguration, error) {
 	if ctx == nil || runtime == nil || runtime.state == nil || runtime.discoverer == nil || runtime.compiler == nil || runtime.activator == nil || expectedGeneration == 0 {
-		return fmt.Errorf("committed node activation is incomplete")
+		return enrollment.NodeConfiguration{}, fmt.Errorf("committed node activation is incomplete")
 	}
 	state, err := runtime.state.Load()
 	if err != nil {
-		return fmt.Errorf("load committed node state: %w", err)
+		return enrollment.NodeConfiguration{}, fmt.Errorf("load committed node state: %w", err)
 	}
 	if state.Generation != expectedGeneration || state.Host.Role != model.RoleNode || len(state.Nodes) != 1 || state.Nodes[0].Gateway == nil {
-		return fmt.Errorf("committed node generation changed before service activation")
+		return enrollment.NodeConfiguration{}, fmt.Errorf("committed node generation changed before service activation")
 	}
 	snapshot, err := runtime.discoverer.Discover(ctx)
 	if err != nil {
-		return fmt.Errorf("discover node host for service activation: %w", err)
+		return enrollment.NodeConfiguration{}, fmt.Errorf("discover node host for service activation: %w", err)
 	}
 	configuration, err := runtime.compiler.Compile(ctx, state, snapshot)
 	if err != nil {
-		return fmt.Errorf("compile committed node service generation: %w", err)
+		return enrollment.NodeConfiguration{}, fmt.Errorf("compile committed node service generation: %w", err)
 	}
 	if configuration.StateGeneration() != expectedGeneration {
-		return fmt.Errorf("compiled node service generation changed before activation")
+		return enrollment.NodeConfiguration{}, fmt.Errorf("compiled node service generation changed before activation")
 	}
-	return runtime.activator.Activate(ctx, configuration)
+	return configuration, nil
+}
+
+func committedNodeRepairArtifacts(configuration enrollment.NodeConfiguration) []CommittedNodeRepairArtifact {
+	configs := configuration.ConfigFiles()
+	artifacts := make([]CommittedNodeRepairArtifact, len(configs))
+	for index, config := range configs {
+		digest := sha256.Sum256(config.Content)
+		artifacts[index] = CommittedNodeRepairArtifact{Name: config.Name, SHA256: fmt.Sprintf("%x", digest[:])}
+	}
+	return artifacts
 }
 
 var _ NodeJoiner = (*systemNodeJoiner)(nil)
