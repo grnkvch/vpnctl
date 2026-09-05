@@ -110,6 +110,30 @@ def run_armed_probe(args: argparse.Namespace) -> dict[str, object]:
         raise
 
 
+def run_armed_recovery(args: argparse.Namespace) -> dict[str, object]:
+    trigger_file = pathlib.Path(args.trigger_file)
+    ready_file = pathlib.Path(args.ready_file)
+    if trigger_file.exists() or ready_file.exists():
+        raise FileExistsError("armed recovery synchronization file already exists")
+    ready_file.touch(mode=0o600, exist_ok=False)
+    started = read_trigger_timestamp(trigger_file, args.trigger_timeout)
+    args.started_monotonic = started
+    return run_recovery_probe(args)
+
+
+def read_trigger_timestamp(
+    trigger_file: pathlib.Path,
+    timeout: float,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> float:
+    wait_for_trigger(trigger_file, timeout, clock, sleeper)
+    started = float(trigger_file.read_text(encoding="ascii").strip())
+    if not math.isfinite(started) or started <= 0:
+        raise ValueError("armed recovery timestamp is invalid")
+    return started
+
+
 def proxy_api_request(args: argparse.Namespace, _index: int, started: float) -> dict[str, object]:
     before = time.monotonic()
     sock = None
@@ -301,6 +325,17 @@ def main() -> None:
     recover.add_argument("--recovery-limit-seconds", type=float, required=True)
     recover.add_argument("--stable-probes", type=int, default=5)
     recover.add_argument("--probe-interval", type=float, default=0.1)
+    armed_recover = commands.add_parser("armed-recover")
+    armed_recover.add_argument("--public-ip", required=True)
+    armed_recover.add_argument("--certificate", required=True)
+    armed_recover.add_argument("--body-bytes", type=int, default=128)
+    armed_recover.add_argument("--timeout", type=float, default=1.0)
+    armed_recover.add_argument("--recovery-limit-seconds", type=float, required=True)
+    armed_recover.add_argument("--stable-probes", type=int, default=5)
+    armed_recover.add_argument("--probe-interval", type=float, default=0.1)
+    armed_recover.add_argument("--trigger-file", required=True)
+    armed_recover.add_argument("--ready-file", required=True)
+    armed_recover.add_argument("--trigger-timeout", type=float, default=30.0)
     api = commands.add_parser("api")
     add_common(api)
     api.add_argument("--proxy-port", type=int, default=17890)
@@ -320,6 +355,11 @@ def main() -> None:
         if args.started_monotonic <= 0 or args.recovery_limit_seconds <= 0 or args.stable_probes < 1 or args.probe_interval < 0:
             raise ValueError("recovery probe bounds are invalid")
         print(json.dumps(run_recovery_probe(args), separators=(",", ":"), sort_keys=True))
+        return
+    if args.command == "armed-recover":
+        if args.recovery_limit_seconds <= 0 or args.stable_probes < 1 or args.probe_interval < 0 or args.trigger_timeout <= 0:
+            raise ValueError("armed recovery bounds are invalid")
+        print(json.dumps(run_armed_recovery(args), separators=(",", ":"), sort_keys=True))
         return
     if args.duration < 1 or args.rate < 1 or args.workers < 1:
         raise ValueError("duration, rate, and workers must be positive")

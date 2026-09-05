@@ -86,12 +86,13 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 		"fault_stage: $fault_stage", "result_emitted=false", "fault_incomplete",
-		"load armed-probe", "prepare_armed_probe", "run_armed_probe", "cleanup_armed_probe",
+		"load armed-probe", "load armed-recover", "prepare_armed_probe", "run_armed_probe", "run_armed_recovery", "cleanup_armed_probe",
 		"armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe", "--trigger-timeout 30",
+		"--recovery-limit-seconds \"$recovery_limit_seconds\"", "recovery-trigger", "recovery-ready", "recovery-result.json",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
-		"recovery_probe_attempts: $recovery_probe_attempts", "load recover", "--started-monotonic \"$restart_started\"",
+		"recovery_probe_attempts: $recovery_probe_attempts", "run_armed_recovery",
 		"--stable-probes 5 --probe-interval 0.1",
 	} {
 		if !strings.Contains(faultHelper, required) {
@@ -108,6 +109,11 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
 	if temporaryPolicyApplied < 0 || armedProbe < 0 || !(temporaryPolicyApplied < armedProbe && armedProbe < restartTimer) {
 		t.Fatal("capacity HTTPS probe must be armed after slow policy setup and immediately before the restart timer")
+	}
+	recoveryWorker := strings.Index(faultHelper, "load armed-recover")
+	outageWorker := strings.Index(faultHelper, "load armed-probe")
+	if recoveryWorker < 0 || outageWorker < 0 || recoveryWorker >= outageWorker {
+		t.Fatal("capacity recovery worker must become ready before the timeout-sensitive TLS outage worker starts")
 	}
 	stoppedCheck := strings.Index(faultHelper, "stop_state=")
 	unavailableProbe := strings.Index(faultHelper, "run_armed_probe\n")

@@ -68,6 +68,13 @@ class CapacityLoadTest(unittest.TestCase):
             MODULE.wait_for_trigger(trigger, 0.025, clock, clock.sleep)
         self.assertAlmostEqual(clock.value, 0.025)
 
+    def test_armed_recovery_reads_restart_timestamp_after_trigger(self):
+        clock = FakeClock()
+        trigger = TriggerTextPath(clock, visible_at=0.03, contents="0.03\n")
+        started = MODULE.read_trigger_timestamp(trigger, 1.0, clock, clock.sleep)
+        self.assertEqual(started, 0.03)
+        self.assertEqual(trigger.encoding, "ascii")
+
 
 class FakeClock:
     def __init__(self):
@@ -98,6 +105,16 @@ class TriggerPath:
 
     def exists(self):
         return self.clock.value >= self.visible_at
+
+
+class TriggerTextPath(TriggerPath):
+    def __init__(self, clock, visible_at, contents):
+        super().__init__(clock, visible_at)
+        self.contents = contents
+
+    def read_text(self, encoding):
+        self.encoding = encoding
+        return self.contents
 
 
 def recovery_args():

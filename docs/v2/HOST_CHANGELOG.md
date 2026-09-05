@@ -795,6 +795,38 @@ This journal records development-host mutations made while implementing and vali
   runtime/provider/package resource and returned both fixtures to `Stopped`;
   no manual rollback remains.
 
+### Accepted outage and pre-armed recovery-worker plan
+
+- The clean-source run at commit
+  `0c8641a0633c16044e26156353f3220bbe0eae38` proved the complete fault side:
+  its typed evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T092603Z/reconnect.json` records
+  nginx `503` in 60ms on the pre-established TLS connection, stopped-state in
+  0.840s, and actual kill-to-active down time `2.806s` inside the unchanged
+  hard bound. The tunnel-client service PID/restart count remained stable and
+  exactly one frpc child was recycled. No final summary is accepted because
+  the subsequent recovery worker produced a zero-attempt/otherwise invalid
+  result before the helper could apply its five-success assertion.
+- A local negative CLI smoke of the same checked-in `load.py recover` command
+  produced structurally valid JSON, so the invalid live result is consistent
+  with interpreter startup on the loaded one-vCPU gateway consuming the
+  remaining eight-second monotonic window before its first attempt. The raw
+  result was not retained by the old command substitution, so this run does
+  not claim a more specific failure class.
+- The corrected fixture prestarts a second bounded Python worker alongside the
+  outage worker, before the fault timer. It creates an exact ready marker and
+  waits for a trigger containing systemd's observed FRPS active monotonic
+  timestamp. Only after restart does it create fresh HTTPS connections and
+  require five consecutive successes before the same eight-second deadline.
+  Thus interpreter/module startup is outside the measured recovery interval,
+  while all data-plane probes and pass/fail semantics remain inside it.
+- Both workers use the same exact owner-scoped `fault-probe` directory and
+  30-second self-timeout. The helper tracks/kills/waits both exact PIDs and
+  removes only their six synchronization/result files plus the empty directory;
+  parent owner cleanup remains an independent boundary. The failed run removed
+  all capacity/provider/package resources and returned both fixtures to
+  `Stopped`; no manual rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

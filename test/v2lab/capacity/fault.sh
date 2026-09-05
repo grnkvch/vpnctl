@@ -31,6 +31,7 @@ result_emitted=false
 fault_stage=preflight
 armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe
 armed_probe_pid=
+recovery_probe_pid=
 armed_probe_root_created=false
 
 usage() {
@@ -84,13 +85,36 @@ emit_result() {
 }
 
 prepare_armed_probe() {
-  local armed_ready=false
+  local outage_ready=false recovery_ready=false
   if [ -e "$armed_probe_root" ] || [ -L "$armed_probe_root" ]; then
     echo 'refusing existing armed probe runtime' >&2
     return 3
   fi
   mkdir -m 0700 -- "$armed_probe_root"
   armed_probe_root_created=true
+  python3 /usr/local/libexec/vpnctl-v2-capacity/load armed-recover \
+    --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1 \
+    --recovery-limit-seconds "$recovery_limit_seconds" --stable-probes 5 --probe-interval 0.1 \
+    --trigger-file "$armed_probe_root/recovery-trigger" --ready-file "$armed_probe_root/recovery-ready" \
+    --trigger-timeout 30 > "$armed_probe_root/recovery-result.json" &
+  recovery_probe_pid=$!
+  for _attempt in $(seq 1 200); do
+    if [ -f "$armed_probe_root/recovery-ready" ] && [ ! -L "$armed_probe_root/recovery-ready" ]; then
+      recovery_ready=true
+      break
+    fi
+    if ! kill -0 "$recovery_probe_pid" 2>/dev/null; then
+      wait "$recovery_probe_pid" || true
+      recovery_probe_pid=
+      echo 'armed recovery probe exited before readiness' >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  if [ "$recovery_ready" != true ]; then
+    echo 'armed recovery probe did not become ready' >&2
+    return 1
+  fi
   python3 /usr/local/libexec/vpnctl-v2-capacity/load armed-probe \
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 2 \
     --trigger-file "$armed_probe_root/trigger" --ready-file "$armed_probe_root/ready" \
@@ -98,7 +122,7 @@ prepare_armed_probe() {
   armed_probe_pid=$!
   for _attempt in $(seq 1 200); do
     if [ -f "$armed_probe_root/ready" ] && [ ! -L "$armed_probe_root/ready" ]; then
-      armed_ready=true
+      outage_ready=true
       break
     fi
     if ! kill -0 "$armed_probe_pid" 2>/dev/null; then
@@ -109,7 +133,7 @@ prepare_armed_probe() {
     fi
     sleep 0.05
   done
-  if [ "$armed_ready" != true ]; then
+  if [ "$outage_ready" != true ]; then
     echo 'armed HTTPS probe did not become ready' >&2
     return 1
   fi
@@ -126,6 +150,17 @@ run_armed_probe() {
   unavailable_probe=$(cat "$armed_probe_root/result.json")
 }
 
+run_armed_recovery() {
+  printf '%s\n' "$restart_started" > "$armed_probe_root/recovery-trigger"
+  if ! wait "$recovery_probe_pid"; then
+    recovery_probe_pid=
+    echo 'armed recovery probe failed' >&2
+    return 1
+  fi
+  recovery_probe_pid=
+  recovery_result=$(cat "$armed_probe_root/recovery-result.json")
+}
+
 cleanup_armed_probe() {
   local cleanup_status=0
   if [ -n "$armed_probe_pid" ]; then
@@ -133,23 +168,24 @@ cleanup_armed_probe() {
     wait "$armed_probe_pid" >/dev/null 2>&1 || true
     armed_probe_pid=
   fi
+  if [ -n "$recovery_probe_pid" ]; then
+    kill "$recovery_probe_pid" >/dev/null 2>&1 || true
+    wait "$recovery_probe_pid" >/dev/null 2>&1 || true
+    recovery_probe_pid=
+  fi
   if [ "$armed_probe_root_created" = true ]; then
     if [ ! -d "$armed_probe_root" ] || [ -L "$armed_probe_root" ]; then
       echo 'refusing cleanup of changed armed probe runtime type' >&2
       return 3
     fi
-    rm -f -- "$armed_probe_root/trigger" "$armed_probe_root/ready" "$armed_probe_root/result.json" || cleanup_status=$?
+    rm -f -- \
+      "$armed_probe_root/trigger" "$armed_probe_root/ready" "$armed_probe_root/result.json" \
+      "$armed_probe_root/recovery-trigger" "$armed_probe_root/recovery-ready" \
+      "$armed_probe_root/recovery-result.json" || cleanup_status=$?
     rmdir "$armed_probe_root" || cleanup_status=$?
     armed_probe_root_created=false
   fi
   return "$cleanup_status"
-}
-
-recover() {
-  python3 /usr/local/libexec/vpnctl-v2-capacity/load recover \
-    --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1 \
-    --started-monotonic "$restart_started" --recovery-limit-seconds "$recovery_limit_seconds" \
-    --stable-probes 5 --probe-interval 0.1
 }
 
 restore_restart_policy() {
@@ -283,7 +319,6 @@ stop_finished=$(monotonic)
 fault_stage=stopped
 run_armed_probe
 unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
-cleanup_armed_probe
 fault_stage=unavailable_probed
 restart_state=
 for _attempt in $(seq 1 120); do
@@ -315,7 +350,9 @@ if [ "$unavailable_status" != 503 ]; then
   exit 1
 fi
 
-recovery_result=$(recover 2>/dev/null || true)
+recovery_result=
+run_armed_recovery || true
+cleanup_armed_probe
 if ! printf '%s\n' "$recovery_result" | jq -e '
   (.status == "passed" or .status == "failed") and
   (.recovery_seconds | type == "number" and . >= 0) and
