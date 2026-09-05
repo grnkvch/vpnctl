@@ -22,14 +22,17 @@ def percentile(values: list[float], fraction: float) -> float:
     return round(ordered[max(0, math.ceil(len(ordered) * fraction) - 1)], 3)
 
 
-def latency_summary(results: list[dict[str, object]]) -> dict[str, float]:
-    latencies = [float(result["elapsed_ms"]) for result in results]
+def numeric_summary(values: list[float]) -> dict[str, float]:
     return {
-        "p50": percentile(latencies, 0.50),
-        "p95": percentile(latencies, 0.95),
-        "p99": percentile(latencies, 0.99),
-        "max": round(max(latencies), 3) if latencies else 0.0,
+        "p50": percentile(values, 0.50),
+        "p95": percentile(values, 0.95),
+        "p99": percentile(values, 0.99),
+        "max": round(max(values), 3) if values else 0.0,
     }
+
+
+def latency_summary(results: list[dict[str, object]]) -> dict[str, float]:
+    return numeric_summary([float(result["elapsed_ms"]) for result in results])
 
 
 def latency_by_fault_window(
@@ -43,6 +46,46 @@ def latency_by_fault_window(
         "inside": {"successful_requests": len(inside), "latency_ms": latency_summary(inside)},
         "outside": {"successful_requests": len(outside), "latency_ms": latency_summary(outside)},
     }
+
+
+def latency_by_start_bucket(
+    successes: list[dict[str, object]], duration: int, bucket_seconds: int = 30
+) -> list[dict[str, object]]:
+    if bucket_seconds < 1:
+        raise ValueError("latency bucket size must be positive")
+    maximum_offset = max(
+        [float(result["offset_seconds"]) for result in successes], default=0.0
+    )
+    covered_seconds = max(float(duration), maximum_offset + 0.001)
+    bucket_count = max(1, math.ceil(covered_seconds / bucket_seconds))
+    buckets = []
+    for index in range(bucket_count):
+        start = index * bucket_seconds
+        end = (index + 1) * bucket_seconds
+        values = [
+            result
+            for result in successes
+            if start <= float(result["offset_seconds"]) < end
+        ]
+        buckets.append(
+            {
+                "start_seconds": start,
+                "end_seconds": end,
+                "successful_requests": len(values),
+                "latency_ms": latency_summary(values),
+            }
+        )
+    return buckets
+
+
+def annotate_dispatch_lag(
+    results: list[dict[str, object]], rate: int
+) -> list[dict[str, object]]:
+    for index, result in enumerate(results):
+        scheduled_offset = index / rate
+        actual_offset = float(result["offset_seconds"])
+        result["dispatch_lag_ms"] = max(0.0, (actual_offset - scheduled_offset) * 1000)
+    return results
 
 
 def telegram_body(index: int, size: int) -> bytes:
@@ -218,7 +261,10 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
             if remaining > 0:
                 time.sleep(remaining)
             futures.append(executor.submit(operation, args, index, started))
-        results = [future.result(timeout=args.timeout + args.duration) for future in futures]
+        results = annotate_dispatch_lag(
+            [future.result(timeout=args.timeout + args.duration) for future in futures],
+            args.rate,
+        )
     wall = time.monotonic() - started
     successes = [result for result in results if result["ok"]]
     failures = [result for result in results if not result["ok"]]
@@ -251,6 +297,12 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
         "latency_ms": latency_summary(successes),
         "latency_by_fault_window": latency_by_fault_window(
             successes, args.failure_window_start, args.failure_window_end
+        ),
+        "successful_latency_by_30_second_start_bucket": latency_by_start_bucket(
+            successes, args.duration
+        ),
+        "dispatch_lag_ms": numeric_summary(
+            [float(result["dispatch_lag_ms"]) for result in results]
         ),
         "wall_seconds": round(wall, 3),
         "achieved_requests_per_second": round(requests / wall, 3),

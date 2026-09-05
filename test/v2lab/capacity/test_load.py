@@ -49,6 +49,32 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(summary["outside"]["successful_requests"], 2)
         self.assertEqual(summary["outside"]["latency_ms"]["p95"], 50.0)
 
+    def test_success_latency_is_partitioned_by_start_bucket(self):
+        results = [
+            {"elapsed_ms": 10.0, "offset_seconds": 0.0},
+            {"elapsed_ms": 20.0, "offset_seconds": 29.999},
+            {"elapsed_ms": 30.0, "offset_seconds": 30.0},
+            {"elapsed_ms": 40.0, "offset_seconds": 61.0},
+        ]
+        buckets = MODULE.latency_by_start_bucket(results, 60)
+        self.assertEqual(
+            [(bucket["start_seconds"], bucket["successful_requests"]) for bucket in buckets],
+            [(0, 2), (30, 1), (60, 1)],
+        )
+        self.assertEqual(buckets[0]["latency_ms"]["p99"], 20.0)
+        self.assertEqual(buckets[2]["latency_ms"]["max"], 40.0)
+
+    def test_dispatch_lag_uses_scheduled_rate_without_retaining_requests(self):
+        results = [
+            {"offset_seconds": 0.01},
+            {"offset_seconds": 0.60},
+            {"offset_seconds": 1.25},
+        ]
+        annotated = MODULE.annotate_dispatch_lag(results, 2)
+        self.assertAlmostEqual(annotated[0]["dispatch_lag_ms"], 10.0)
+        self.assertAlmostEqual(annotated[1]["dispatch_lag_ms"], 100.0)
+        self.assertAlmostEqual(annotated[2]["dispatch_lag_ms"], 250.0)
+
     def test_recovery_probe_reuses_one_process_and_requires_five_successes_before_deadline(self):
         clock = FakeClock()
         operation = RecoveryOperation(clock, [(0.2, False)] + [(0.2, True)] * 5)

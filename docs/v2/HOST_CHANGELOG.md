@@ -1111,6 +1111,39 @@ This journal records development-host mutations made while implementing and vali
   failure into a pass. It records no payload, path, credential, or per-request
   event and changes no workload or acceptance bound.
 
+### Fault-window result and planned temporal latency diagnosis
+
+- The clean-source run at commit
+  `5272311d6ec78216c49c7c33fa14bd43dd3b52cd` completed the full profile and
+  remains a non-accepted `candidate` at
+  `artifacts/v2lab/capacity-e2e/run-20260905T122541Z/summary.json`. The armed
+  HTTPS request returned `503` in 76 ms; actual FRPS down time was `2.948s`,
+  first recovery succeeded at `2.041s`, and five stable successes completed at
+  `2.845s`. The tunnel-client service PID/restart count remained unchanged and
+  its supervised frpc child recycled once.
+- Webhook delivery was 2930/3000 with all 70 failures inside the accepted
+  window. Its overall p95/p99 was `1958.241/2808.174ms`; outside the fixed
+  fault window p95 fell to `165.680ms`, but p99 remained `2403.439ms`, so the
+  existing two-second steady-state tail bound is genuinely unproven and is not
+  waived. Bot API-like delivery passed 1500/1500 with overall p95/p99
+  `793.622/1819.286ms`; every client completed 300/300 probes with zero loss.
+- Controller idle RSS was 11,632,640 bytes. Gateway/node average CPU was
+  `45.589/57.048%`, minimum available memory `229924864/211103744` bytes,
+  maximum swap use `49512448/18456576` bytes, disk growth `0/12288` bytes,
+  both connection limits were exact 40/5 and 64/8, and every measured unit had
+  zero OOM kills. No workload deadlocked.
+- Owner cleanup removed all capacity/provider resources, nginx packages, and
+  exact temporary paths. Independent Lima state reports both fixtures
+  `Stopped`, and no QEMU crash report appeared during the run; no manual host
+  rollback remains.
+- The next source-only diagnostic adds aggregate 30-second successful-latency
+  buckets and dispatch-lag percentiles to both load reports. This distinguishes
+  transport/backend tail latency from generator worker-queue delay without
+  retaining request bodies, paths, credentials, addresses, or per-request
+  records. The next clean run still gates on the original overall p95/p99,
+  request, fault, resource, and connection bounds; the instrumentation neither
+  retries traffic nor changes offered load or acceptance semantics.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

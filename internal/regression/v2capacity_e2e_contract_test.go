@@ -171,4 +171,13 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	if strings.Count(harness, "--failure-window-start \"$fault_start\" --failure-window-end \"$fault_end\"") != 2 {
 		t.Fatal("capacity webhook and Bot API loads must record the same fault-window latency partition")
 	}
+	loadReporter := readContractFile(t, filepath.Join(fixtureRoot, "load.py"))
+	for _, required := range []string{
+		"successful_latency_by_30_second_start_bucket", "dispatch_lag_ms",
+		"latency_by_start_bucket", "annotate_dispatch_lag",
+	} {
+		if !strings.Contains(loadReporter, required) {
+			t.Errorf("capacity load reporter is missing aggregate temporal diagnostic %q", required)
+		}
+	}
 }
