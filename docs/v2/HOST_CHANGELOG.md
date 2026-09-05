@@ -1035,6 +1035,33 @@ This journal records development-host mutations made while implementing and vali
   bounds. The existing owner trap remains responsible for all guest cleanup;
   repository rollback is the single correction commit.
 
+### First complete post-correction candidate
+
+- The clean-source run at commit
+  `b95b6091d2e4ec3036d96fc867c406a0ed30baea` passed bounded readiness for all
+  five fresh WireGuard peers, complete provider/ingress composition, controller
+  startup, and the exact 40/5 per-expose plus 64/8 gateway limits. It completed
+  the full 300 seconds and retained a deliberately non-accepted `candidate`
+  summary at `artifacts/v2lab/capacity-e2e/run-20260905T111653Z/summary.json`.
+- FRPS fault behavior passed: nginx returned `503`, actual down time was
+  `2.849s`, the original tunnel-client service PID/restart count remained
+  unchanged, one frpc child recycled, first HTTPS success arrived at `6.443s`,
+  and five stable successes completed at `7.311s`, inside the unchanged
+  eight-second reconnect bound. Bot API-like requests completed 1500/1500;
+  every client completed 300/300 probes; connection limits, controller 11.3-MiB
+  idle RSS, CPU/memory/swap/disk bounds, zero OOM, and no deadlock all passed.
+- Only three webhook assertions failed. There were 2882/3000 successes against
+  the unchanged minimum 2890, with all 118 `503` failures inside the accepted
+  fault window; successful-response p95/p99 were `2511.741/3556.604ms` against
+  `1000/2000ms`. The slower but still bounded reconnect created a longer
+  transient queue than earlier diagnostic runs. These values are not rewritten,
+  excluded, or accepted after the fact; status remains `candidate`.
+- Owner cleanup and exact absence checks passed before summary construction,
+  both VM states were restored to `Stopped`, and no new QEMU crash report was
+  created. The next run repeats the identical workload and all original bounds
+  to distinguish constrained-host/reconnect jitter from a reproducible product
+  failure. No implementation or acceptance threshold changes for this repeat.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
