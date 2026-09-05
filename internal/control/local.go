@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	LocalSchemaVersion = 1
-	LocalMaximumBytes  = 64 << 10
-	LocalTimeout       = 5 * time.Second
+	LocalSchemaVersion          = 1
+	LocalMaximumBytes           = 64 << 10
+	LocalTimeout                = 5 * time.Second
+	LocalMaximumMutationTimeout = 60 * time.Second
 )
 
 type LocalMethod string
@@ -44,6 +45,17 @@ type LocalResponse struct {
 // Application failures remain represented by a valid response; the returned
 // error is reserved for transport and protocol-boundary failures.
 func CallLocal(ctx context.Context, socketPath string, request LocalRequest) (LocalResponse, error) {
+	return callLocal(ctx, socketPath, request, LocalTimeout)
+}
+
+// CallLocalMutation permits a longer bounded response deadline for explicit
+// runtime operations that may restart several services. The server applies the
+// same absolute maximum independently.
+func CallLocalMutation(ctx context.Context, socketPath string, request LocalRequest) (LocalResponse, error) {
+	return callLocal(ctx, socketPath, request, LocalMaximumMutationTimeout)
+}
+
+func callLocal(ctx context.Context, socketPath string, request LocalRequest, timeout time.Duration) (LocalResponse, error) {
 	if ctx == nil {
 		return LocalResponse{}, fmt.Errorf("context is required")
 	}
@@ -61,7 +73,10 @@ func CallLocal(ctx context.Context, socketPath string, request LocalRequest) (Lo
 		return LocalResponse{}, fmt.Errorf("local controller request exceeds the size limit")
 	}
 
-	deadline := time.Now().Add(LocalTimeout)
+	if timeout <= 0 || timeout > LocalMaximumMutationTimeout {
+		return LocalResponse{}, fmt.Errorf("local controller timeout is unsupported")
+	}
+	deadline := time.Now().Add(timeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
@@ -74,7 +89,14 @@ func CallLocal(ctx context.Context, socketPath string, request LocalRequest) (Lo
 	if err := connection.SetDeadline(deadline); err != nil {
 		return LocalResponse{}, fmt.Errorf("bound local controller request: %w", err)
 	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = connection.SetDeadline(time.Now())
+	})
+	defer stopCancellation()
 	if _, err := connection.Write(encoded); err != nil {
+		if ctx.Err() != nil {
+			return LocalResponse{}, fmt.Errorf("write local controller request: %w", ctx.Err())
+		}
 		return LocalResponse{}, fmt.Errorf("write local controller request: %w", err)
 	}
 	unixConnection, ok := connection.(*net.UnixConn)
@@ -82,10 +104,16 @@ func CallLocal(ctx context.Context, socketPath string, request LocalRequest) (Lo
 		return LocalResponse{}, fmt.Errorf("local controller connection is not Unix")
 	}
 	if err := unixConnection.CloseWrite(); err != nil {
+		if ctx.Err() != nil {
+			return LocalResponse{}, fmt.Errorf("finish local controller request: %w", ctx.Err())
+		}
 		return LocalResponse{}, fmt.Errorf("finish local controller request: %w", err)
 	}
 	data, err := io.ReadAll(io.LimitReader(connection, LocalMaximumBytes+1))
 	if err != nil {
+		if ctx.Err() != nil {
+			return LocalResponse{}, fmt.Errorf("read local controller response: %w", ctx.Err())
+		}
 		return LocalResponse{}, fmt.Errorf("read local controller response: %w", err)
 	}
 	if len(data) > LocalMaximumBytes {

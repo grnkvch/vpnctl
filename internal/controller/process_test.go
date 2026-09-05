@@ -180,6 +180,50 @@ func TestControllerPreparedMutationAppliesBeforeStateAndRollsBackOnWriteFailure(
 	}
 }
 
+func TestControllerRuntimeOnlyMutationPreservesAuthoritativeGeneration(t *testing.T) {
+	paths, persisted := controllerTestState(t, model.RoleGateway)
+	state, err := persisted.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name            string
+		changeCandidate bool
+		timeout         time.Duration
+		wantOK          bool
+	}{
+		{name: "runtime result", wantOK: true},
+		{name: "changed candidate", changeCandidate: true},
+		{name: "excessive timeout", timeout: control.LocalMaximumMutationTimeout + time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateStore := &preparedMutationStateStore{state: state}
+			dispatcher := &runtimeOnlyTestDispatcher{changeCandidate: test.changeCandidate, timeout: test.timeout}
+			server, err := NewController(ControllerRuntime{Paths: paths, State: stateStore, Observer: &recordingObserver{}, Dispatcher: dispatcher})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := server.mutateResponse(control.LocalRequest{
+				SchemaVersion: control.LocalSchemaVersion, Method: control.LocalMutate,
+				Operation: "repair.gateway", ExpectedGeneration: state.Generation, Payload: json.RawMessage(`{}`),
+			})
+			if response.OK != test.wantOK || response.Generation != state.Generation {
+				t.Fatalf("runtime-only response = %+v", response)
+			}
+			wantApplies := 0
+			if test.wantOK {
+				wantApplies = 1
+				if string(response.Data) != `{"transaction_id":"fw-7K3M2P"}` {
+					t.Fatalf("runtime-only result = %s", response.Data)
+				}
+			}
+			if dispatcher.applies != wantApplies || stateStore.saves != 0 || stateStore.state.Generation != state.Generation {
+				t.Fatalf("runtime-only applies/saves/generation = %d/%d/%d", dispatcher.applies, stateStore.saves, stateStore.state.Generation)
+			}
+		})
+	}
+}
+
 func TestControllerGracefulStopWaitsForAcceptedMutation(t *testing.T) {
 	paths, stateStore := controllerTestState(t, model.RoleGateway)
 	dispatcher := &blockingMutationDispatcher{started: make(chan struct{}), release: make(chan struct{})}
@@ -421,6 +465,7 @@ type preparedMutationStateStore struct {
 	state          model.State
 	failSave       bool
 	commitThenFail bool
+	saves          int
 }
 
 func (stateStore *preparedMutationStateStore) Load() (model.State, error) {
@@ -428,6 +473,7 @@ func (stateStore *preparedMutationStateStore) Load() (model.State, error) {
 }
 
 func (stateStore *preparedMutationStateStore) Save(expected uint64, candidate model.State) error {
+	stateStore.saves++
 	if stateStore.failSave {
 		if stateStore.commitThenFail {
 			stateStore.state = candidate
@@ -439,6 +485,32 @@ func (stateStore *preparedMutationStateStore) Save(expected uint64, candidate mo
 	}
 	stateStore.state = candidate
 	return nil
+}
+
+type runtimeOnlyTestDispatcher struct {
+	changeCandidate bool
+	timeout         time.Duration
+	applies         int
+}
+
+func (*runtimeOnlyTestDispatcher) Dispatch(context.Context, model.State, string, json.RawMessage) (model.State, json.RawMessage, error) {
+	return model.State{}, nil, errors.New("legacy dispatch must not be used")
+}
+
+func (dispatcher *runtimeOnlyTestDispatcher) Prepare(_ context.Context, state model.State, _ string, _ json.RawMessage) (PreparedMutation, error) {
+	candidate := state
+	if dispatcher.changeCandidate {
+		candidate.Generation++
+	}
+	return PreparedMutation{
+		Candidate: candidate, Changed: true, RuntimeOnly: true, Timeout: dispatcher.timeout,
+		Apply: func(context.Context) error {
+			dispatcher.applies++
+			return nil
+		},
+		Rollback: func(context.Context) error { return nil },
+		Result:   func() json.RawMessage { return json.RawMessage(`{"transaction_id":"fw-7K3M2P"}`) },
+	}, nil
 }
 
 type preparedTestDispatcher struct {

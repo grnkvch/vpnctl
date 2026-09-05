@@ -200,6 +200,38 @@ func TestGatewayServiceConvergenceRecoveryCanReconstructMissingOrAdvanceOlderBas
 	}
 }
 
+func TestGatewayServiceConvergenceInactiveRecoveryCanReconstructInviteOnlyGeneration(t *testing.T) {
+	t.Parallel()
+
+	request := initialGatewayConvergenceRequest(t)
+	for _, seed := range []bool{false, true} {
+		path := newConvergenceSnapshotStorePath(t)
+		store, _ := NewFileConvergenceSnapshotStore(path)
+		if seed {
+			initial, _ := InitialGatewayRoleConvergenceSnapshot(1, request)
+			if err := store.Initialize(context.Background(), initial); err != nil {
+				t.Fatal(err)
+			}
+		}
+		publisher, _ := NewGatewayServiceConvergencePublisher(store)
+		if err := publisher.PublishInactiveGatewayGeneration(context.Background(), 3, request); err != nil {
+			t.Fatalf("seed=%t inactive publish: %v", seed, err)
+		}
+		if err := publisher.PublishInactiveGatewayGeneration(context.Background(), 3, request); err != nil {
+			t.Fatalf("seed=%t inactive idempotent publish: %v", seed, err)
+		}
+		got, err := store.Read(context.Background())
+		if err != nil || got.Applied.Generation != 3 || len(got.Applied.Resources) != 13 {
+			t.Fatalf("seed=%t inactive recovered = %+v, %v", seed, got, err)
+		}
+		changed := cloneGatewayRoleRequest(request)
+		changed.Configs[0].Content = []byte("changed\n")
+		if err := publisher.PublishInactiveGatewayGeneration(context.Background(), 3, changed); !errors.Is(err, ErrConvergenceSnapshotConflict) {
+			t.Fatalf("seed=%t changed inactive generation error = %v", seed, err)
+		}
+	}
+}
+
 func TestGatewayServiceConvergenceRefusesPendingOrNewerBaseline(t *testing.T) {
 	t.Parallel()
 

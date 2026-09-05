@@ -66,8 +66,14 @@ type PreparedMutation struct {
 	Candidate model.State
 	Data      json.RawMessage
 	Changed   bool
-	Apply     func(context.Context) error
-	Rollback  func(context.Context) error
+	// RuntimeOnly permits a state-preserving repair under the controller's
+	// mutation lock. Candidate must remain byte-logically equal to the loaded
+	// state; Apply owns its internal rollback and no state generation is saved.
+	RuntimeOnly bool
+	Timeout     time.Duration
+	Apply       func(context.Context) error
+	Rollback    func(context.Context) error
+	Result      func() json.RawMessage
 }
 
 type ControllerRuntime struct {
@@ -273,11 +279,31 @@ func (controller *Controller) applyPreparedMutation(state model.State, request c
 	if prepared.Apply == nil || prepared.Rollback == nil {
 		return localFailureWithGeneration("mutation_failed", "local mutation was rejected", state.Generation)
 	}
-	applyContext, cancelApply := context.WithTimeout(context.Background(), control.LocalTimeout)
+	if prepared.RuntimeOnly && !reflect.DeepEqual(prepared.Candidate, state) {
+		return localFailureWithGeneration("mutation_failed", "runtime-only mutation changed authoritative state", state.Generation)
+	}
+	applyTimeout := prepared.Timeout
+	if applyTimeout <= 0 {
+		applyTimeout = control.LocalTimeout
+	}
+	if applyTimeout > control.LocalMaximumMutationTimeout {
+		return localFailureWithGeneration("mutation_failed", "local mutation timeout is unsupported", state.Generation)
+	}
+	applyContext, cancelApply := context.WithTimeout(context.Background(), applyTimeout)
 	err = prepared.Apply(applyContext)
 	cancelApply()
 	if err != nil {
 		return localFailureWithGeneration("runtime_apply_failed", "operation runtime could not be activated", state.Generation)
+	}
+	if prepared.Result != nil {
+		prepared.Data = prepared.Result()
+		if len(prepared.Data) == 0 {
+			prepared.Data = json.RawMessage(`{}`)
+		}
+	}
+	if prepared.RuntimeOnly {
+		controller.recordObservation(context.Background(), state)
+		return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: state.Generation, Data: prepared.Data}
 	}
 	if err := controller.runtime.State.Save(state.Generation, prepared.Candidate); err != nil {
 		observed, loadErr := controller.runtime.State.Load()

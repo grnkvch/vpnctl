@@ -15,6 +15,7 @@ type GatewayMutationDispatcher struct {
 	dns     *GatewayDNSMutationDispatcher
 	logging *GatewayLoggingMutationDispatcher
 	invites *GatewayInviteMutationDispatcher
+	repair  *GatewayRepairDispatcher
 }
 
 func NewGatewayMutationDispatcher(dns *GatewayDNSMutationDispatcher, logging *GatewayLoggingMutationDispatcher, invites ...*GatewayInviteMutationDispatcher) (*GatewayMutationDispatcher, error) {
@@ -29,6 +30,23 @@ func NewGatewayMutationDispatcher(dns *GatewayDNSMutationDispatcher, logging *Ga
 		inviteDispatcher = invites[0]
 	}
 	return &GatewayMutationDispatcher{dns: dns, logging: logging, invites: inviteDispatcher}, nil
+}
+
+func NewGatewayMutationDispatcherWithRepair(
+	dns *GatewayDNSMutationDispatcher,
+	logging *GatewayLoggingMutationDispatcher,
+	invites *GatewayInviteMutationDispatcher,
+	repair *GatewayRepairDispatcher,
+) (*GatewayMutationDispatcher, error) {
+	if repair == nil {
+		return nil, fmt.Errorf("gateway repair dispatcher is required")
+	}
+	dispatcher, err := NewGatewayMutationDispatcher(dns, logging, invites)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher.repair = repair
+	return dispatcher, nil
 }
 
 func (dispatcher *GatewayMutationDispatcher) Dispatch(context.Context, model.State, string, json.RawMessage) (model.State, json.RawMessage, error) {
@@ -46,6 +64,8 @@ func (dispatcher *GatewayMutationDispatcher) Prepare(ctx context.Context, state 
 		return dispatcher.logging.Prepare(ctx, state, operation, payload)
 	case strings.HasPrefix(operation, "invite.") && dispatcher.invites != nil:
 		return dispatcher.invites.Prepare(ctx, state, operation, payload)
+	case operation == GatewayRepairOperation && dispatcher.repair != nil:
+		return dispatcher.repair.Prepare(ctx, state, operation, payload)
 	default:
 		return PreparedMutation{}, fmt.Errorf("unsupported gateway mutation operation")
 	}

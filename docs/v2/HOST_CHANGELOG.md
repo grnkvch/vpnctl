@@ -2,6 +2,47 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — controller-owned committed gateway repair
+
+### Planned reversible validation
+
+- Connect public `vpnctl repair` on a gateway to a content-free, generation-
+  bound preview of the exact five role services and eight initial or twelve
+  tunnel-active generated configs. When bootstrap networking was never
+  confirmed, include the two watchdog templates, firewall hash, and retained
+  pre-vpnctl network-snapshot hash in the reviewed plan.
+- Execute only through the root-only controller socket under its existing
+  mutation mutex. Recompile state, secrets, watchdog history, and every
+  artifact hash after consent; reject changed input before host writes and
+  preserve the authoritative state generation throughout runtime-only repair.
+- Repair committed unit/config content as retryable forward progress, verify
+  the exact WireGuard identity/listen/addresses/peer set plus restricted and
+  tunnel readiness, then publish the matching inactive or active convergence
+  generation. A bootstrap recovery may arm a new watchdog and activate the
+  firewall only when its fresh snapshot exactly equals the oldest retained
+  initialization snapshot. Success requires a new-session
+  `vpnctl confirm <transaction-id>`; any network-path failure triggers the
+  watchdog rollback immediately.
+- Treat a lost local response as outcome-uncertain because an active watchdog
+  transaction may exist. Bound ordinary local calls to five seconds, repair
+  apply to 45 seconds, and its client socket to 60 seconds; caller cancellation
+  interrupts an accepted socket read. Validation uses temporary roots, fake
+  services/network/watchdogs, and repository-local build caches only. No
+  production config, unit, firewall, sysctl, host, or VM is changed.
+
+### Acceptance
+
+- Tests prove read-only secret-free initial/active compilation; exact 13/17
+  role and 15-resource bootstrap previews; stale plan and pending-watchdog
+  refusal; inactive tunnel-marker removal before service start; empty/insecure
+  owned-config correction; unexpected WireGuard-peer rejection; controller
+  serialization without a state save; exact apply ordering; pre-vpnctl network
+  equality; rollback before mismatched activation; valid confirmation output;
+  dry-run/TTY/`--yes` behavior; role dispatch; and lost-response guidance.
+- Full Go tests and race checks for control/controller/enrollment/operations/
+  CLI passed. Repository rollback removes this source slice; no host rollback
+  is needed.
+
 ## 2026-09-05 — transactional active gateway convergence
 
 ### Planned reversible validation

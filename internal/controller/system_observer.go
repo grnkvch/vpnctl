@@ -120,7 +120,13 @@ func newSystemController(paths store.Paths, state *store.StateStore) (*Controlle
 	if err != nil {
 		return nil, err
 	}
-	dispatcher, err := NewGatewayMutationDispatcher(dnsDispatcher, loggingDispatcher, NewGatewayInviteMutationDispatcher(nil, nil))
+	repairDispatcher, err := NewSystemGatewayRepairDispatcher(paths)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher, err := NewGatewayMutationDispatcherWithRepair(
+		dnsDispatcher, loggingDispatcher, NewGatewayInviteMutationDispatcher(nil, nil), repairDispatcher,
+	)
 	if err != nil {
 		return nil, err
 	}

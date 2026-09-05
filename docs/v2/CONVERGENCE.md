@@ -101,8 +101,15 @@ mutation lock. It includes the current shared DNS plus transport and tunnel
 artifacts. Any clean older baseline is accepted because invite-only state
 mutations may skip runtime generations. A rejected state commit restores the
 runtime first and then CAS-restores its prior snapshot; a confirmed or
-uncertain commit retains the candidate. Later mutation/apply publication and a
-concrete gateway repair executor remain to be connected.
+uncertain commit retains the candidate. The concrete committed-generation
+gateway repair path is now connected through the controller mutation lock. It
+reconstructs the exact inactive or active role request from authoritative
+state and existing secrets, republishes a missing/older clean snapshot, and
+never rewrites state. When no gateway network transaction has ever been
+confirmed, the same reviewed repair also reinstalls watchdog templates and
+repeats initial firewall/sysctl activation only after a fresh network snapshot
+exactly matches the oldest retained pre-vpnctl snapshot. Later mutation/apply
+publication remains to be connected.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It

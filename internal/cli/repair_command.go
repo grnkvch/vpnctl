@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
@@ -14,10 +15,11 @@ import (
 )
 
 var (
-	repairSystemPaths = store.DefaultPaths
-	repairLoadRole    = loadSystemHostRole
-	repairBuildNode   = buildSystemCommittedNodeRepair
-	repairOpenTTY     = func() (PromptIO, io.Closer, error) {
+	repairSystemPaths  = store.DefaultPaths
+	repairLoadRole     = loadSystemHostRole
+	repairBuildNode    = buildSystemCommittedNodeRepair
+	repairBuildGateway = buildSystemCommittedGatewayRepair
+	repairOpenTTY      = func() (PromptIO, io.Closer, error) {
 		terminal, err := OpenControllingTerminal()
 		if err != nil {
 			return nil, nil, err
@@ -50,34 +52,45 @@ func executeRepair(args []string, stdout, stderr io.Writer) int {
 		return ExitInternal
 	}
 	if err != nil {
-		return emitRepairCommandFailure(emitter, output.CategoryValidation, "invalid_arguments", err.Error(), false)
+		return emitRepairCommandFailure(emitter, output.CategoryValidation, "invalid_arguments", err.Error(), false, RoleUninitialized)
 	}
 	paths := repairSystemPaths()
 	role, err := repairLoadRole(paths)
 	if err != nil || role == RoleUninitialized {
-		return emitRepairCommandFailure(emitter, output.CategoryValidation, "invalid_host_state", "repair requires an initialized host", false)
-	}
-	if role != RoleNode {
-		return emitRepairCommandFailure(emitter, output.CategoryUnavailable, "gateway_repair_unavailable", "gateway repair runtime is not connected yet", false)
-	}
-	operator, err := repairBuildNode(paths)
-	if err != nil {
-		category, code, message := classifyRepairCommandError(err)
-		return emitRepairCommandFailure(emitter, category, code, message, false)
+		return emitRepairCommandFailure(emitter, output.CategoryValidation, "invalid_host_state", "repair requires an initialized host", false, RoleUninitialized)
 	}
 	var terminal PromptIO
 	var closer io.Closer
 	if !parsed.Yes && !parsed.DryRun {
 		terminal, closer, err = repairOpenTTY()
 		if err != nil {
-			return emitRepairCommandFailure(emitter, output.CategoryValidation, "controlling_tty_required", "repair confirmation requires a controlling TTY or --yes", false)
+			return emitRepairCommandFailure(emitter, output.CategoryValidation, "controlling_tty_required", "repair confirmation requires a controlling TTY or --yes", false, role)
 		}
 		defer closer.Close()
 	}
-	outcome, err := RunCommittedNodeRepair(context.Background(), parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
+	var outcome MutationOutcome
+	switch role {
+	case RoleGateway:
+		operator, buildErr := repairBuildGateway(paths)
+		if buildErr != nil {
+			category, code, message := classifyRepairCommandError(buildErr)
+			return emitRepairCommandFailure(emitter, category, code, message, false, role)
+		}
+		outcome, err = RunCommittedGatewayRepair(context.Background(), parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
+	case RoleNode:
+		operator, buildErr := repairBuildNode(paths)
+		if buildErr != nil {
+			category, code, message := classifyRepairCommandError(buildErr)
+			return emitRepairCommandFailure(emitter, category, code, message, false, role)
+		}
+		outcome, err = RunCommittedNodeRepair(context.Background(), parsed.DryRun, parsed.Yes, parsed.JSON, terminal, operator)
+	default:
+		return emitRepairCommandFailure(emitter, output.CategoryValidation, "repair_request_invalid", "repair requires an initialized gateway or node", false, role)
+	}
 	if err != nil {
 		category, code, message := classifyRepairCommandError(err)
-		return emitRepairCommandFailure(emitter, category, code, message, errors.Is(err, enrollment.ErrNodeActivationPending))
+		changed := errors.Is(err, enrollment.ErrNodeActivationPending) || errors.Is(err, ErrCommittedGatewayRepairPending) || errors.Is(err, ErrCommittedGatewayRepairUncertain)
+		return emitRepairCommandFailure(emitter, category, code, message, changed, role)
 	}
 	exit, err := emitter.Emit(outcome.Result)
 	if err != nil {
@@ -135,18 +148,25 @@ Usage:
 func classifyRepairCommandError(err error) (output.ExitCategory, string, string) {
 	switch {
 	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags), errors.Is(err, ErrInteractionRefused),
-		errors.Is(err, ErrCommittedNodeRepairInvalid), errors.Is(err, store.ErrStateNotFound):
-		return output.CategoryValidation, "repair_request_invalid", "repair requires a valid joined node generation"
-	case errors.Is(err, ErrCommittedNodeRepairStale), errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict):
+		errors.Is(err, ErrCommittedNodeRepairInvalid), errors.Is(err, ErrCommittedGatewayRepairInvalid), errors.Is(err, controller.ErrGatewayRepairInvalid),
+		errors.Is(err, store.ErrStateNotFound):
+		return output.CategoryValidation, "repair_request_invalid", "repair requires a valid committed host generation"
+	case errors.Is(err, ErrCommittedNodeRepairStale), errors.Is(err, ErrCommittedGatewayRepairStale), errors.Is(err, controller.ErrGatewayRepairStale),
+		errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict), errors.Is(err, controller.ErrGatewayRepairWatchdogActive),
+		errors.Is(err, controller.ErrGatewayRepairNetworkState):
 		return output.CategoryConflict, "repair_plan_stale", "the committed generation changed after repair preview"
-	case errors.Is(err, enrollment.ErrNodeActivationPending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return output.CategoryUnavailable, "repair_activation_pending", "the committed node generation is still not ready; resolve the reported host issue and retry repair"
+	case errors.Is(err, ErrCommittedGatewayRepairUnavailable):
+		return output.CategoryUnavailable, "gateway_controller_unavailable", "gateway repair requires the local controller service"
+	case errors.Is(err, ErrCommittedGatewayRepairUncertain):
+		return output.CategoryUnavailable, "gateway_repair_outcome_uncertain", "the controller response was lost; inspect gateway status and any active watchdog transaction before retrying"
+	case errors.Is(err, enrollment.ErrNodeActivationPending), errors.Is(err, ErrCommittedGatewayRepairPending), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return output.CategoryUnavailable, "repair_activation_pending", "the committed runtime is still not ready; resolve the reported host issue and retry repair"
 	default:
 		return output.CategoryInternal, "repair_failed", "vpnctl could not repair the committed runtime"
 	}
 }
 
-func emitRepairCommandFailure(emitter *ResultEmitter, category output.ExitCategory, code, message string, changed bool) int {
+func emitRepairCommandFailure(emitter *ResultEmitter, category output.ExitCategory, code, message string, changed bool, role HostRole) int {
 	status := output.StatusFailed
 	if category == output.CategoryUnavailable || category == output.CategoryConflict {
 		status = output.StatusDegraded
@@ -154,9 +174,14 @@ func emitRepairCommandFailure(emitter *ResultEmitter, category output.ExitCatego
 	result := output.NewResult("repair", status, category, output.SafeObject{"changed": changed})
 	result.Warnings = append(result.Warnings, output.Message{Code: code, Message: singleLineGatewayInitMessage(message)})
 	if changed {
-		result.RequiresAction = append(result.RequiresAction, output.Action{
-			Code: "retry_node_repair", Message: "Retry repair after resolving the host readiness failure.", Command: "vpnctl repair",
-		})
+		action := output.Action{Code: "retry_node_repair", Message: "Retry repair after resolving the host readiness failure.", Command: "vpnctl repair"}
+		if role == RoleGateway {
+			action = output.Action{Code: "retry_gateway_repair", Message: "Retry repair after resolving the gateway readiness failure.", Command: "vpnctl repair"}
+			if code == "gateway_repair_outcome_uncertain" {
+				action = output.Action{Code: "inspect_gateway_repair", Message: "Inspect gateway and watchdog status before deciding whether to retry repair.", Command: "vpnctl status"}
+			}
+		}
+		result.RequiresAction = append(result.RequiresAction, action)
 	}
 	exit, err := emitter.Emit(result)
 	if err != nil {

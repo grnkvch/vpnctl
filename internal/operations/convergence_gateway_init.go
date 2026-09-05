@@ -253,10 +253,33 @@ func (publisher *GatewayServiceConvergencePublisher) PublishActiveGatewayGenerat
 	generation uint64,
 	request linuxplatform.RoleInstallationRequest,
 ) error {
+	return publisher.publishGatewayGeneration(ctx, generation, request, true)
+}
+
+func (publisher *GatewayServiceConvergencePublisher) PublishInactiveGatewayGeneration(
+	ctx context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+) error {
+	return publisher.publishGatewayGeneration(ctx, generation, request, false)
+}
+
+func (publisher *GatewayServiceConvergencePublisher) publishGatewayGeneration(
+	ctx context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+	activeTunnel bool,
+) error {
 	if ctx == nil || publisher == nil || publisher.store == nil {
 		return fmt.Errorf("gateway service convergence publisher is incomplete")
 	}
-	candidate, err := ActiveGatewayRoleConvergenceSnapshot(generation, request)
+	var candidate ConvergenceSnapshot
+	var err error
+	if activeTunnel {
+		candidate, err = ActiveGatewayRoleConvergenceSnapshot(generation, request)
+	} else {
+		candidate, err = InitialGatewayRoleConvergenceSnapshot(generation, request)
+	}
 	if err != nil {
 		return err
 	}

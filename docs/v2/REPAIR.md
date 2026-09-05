@@ -55,3 +55,24 @@ present rejects the result, so repair cannot claim success without convergence.
 The authoritative desired, applied, and pending snapshots are not rewritten by
 repair itself; concrete component transactions perform only the previewed
 runtime corrections.
+
+## Committed-generation recovery boundary
+
+Gateway and private-node initialization/join can commit authoritative state
+before their service-generation convergence publication is durably
+acknowledged. Public `vpnctl repair` therefore has a closed recovery adapter
+for this state: it previews the complete role-owned committed generation by
+service/config name and SHA-256, then recompiles the same generation after
+consent. This adapter never adopts observed content, changes authoritative
+state, downloads components, or targets resources outside the fixed role
+catalog.
+
+Gateway execution occurs only in the resident controller under the same
+mutation lock used by DNS, logging, invites, and enrollment. If the initial
+network activation has no committed watchdog transaction, recovery additionally
+previews its firewall and original-network hashes. It may reactivate networking
+only when a newly captured watchdog snapshot is byte-logically equal to the
+oldest retained pre-vpnctl snapshot. The result then requires
+`vpnctl confirm <transaction-id>` from a new SSH session; `--yes` cannot satisfy
+that independent gate. A pending watchdog blocks repair, and a lost controller
+response is reported as outcome-uncertain rather than safe to retry blindly.

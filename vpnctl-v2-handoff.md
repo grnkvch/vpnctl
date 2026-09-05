@@ -9,6 +9,22 @@
 
 Последнее обновление: **2026-09-05**.
 
+Concrete gateway repair теперь подключён к public `vpnctl repair`. Read-only
+preview из committed gateway state и существующих secrets содержит только
+generation/host ID, точные пять services, SHA-256 восьми initial или двенадцати
+active configs и unit templates. После consent CLI передаёт retained plan в
+root-only controller socket; controller повторно компилирует его под общим
+mutation lock, восстанавливает committed role runtime, проверяет точный
+WireGuard peer set/listen/addresses, restricted/tunnel readiness и публикует
+inactive/active convergence без записи authoritative state. Если gateway init
+ещё ни разу не был подтверждён, plan также фиксирует два watchdog unit-а,
+firewall и initial-network hashes: новый watchdog snapshot обязан точно
+совпасть с самым старым pre-vpnctl snapshot до сетевой активации. Успех
+возвращает `vpnctl confirm fw-XXXXXX`; pending watchdog блокирует repair, любой
+network failure откатывается, а потерянный local response считается
+outcome-uncertain. Full/race suites пройдены source-only, production host/VM не
+изменялись.
+
 Successful gateway-side join теперь transactionally продвигает convergence к
 полной active generation: пять running unit-ов и 12 exact config artifacts,
 включая shared DNS, оба transport-а и tunnel server. Snapshot staging идёт
@@ -23,9 +39,8 @@ Gateway `init` теперь также публикует первый content-f
 listener artifact-а; условно пропущенный tunnel-server отмечен inactive, а
 остальные initial services — active. Ошибка publication не маскирует commit:
 watchdog откатывает сетевую область, CLI возвращает degraded/changed и требует
-`vpnctl repair`. Следующий implementation slice — concrete gateway repair
-executor, включая watchdog-protected network recovery после незавершённого
-gateway init.
+`vpnctl repair`. Этот recovery tail теперь реализован описанным выше concrete
+gateway repair executor с watchdog-protected network recovery.
 
 Текущий implementation continuation: public `vpnctl repair` теперь
 диспетчеризуется на private node и закрывает emitted
