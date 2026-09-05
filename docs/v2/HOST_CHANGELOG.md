@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — production owned-unit drift observation
+
+### Planned reversible validation
+
+- Extend the production convergence discoverer from files to the closed set of
+  gateway/node `vpnctl-*.service` units. Each present regular unit is observed
+  through its exact file type/mode/content hash plus `systemctl show` and
+  `systemctl is-enabled`; the resulting report contains only a runtime digest.
+- A missing unit is planner-visible missing drift. A stopped, disabled,
+  modified, symlinked, hard-linked, or non-regular unit becomes modified drift.
+  Unsafe file shapes are never passed to systemctl; unknown units and still
+  unsupported state/network resources fail closed instead of yielding a
+  partial healthy plan.
+- Tests use fake read-only runners and temporary roots. No unit command beyond
+  `show`/`is-enabled` is representable in the adapter; repository rollback is
+  limited to this commit and no host rollback is needed.
+
+### Acceptance
+
+- Mixed file/unit manifests now converge with zero drift when exact bytes,
+  mode, enablement, and active process state match. Stopped and missing units,
+  unsafe unit file shapes, unknown names, malformed systemd responses, and
+  runner failures are covered; recorded commands prove only `show` and
+  `is-enabled` are issued.
+- The complete Go suite, `go vet ./...`, formatting/diff checks, and strict
+  OpenSpec validation passed. Only temporary unit trees, fake runners, and the
+  existing suite's disposable local sockets were used; no persistent host
+  mutation or rollback remains.
+
 ## 2026-09-06 — production owned-file drift observation
 
 ### Planned reversible validation

@@ -159,7 +159,7 @@ func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion 
 	if err != nil {
 		return nil, err
 	}
-	owned, err := operations.NewFilesystemOwnedResourceDiscoverer(paths.Root)
+	owned, err := operations.NewSystemOwnedResourceDiscoverer(paths.Root, linuxplatform.OSProbeRunner{})
 	if err != nil {
 		return nil, err
 	}

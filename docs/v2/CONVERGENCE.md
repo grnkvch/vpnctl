@@ -85,3 +85,12 @@ bytes. Missing paths are omitted for the planner's `missing` classification;
 wrong type, mode, or content becomes `modified`. Unit, state, and network
 resources remain typed unsupported until their own ownership-aware adapters
 are connected, so a mixed manifest cannot yield a partial healthy result.
+
+The system discovery adapter additionally accepts only unit names from the
+closed gateway/node role-unit catalog. A regular single-link unit is
+fingerprinted from its mode and content hash plus read-only `systemctl show`
+load/active/sub-state and `systemctl is-enabled` output. Missing unit files are
+`missing`; stopped, disabled, changed, or unsafe file shapes are `modified`.
+Unsafe unit paths are never handed to systemctl, and the adapter has no
+start/stop/reload/enable capability. State and network resources remain typed
+unsupported until equivalent ownership-aware readers exist.
