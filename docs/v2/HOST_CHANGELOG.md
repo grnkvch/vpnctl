@@ -897,6 +897,39 @@ This journal records development-host mutations made while implementing and vali
   absent, then return both VM states to `Stopped`. Any foreign or ambiguous
   resource stops recovery without mutation.
 
+### Partial residue inventory and checksum-closed recovery plan
+
+- Read-only inspection after starting only the two contract-matching fixtures
+  found no task listener, process, or `vpnctl_v2_spike_uot_capture` table on
+  either host; each retained only Lima's pre-existing `table ip nat`. Node is
+  a complete inactive owner-marked restricted side: marker SHA-256
+  `22b186e6407ef91bfb1f6bd5e891596f6567877815499f49970356bc773d5731`,
+  config/helper/unit hashes match the current generated/source files exactly,
+  and its Mihomo binary matches the pinned cache SHA-256
+  `3e92df24f5e80e86b9cf9183ceb7bb575f0bd132a9dc4081dae42e80f21076ae`.
+- Gateway contains only the exact declared restricted directories/files, but
+  the owner marker, generated config, three unit files, UDP helper, probe body,
+  and Telegram fixture are zero-length regular root files. Its Mihomo binary
+  has the same pinned hash; its two Mihomo/cache state directories contain only
+  the expected `cache.db`, with the same hash observed on node. All three units
+  are inactive and interpreted as masked because their fragment files are
+  empty regular files, not symlinks. This exact empty-file pattern is an
+  interrupted run-owned install, but it does not satisfy ordinary marker-only
+  cleanup and therefore was not mutated during discovery.
+- Revised recovery is narrower than completing the fixture. After rechecking
+  this exact path/type/hash closure immediately before mutation, write only the
+  exact owner marker bytes plus newline to the empty gateway marker, then invoke
+  the existing owner-checked restricted `uninstall`. That operation first
+  removes the exact valid node side and then the newly re-marked exact gateway
+  residue using its fixed role lists. It must not run if any file, hash, entry,
+  listener, process, table, or VM contract differs.
+- Postflight must prove both restricted trees, their four unit files, five
+  helper/binary names, three state directories, reserved listeners, and capture
+  table absent while the pre-existing `table ip nat` remains. Both VMs are then
+  returned to their prior `Stopped` state. This deletes only a broken disposable
+  lab fixture; it can be recreated from the checksum-pinned cache and checked-in
+  source, and no user data or foreign resource is in scope.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
