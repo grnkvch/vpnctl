@@ -9,6 +9,15 @@
 
 Последнее обновление: **2026-09-05**.
 
+Следующий generic-repair слой начат с безопасной read-only границы:
+`operations.BuildRepairPlan` теперь строит exact applied-generation plan без
+mutation executor, а `LocalRoleRepairScopeResolver` принимает только фиксированный
+unit catalog и непосредственные generated config-файлы текущей authoritative
+gateway/node роли. Cross-role component/path, nested path и network/state kind
+отклоняют весь plan. Это подготавливает настоящий drift-aware no-op/preview;
+public command пока сохраняет committed-generation recovery adapter до
+подключения post-observation executor bridge.
+
 Concrete gateway repair теперь подключён к public `vpnctl repair`. Read-only
 preview из committed gateway state и существующих secrets содержит только
 generation/host ID, точные пять services, SHA-256 восьми initial или двенадцати

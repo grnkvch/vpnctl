@@ -28,6 +28,14 @@ files, units, network objects, and state records remain outside the observation
 set. Since repair actions must exactly and in order cover planner drift, callers
 cannot append a foreign action to an approved plan.
 
+The production local scope resolver is closed over the authoritative role and,
+for a node, its immutable node ID. It accepts only the fixed role unit catalog
+and direct files in `/etc/vpnctl/generated/gateway` or
+`/etc/vpnctl/generated/node`; a cross-role component, nested/sibling path, or
+unsupported resource kind invalidates the whole plan. Repair-plan construction
+is a read-only API with no executor dependency, so preview and a clean no-op do
+not need to construct a mutation-capable runtime.
+
 ## Preview and consent
 
 `vpnctl repair --dry-run` returns the complete non-secret repair set without an

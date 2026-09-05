@@ -2,6 +2,30 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — read-only local repair planning boundary
+
+### Planned reversible validation
+
+- Extract construction of an exact `RepairPlan` from convergence observation
+  into a public read-only operation that has no executor dependency. This lets
+  dry-run and healthy no-op planning complete without constructing a host
+  mutator.
+- Resolve scope only from the initialized authoritative role: accept the exact
+  gateway or node unit catalog and direct children of that role's generated
+  config directory. Reject cross-role components, sibling/nested paths, and
+  unsupported state/network kinds before any executor can be selected.
+- Keep pending desired changes independent and target only the last applied
+  generation. Validation uses unit tests and an isolated Go cache under
+  `/private/tmp/vpnctl-go-cache`; it does not write production state/config,
+  invoke systemd, or change a host/VM/network resource.
+
+### Acceptance
+
+- Focused ordinary and race tests prove exact gateway/node scope, no-op plans,
+  applied-generation targeting with newer desired intent, and whole-plan
+  rejection of a cross-role resource. Repository rollback removes this source
+  slice; no host rollback is needed.
+
 ## 2026-09-05 — controller-owned committed gateway repair
 
 ### Planned reversible validation

@@ -136,7 +136,7 @@ func (coordinator *RepairCoordinator) Plan(ctx context.Context) (RepairPlan, err
 	if err != nil {
 		return RepairPlan{}, fmt.Errorf("plan vpnctl-owned repair: %w", err)
 	}
-	return coordinator.buildPlan(convergence)
+	return BuildRepairPlan(coordinator.role, coordinator.currentNodeID, convergence, coordinator.resolver)
 }
 
 func (coordinator *RepairCoordinator) Repair(ctx context.Context, approved RepairPlan) (RepairResult, error) {
@@ -194,7 +194,31 @@ func (coordinator *RepairCoordinator) Repair(ctx context.Context, approved Repai
 	}, nil
 }
 
-func (coordinator *RepairCoordinator) buildPlan(convergence ConvergencePlan) (RepairPlan, error) {
+// BuildRepairPlan converts a read-only convergence observation into the exact
+// role-scoped repair preview. It deliberately needs no mutation executor, so
+// dry-run and no-op planning cannot construct or accidentally call a host
+// mutator.
+func BuildRepairPlan(
+	role model.Role,
+	currentNodeID string,
+	convergence ConvergencePlan,
+	resolver RepairScopeResolver,
+) (RepairPlan, error) {
+	if nilInterface(resolver) {
+		return RepairPlan{}, fmt.Errorf("%w: repair scope resolver is required", ErrRepairInvalid)
+	}
+	switch role {
+	case model.RoleGateway:
+		if currentNodeID != "" {
+			return RepairPlan{}, fmt.Errorf("%w: gateway repair cannot contain a current node ID", ErrRepairInvalid)
+		}
+	case model.RoleNode:
+		if err := model.ValidateResourceID(currentNodeID); err != nil {
+			return RepairPlan{}, fmt.Errorf("%w: current node ID: %v", ErrRepairInvalid, err)
+		}
+	default:
+		return RepairPlan{}, fmt.Errorf("%w: unsupported repair role %q", ErrRepairInvalid, role)
+	}
 	if err := convergence.Validate(); err != nil {
 		return RepairPlan{}, fmt.Errorf("%w: convergence plan: %v", ErrRepairInvalid, err)
 	}
@@ -205,14 +229,14 @@ func (coordinator *RepairCoordinator) buildPlan(convergence ConvergencePlan) (Re
 		if err != nil {
 			return RepairPlan{}, err
 		}
-		scope, err := coordinator.resolver.ResolveRepairScope(action)
+		scope, err := resolver.ResolveRepairScope(action)
 		if err != nil {
-			return RepairPlan{}, fmt.Errorf("resolve repair scope for %s: %w", resourceOrder(action.Resource), err)
+			return RepairPlan{}, fmt.Errorf("%w: resolve repair scope for %s: %v", ErrRepairInvalid, resourceOrder(action.Resource), err)
 		}
 		if err := scope.validate(); err != nil {
 			return RepairPlan{}, fmt.Errorf("%w: resource %s scope: %v", ErrRepairInvalid, resourceOrder(action.Resource), err)
 		}
-		if err := coordinator.acceptScope(action.Resource, scope); err != nil {
+		if err := acceptRepairScope(role, currentNodeID, action.Resource, scope); err != nil {
 			return RepairPlan{}, err
 		}
 		action.Scope = scope
@@ -220,7 +244,7 @@ func (coordinator *RepairCoordinator) buildPlan(convergence ConvergencePlan) (Re
 		impact = maximumConvergenceImpact(impact, action.Impact)
 	}
 	plan := RepairPlan{
-		Role: coordinator.role, CurrentNodeID: coordinator.currentNodeID,
+		Role: role, CurrentNodeID: currentNodeID,
 		TargetGeneration: convergence.AppliedGeneration, Impact: impact,
 		Actions: actions, Convergence: convergence,
 	}
@@ -249,15 +273,15 @@ func (coordinator *RepairCoordinator) validate() error {
 	return nil
 }
 
-func (coordinator *RepairCoordinator) acceptScope(resource ManagedResourceKey, scope ApplyScope) error {
-	switch coordinator.role {
+func acceptRepairScope(role model.Role, currentNodeID string, resource ManagedResourceKey, scope ApplyScope) error {
+	switch role {
 	case model.RoleGateway:
 		if scope.Role == model.RoleNode {
 			return fmt.Errorf("%w: resource %s belongs to node %s; run vpnctl repair on that node", ErrRepairNodeAgentUnavailable, resourceOrder(resource), scope.NodeID)
 		}
 	case model.RoleNode:
-		if scope.Role != model.RoleNode || scope.NodeID != coordinator.currentNodeID {
-			return fmt.Errorf("%w: resource %s does not belong to current node %s", ErrRepairConflict, resourceOrder(resource), coordinator.currentNodeID)
+		if scope.Role != model.RoleNode || scope.NodeID != currentNodeID {
+			return fmt.Errorf("%w: resource %s does not belong to current node %s", ErrRepairConflict, resourceOrder(resource), currentNodeID)
 		}
 	}
 	return nil
