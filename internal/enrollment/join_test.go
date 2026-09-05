@@ -639,6 +639,11 @@ func joinGatewayState(t *testing.T, secrets *store.SecretStore, now time.Time) (
 		}
 	}
 	state := inviteGatewayState(now)
+	state.DNS = &model.DNSUpstreamState{
+		SchemaVersion: model.ResourceSchemaVersion,
+		Scope:         model.DNSUpstreamGateway,
+		IPv4:          model.DefaultGatewayDNSUpstreams(),
+	}
 	state.Components.Components = append(state.Components.Components, model.ComponentPin{
 		Name: transport.RestrictedProviderName, Version: transport.RestrictedProviderVersion,
 		Source: "vpnctl-release-bundle", Bundled: true, SHA256: transport.RestrictedProviderSHA256,

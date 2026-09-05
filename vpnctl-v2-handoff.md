@@ -9,14 +9,23 @@
 
 Последнее обновление: **2026-09-05**.
 
+Successful gateway-side join теперь transactionally продвигает convergence к
+полной active generation: пять running unit-ов и 12 exact config artifacts,
+включая shared DNS, оба transport-а и tunnel server. Snapshot staging идёт
+после readiness под controller mutation lock. Join rollback сначала
+восстанавливает configs/services и только затем прежний snapshot; confirmed и
+uncertain authoritative commit сохраняют candidate. Clean baseline может
+прыгнуть `1 -> 3+`, потому что invite-only mutations не меняют runtime.
+
 Gateway `init` теперь также публикует первый content-free convergence baseline
 после commit state/role и до network activation. Generation 1 содержит ровно
 пять enabled unit-файлов, bootstrap/controller/DNS metadata и четыре transport
 listener artifact-а; условно пропущенный tunnel-server отмечен inactive, а
 остальные initial services — active. Ошибка publication не маскирует commit:
 watchdog откатывает сетевую область, CLI возвращает degraded/changed и требует
-`vpnctl repair`. Следующий implementation slice — active gateway generation
-после join и concrete gateway repair executor.
+`vpnctl repair`. Следующий implementation slice — concrete gateway repair
+executor, включая watchdog-protected network recovery после незавершённого
+gateway init.
 
 Текущий implementation continuation: public `vpnctl repair` теперь
 диспетчеризуется на private node и закрывает emitted

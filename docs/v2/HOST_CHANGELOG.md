@@ -2,6 +2,34 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — transactional active gateway convergence
+
+### Planned reversible validation
+
+- Compile the full active gateway generation from the same role request used
+  for join readiness: five enabled/running services, bootstrap/controller,
+  current shared DNS, four transport listeners, and four tunnel-server files.
+  The 17-resource snapshot contains fingerprints only.
+- Stage convergence only after all gateway candidate readiness checks while the
+  controller mutation lock remains held. Accept any clean older baseline
+  because invite-only state transitions can skip generations. A rejected join
+  restores exact configs/services first and then CAS-restores exact metadata;
+  an authoritative commit retains both together.
+- Compose the publisher at the controller boundary without introducing an
+  enrollment/operations package cycle. Validation uses temporary roots,
+  in-memory gateway state, fake probes, and the file CAS store; no production
+  config, unit, network, host, or VM is changed.
+
+### Acceptance
+
+- Tests prove the exact active runtime fingerprint, `1 -> 3` stage/rollback/
+  commit, idempotent same-generation handling, changed-generation conflicts,
+  missing-baseline repair publication, successful join retention, and full
+  runtime rollback on convergence-stage failure.
+- Focused and full Go suites, race checks for operations/enrollment/controller,
+  `go vet ./...`, strict OpenSpec validation, and diff checks passed.
+  Repository rollback removes this source slice; no host rollback is needed.
+
 ## 2026-09-05 — initial gateway convergence baseline
 
 ### Planned reversible validation

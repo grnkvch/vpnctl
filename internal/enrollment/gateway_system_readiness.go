@@ -15,6 +15,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -23,27 +24,38 @@ import (
 
 const maximumGatewayJoinSnapshotBytes = 8 << 20
 
+type GatewayJoinConvergencePreparation interface {
+	Commit()
+	Rollback(context.Context) error
+}
+
+type GatewayJoinConvergencePreparer interface {
+	PrepareActiveGatewayGeneration(context.Context, uint64, linuxplatform.RoleInstallationRequest) (GatewayJoinConvergencePreparation, error)
+}
+
 // SystemGatewayJoinReadiness publishes one complete gateway-side join
 // candidate before the authoritative invite/node transition. The returned
 // preparation owns an exact file snapshot and the serialization lock until
 // the caller either commits or rolls back the candidate.
 type SystemGatewayJoinReadiness struct {
-	paths      store.Paths
-	secrets    NodeCredentialSecretStore
-	roles      *linuxplatform.RoleSystemdInstaller
-	runner     linuxplatform.ProbeRunner
-	keyRunner  wireguard.Runner
-	mutationMu *sync.Mutex
-	binaryPath string
+	paths       store.Paths
+	secrets     NodeCredentialSecretStore
+	roles       *linuxplatform.RoleSystemdInstaller
+	runner      linuxplatform.ProbeRunner
+	keyRunner   wireguard.Runner
+	convergence GatewayJoinConvergencePreparer
+	mutationMu  *sync.Mutex
+	binaryPath  string
 }
 
 func NewSystemGatewayJoinReadiness(
 	paths store.Paths,
 	secrets NodeCredentialSecretStore,
 	mutationMu *sync.Mutex,
+	convergence GatewayJoinConvergencePreparer,
 ) (*SystemGatewayJoinReadiness, error) {
 	return newSystemGatewayJoinReadiness(
-		paths, secrets, mutationMu, linuxplatform.OSProbeRunner{}, wireguard.ExecRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
+		paths, secrets, mutationMu, convergence, linuxplatform.OSProbeRunner{}, wireguard.ExecRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 }
 
@@ -51,11 +63,12 @@ func newSystemGatewayJoinReadiness(
 	paths store.Paths,
 	secrets NodeCredentialSecretStore,
 	mutationMu *sync.Mutex,
+	convergence GatewayJoinConvergencePreparer,
 	runner linuxplatform.ProbeRunner,
 	keyRunner wireguard.Runner,
 	binaryPath string,
 ) (*SystemGatewayJoinReadiness, error) {
-	if secrets == nil || mutationMu == nil || runner == nil || keyRunner == nil {
+	if secrets == nil || mutationMu == nil || convergence == nil || runner == nil || keyRunner == nil {
 		return nil, fmt.Errorf("system gateway join readiness dependencies are incomplete")
 	}
 	roles, err := linuxplatform.NewRoleSystemdInstaller(paths.Root, paths.ConfigDir, runner)
@@ -66,7 +79,7 @@ func newSystemGatewayJoinReadiness(
 		return nil, err
 	}
 	return &SystemGatewayJoinReadiness{
-		paths: paths, secrets: secrets, roles: roles, runner: runner, keyRunner: keyRunner,
+		paths: paths, secrets: secrets, roles: roles, runner: runner, keyRunner: keyRunner, convergence: convergence,
 		mutationMu: mutationMu, binaryPath: binaryPath,
 	}, nil
 }
@@ -88,7 +101,7 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 		return nil, fmt.Errorf("context is required")
 	}
 	if readiness == nil || readiness.secrets == nil || readiness.roles == nil || readiness.runner == nil ||
-		readiness.keyRunner == nil || readiness.mutationMu == nil {
+		readiness.keyRunner == nil || readiness.convergence == nil || readiness.mutationMu == nil {
 		return nil, fmt.Errorf("system gateway join readiness is incomplete")
 	}
 	readiness.mutationMu.Lock()
@@ -154,6 +167,11 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 	if err := report.Validate(); err != nil {
 		return rollback(err)
 	}
+	convergence, convergenceErr := readiness.convergence.PrepareActiveGatewayGeneration(ctx, candidate.State.Generation, request)
+	preparation.convergence = convergence
+	if convergenceErr != nil {
+		return rollback(fmt.Errorf("stage gateway join convergence: %w", convergenceErr))
+	}
 	preparation.report = report
 	locked = false
 	return preparation, nil
@@ -194,6 +212,14 @@ func renderSystemGatewayCandidate(
 	for _, file := range listenerFiles.ConfigFiles() {
 		request.Configs = append(request.Configs, linuxplatform.RoleConfigFile{Name: file.Name, Content: file.Content})
 	}
+	dns, err := routing.RenderGatewayDNSConfig(state)
+	if err != nil {
+		return linuxplatform.RoleInstallationRequest{}, fmt.Errorf("render candidate gateway DNS: %w", err)
+	}
+	request.Configs = append(request.Configs,
+		linuxplatform.RoleConfigFile{Name: routing.GatewayDNSConfigFileName, Content: dns.Bytes()},
+		linuxplatform.RoleConfigFile{Name: routing.GatewayDNSReadyFileName, Content: []byte("schema_version=1\n")},
+	)
 	tunnelFiles, err := renderSystemGatewayTunnelCandidate(ctx, paths, credentials, state, tunnelCertificatePEM)
 	if err != nil {
 		return linuxplatform.RoleInstallationRequest{}, err
@@ -393,11 +419,12 @@ type gatewayJoinConfigSnapshot struct {
 }
 
 type systemGatewayJoinPreparation struct {
-	mu        sync.Mutex
-	runtime   *SystemGatewayJoinReadiness
-	snapshots []gatewayJoinConfigSnapshot
-	report    JoinReadinessReport
-	finished  bool
+	mu          sync.Mutex
+	runtime     *SystemGatewayJoinReadiness
+	snapshots   []gatewayJoinConfigSnapshot
+	report      JoinReadinessReport
+	convergence GatewayJoinConvergencePreparation
+	finished    bool
 }
 
 func (preparation *systemGatewayJoinPreparation) Report() JoinReadinessReport {
@@ -419,6 +446,10 @@ func (preparation *systemGatewayJoinPreparation) Commit() {
 		return
 	}
 	preparation.finished = true
+	if preparation.convergence != nil {
+		preparation.convergence.Commit()
+		preparation.convergence = nil
+	}
 	clearGatewayJoinSnapshots(preparation.snapshots)
 	preparation.snapshots = nil
 	preparation.runtime.mutationMu.Unlock()
@@ -455,6 +486,10 @@ func (preparation *systemGatewayJoinPreparation) rollbackLocked(ctx context.Cont
 			result = errors.Join(result, fmt.Errorf("restart restored gateway service %s", unit), err)
 		}
 	}
+	if preparation.convergence != nil && result == nil {
+		result = errors.Join(result, preparation.convergence.Rollback(ctx))
+	}
+	preparation.convergence = nil
 	return result
 }
 

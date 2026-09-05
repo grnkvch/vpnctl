@@ -19,8 +19,9 @@ func NewSystemPublicEnrollmentServer(
 	stateStore *store.StateStore,
 	secrets *store.SecretStore,
 	mutationMu *sync.Mutex,
+	convergence GatewayJoinConvergencePreparer,
 ) (*PublicEnrollmentServer, error) {
-	if stateStore == nil || secrets == nil || mutationMu == nil {
+	if stateStore == nil || secrets == nil || mutationMu == nil || convergence == nil {
 		return nil, fmt.Errorf("system public enrollment dependencies are incomplete")
 	}
 	state, err := stateStore.Load()
@@ -43,7 +44,7 @@ func NewSystemPublicEnrollmentServer(
 	if err != nil {
 		return nil, err
 	}
-	readiness, err := NewSystemGatewayJoinReadiness(paths, secrets, mutationMu)
+	readiness, err := NewSystemGatewayJoinReadiness(paths, secrets, mutationMu, convergence)
 	if err != nil {
 		return nil, err
 	}

@@ -106,7 +106,7 @@ func newSystemGatewayRecoveryFixture(
 	fixture.gatewayState.mu.Lock()
 	fixture.gatewayState.state.Exposes[0].TunnelPort = 20112
 	fixture.gatewayState.mu.Unlock()
-	paths, runner, _ := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	paths, runner, _, _ := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
 	publishGatewayRecoveryBaseline(t, paths, runner, fixture)
 	runner.systemctl = nil
 	runtime, err := newSystemGatewayRecoveryRuntime(

@@ -95,9 +95,14 @@ installation but before network activation. It covers five enabled unit files,
 four bootstrap/controller/DNS files, and four fixed transport listener files;
 the condition-skipped tunnel server is inactive while the other initial
 services are active. Publication failure is an explicit committed repair state
-and cannot activate the network. A joined-node gateway generation, later
-mutation/apply publication, and a concrete gateway repair executor remain to
-be connected.
+and cannot activate the network. Gateway join now stages the complete
+17-resource active generation only after readiness and under the controller
+mutation lock. It includes the current shared DNS plus transport and tunnel
+artifacts. Any clean older baseline is accepted because invite-only state
+mutations may skip runtime generations. A rejected state commit restores the
+runtime first and then CAS-restores its prior snapshot; a confirmed or
+uncertain commit retains the candidate. Later mutation/apply publication and a
+concrete gateway repair executor remain to be connected.
 
 The first production discovery adapter is deliberately limited to file
 resources positively named by the applied manifest under `/etc/vpnctl/`. It

@@ -22,7 +22,7 @@ func TestSystemGatewayJoinReadinessPublishesAndRetainsCommittedCandidate(t *test
 	fixture := newJoinFixture(t, late)
 	defer fixture.destroy()
 	ensureJoinFixtureFRPComponent(fixture)
-	paths, runner, readiness := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	paths, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
 	late.target = readiness
 
 	result, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"})
@@ -53,6 +53,9 @@ func TestSystemGatewayJoinReadinessPublishesAndRetainsCommittedCandidate(t *test
 	}) {
 		t.Fatalf("candidate restart sequence was not observed: %v", runner.systemctl)
 	}
+	if convergence.stages != 1 || convergence.commits != 1 || convergence.rollbacks != 0 || convergence.generation != 3 || len(convergence.request.Configs) != 12 {
+		t.Fatalf("gateway convergence transaction = %+v", convergence)
+	}
 }
 
 func TestSystemGatewayJoinReadinessFailureRestoresExactBaseline(t *testing.T) {
@@ -60,7 +63,7 @@ func TestSystemGatewayJoinReadinessFailureRestoresExactBaseline(t *testing.T) {
 	fixture := newJoinFixture(t, late)
 	defer fixture.destroy()
 	ensureJoinFixtureFRPComponent(fixture)
-	paths, runner, readiness := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	paths, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
 	baseline := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
 	runner.failTunnelHealth = true
 	late.target = readiness
@@ -74,6 +77,80 @@ func TestSystemGatewayJoinReadinessFailureRestoresExactBaseline(t *testing.T) {
 		t.Fatalf("gateway configs differ after rollback:\nbefore=%v\nafter=%v", baseline, after)
 	}
 	assertRejectedJoinHasNoPartialNode(t, fixture)
+	if convergence.stages != 0 || convergence.commits != 0 || convergence.rollbacks != 0 {
+		t.Fatalf("failed readiness touched convergence: %+v", convergence)
+	}
+}
+
+func TestSystemGatewayJoinConvergenceFailureRestoresExactRuntime(t *testing.T) {
+	late := &lateGatewayJoinReadiness{}
+	fixture := newJoinFixture(t, late)
+	defer fixture.destroy()
+	ensureJoinFixtureFRPComponent(fixture)
+	paths, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	baseline := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
+	convergence.err = fmt.Errorf("synthetic convergence stage failure")
+	late.target = readiness
+
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); err == nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	after := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
+	if !reflect.DeepEqual(after, baseline) {
+		t.Fatalf("gateway configs differ after convergence rollback:\nbefore=%v\nafter=%v", baseline, after)
+	}
+	if convergence.stages != 1 || convergence.commits != 0 || convergence.rollbacks != 1 {
+		t.Fatalf("failed convergence transaction = %+v", convergence)
+	}
+	if !runner.sawSequence([][]string{{"restart", "vpnctl-standard.service"}, {"restart", "vpnctl-restricted.service"}, {"restart", "vpnctl-tunnel-server.service"}}) {
+		t.Fatalf("restored services were not restarted: %v", runner.systemctl)
+	}
+	assertRejectedJoinHasNoPartialNode(t, fixture)
+}
+
+func TestSystemGatewayJoinStateCommitFailureRollsBackRuntimeAndConvergence(t *testing.T) {
+	late := &lateGatewayJoinReadiness{}
+	fixture := newJoinFixture(t, late)
+	defer fixture.destroy()
+	ensureJoinFixtureFRPComponent(fixture)
+	paths, _, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	baseline := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
+	fixture.manager.state = &faultingGatewayJoinState{base: fixture.gatewayState}
+	late.target = readiness
+
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); err == nil {
+		t.Fatal("Join() accepted failed authoritative state commit")
+	}
+	after := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
+	if !reflect.DeepEqual(after, baseline) {
+		t.Fatalf("gateway configs differ after state failure:\nbefore=%v\nafter=%v", baseline, after)
+	}
+	if convergence.stages != 1 || convergence.commits != 0 || convergence.rollbacks != 1 {
+		t.Fatalf("state failure convergence transaction = %+v", convergence)
+	}
+	assertRejectedJoinHasNoPartialNode(t, fixture)
+}
+
+func TestSystemGatewayJoinUncertainCommittedStateRetainsRuntimeAndConvergence(t *testing.T) {
+	late := &lateGatewayJoinReadiness{}
+	fixture := newJoinFixture(t, late)
+	defer fixture.destroy()
+	ensureJoinFixtureFRPComponent(fixture)
+	_, _, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	fixture.manager.state = &faultingGatewayJoinState{base: fixture.gatewayState, commit: true}
+	late.target = readiness
+
+	result, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GatewayStateGeneration != 3 || convergence.stages != 1 || convergence.commits != 1 || convergence.rollbacks != 0 {
+		t.Fatalf("uncertain committed join = result:%+v convergence:%+v", result, convergence)
+	}
+	gateway, err := fixture.gatewayState.Load()
+	if err != nil || gateway.Generation != 3 || len(gateway.Nodes) != 1 {
+		t.Fatalf("uncertain committed gateway = %+v, %v", gateway, err)
+	}
 }
 
 func TestPreparedGatewayJoinReadinessRollsBackWhenReportIsRejected(t *testing.T) {
@@ -108,7 +185,7 @@ func TestPreparedGatewayJoinReadinessCommitsWithAuthoritativeJoin(t *testing.T) 
 func newGatewayJoinReadinessFixture(
 	t *testing.T,
 	secrets *store.SecretStore,
-) (store.Paths, *gatewayJoinReadinessProbeRunner, *SystemGatewayJoinReadiness) {
+) (store.Paths, *gatewayJoinReadinessProbeRunner, *SystemGatewayJoinReadiness, *recordingGatewayJoinConvergence) {
 	t.Helper()
 	paths, err := store.NewPaths(t.TempDir())
 	if err != nil {
@@ -132,13 +209,14 @@ func newGatewayJoinReadinessFixture(
 		t.Fatal(err)
 	}
 	runner.systemctl = nil
+	convergence := &recordingGatewayJoinConvergence{}
 	readiness, err := newSystemGatewayJoinReadiness(
-		paths, secrets, &sync.Mutex{}, runner, &joinWireGuardRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
+		paths, secrets, &sync.Mutex{}, convergence, runner, &joinWireGuardRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return paths, runner, readiness
+	return paths, runner, readiness, convergence
 }
 
 func ensureJoinFixtureFRPComponent(fixture *joinFixture) {
@@ -262,5 +340,66 @@ func (preparation *recordingGatewayJoinPreparation) Report() JoinReadinessReport
 func (preparation *recordingGatewayJoinPreparation) Commit() { preparation.commits++ }
 func (preparation *recordingGatewayJoinPreparation) Rollback(context.Context) error {
 	preparation.rollbacks++
+	return nil
+}
+
+type recordingGatewayJoinConvergence struct {
+	stages     int
+	commits    int
+	rollbacks  int
+	generation uint64
+	request    linuxplatform.RoleInstallationRequest
+	err        error
+}
+
+func (convergence *recordingGatewayJoinConvergence) PrepareActiveGatewayGeneration(
+	_ context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+) (GatewayJoinConvergencePreparation, error) {
+	convergence.stages++
+	convergence.generation = generation
+	convergence.request = request
+	preparation := &recordingGatewayJoinConvergencePreparation{owner: convergence}
+	return preparation, convergence.err
+}
+
+type recordingGatewayJoinConvergencePreparation struct {
+	owner    *recordingGatewayJoinConvergence
+	finished bool
+}
+
+type faultingGatewayJoinState struct {
+	base   *inviteMemoryState
+	commit bool
+}
+
+func (state *faultingGatewayJoinState) Load() (model.State, error) {
+	return state.base.Load()
+}
+
+func (state *faultingGatewayJoinState) Save(expected uint64, candidate model.State) error {
+	if state.commit {
+		if err := state.base.Save(expected, candidate); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("synthetic gateway state save failure")
+}
+
+func (preparation *recordingGatewayJoinConvergencePreparation) Commit() {
+	if preparation.finished {
+		return
+	}
+	preparation.finished = true
+	preparation.owner.commits++
+}
+
+func (preparation *recordingGatewayJoinConvergencePreparation) Rollback(context.Context) error {
+	if preparation.finished {
+		return nil
+	}
+	preparation.finished = true
+	preparation.owner.rollbacks++
 	return nil
 }

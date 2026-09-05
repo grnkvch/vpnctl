@@ -55,7 +55,33 @@ func newSystemPublicEnrollmentServer(
 	if err != nil {
 		return nil, fmt.Errorf("create public enrollment secret store: %w", err)
 	}
-	return enrollment.NewSystemPublicEnrollmentServer(paths, stateStore, secrets, &controller.mutationMu)
+	convergenceStore, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway service convergence store: %w", err)
+	}
+	convergence, err := operations.NewGatewayServiceConvergencePublisher(convergenceStore)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway service convergence publisher: %w", err)
+	}
+	return enrollment.NewSystemPublicEnrollmentServer(
+		paths, stateStore, secrets, &controller.mutationMu,
+		gatewayJoinConvergenceAdapter{publisher: convergence},
+	)
+}
+
+type gatewayJoinConvergenceAdapter struct {
+	publisher *operations.GatewayServiceConvergencePublisher
+}
+
+func (adapter gatewayJoinConvergenceAdapter) PrepareActiveGatewayGeneration(
+	ctx context.Context,
+	generation uint64,
+	request linuxplatform.RoleInstallationRequest,
+) (enrollment.GatewayJoinConvergencePreparation, error) {
+	if adapter.publisher == nil {
+		return nil, fmt.Errorf("gateway join convergence publisher is unavailable")
+	}
+	return adapter.publisher.PrepareActiveGatewayGeneration(ctx, generation, request)
 }
 
 func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore *store.StateStore, paths store.Paths) (*control.RPCServer, error) {
