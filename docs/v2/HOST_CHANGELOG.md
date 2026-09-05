@@ -2,6 +2,39 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Gateway transport-switch finalization protocol
+
+### Implementation and non-mutation boundary
+
+- Add a distinct authenticated `finalize` mutation for a retained deferred
+  transport switch. Registration and finalization have different stable
+  request identities and idempotency records; finalization validates the exact
+  node, operation, target and `N -> N+2` intent before changing gateway
+  active/standby selection and completing all retained operation steps.
+- Treat the gateway generation anticipated during registration as historical
+  plan metadata, not as a reserved slot. Finalization uses a fresh explicit
+  gateway CAS generation. An intervening unrelated fleet mutation therefore
+  causes the stale request to fail without changing selection; a newly
+  reviewed request at the current generation can safely complete the same
+  operation. This avoids globally blocking other nodes while intent is
+  deferred.
+- Tests use only temporary state stores, in-memory RPC callers, disposable Go
+  caches, and existing local test listeners. No real service, config, state,
+  transport, route, firewall, host, VM, public endpoint, webhook, or client is
+  changed; no host rollback is required. Repository rollback is this bounded
+  source/documentation commit.
+
+### Acceptance
+
+- Focused tests cover stable action-specific identities, full and compact RPC
+  receipts, selection/operation final commit, replay, and the interleaved
+  generation conflict/retry case where the original anticipated generation
+  has already been consumed.
+- Full Go, race, vet, documentation regression, strict OpenSpec, formatting,
+  and diff checks are recorded before commit. The current-node apply executor
+  still needs to stage/activate the local runtime, obtain the fresh gateway
+  generation, call this finalizer, and commit the terminal node state.
+
 ## 2026-09-06 — Current-node transport apply preview
 
 ### Implementation and non-mutation boundary

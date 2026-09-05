@@ -11,10 +11,10 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
-// TransportSwitchMutationDispatcher registers only gateway-authoritative
-// intent. It deliberately does not change the node's active transport: the
-// later current-node apply coordinator must stage and prove the private path
-// before the gateway selection can be published.
+// TransportSwitchMutationDispatcher owns both authoritative commits of a
+// deferred switch. Registration records intent without changing selection;
+// finalization changes selection only after the node has staged and proven the
+// private path. Both commits are independently generation-guarded.
 type TransportSwitchMutationDispatcher struct {
 	now func() time.Time
 }
@@ -40,11 +40,34 @@ func (dispatcher *TransportSwitchMutationDispatcher) Dispatch(
 	if request.Operation != string(model.OperationTransportSwitch) {
 		return model.State{}, NodeMutationResult{}, fmt.Errorf("unsupported transport switch operation")
 	}
-	payload, intent, node, err := validateDeferredTransportSwitch(state, request)
+	payload, intent, node, err := validateDeferredTransportSwitchRequest(state, request)
 	if err != nil {
 		return model.State{}, NodeMutationResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	switch payload.Action {
+	case transport.SwitchMutationRegister:
+		return dispatcher.dispatchRegistration(state, request, payload, intent, node)
+	case transport.SwitchMutationFinalize:
+		return dispatcher.dispatchFinalization(state, request, payload, intent, node)
+	default:
+		return model.State{}, NodeMutationResult{}, fmt.Errorf("unsupported transport switch mutation action")
+	}
+}
+
+func (dispatcher *TransportSwitchMutationDispatcher) dispatchRegistration(
+	state model.State,
+	request control.RPCRequest,
+	payload transport.DeferredSwitchRequest,
+	intent transport.SwitchIntentTarget,
+	node model.Node,
+) (model.State, NodeMutationResult, error) {
+	if _, err := payload.ValidateRegistration(node.ID, request.ExpectedStateGeneration, request.RequestID); err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	if err := validateTransportSwitchSelection(state, node, payload.Current, payload.Target); err != nil {
 		return model.State{}, NodeMutationResult{}, err
 	}
 	operationID, err := transport.SwitchOperationID(request.RequestID)
@@ -106,6 +129,73 @@ func (dispatcher *TransportSwitchMutationDispatcher) Dispatch(
 	return candidate, result, nil
 }
 
+func (dispatcher *TransportSwitchMutationDispatcher) dispatchFinalization(
+	state model.State,
+	request control.RPCRequest,
+	payload transport.DeferredSwitchRequest,
+	intent transport.SwitchIntentTarget,
+	node model.Node,
+) (model.State, NodeMutationResult, error) {
+	if _, err := payload.ValidateFinalization(node.ID, request.ExpectedStateGeneration, request.RequestID); err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	if err := validateTransportSwitchSelection(state, node, payload.Current, payload.Target); err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	operationIndex, operation, err := retainedTransportSwitchOperation(state, payload.OperationID, intent)
+	if err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	if operation.State != model.OperationPending {
+		return model.State{}, NodeMutationResult{}, fmt.Errorf("transport switch operation is not pending")
+	}
+	at := dispatcher.now().UTC()
+	completed, err := completeTransportSwitchOperation(operation, at)
+	if err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	candidate := state
+	candidate.Generation, err = model.NextGeneration(state.Generation)
+	if err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	candidate.Nodes = append([]model.Node(nil), state.Nodes...)
+	for index := range candidate.Nodes {
+		if candidate.Nodes[index].ID == node.ID {
+			candidate.Nodes[index].ActiveTransport = payload.Target
+		}
+	}
+	candidate.Transports = append([]model.Transport(nil), state.Transports...)
+	for index := range candidate.Transports {
+		configured := &candidate.Transports[index]
+		if configured.OwnerKind != model.TargetNode || configured.OwnerID != node.ID {
+			continue
+		}
+		switch configured.Kind {
+		case payload.Current:
+			configured.State = model.TransportStandby
+		case payload.Target:
+			configured.State = model.TransportActive
+		}
+	}
+	candidate.Operations = append([]model.Operation(nil), state.Operations...)
+	candidate.Operations[operationIndex] = completed
+	if err := model.ValidateTransition(state, candidate); err != nil {
+		return model.State{}, NodeMutationResult{}, fmt.Errorf("finalize transport switch operation: %w", err)
+	}
+	receipt := transport.FinalizedSwitchReceipt{
+		OperationID: operation.ID, RequestID: request.RequestID, NodeID: node.ID,
+		Previous: payload.Current, Active: payload.Target,
+		ExpectedGatewayGeneration: request.ExpectedStateGeneration, GatewayGeneration: candidate.Generation,
+		ExpectedNodeGeneration: intent.ExpectedNodeGeneration, DesiredNodeGeneration: intent.DesiredNodeGeneration,
+	}
+	result, err := finalizedTransportSwitchMutationResult(receipt)
+	if err != nil {
+		return model.State{}, NodeMutationResult{}, err
+	}
+	return candidate, result, nil
+}
+
 func (dispatcher *TransportSwitchMutationDispatcher) Reconcile(
 	ctx context.Context,
 	state model.State,
@@ -119,6 +209,26 @@ func (dispatcher *TransportSwitchMutationDispatcher) Reconcile(
 		return NodeMutationResult{}, false, err
 	}
 	if err := ctx.Err(); err != nil {
+		return NodeMutationResult{}, false, err
+	}
+	switch payload.Action {
+	case transport.SwitchMutationRegister:
+		return reconcileTransportSwitchRegistration(state, request, payload, intent, node)
+	case transport.SwitchMutationFinalize:
+		return reconcileTransportSwitchFinalization(state, request, payload, intent, node)
+	default:
+		return NodeMutationResult{}, false, fmt.Errorf("unsupported transport switch mutation action")
+	}
+}
+
+func reconcileTransportSwitchRegistration(
+	state model.State,
+	request control.RPCRequest,
+	payload transport.DeferredSwitchRequest,
+	intent transport.SwitchIntentTarget,
+	node model.Node,
+) (NodeMutationResult, bool, error) {
+	if _, err := payload.ValidateRegistration(node.ID, request.ExpectedStateGeneration, request.RequestID); err != nil {
 		return NodeMutationResult{}, false, err
 	}
 	operationID, err := transport.SwitchOperationID(request.RequestID)
@@ -159,30 +269,58 @@ func (dispatcher *TransportSwitchMutationDispatcher) Reconcile(
 	return NodeMutationResult{}, false, nil
 }
 
-func validateDeferredTransportSwitch(
+func reconcileTransportSwitchFinalization(
 	state model.State,
 	request control.RPCRequest,
-) (transport.DeferredSwitchRequest, transport.SwitchIntentTarget, model.Node, error) {
-	payload, intent, node, err := validateDeferredTransportSwitchRequest(state, request)
-	if err != nil {
-		return payload, intent, node, err
+	payload transport.DeferredSwitchRequest,
+	intent transport.SwitchIntentTarget,
+	node model.Node,
+) (NodeMutationResult, bool, error) {
+	if _, err := payload.ValidateFinalization(node.ID, request.ExpectedStateGeneration, request.RequestID); err != nil {
+		return NodeMutationResult{}, false, err
 	}
-	if node.Lifecycle != model.LifecycleActive || node.ActiveTransport != payload.Current {
-		return payload, intent, node, fmt.Errorf("authoritative node transport differs from the reviewed plan")
+	_, operation, err := retainedTransportSwitchOperation(state, payload.OperationID, intent)
+	if err != nil {
+		return NodeMutationResult{}, false, err
+	}
+	if operation.State != model.OperationCompleted {
+		return NodeMutationResult{}, false, nil
+	}
+	if err := validateTransportSwitchSelection(state, node, payload.Target, payload.Current); err != nil {
+		return NodeMutationResult{}, false, fmt.Errorf("completed transport switch selection is invalid: %w", err)
+	}
+	receipt := transport.FinalizedSwitchReceipt{
+		OperationID: operation.ID, RequestID: request.RequestID, NodeID: node.ID,
+		Previous: payload.Current, Active: payload.Target,
+		ExpectedGatewayGeneration: request.ExpectedStateGeneration, GatewayGeneration: state.Generation,
+		ExpectedNodeGeneration: intent.ExpectedNodeGeneration, DesiredNodeGeneration: intent.DesiredNodeGeneration,
+	}
+	result, err := finalizedTransportSwitchMutationResult(receipt)
+	return result, true, err
+}
+
+func validateTransportSwitchSelection(
+	state model.State,
+	node model.Node,
+	current model.TransportKind,
+	target model.TransportKind,
+) error {
+	if node.Lifecycle != model.LifecycleActive || node.ActiveTransport != current {
+		return fmt.Errorf("authoritative node transport differs from the reviewed plan")
 	}
 	states := make(map[model.TransportKind]model.TransportState, 2)
 	for _, configured := range state.Transports {
 		if configured.OwnerKind == model.TargetNode && configured.OwnerID == node.ID && configured.State != model.TransportDisabled {
 			if _, duplicate := states[configured.Kind]; duplicate {
-				return payload, intent, node, fmt.Errorf("authoritative node transport set is ambiguous")
+				return fmt.Errorf("authoritative node transport set is ambiguous")
 			}
 			states[configured.Kind] = configured.State
 		}
 	}
-	if len(states) != 2 || states[payload.Current] != model.TransportActive || states[payload.Target] != model.TransportStandby {
-		return payload, intent, node, fmt.Errorf("transport switch requires one active current and one standby target")
+	if len(states) != 2 || states[current] != model.TransportActive || states[target] != model.TransportStandby {
+		return fmt.Errorf("transport switch requires one active current and one standby target")
 	}
-	return payload, intent, node, nil
+	return nil
 }
 
 func validateDeferredTransportSwitchRequest(
@@ -208,6 +346,44 @@ func validateDeferredTransportSwitchRequest(
 	return payload, intent, model.Node{}, fmt.Errorf("transport switch node does not exist")
 }
 
+func retainedTransportSwitchOperation(
+	state model.State,
+	operationID string,
+	intent transport.SwitchIntentTarget,
+) (int, model.Operation, error) {
+	for index, operation := range state.Operations {
+		if operation.ID != operationID {
+			continue
+		}
+		registrationGeneration, registrationErr := model.NextGeneration(operation.ExpectedGeneration)
+		desiredGatewayGeneration, desiredErr := model.NextGeneration(registrationGeneration)
+		derivedOperationID, identityErr := transport.SwitchOperationID(operation.RequestID)
+		if operation.Type != model.OperationTransportSwitch || operation.TargetKind != "transport" ||
+			operation.TargetID != intent.String() || registrationErr != nil || desiredErr != nil || identityErr != nil ||
+			operation.DesiredGeneration != desiredGatewayGeneration || derivedOperationID != operation.ID {
+			return -1, model.Operation{}, fmt.Errorf("retained transport switch operation is invalid")
+		}
+		return index, operation, nil
+	}
+	return -1, model.Operation{}, fmt.Errorf("transport switch operation does not exist")
+}
+
+func completeTransportSwitchOperation(operation model.Operation, at time.Time) (model.Operation, error) {
+	completed := operation
+	var err error
+	for _, step := range operation.Steps {
+		completed, err = completed.TransitionStep(step.Name, model.OperationCompleted, at)
+		if err != nil {
+			return model.Operation{}, fmt.Errorf("complete transport switch step %s: %w", step.Name, err)
+		}
+	}
+	completed, err = completed.Transition(model.OperationCompleted, at, "")
+	if err != nil {
+		return model.Operation{}, fmt.Errorf("complete transport switch operation: %w", err)
+	}
+	return completed, nil
+}
+
 func transportSwitchMutationResult(receipt transport.DeferredSwitchReceipt, status model.ResultStatus) (NodeMutationResult, error) {
 	if err := receipt.Validate(); err != nil {
 		return NodeMutationResult{}, err
@@ -226,6 +402,20 @@ func transportSwitchMutationResult(receipt transport.DeferredSwitchReceipt, stat
 		response.Message = "the retained transport switch operation failed"
 	}
 	return NodeMutationResult{Status: status, Response: response}, nil
+}
+
+func finalizedTransportSwitchMutationResult(receipt transport.FinalizedSwitchReceipt) (NodeMutationResult, error) {
+	if err := receipt.Validate(); err != nil {
+		return NodeMutationResult{}, err
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return NodeMutationResult{}, err
+	}
+	response := control.NewRPCResponse("success", receipt.GatewayGeneration, encoded)
+	response.ResourceIDs["node_id"] = receipt.NodeID
+	response.ResourceIDs["operation_id"] = receipt.OperationID
+	return NodeMutationResult{Status: model.ResultOK, Response: response}, nil
 }
 
 var _ NodeMutationDispatcher = (*TransportSwitchMutationDispatcher)(nil)

@@ -80,6 +80,7 @@ func (gateway *RemoteTransportSwitchGateway) RegisterDeferred(
 		return transport.DeferredSwitchReceipt{}, fmt.Errorf("remote transport switch gateway is incomplete")
 	}
 	payload := transport.DeferredSwitchRequest{
+		Action:  transport.SwitchMutationRegister,
 		Current: current, Target: target, ExpectedNodeGeneration: expectedNodeGeneration,
 	}
 	intent, err := payload.IntentTarget(gateway.nodeID)
@@ -130,7 +131,7 @@ func (gateway *RemoteTransportSwitchGateway) RegisterDeferred(
 	if err := control.DecodeRPCPayload(call.Response.Data, &receipt); err == nil && receipt.OperationID != "" {
 		if err := receipt.Validate(); err != nil || receipt.OperationID != operationID || receipt.RequestID != requestID || receipt.NodeID != gateway.nodeID ||
 			receipt.Current != current || receipt.Target != target || receipt.ExpectedNodeGeneration != expectedNodeGeneration ||
-			receipt.GatewayGeneration != call.Response.AuthoritativeGeneration {
+			receipt.GatewayGeneration > call.Response.AuthoritativeGeneration {
 			return transport.DeferredSwitchReceipt{}, errors.New("gateway returned an invalid transport switch receipt")
 		}
 		return receipt, nil
@@ -154,6 +155,105 @@ func (gateway *RemoteTransportSwitchGateway) RegisterDeferred(
 	}
 	if err := receipt.Validate(); err != nil {
 		return transport.DeferredSwitchReceipt{}, errors.New("gateway returned an invalid transport switch replay receipt")
+	}
+	return receipt, nil
+}
+
+// FinalizeDeferred commits the gateway-side selection for an already retained
+// node operation. The expected gateway generation is supplied by the caller's
+// immediately preceding authenticated freshness check; it is not inferred
+// from the registration receipt because unrelated fleet mutations may have
+// advanced the authoritative state in the meantime.
+func (gateway *RemoteTransportSwitchGateway) FinalizeDeferred(
+	ctx context.Context,
+	operation model.Operation,
+	current model.TransportKind,
+	expectedGatewayGeneration uint64,
+) (transport.FinalizedSwitchReceipt, error) {
+	if ctx == nil || gateway == nil || gateway.caller == nil || gateway.now == nil || gateway.entropy == nil {
+		return transport.FinalizedSwitchReceipt{}, fmt.Errorf("remote transport switch gateway is incomplete")
+	}
+	intent, err := transport.ParseSwitchIntentTarget(operation.TargetID)
+	if err != nil || operation.Type != model.OperationTransportSwitch || operation.TargetKind != "transport" ||
+		operation.State != model.OperationPending || operation.ID == "" || intent.NodeID != gateway.nodeID ||
+		expectedGatewayGeneration == 0 {
+		return transport.FinalizedSwitchReceipt{}, transport.ErrTransportSwitchStale
+	}
+	requestID, err := transport.SwitchFinalizeRequestID(operation.ID, intent.DesiredNodeGeneration, expectedGatewayGeneration)
+	if err != nil {
+		return transport.FinalizedSwitchReceipt{}, err
+	}
+	payload := transport.DeferredSwitchRequest{
+		Action:  transport.SwitchMutationFinalize,
+		Current: current, Target: intent.Target,
+		ExpectedNodeGeneration: intent.ExpectedNodeGeneration,
+		DesiredNodeGeneration:  intent.DesiredNodeGeneration,
+		OperationID:            operation.ID,
+	}
+	if _, err := payload.ValidateFinalization(gateway.nodeID, expectedGatewayGeneration, requestID); err != nil {
+		return transport.FinalizedSwitchReceipt{}, err
+	}
+	nonce := make([]byte, control.RPCNonceBytes)
+	if _, err := io.ReadFull(gateway.entropy, nonce); err != nil {
+		return transport.FinalizedSwitchReceipt{}, fmt.Errorf("generate transport switch finalization RPC nonce: %w", err)
+	}
+	defer clearTransportSwitchRPCSecret(nonce)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return transport.FinalizedSwitchReceipt{}, err
+	}
+	call, err := gateway.caller.CallManagement(ctx, control.RPCRequest{
+		ProtocolMajor: gateway.protocol.Major, ProtocolMinor: gateway.protocol.Minor,
+		RequestID: requestID, ExpectedStateGeneration: expectedGatewayGeneration,
+		NodeID: gateway.nodeID, CredentialGeneration: gateway.credentialGeneration,
+		Timestamp: gateway.now().UTC(), Nonce: base64.RawURLEncoding.EncodeToString(nonce),
+		Operation: string(model.OperationTransportSwitch), Payload: encoded,
+	})
+	if err != nil {
+		return transport.FinalizedSwitchReceipt{}, fmt.Errorf("%w: %v", ErrTransportSwitchGatewayUnavailable, err)
+	}
+	if call.StatusCode != http.StatusOK || call.Response.Category != "success" {
+		switch call.Response.Category {
+		case "conflict", "validation":
+			return transport.FinalizedSwitchReceipt{}, transport.ErrTransportSwitchStale
+		case "unavailable":
+			return transport.FinalizedSwitchReceipt{}, ErrTransportSwitchGatewayUnavailable
+		default:
+			return transport.FinalizedSwitchReceipt{}, errors.New("gateway transport switch finalization failed")
+		}
+	}
+	if call.Response.AuthoritativeGeneration <= expectedGatewayGeneration {
+		return transport.FinalizedSwitchReceipt{}, errors.New("gateway transport switch finalization did not advance authoritative generation")
+	}
+	receipt := transport.FinalizedSwitchReceipt{}
+	if err := control.DecodeRPCPayload(call.Response.Data, &receipt); err == nil && receipt.OperationID != "" {
+		if err := receipt.Validate(); err != nil || receipt.OperationID != operation.ID || receipt.RequestID != requestID ||
+			receipt.NodeID != gateway.nodeID || receipt.Previous != current || receipt.Active != intent.Target ||
+			receipt.ExpectedGatewayGeneration != expectedGatewayGeneration ||
+			receipt.GatewayGeneration != call.Response.AuthoritativeGeneration ||
+			receipt.ExpectedNodeGeneration != intent.ExpectedNodeGeneration ||
+			receipt.DesiredNodeGeneration != intent.DesiredNodeGeneration {
+			return transport.FinalizedSwitchReceipt{}, errors.New("gateway returned an invalid transport switch finalization receipt")
+		}
+		return receipt, nil
+	}
+	var replay struct {
+		Replayed     bool               `json:"replayed"`
+		ResultStatus model.ResultStatus `json:"result_status"`
+	}
+	if err := control.DecodeRPCPayload(call.Response.Data, &replay); err != nil || !replay.Replayed || replay.ResultStatus != model.ResultOK {
+		return transport.FinalizedSwitchReceipt{}, errors.New("gateway returned an invalid transport switch finalization replay receipt")
+	}
+	receipt = transport.FinalizedSwitchReceipt{
+		OperationID: operation.ID, RequestID: requestID, NodeID: gateway.nodeID,
+		Previous: current, Active: intent.Target,
+		ExpectedGatewayGeneration: expectedGatewayGeneration,
+		GatewayGeneration:         call.Response.AuthoritativeGeneration,
+		ExpectedNodeGeneration:    intent.ExpectedNodeGeneration,
+		DesiredNodeGeneration:     intent.DesiredNodeGeneration,
+	}
+	if err := receipt.Validate(); err != nil {
+		return transport.FinalizedSwitchReceipt{}, errors.New("gateway returned an invalid transport switch finalization replay receipt")
 	}
 	return receipt, nil
 }

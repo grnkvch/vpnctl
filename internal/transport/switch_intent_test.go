@@ -48,6 +48,58 @@ func TestSwitchIntentTargetRejectsNonCanonicalOrInconsistentValues(t *testing.T)
 	}
 }
 
+func TestDeferredSwitchMutationActionsBindStableRequestIdentities(t *testing.T) {
+	t.Parallel()
+	nodeID := "22000000-0000-4000-8000-000000000001"
+	registration := DeferredSwitchRequest{
+		Action: SwitchMutationRegister, Current: model.TransportStandard,
+		Target: model.TransportRestricted, ExpectedNodeGeneration: 9,
+	}
+	intent, err := registration.IntentTarget(nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationID, err := SwitchRequestID(intent, registration.Current, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := registration.ValidateRegistration(nodeID, 12, registrationID); err != nil || got != intent {
+		t.Fatalf("registration intent=%+v err=%v", got, err)
+	}
+	operationID, err := SwitchOperationID(registrationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalization := DeferredSwitchRequest{
+		Action: SwitchMutationFinalize, Current: model.TransportStandard,
+		Target: model.TransportRestricted, ExpectedNodeGeneration: 9, DesiredNodeGeneration: 11,
+		OperationID: operationID,
+	}
+	finalizationID, err := SwitchFinalizeRequestID(operationID, 11, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := finalization.ValidateFinalization(nodeID, 17, finalizationID); err != nil || got != intent {
+		t.Fatalf("finalization intent=%+v err=%v", got, err)
+	}
+	if finalizationID == registrationID {
+		t.Fatal("registration and finalization request IDs must differ")
+	}
+	receipt := FinalizedSwitchReceipt{
+		OperationID: operationID, RequestID: finalizationID, NodeID: nodeID,
+		Previous: model.TransportStandard, Active: model.TransportRestricted,
+		ExpectedGatewayGeneration: 17, GatewayGeneration: 18,
+		ExpectedNodeGeneration: 9, DesiredNodeGeneration: 11,
+	}
+	if err := receipt.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	receipt.GatewayGeneration = 17
+	if err := receipt.Validate(); err == nil {
+		t.Fatal("receipt accepted a non-advancing gateway generation")
+	}
+}
+
 func TestDeferredSwitchDesiredStateBuildsExactFinalNodeGeneration(t *testing.T) {
 	t.Parallel()
 	state := nodeTransportTestState(t)

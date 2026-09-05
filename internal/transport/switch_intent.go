@@ -11,6 +11,13 @@ import (
 
 const transportSwitchIntentVersion = "v1"
 
+type SwitchMutationAction string
+
+const (
+	SwitchMutationRegister SwitchMutationAction = "register"
+	SwitchMutationFinalize SwitchMutationAction = "finalize"
+)
+
 var switchOperationSteps = []string{
 	"stage", "activate-private", "confirm-private", "publish-public", "drain", "finalize",
 }
@@ -31,9 +38,12 @@ type SwitchIntentTarget struct {
 }
 
 type DeferredSwitchRequest struct {
-	Current                model.TransportKind `json:"current"`
-	Target                 model.TransportKind `json:"target"`
-	ExpectedNodeGeneration uint64              `json:"expected_node_generation"`
+	Action                 SwitchMutationAction `json:"action"`
+	Current                model.TransportKind  `json:"current"`
+	Target                 model.TransportKind  `json:"target"`
+	ExpectedNodeGeneration uint64               `json:"expected_node_generation"`
+	DesiredNodeGeneration  uint64               `json:"desired_node_generation,omitempty"`
+	OperationID            string               `json:"operation_id,omitempty"`
 }
 
 func (request DeferredSwitchRequest) IntentTarget(nodeID string) (SwitchIntentTarget, error) {
@@ -41,6 +51,35 @@ func (request DeferredSwitchRequest) IntentTarget(nodeID string) (SwitchIntentTa
 		return SwitchIntentTarget{}, fmt.Errorf("deferred transport switch requires different explicit current and target transports")
 	}
 	return NewSwitchIntentTarget(nodeID, request.Target, request.ExpectedNodeGeneration)
+}
+
+func (request DeferredSwitchRequest) ValidateRegistration(nodeID string, expectedGatewayGeneration uint64, requestID string) (SwitchIntentTarget, error) {
+	intent, err := request.IntentTarget(nodeID)
+	if err != nil || request.Action != SwitchMutationRegister || request.DesiredNodeGeneration != 0 || request.OperationID != "" {
+		return SwitchIntentTarget{}, fmt.Errorf("deferred transport switch registration is invalid")
+	}
+	wantRequestID, err := SwitchRequestID(intent, request.Current, expectedGatewayGeneration)
+	if err != nil || wantRequestID != requestID {
+		return SwitchIntentTarget{}, fmt.Errorf("deferred transport switch registration identity is invalid")
+	}
+	return intent, nil
+}
+
+func (request DeferredSwitchRequest) ValidateFinalization(nodeID string, expectedGatewayGeneration uint64, requestID string) (SwitchIntentTarget, error) {
+	intent, err := request.IntentTarget(nodeID)
+	if err != nil || request.Action != SwitchMutationFinalize || request.OperationID == "" ||
+		request.DesiredNodeGeneration != intent.DesiredNodeGeneration || !isTransportKind(request.Current) ||
+		request.Current == request.Target {
+		return SwitchIntentTarget{}, fmt.Errorf("transport switch finalization is invalid")
+	}
+	if err := model.ValidateResourceID(request.OperationID); err != nil {
+		return SwitchIntentTarget{}, fmt.Errorf("transport switch finalization operation ID is invalid")
+	}
+	wantRequestID, err := SwitchFinalizeRequestID(request.OperationID, intent.DesiredNodeGeneration, expectedGatewayGeneration)
+	if err != nil || wantRequestID != requestID {
+		return SwitchIntentTarget{}, fmt.Errorf("transport switch finalization identity is invalid")
+	}
+	return intent, nil
 }
 
 type DeferredSwitchReceipt struct {
@@ -53,6 +92,42 @@ type DeferredSwitchReceipt struct {
 	DesiredGatewayGeneration uint64              `json:"desired_gateway_generation"`
 	ExpectedNodeGeneration   uint64              `json:"expected_node_generation"`
 	DesiredNodeGeneration    uint64              `json:"desired_node_generation"`
+}
+
+type FinalizedSwitchReceipt struct {
+	OperationID               string              `json:"operation_id"`
+	RequestID                 string              `json:"request_id"`
+	NodeID                    string              `json:"node_id"`
+	Previous                  model.TransportKind `json:"previous"`
+	Active                    model.TransportKind `json:"active"`
+	ExpectedGatewayGeneration uint64              `json:"expected_gateway_generation"`
+	GatewayGeneration         uint64              `json:"gateway_generation"`
+	ExpectedNodeGeneration    uint64              `json:"expected_node_generation"`
+	DesiredNodeGeneration     uint64              `json:"desired_node_generation"`
+}
+
+func (receipt FinalizedSwitchReceipt) Validate() error {
+	if err := model.ValidateResourceID(receipt.OperationID); err != nil {
+		return fmt.Errorf("transport switch operation ID: %w", err)
+	}
+	if err := model.ValidateResourceID(receipt.RequestID); err != nil {
+		return fmt.Errorf("transport switch finalization request ID: %w", err)
+	}
+	if err := model.ValidateResourceID(receipt.NodeID); err != nil {
+		return fmt.Errorf("transport switch node ID: %w", err)
+	}
+	pendingNodeGeneration, pendingErr := model.NextGeneration(receipt.ExpectedNodeGeneration)
+	desiredNodeGeneration, desiredErr := model.NextGeneration(pendingNodeGeneration)
+	wantRequestID, requestErr := SwitchFinalizeRequestID(
+		receipt.OperationID, receipt.DesiredNodeGeneration, receipt.ExpectedGatewayGeneration,
+	)
+	if pendingErr != nil || desiredErr != nil || requestErr != nil ||
+		desiredNodeGeneration != receipt.DesiredNodeGeneration || wantRequestID != receipt.RequestID ||
+		!isTransportKind(receipt.Previous) || !isTransportKind(receipt.Active) || receipt.Previous == receipt.Active ||
+		receipt.ExpectedGatewayGeneration == 0 || receipt.GatewayGeneration <= receipt.ExpectedGatewayGeneration {
+		return fmt.Errorf("transport switch finalization receipt is invalid")
+	}
+	return nil
 }
 
 func (receipt DeferredSwitchReceipt) Validate() error {
@@ -168,6 +243,19 @@ func SwitchOperationID(requestID string) (string, error) {
 		return "", fmt.Errorf("transport switch request ID: %w", err)
 	}
 	digest := sha256.Sum256([]byte("vpnctl-v2:transport-switch-operation:" + requestID))
+	return uuidFromDigest(digest, 4), nil
+}
+
+// SwitchFinalizeRequestID is stable for the exact retained operation and the
+// node/gateway generations proven by apply. It is deliberately distinct from
+// the registration request so both commits have independent idempotency
+// records.
+func SwitchFinalizeRequestID(operationID string, desiredNodeGeneration, expectedGatewayGeneration uint64) (string, error) {
+	if err := model.ValidateResourceID(operationID); err != nil || desiredNodeGeneration == 0 || expectedGatewayGeneration == 0 {
+		return "", fmt.Errorf("transport switch finalization identity input is invalid")
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("vpnctl-v2:transport-switch-finalize:%s:%d:%d",
+		operationID, desiredNodeGeneration, expectedGatewayGeneration)))
 	return uuidFromDigest(digest, 4), nil
 }
 

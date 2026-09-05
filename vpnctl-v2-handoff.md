@@ -25,11 +25,20 @@ durable idempotency controller, а только после подтверждё�
 Gateway- и node-generation остаются разными координатами; identity/type/target
 authoritative operation при этом едины. Повтор той же deferred-команды
 допубликовывает material/snapshot без второго gateway mutation. `vpnctl plan`
-уже видит operation-bound diff, но current-node executor пока не подключён,
-поэтому `apply` честно остаётся unavailable. Host transport provider для
+уже видит operation-bound diff. Для второй половины операции добавлен
+отдельный authenticated gateway `finalize`: он проверяет точный retained
+operation и node `N -> N+2` intent, атомарно меняет gateway active/standby и
+завершает operation. Поколение `G+2`, рассчитанное при регистрации, не
+считается зарезервированным: после любой промежуточной fleet mutation старый
+finalize fail-closed конфликтует, а новый запрос использует свежий gateway CAS
+и тот же operation ID. Благодаря этому deferred switch одного node не
+блокирует мутации остальных. Current-node executor пока не подключён, поэтому
+`apply` честно остаётся unavailable и сам finalize ещё не вызывается из
+публичной команды. Host transport provider для
 test/immediate switch также пока закрыт typed
 `system transport runtime adapter is unavailable`. Следующий slice —
-current-node cross-host executor с четырьмя обязательными проверками и
+current-node executor: staged local activation, свежая authenticated gateway
+generation, вызов finalize и единый terminal node/convergence commit с
 manual-only selection.
 
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется

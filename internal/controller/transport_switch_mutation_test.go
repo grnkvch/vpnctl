@@ -82,7 +82,6 @@ func TestTransportSwitchMutationReconcilesEvictedStableRequestAndRejectsAnotherP
 	}
 
 	second := transportSwitchMutationRequest(t, 3, 9)
-	second.RequestID = "71000000-0000-4000-8000-000000000002"
 	result, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, second)
 	if err != nil || result.StatusCode != http.StatusUnprocessableEntity || result.Response.ErrorCode != "mutation_rejected" {
 		t.Fatalf("second pending result=%+v err=%v", result, err)
@@ -90,6 +89,88 @@ func TestTransportSwitchMutationReconcilesEvictedStableRequestAndRejectsAnotherP
 	state, err := stateStore.Load()
 	if err != nil || state.Generation != 3 || len(state.Operations) != 1 {
 		t.Fatalf("second request changed state=%+v err=%v", state, err)
+	}
+}
+
+func TestTransportSwitchMutationFinalizesAgainstFreshGatewayGenerationAfterInterleaving(t *testing.T) {
+	controller, stateStore, now := transportSwitchMutationController(t)
+	dispatcher, _ := NewTransportSwitchMutationDispatcher(func() time.Time { return now })
+	handler, _ := controller.NewNodeMutationHandler(dispatcher)
+	registration := transportSwitchMutationRequest(t, 2, 9)
+	registered, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, registration)
+	if err != nil || registered.StatusCode != http.StatusOK {
+		t.Fatalf("registration=%+v err=%v", registered, err)
+	}
+	var pending transport.DeferredSwitchReceipt
+	if err := control.DecodeRPCPayload(registered.Response.Data, &pending); err != nil {
+		t.Fatal(err)
+	}
+
+	// An unrelated authoritative mutation may consume the generation that was
+	// anticipated when the deferred intent was registered.
+	interleaved, err := stateStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	interleaved.Generation++
+	if err := stateStore.Save(3, interleaved); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := transportSwitchFinalizationRequest(t, pending, 3)
+	staleResult, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, stale)
+	if err != nil || staleResult.StatusCode != http.StatusConflict || staleResult.Response.AuthoritativeGeneration != 4 {
+		t.Fatalf("stale finalization=%+v err=%v", staleResult, err)
+	}
+	unchanged, err := stateStore.Load()
+	if err != nil || unchanged.Generation != 4 || unchanged.Nodes[0].ActiveTransport != model.TransportStandard ||
+		unchanged.Operations[0].State != model.OperationPending {
+		t.Fatalf("stale finalization changed state=%+v err=%v", unchanged, err)
+	}
+
+	fresh := transportSwitchFinalizationRequest(t, pending, 4)
+	finalized, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, fresh)
+	if err != nil || finalized.StatusCode != http.StatusOK || finalized.Response.AuthoritativeGeneration != 5 {
+		t.Fatalf("fresh finalization=%+v err=%v", finalized, err)
+	}
+	var receipt transport.FinalizedSwitchReceipt
+	if err := control.DecodeRPCPayload(finalized.Response.Data, &receipt); err != nil || receipt.Validate() != nil ||
+		receipt.OperationID != pending.OperationID || receipt.ExpectedGatewayGeneration != 4 || receipt.GatewayGeneration != 5 ||
+		receipt.ExpectedNodeGeneration != 9 || receipt.DesiredNodeGeneration != 11 {
+		t.Fatalf("final receipt=%+v err=%v", receipt, err)
+	}
+	state, err := stateStore.Load()
+	if err != nil || state.Generation != 5 || state.Nodes[0].ActiveTransport != model.TransportRestricted ||
+		state.Operations[0].State != model.OperationCompleted || state.Operations[0].DesiredGeneration != 4 {
+		t.Fatalf("final state=%+v err=%v", state, err)
+	}
+	for _, step := range state.Operations[0].Steps {
+		if step.State != model.OperationCompleted {
+			t.Fatalf("step %s state=%s", step.Name, step.State)
+		}
+	}
+	for _, configured := range state.Transports {
+		if configured.Kind == model.TransportStandard && configured.State != model.TransportStandby ||
+			configured.Kind == model.TransportRestricted && configured.State != model.TransportActive {
+			t.Fatalf("final transport selection=%+v", state.Transports)
+		}
+	}
+
+	replayed, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, fresh)
+	if err != nil || replayed.StatusCode != http.StatusOK || replayed.Response.AuthoritativeGeneration != 5 ||
+		replayed.Response.ResultHash != finalized.Response.ResultHash {
+		t.Fatalf("final replay=%+v err=%v", replayed, err)
+	}
+	controller.runtime.Now = func() time.Time { return now.Add(model.IdempotencyMaxAge + time.Second) }
+	reconciled, err := handler.HandleRPC(context.Background(), control.RPCPeer{NodeID: mutationTestNodeID}, fresh)
+	if err != nil || reconciled.StatusCode != http.StatusOK || reconciled.Response.AuthoritativeGeneration != 5 ||
+		len(reconciled.Response.Warnings) != 1 {
+		t.Fatalf("final reconciliation=%+v err=%v", reconciled, err)
+	}
+	var reconciledReceipt transport.FinalizedSwitchReceipt
+	if err := control.DecodeRPCPayload(reconciled.Response.Data, &reconciledReceipt); err != nil || reconciledReceipt.Validate() != nil ||
+		reconciledReceipt.OperationID != pending.OperationID || reconciledReceipt.GatewayGeneration != 5 {
+		t.Fatalf("final reconciled receipt=%+v err=%v", reconciledReceipt, err)
 	}
 }
 
@@ -101,6 +182,7 @@ func transportSwitchMutationController(t *testing.T) (*Controller, ControllerSta
 func transportSwitchMutationRequest(t *testing.T, expectedGateway, expectedNode uint64) control.RPCRequest {
 	t.Helper()
 	payload := transport.DeferredSwitchRequest{
+		Action:  transport.SwitchMutationRegister,
 		Current: model.TransportStandard, Target: model.TransportRestricted, ExpectedNodeGeneration: expectedNode,
 	}
 	encoded, err := json.Marshal(payload)
@@ -118,6 +200,35 @@ func transportSwitchMutationRequest(t *testing.T, expectedGateway, expectedNode 
 	return control.RPCRequest{
 		ProtocolMajor: 1, ProtocolMinor: 0, RequestID: requestID,
 		ExpectedStateGeneration: expectedGateway, NodeID: mutationTestNodeID, CredentialGeneration: 1,
+		Timestamp: time.Date(2035, 1, 2, 3, 4, 5, 0, time.UTC), Nonce: "QUFBQUFBQUFBQUFBQUFBQQ",
+		Operation: string(model.OperationTransportSwitch), Payload: encoded,
+	}
+}
+
+func transportSwitchFinalizationRequest(
+	t *testing.T,
+	receipt transport.DeferredSwitchReceipt,
+	expectedGateway uint64,
+) control.RPCRequest {
+	t.Helper()
+	payload := transport.DeferredSwitchRequest{
+		Action:  transport.SwitchMutationFinalize,
+		Current: receipt.Current, Target: receipt.Target,
+		ExpectedNodeGeneration: receipt.ExpectedNodeGeneration,
+		DesiredNodeGeneration:  receipt.DesiredNodeGeneration,
+		OperationID:            receipt.OperationID,
+	}
+	requestID, err := transport.SwitchFinalizeRequestID(receipt.OperationID, receipt.DesiredNodeGeneration, expectedGateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return control.RPCRequest{
+		ProtocolMajor: 1, ProtocolMinor: 0, RequestID: requestID,
+		ExpectedStateGeneration: expectedGateway, NodeID: receipt.NodeID, CredentialGeneration: 1,
 		Timestamp: time.Date(2035, 1, 2, 3, 4, 5, 0, time.UTC), Nonce: "QUFBQUFBQUFBQUFBQUFBQQ",
 		Operation: string(model.OperationTransportSwitch), Payload: encoded,
 	}
