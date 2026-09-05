@@ -132,6 +132,35 @@ func NewNodeApplyCoordinator(
 	}, nil
 }
 
+// BuildApplyPlan validates and groups an already computed convergence plan for
+// one explicit execution host. It is the read-only half of ApplyCoordinator
+// and lets command boundaries expose a truthful preview before a concrete
+// mutation executor is available.
+func BuildApplyPlan(
+	role model.Role,
+	currentNodeID string,
+	convergence ConvergencePlan,
+	resolver ApplyScopeResolver,
+) (ApplyPlan, error) {
+	if nilInterface(resolver) {
+		return ApplyPlan{}, fmt.Errorf("apply scope resolver is required")
+	}
+	switch role {
+	case model.RoleGateway:
+		if currentNodeID != "" {
+			return ApplyPlan{}, fmt.Errorf("%w: gateway plan cannot contain a node ID", ErrApplyInvalid)
+		}
+	case model.RoleNode:
+		if err := model.ValidateResourceID(currentNodeID); err != nil {
+			return ApplyPlan{}, fmt.Errorf("%w: current node ID: %v", ErrApplyInvalid, err)
+		}
+	default:
+		return ApplyPlan{}, fmt.Errorf("%w: unsupported role %q", ErrApplyInvalid, role)
+	}
+	coordinator := &ApplyCoordinator{role: role, currentNodeID: currentNodeID, resolver: resolver}
+	return coordinator.buildPlan(convergence)
+}
+
 // Plan derives an executable batch only from changes emitted by the strict
 // registered-pending planner. Conflicting drift and incompatible host scopes
 // fail before a mutation-capable dependency is called.

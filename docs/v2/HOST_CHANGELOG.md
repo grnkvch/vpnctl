@@ -2,6 +2,25 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Current-node transport apply preview
+
+### Implementation and non-mutation boundary
+
+- Extend the production apply boundary to group the published deferred
+  transport Desired into one exact current-node operation. The scope resolver
+  parses the versioned target, requires its node ID and local `N -> N+2`
+  generations to match the convergence changes, and cross-checks operation
+  identity/type/target against the retained authoritative node request.
+- Planning remains read-only and now exposes the real availability impact.
+  After consent, apply rechecks exact state and plan, performs the mandatory
+  authenticated gateway freshness probe, and then returns the distinct typed
+  `apply_executor_unavailable` result. It does not report success or activate
+  any material until the operation-specific executor is connected.
+- Tests use only in-memory state/planner/probe fixtures and disposable Go
+  caches. No host/VM service, config, state, transport, route, firewall,
+  listener, public endpoint, webhook, or client is changed; no rollback is
+  required. Source rollback is this bounded preview commit.
+
 ## 2026-09-06 — Deferred transport Desired publication
 
 ### Planned reversible validation

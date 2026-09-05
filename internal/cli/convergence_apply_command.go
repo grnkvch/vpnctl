@@ -148,6 +148,8 @@ func classifyConvergenceApplyError(err error) (output.ExitCategory, string, stri
 		return output.CategoryUnavailable, "gateway_unavailable", "node apply requires the authoritative gateway"
 	case errors.Is(err, operations.ErrConvergenceSnapshotUnavailable), errors.Is(err, ErrSystemConvergenceApplyUnavailable):
 		return output.CategoryUnavailable, "apply_convergence_unavailable", "registered pending convergence material is not available for safe apply"
+	case errors.Is(err, ErrSystemConvergenceApplyExecutorUnavailable):
+		return output.CategoryUnavailable, "apply_executor_unavailable", "the registered pending operation has no connected production executor yet"
 	case errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrPromptInput), errors.Is(err, ErrConsentDeclined):
 		return output.CategoryValidation, "apply_consent_required", "availability-impacting apply requires explicit confirmation or --yes"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

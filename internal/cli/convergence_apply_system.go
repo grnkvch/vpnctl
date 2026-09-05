@@ -3,15 +3,20 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
-var ErrSystemConvergenceApplyUnavailable = errors.New("system pending convergence apply is unavailable")
+var (
+	ErrSystemConvergenceApplyUnavailable         = errors.New("system pending convergence apply is unavailable")
+	ErrSystemConvergenceApplyExecutorUnavailable = errors.New("system pending convergence executor is unavailable")
+)
 
 type convergenceApplyStateReader interface {
 	Load() (model.State, error)
@@ -106,17 +111,29 @@ func (operator *systemConvergenceApply) planCurrent(ctx context.Context) (operat
 	if err != nil || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(pendingBefore, pendingAfter) {
 		return operations.ApplyPlan{}, model.State{}, errors.Join(operations.ErrApplyConflict, err)
 	}
-	if len(pendingAfter) != 0 || len(convergence.Changes) != 0 {
-		return operations.ApplyPlan{}, model.State{}, ErrSystemConvergenceApplyUnavailable
-	}
-	if convergence.DesiredGeneration != convergence.AppliedGeneration {
-		return operations.ApplyPlan{}, model.State{}, operations.ErrApplyInvalid
-	}
-	plan := operations.ApplyPlan{
-		Role: operator.role, CurrentNodeID: operator.nodeID,
-		AppliedGeneration: convergence.AppliedGeneration, DesiredGeneration: convergence.DesiredGeneration,
-		Impact: operations.ConvergenceImpactNone, Operations: []operations.ApplyOperation{},
-		RemainingDrift: append([]operations.OwnedDrift{}, convergence.Drift...), Convergence: convergence,
+	var plan operations.ApplyPlan
+	if len(pendingAfter) == 0 && len(convergence.Changes) == 0 {
+		if convergence.DesiredGeneration != convergence.AppliedGeneration {
+			return operations.ApplyPlan{}, model.State{}, operations.ErrApplyInvalid
+		}
+		plan = operations.ApplyPlan{
+			Role: operator.role, CurrentNodeID: operator.nodeID,
+			AppliedGeneration: convergence.AppliedGeneration, DesiredGeneration: convergence.DesiredGeneration,
+			Impact: operations.ConvergenceImpactNone, Operations: []operations.ApplyOperation{},
+			RemainingDrift: append([]operations.OwnedDrift{}, convergence.Drift...), Convergence: convergence,
+		}
+	} else {
+		if operator.role != model.RoleNode || len(pendingAfter) != 1 || pendingAfter[0].Type != model.OperationTransportSwitch {
+			return operations.ApplyPlan{}, model.State{}, ErrSystemConvergenceApplyUnavailable
+		}
+		resolver := currentNodeTransportApplyScopeResolver{nodeID: operator.nodeID}
+		plan, err = operations.BuildApplyPlan(operator.role, operator.nodeID, convergence, resolver)
+		if err != nil {
+			return operations.ApplyPlan{}, model.State{}, err
+		}
+		if err := validateCurrentNodeTransportApplyAuthority(plan, pendingAfter[0]); err != nil {
+			return operations.ApplyPlan{}, model.State{}, err
+		}
 	}
 	if err := plan.Validate(); err != nil {
 		return operations.ApplyPlan{}, model.State{}, errors.Join(operations.ErrApplyInvalid, err)
@@ -153,10 +170,36 @@ func (operator *systemConvergenceApply) Apply(ctx context.Context, approved oper
 	if err != nil || !reflect.DeepEqual(approved, final) || !reflect.DeepEqual(plannedState, finalState) {
 		return operations.ApplyResult{}, errors.Join(operations.ErrApplyConflict, err)
 	}
+	if len(final.Operations) != 0 {
+		return operations.ApplyResult{}, ErrSystemConvergenceApplyExecutorUnavailable
+	}
 	return operations.ApplyResult{
 		Changed: false, Generation: fresh.AppliedGeneration,
 		OperationIDs: []string{}, RemainingDrift: append([]operations.OwnedDrift{}, fresh.RemainingDrift...),
 	}, nil
+}
+
+type currentNodeTransportApplyScopeResolver struct{ nodeID string }
+
+func (resolver currentNodeTransportApplyScopeResolver) ResolveApplyScope(operation operations.ApplyOperation) (operations.ApplyScope, error) {
+	if operation.Type != string(model.OperationTransportSwitch) || operation.TargetKind != "transport" {
+		return operations.ApplyScope{}, ErrSystemConvergenceApplyUnavailable
+	}
+	intent, err := transport.ParseSwitchIntentTarget(operation.TargetID)
+	if err != nil || intent.NodeID != resolver.nodeID || intent.ExpectedNodeGeneration != operation.ExpectedGeneration ||
+		intent.DesiredNodeGeneration != operation.DesiredGeneration {
+		return operations.ApplyScope{}, fmt.Errorf("%w: pending transport switch does not match current node", operations.ErrApplyConflict)
+	}
+	return operations.ApplyScope{Role: model.RoleNode, NodeID: resolver.nodeID}, nil
+}
+
+func validateCurrentNodeTransportApplyAuthority(plan operations.ApplyPlan, operation model.Operation) error {
+	if len(plan.Operations) != 1 || plan.Operations[0].ID != operation.ID ||
+		plan.Operations[0].Type != string(operation.Type) || plan.Operations[0].TargetKind != operation.TargetKind ||
+		plan.Operations[0].TargetID != operation.TargetID || operation.State != model.OperationPending {
+		return fmt.Errorf("%w: convergence operation differs from retained node request", operations.ErrApplyConflict)
+	}
+	return nil
 }
 
 func (operator *systemConvergenceApply) readAuthority() (model.State, []model.Operation, error) {
@@ -177,3 +220,4 @@ func (operator *systemConvergenceApply) readAuthority() (model.State, []model.Op
 }
 
 var _ ConvergenceApplyOperator = (*systemConvergenceApply)(nil)
+var _ operations.ApplyScopeResolver = currentNodeTransportApplyScopeResolver{}

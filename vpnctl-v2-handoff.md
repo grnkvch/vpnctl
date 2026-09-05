@@ -53,9 +53,12 @@ plan; node дополнительно делает свежий authenticated ga
 no-op. TTY требуется только после полного availability/destructive preview.
 Transport-switch deferred writer уже публикует operation-bound Desired и
 exact staged material; operation-specific current-node executor ещё не
-подключён. Поэтому наличие pending state возвращает явный
-`apply_convergence_unavailable`, а не ложный success. Следующий implementation
-slice — подключить transport-switch apply executor и его cross-host finalize.
+подключён. Public `vpnctl apply` теперь строит из этого Desired точный
+availability-impact preview, связывает operation только с текущим node и после
+consent повторно проверяет authoritative state, plan и доступность gateway.
+Вместо ложного success выполнение останавливается typed
+`apply_executor_unavailable`. Следующий implementation slice — подключить
+transport-switch apply executor и его cross-host finalize.
 
 Immutable applied-material foundation теперь подключён ко всем production
 publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в
