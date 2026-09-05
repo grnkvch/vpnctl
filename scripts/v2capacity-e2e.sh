@@ -166,6 +166,35 @@ cleanup_capacity() {
   return "$result"
 }
 
+cleanup_capacity_ingress_backup() {
+  local directory=/etc/vpnctl-v2-spike/ingress
+  local backup=$directory/nginx.conf.capacity-before
+  local expected actual entries
+  if ! guest "$gateway_instance" sudo test -e "$backup"; then
+    return
+  fi
+  if path_owned "$gateway_instance" "$directory" "$directory/.owner" vpnctl-v2-ingress-spike-v1; then
+    guest "$gateway_instance" sudo rm -f "$backup"
+    return
+  fi
+  if ! guest "$gateway_instance" sudo test -d "$directory" ||
+     guest "$gateway_instance" sudo test -L "$directory" ||
+     ! guest "$gateway_instance" sudo test -f "$backup" ||
+     guest "$gateway_instance" sudo test -L "$backup"; then
+    echo "refusing unsafe unmarked ingress residue type" >&2
+    return 3
+  fi
+  expected=$(shasum -a 256 "$repository_root/test/v2lab/ingress/nginx.conf" | awk '{print $1}')
+  actual=$(guest "$gateway_instance" sudo sha256sum "$backup" | awk '{print $1}')
+  entries=$(guest "$gateway_instance" sudo find "$directory" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+  if [ "$actual" != "$expected" ] || [ "$entries" != nginx.conf.capacity-before ]; then
+    echo "refusing to remove non-exact unmarked ingress residue" >&2
+    return 3
+  fi
+  guest "$gateway_instance" sudo rm -f "$backup"
+  guest "$gateway_instance" sudo rmdir "$directory" /etc/vpnctl-v2-spike >/dev/null 2>&1 || true
+}
+
 cleanup_guest_temporary() {
   guest "$gateway_instance" sudo rm -f \
     /tmp/clients.sh /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" \
@@ -182,6 +211,7 @@ cleanup_owned() {
     return
   fi
   cleanup_capacity || result=$?
+  cleanup_capacity_ingress_backup || result=$?
   if path_owned "$gateway_instance" /etc/vpnctl-v2-spike/ingress \
     /etc/vpnctl-v2-spike/ingress/.owner vpnctl-v2-ingress-spike-v1; then
     "$repository_root/scripts/v2ingress-spike.sh" uninstall >/dev/null 2>&1 || result=$?
@@ -388,7 +418,7 @@ compose_ingress_tunnel() {
   guest "$node_instance" sudo systemctl daemon-reload
   guest "$node_instance" sudo systemctl start "$backend_unit"
 
-  guest "$gateway_instance" sudo sed -i.capacity-before \
+  guest "$gateway_instance" sudo sed -i \
     's|127.0.0.1:18081|127.0.0.1:18111|g' /etc/vpnctl-v2-spike/ingress/nginx.conf
   guest "$gateway_instance" sudo /usr/sbin/nginx -t \
     -p /etc/vpnctl-v2-spike/ingress/ -c nginx.conf > "$run_root/nginx-composed-validation.txt" 2>&1

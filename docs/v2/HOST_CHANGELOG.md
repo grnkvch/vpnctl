@@ -98,6 +98,25 @@ This journal records development-host mutations made while implementing and vali
   These diagnostics contain only synthetic paths/addresses and static error
   classes; credentials and configuration bytes remain excluded.
 
+### Stale-backup cleanup correction
+
+- The next clean-source invocation started both fixtures but stopped at its
+  initial clean-state assertion before copying or creating any new guest
+  resource. The prior child ingress uninstall had removed its owner marker and
+  all documented resources but could not remove the directory because the
+  capacity composition used `sed -i.capacity-before`, leaving the exact
+  `/etc/vpnctl-v2-spike/ingress/nginx.conf.capacity-before` source backup.
+  Both VMs were returned to `Stopped`, and the new host build root was removed.
+- Composition now uses an in-place edit without a backup because the entire
+  ingress tree is already disposable under its owner uninstall. Recovery for
+  the single existing residue is deliberately narrow: it operates only when
+  the ingress owner marker is absent, the directory contains exactly one
+  regular entry named `nginx.conf.capacity-before`, and its SHA-256 equals the
+  checked-in original nginx fixture. Otherwise it refuses mutation. After
+  removing that exact file it removes only the now-empty ingress/spike
+  directories; ordinary owned runs remove the same exact backup before child
+  uninstall if one is ever present.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
