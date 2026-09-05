@@ -253,6 +253,35 @@ This journal records development-host mutations made while implementing and vali
   a lingering request from FRP or nginx admission behavior without accepting
   either as reduced capacity.
 
+### Quiescent ingress confirmation and capacity-backend task limit correction
+
+- The clean-source run at commit
+  `200596a3c5770d9eeba28713693457df267afbda` again passed composed ingress,
+  controller idle RSS (11,513,856 bytes), and exact per-expose 40/5. Its
+  pre-global socket snapshot proved zero established downstream TCP/443
+  connections, but the global burst still completed as 63/9. Evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T023338Z`.
+- While that burst was active, the harness's loopback status request received
+  an empty reply and aborted only the observation path. The burst itself still
+  wrote all 72 HTTP responses. This exposed the actual fixture bottleneck:
+  the capacity receiver inherited `TasksMax=64` from the tunnel spike backend
+  unit. `ThreadingHTTPServer` consumes one task for its accepting thread, so
+  only 63 simultaneous request-handler threads could exist. This matches all
+  three reproduced 63/9 results and the prior maximum-active value of 63; it
+  is not a lower nginx or FRP product limit.
+- The capacity-only systemd drop-in now sets `TasksMax=96`, leaving the
+  gateway hard limit at 64 and the original tunnel fixture unchanged. Burst
+  readiness is observed from established ingress TCP/443 connections instead
+  of competing for a backend handler; final backend evidence must record
+  exactly 64 maximum active handlers. The regression contract fixes the
+  synthetic service headroom and exact 40/5 and 64/8 acceptance criteria.
+- The armed trap removed all owned capacity/provider/package state, guest and
+  host temporary files, and returned both exact fixtures to verified
+  `Stopped`; no manual rollback remains. Reverting the correction removes only
+  the capacity-owned drop-in override, regression test, and harness
+  instrumentation. The next clean-source run repeats the complete five-minute
+  gate without changing any acceptance bound.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

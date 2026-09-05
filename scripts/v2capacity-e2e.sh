@@ -544,24 +544,24 @@ run_connection_limits() {
     > "$run_root/gateway-limit.json" &
   limit_pid=$!
   background_pids+=("$limit_pid")
-  active=0
+  connection_count=0
   for attempt in $(seq 1 100); do
-    active=$(guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status | jq -er '.active_requests')
-    if [ "$active" -ge 60 ]; then
+    connection_count=$(guest "$gateway_instance" sudo ss -H -tan state established 'sport = :443' | wc -l | tr -d ' ')
+    if [ "$connection_count" -ge 60 ]; then
       break
     fi
     sleep 0.05
   done
   guest "$gateway_instance" sudo ss -H -tan state established 'sport = :443' \
     > "$run_root/gateway-limit-during-connections.txt"
-  [ "$active" -ge 60 ] || { echo "global limit case did not reach concurrent upstream load" >&2; exit 1; }
+  [ "$connection_count" -ge 60 ] || { echo "global limit case did not reach concurrent ingress load" >&2; exit 1; }
   wait "$limit_pid"
   background_pids=()
   guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status \
     > "$run_root/gateway-limit-backend.json"
   jq -e '.responses == 72 and (.errors | length) == 0 and .status_counts["200"] == 64 and .status_counts["503"] == 8' \
     "$run_root/gateway-limit.json" >/dev/null
-  jq -e '.ok and .active_requests == 0 and .max_active_requests >= 60' \
+  jq -e '.ok and .active_requests == 0 and .max_active_requests == 64' \
     "$run_root/gateway-limit-backend.json" >/dev/null
 }
 
