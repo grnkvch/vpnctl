@@ -2,6 +2,40 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — action-scoped Linux role repair primitive
+
+### Planned reversible validation
+
+- Add a restore-only host primitive for an explicitly selected subset of the
+  current gateway or node role's fixed systemd units and direct generated
+  configs. Require exact target bytes/hashes and full expected unit runtime;
+  reject the complete batch before mutation on cross-role scope, unsafe paths,
+  ownership/mode/link drift, inconsistent missing units, or stale observations.
+- Apply atomic writes and only the selected enable/start/stop/restart actions or
+  explicitly named dependent restarts. Keep per-file and per-unit attempt
+  records so rollback also covers an uncertain error after rename, restores
+  original content/mode, and stops/disables a newly restored unit before
+  removing it. Consume and wipe the in-memory plan after apply.
+- Keep this primitive disconnected from public generic repair until immutable
+  material for the exact Applied manifest and the authoritative host mutation
+  lock are wired. Validation uses temporary roots and fake systemctl state; it
+  does not write production config/unit files or mutate a real service, host,
+  VM, firewall, route, or network namespace.
+
+### Acceptance
+
+- Tests cover config-only repair with one dependent restart, unit content and
+  full runtime drift, empty corrupted files, a missing unit, whole-batch
+  preflight refusal, stale-plan refusal, cross-role/path/link rejection, exact
+  per-unit rollback scope, explicit incomplete-runtime rollback, prior file
+  mode restoration, reverse unit rollback order, failed pre-state refusal,
+  post-rename fault injection, safe removal of a failed newly restored unit,
+  unsafe-directory refusal, and retained-byte wiping. Package
+  and focused race suites pass. A clean full Go suite, `go vet ./...`, strict
+  OpenSpec validation, and diff checks pass as well.
+- Repository rollback removes the new repair primitive/tests and the installer
+  root field; no production host rollback is needed.
+
 ## 2026-09-05 — read-only local repair planning boundary
 
 ### Planned reversible validation

@@ -64,6 +64,36 @@ The authoritative desired, applied, and pending snapshots are not rewritten by
 repair itself; concrete component transactions perform only the previewed
 runtime corrections.
 
+The Linux role repair primitive is restore-only and action-scoped. Before its
+first write it validates the complete batch, fixed role ownership, direct
+generated-config paths, exact content hashes, unit targets, same-owner
+directories, and current file/systemd observations. Apply consumes the opaque
+in-memory plan, repeats that preflight, and rejects a stale plan. It writes only
+selected files, reloads systemd only after a selected unit-file repair, and
+changes only selected units or explicitly listed dependent restarts. Unit
+success evidence covers exact `LoadState`, `ActiveState`, `SubState`, and
+enablement as well as regular single-link file content and mode. A
+per-file/per-unit attempt journal drives bounded rollback, including uncertain
+post-rename errors and removal of a unit that was missing before repair.
+Retained prior and target bytes are wiped
+when the one-shot plan is consumed or rejected. Unit action attempts retain
+call order and are unwound in reverse dependency order; an inactive unit that
+an attempted start leaves failed may be reset during that rollback. A failed
+or transient pre-state is rejected because it cannot be recreated safely.
+Rollback re-observes the full pre-repair file and unit shape; if systemd cannot
+reproduce an unusual prior substate, the operation reports the incomplete
+rollback explicitly instead of claiming success.
+
+This primitive is deliberately not yet a production generic-repair bridge. A
+caller must obtain target bytes and unit runtime from immutable material for
+the exact `Applied` manifest and execute under the authoritative host mutation
+lock. Re-rendering current or `previous` state is not equivalent: state-only
+mutations may advance those values without advancing the applied runtime. The
+next layer is therefore a root-only, content-addressed applied-material archive
+whose bundle is validated one-to-one against every applied file/unit runtime
+hash. Until that archive and transaction coupling exist, public repair keeps
+using the narrower committed-generation recovery adapters above.
+
 ## Committed-generation recovery boundary
 
 Gateway and private-node initialization/join can commit authoritative state

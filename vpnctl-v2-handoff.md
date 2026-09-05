@@ -7,7 +7,20 @@
 
 ## Актуальный snapshot решений
 
-Последнее обновление: **2026-09-05**.
+Последнее обновление: **2026-09-06**.
+
+Action-scoped Linux repair primitive теперь готов как безопасная restore-only
+граница для будущего generic executor. Он принимает exact subset unit/config
+ресурсов текущей роли, проверяет весь batch и повторяет preflight после consent,
+сравнивает полный systemd runtime, восстанавливает отсутствующий unit и меняет
+только выбранные unit-ы/явные dependent restarts. Per-resource attempt journal
+обеспечивает rollback даже при неясном результате после rename; исходные mode
+и bytes восстанавливаются, полный runtime перепроверяется (невоспроизводимый
+старый substate становится явным incomplete rollback), а retained material
+стирается при one-shot apply.
+Примитив намеренно ещё не подключён к public repair: следующий обязательный
+слой — immutable root-only applied-material archive, one-to-one связанный с
+точным Applied manifest, и выполнение под authoritative host mutation lock.
 
 Следующий generic-repair слой начат с безопасной read-only границы:
 `operations.BuildRepairPlan` теперь строит exact applied-generation plan без

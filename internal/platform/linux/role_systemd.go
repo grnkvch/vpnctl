@@ -78,10 +78,12 @@ type RoleRemovalPlan struct {
 }
 
 type RoleSystemdInstaller struct {
-	configDir  string
-	unitDir    string
-	configRoot string
-	runner     ProbeRunner
+	root             string
+	configDir        string
+	unitDir          string
+	configRoot       string
+	runner           ProbeRunner
+	repairFileWriter func(string, []byte, os.FileMode) (bool, error)
 }
 
 func NewRoleSystemdInstaller(root, configDir string, runner ProbeRunner) (*RoleSystemdInstaller, error) {
@@ -96,8 +98,8 @@ func NewRoleSystemdInstaller(root, configDir string, runner ProbeRunner) (*RoleS
 		return nil, fmt.Errorf("role installer config directory is outside the system root")
 	}
 	return &RoleSystemdInstaller{
-		configDir: configDir, unitDir: filepath.Join(root, "etc", "systemd", "system"),
-		configRoot: filepath.Join(configDir, "generated"), runner: runner,
+		root: root, configDir: configDir, unitDir: filepath.Join(root, "etc", "systemd", "system"),
+		configRoot: filepath.Join(configDir, "generated"), runner: runner, repairFileWriter: installAtomicRoleFile,
 	}, nil
 }
 
