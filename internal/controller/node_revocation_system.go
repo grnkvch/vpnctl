@@ -44,6 +44,12 @@ func newSystemGatewayNodeLifecycleManager(paths store.Paths, state *store.StateS
 	return enrollment.NewNodeLifecycleManager(state, secrets, runtime, nil)
 }
 
+// NewSystemGatewayNodeLifecycleManager composes the production gateway
+// adapters used by the public node revoke/delete commands.
+func NewSystemGatewayNodeLifecycleManager(paths store.Paths, state *store.StateStore, secrets *store.SecretStore) (*enrollment.NodeLifecycleManager, error) {
+	return newSystemGatewayNodeLifecycleManager(paths, state, secrets)
+}
+
 // Revoke runs only after NodeLifecycleManager has committed the fail-closed
 // authoritative candidate. It then republishes both transport peer sets,
 // withdraws disabled expose routes, and restarts the long-lived transport and

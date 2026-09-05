@@ -51,8 +51,20 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isValidateInvocation(args) {
 		return executeValidate(args, stdout, stderr)
 	}
+	if isNodeLifecycleInvocation(args) {
+		return executeNodeLifecycle(args, stdout, stderr)
+	}
 	if isNodeCatalogInvocation(args) {
 		return executeNodeCatalog(args, stdout, stderr)
+	}
+	if isClientMutationInvocation(args) {
+		return executeClientMutation(args, stdout, stderr)
+	}
+	if isClientCatalogInvocation(args) {
+		return executeClientCatalog(args, stdout, stderr)
+	}
+	if isPresetCatalogInvocation(args) {
+		return executePresetCatalog(args, stdout, stderr)
 	}
 	if isInviteInvocation(args) {
 		return executeInvite(args, stdout, stderr)

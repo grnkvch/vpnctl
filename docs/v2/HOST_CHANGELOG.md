@@ -2,6 +2,41 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public client, node lifecycle, and preset command wiring
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes gateway `client add/list/show/rotate/revoke/delete/export`,
+  including dry-run, role validation, lifecycle confirmation, safe local
+  `clash`/`wireguard` file export, optional guarded custom output, stable result
+  envelopes, and secret-free catalog projections. Client profile bytes never
+  enter stdout or JSON.
+- A committed client identity or credential transition now republishes both
+  gateway listener configurations and explicitly restarts the standard and
+  restricted listeners. Authoritative state remains fail-closed if this
+  idempotent runtime reconciliation fails; the command returns pending with a
+  concrete `repair_client_runtime` action.
+- Gateway `node revoke/delete` now execute the existing fail-closed lifecycle
+  manager through the common consent boundary. `preset list/show/validate/diff`
+  now execute the filesystem/effective-state catalog with redaction-safe JSON
+  projections and validation exit behavior.
+- Changes are confined to repository source/tests and disposable Go build
+  cache. Test fixtures write only under their exact temporary roots and clean
+  them automatically. No vpnctl role was initialized, no VM/service/package or
+  network endpoint was touched, and no host firewall, routing, DNS, swap,
+  certificate, `/etc`, or `/var` resource was changed. Repository rollback is
+  one ordinary `git revert` of the implementation commit.
+
+### Acceptance
+
+- Controller, CLI, and regression suites pass. Coverage proves both listener
+  configs are installed as `0600`, both listener units receive explicit
+  restarts, unsupported roles fail before system-service construction,
+  dry-runs never commit, confirmation reaches only reviewed lifecycle plans,
+  export results contain paths and copy actions rather than profile content,
+  and preset output rejects sensitive generic `path` fields in favor of the
+  approved `file_path` projection.
+
 ## 2026-09-05 — public v2 entrypoint cutover, validation, and node inspection
 
 ### Source-only implementation boundary

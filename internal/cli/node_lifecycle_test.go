@@ -1,13 +1,48 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	"github.com/vgrinkevich/vpnctl/internal/store"
 )
+
+func TestExecuteNodeLifecycleUsesRoleGateDryRunAndConfirmation(t *testing.T) {
+	operator := &recordingNodeLifecycleOperator{}
+	oldPaths, oldRole, oldBuilder, oldTTY := nodeLifecycleSystemPaths, nodeLifecycleLoadRole, nodeLifecycleBuilder, nodeLifecycleOpenTTY
+	t.Cleanup(func() {
+		nodeLifecycleSystemPaths, nodeLifecycleLoadRole, nodeLifecycleBuilder, nodeLifecycleOpenTTY = oldPaths, oldRole, oldBuilder, oldTTY
+	})
+	paths, _ := store.NewPaths(t.TempDir())
+	nodeLifecycleSystemPaths = func() store.Paths { return paths }
+	nodeLifecycleLoadRole = func(store.Paths) (HostRole, error) { return RoleGateway, nil }
+	nodeLifecycleBuilder = func(store.Paths) (NodeLifecycleOperator, error) { return operator, nil }
+	nodeLifecycleOpenTTY = func() (PromptIO, io.Closer, error) { t.Fatal("unexpected TTY open"); return nil, nil, nil }
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Execute([]string{"node", "revoke", "private-node", "--dry-run", "--json"}, &stdout, &stderr); code != ExitSuccess {
+		t.Fatalf("node revoke dry-run code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if operator.commits != 0 || !strings.Contains(stdout.String(), `"command":"node.revoke"`) {
+		t.Fatalf("dry-run mutated or emitted wrong output: commits=%d output=%q", operator.commits, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"--json", "node", "delete", "private-node", "--yes"}, &stdout, &stderr); code != ExitSuccess {
+		t.Fatalf("node delete code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if operator.commits != 1 || operator.lastCommit != "delete" || !strings.Contains(stdout.String(), `"command":"node.delete"`) {
+		t.Fatalf("delete did not commit through workflow: operator=%+v output=%q", operator, stdout.String())
+	}
+}
 
 func TestNodeLifecycleWorkflowsUseConfirmedImmediateImpact(t *testing.T) {
 	for _, test := range []struct {
