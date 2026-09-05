@@ -282,6 +282,43 @@ This journal records development-host mutations made while implementing and vali
   instrumentation. The next clean-source run repeats the complete five-minute
   gate without changing any acceptance bound.
 
+### Exact ingress limits passed and bounded FRPS fault injection
+
+- The clean-source run at commit
+  `009ce294dbe7d1be83725ab4dfe64305e0708721` proved the capacity-backend
+  correction: per-expose admission was exactly 40/5, gateway admission was
+  exactly 64/8, and the receiver independently observed exactly 64 active
+  upstream handlers. The complete 300-second workload then ran through FRPS
+  outage/recovery and wrote its summary at
+  `artifacts/v2lab/capacity-e2e/run-20260905T025532Z`.
+- Controller idle RSS was 11,571,200 bytes; gateway CPU averaged 47.378%,
+  minimum `MemAvailable` was 246,583,296 bytes, maximum swap use was
+  71,450,624 bytes, and disk growth was 2,625,536 bytes. Bot API-like load
+  completed 1500/1500 with p95/p99 688.359/818.338 ms, all five WireGuard
+  clients received 300/300 probes, and every monitored unit on both hosts had
+  zero OOM kills. Webhook successes had p95/p99 148.548/235.635 ms and no
+  failure outside the accepted reconnect window.
+- The sole failed bound was webhook success count: 2829 versus the required
+  minimum 2950. Ordinary blocking `systemctl stop` let FRPS spend about 14
+  seconds in its graceful termination path before the intentional three-second
+  down interval began, producing 171 expected-window 503 responses. Once
+  `systemctl start` returned, the existing FRPC recovered immediately. This is
+  fault-fixture timing rather than steady-state capacity or reconnect failure;
+  no product/resource/latency threshold is relaxed.
+- Fault injection now submits the same systemd stop job non-blockingly, then
+  sends KILL only to that unit's main FRPS process while the explicit stop job
+  suppresses `Restart=on-failure`. It waits for exact `inactive`/`failed`
+  state before the unchanged three-second outage, records stop duration
+  separately from post-start recovery, and still requires observed 503 plus
+  recovery of the original client without a manual restart. The bounded kill
+  targets no authorizer, controller, VM, or unrelated process.
+- Final cleanup owner-uninstalled all capacity/provider resources and nginx
+  packages, removed exact guest and host temporary files, and restored both
+  fixtures to verified `Stopped`; the host temporary-root scan was empty and
+  no manual rollback remains. Repository rollback is the corrective commit;
+  the next clean-source run repeats the full gate against unchanged acceptance
+  criteria.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

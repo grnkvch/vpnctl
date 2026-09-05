@@ -64,7 +64,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"--requests 72 --delay-ms 5000", "gateway-limit-before-connections.txt",
 		"gateway-limit-during-connections.txt", ".status_counts[\"200\"] == 64",
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
-		"frps_stop_after_seconds", "recovered_without_client_restart: true",
+		"frps_stop_after_seconds", "systemctl stop --no-block", "--kill-who=main --signal=KILL",
+		"FRP server did not stop within the bounded fault-injection window", "stop_seconds: $stop_seconds",
+		"recovered_without_client_restart: true",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {

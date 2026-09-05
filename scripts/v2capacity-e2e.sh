@@ -607,10 +607,26 @@ start_loads() {
 }
 
 inject_reconnect() {
-  local down_seconds attempt unavailable=false recovered=false
-  local recovery_started recovery_finished
+  local down_seconds attempt unavailable=false recovered=false stop_state
+  local stop_started stop_finished recovery_started recovery_finished
   down_seconds=$(value '.fault.frps_down_seconds')
-  guest "$gateway_instance" sudo systemctl stop "$tunnel_server_unit"
+  stop_started=$(python3 -c 'import time; print(time.monotonic())')
+  guest "$gateway_instance" sudo systemctl stop --no-block "$tunnel_server_unit"
+  sleep 0.25
+  guest "$gateway_instance" sudo systemctl kill --kill-who=main --signal=KILL "$tunnel_server_unit" \
+    >/dev/null 2>&1 || true
+  for attempt in $(seq 1 20); do
+    stop_state=$(guest "$gateway_instance" systemctl show --value -p ActiveState "$tunnel_server_unit")
+    if [ "$stop_state" = inactive ] || [ "$stop_state" = failed ]; then
+      break
+    fi
+    sleep 0.1
+  done
+  [ "$stop_state" = inactive ] || [ "$stop_state" = failed ] || {
+    echo "FRP server did not stop within the bounded fault-injection window" >&2
+    exit 1
+  }
+  stop_finished=$(python3 -c 'import time; print(time.monotonic())')
   for attempt in $(seq 1 20); do
     if [ "$(probe_webhook 2>/dev/null | jq -r '.status' || true)" = 503 ]; then
       unavailable=true
@@ -632,8 +648,9 @@ inject_reconnect() {
   recovery_finished=$(python3 -c 'import time; print(time.monotonic())')
   [ "$recovered" = true ] || { echo "FRP did not reconnect under sustained load" >&2; exit 1; }
   jq -n --argjson down_seconds "$down_seconds" \
-    --argjson recovery_seconds "$(awk -v start="$recovery_started" -v finish="$recovery_finished" 'BEGIN {printf "%.3f", finish-start}')" \
-    '{unavailable_status: 503, down_seconds: $down_seconds, recovery_seconds: $recovery_seconds, recovered_without_client_restart: true}' \
+    --argjson stop_seconds "$(awk -v start="$stop_started" -v finish="$stop_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
+    --argjson recovery_seconds "$(awk -v start="$recovery_started" -v finish="$recovery_finished" 'BEGIN {delta=finish-start; if (delta < 0) delta=0; printf "%.3f", delta}')" \
+    '{unavailable_status: 503, stop_seconds: $stop_seconds, down_seconds: $down_seconds, recovery_seconds: $recovery_seconds, recovered_without_client_restart: true}' \
     > "$run_root/reconnect.json"
 }
 
