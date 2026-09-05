@@ -10,6 +10,8 @@ restart_pid=
 restart_timing_file=
 restore_required=false
 restart_advance_seconds=0.1
+first_recovery_seconds=null
+maximum_stable_recovery_probes=0
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -33,6 +35,8 @@ emit_result() {
     --argjson scheduled_down_seconds "$scheduled_down_seconds" \
     --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
     --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
+    --argjson first_recovery_seconds "$first_recovery_seconds" \
+    --argjson maximum_stable_recovery_probes "$maximum_stable_recovery_probes" \
     --argjson stable_recovery "$stable_recovery" \
     '{
       status: $status,
@@ -43,6 +47,8 @@ emit_result() {
       scheduled_down_seconds: $scheduled_down_seconds,
       down_seconds: $down_seconds,
       recovery_seconds: $recovery_seconds,
+      first_recovery_seconds: $first_recovery_seconds,
+      maximum_stable_recovery_probes: $maximum_stable_recovery_probes,
       stable_recovery_probes: 5,
       stable_recovery_observed: $stable_recovery
     }'
@@ -140,10 +146,17 @@ deadline=$(awk -v start="$restart_started" -v limit="$recovery_limit_seconds" 'B
 while awk -v now="$(monotonic)" -v deadline="$deadline" 'BEGIN {exit !(now <= deadline)}'; do
   probe_output=$(probe 2>/dev/null || true)
   if printf '%s\n' "$probe_output" | jq -e '.status == 200 and .ok == true' >/dev/null 2>&1; then
+    observed_at=$(monotonic)
+    if [ "$first_recovery_seconds" = null ]; then
+      first_recovery_seconds=$(delta "$restart_started" "$observed_at")
+    fi
     stable=$((stable + 1))
+    if [ "$stable" -gt "$maximum_stable_recovery_probes" ]; then
+      maximum_stable_recovery_probes=$stable
+    fi
     if [ "$stable" -eq 5 ]; then
       recovered=true
-      recovery_finished=$(monotonic)
+      recovery_finished=$observed_at
       break
     fi
   else

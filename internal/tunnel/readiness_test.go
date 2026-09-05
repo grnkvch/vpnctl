@@ -28,7 +28,7 @@ func TestPinnedFRPReconnectAndUpstreamHealthContract(t *testing.T) {
 		contract.InitialMaxDelay != 10*time.Second || contract.ReconnectMaxDelay != 20*time.Second ||
 		contract.FastRetryCount != 3 || contract.FastRetryDelay != 200*time.Millisecond ||
 		contract.FastRetryWindow != time.Minute || contract.FastRetryJitter != 0.5 ||
-		contract.CorrectiveRecycleDelay != 2*time.Second || contract.CorrectiveRecyclePoll != 250*time.Millisecond ||
+		contract.CorrectiveRecycleDelay != time.Second || contract.CorrectiveRecyclePoll != 250*time.Millisecond ||
 		contract.CorrectiveRecycleLimit != 1 {
 		t.Fatalf("pinned reconnect contract = %+v", contract)
 	}

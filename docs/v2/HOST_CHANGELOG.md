@@ -544,6 +544,32 @@ This journal records development-host mutations made while implementing and vali
   The next clean repeat has the same mutation and rollback boundary; no manual
   cleanup or additional host action remains.
 
+### Two-second guard result and planned one-second bound
+
+- The clean-source repeat at commit
+  `ad82917b5cd5ce0fb32e0230a67b847ce1cbcea0` again reached the restricted
+  fault under sustained load. Evidence at
+  `artifacts/v2lab/capacity-e2e/run-20260905T061547Z/reconnect.json` records a
+  valid `503`, `3.465s` down time, stable service PID/restart count, and exactly
+  one child recycle (`2892` to `4670`), but the five-probe stability gate had
+  not completed when the eight-second deadline check returned at `9.246s`.
+  The run is failed and is not capacity evidence.
+- The independent 10-rps scheduled webhook stream failed from workload offset
+  `145.706s` through `155.514s` and then returned successes before cleanup.
+  This implies first data-plane recovery roughly `6.3s` after the measured
+  FRPS restart, inside the eight-second limit, but leaves insufficient time for
+  the mandatory five sequential HTTPS stability probes. The acceptance bound
+  and five-probe requirement remain unchanged.
+- Production will shorten only the authenticated unavailable guard to one
+  second, four 250-ms polling intervals. The four-second provider heartbeat,
+  two-second dial timeout, single-child/once-per-outage semantics, local-app
+  exemption, and no-standby/no-direct-fallback policy remain unchanged. The
+  fault evidence now separately records first successful response time and
+  maximum consecutive successes, without changing pass/fail behavior.
+- Automatic cleanup again removed the exact owned resources and packages and
+  returned both fixtures to `Stopped`; no manual rollback remains. The next
+  clean repeat retains the same owner and rollback boundary.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
