@@ -827,6 +827,32 @@ This journal records development-host mutations made while implementing and vali
   all capacity/provider/package resources and returned both fixtures to
   `Stopped`; no manual rollback remains.
 
+### Pre-armed worker trigger-order result and correction
+
+- The clean-source run at commit
+  `cfefa5dbbbb8b65c7810e654988fcfc750d5a876` again proved nginx `503` during
+  the stopped interval and recorded actual down time `3.460s`, within the
+  unchanged 2.75--3.50-second bound. Typed evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T094816Z/reconnect.json`; the stable
+  tunnel-client service and one child recycle also passed. The prestarted
+  recovery worker still returned zero-attempt/invalid evidence, so no summary
+  or capacity acceptance is claimed.
+- Inspection found that the worker trigger remained after the helper stopped
+  the transient units and removed the runtime drop-in with `daemon-reload` and
+  policy verification. Those slow control-plane cleanup operations can consume
+  the complete eight-second recovery window on the loaded one-vCPU gateway,
+  even though interpreter startup is already outside it.
+- The corrected order reads and validates the FRPS active monotonic timestamp,
+  immediately triggers and waits for the prestarted recovery worker, then
+  stops transient units and restores `Restart=on-failure`. FRPS is already
+  active while the five fresh HTTPS probes run; temporarily retaining the
+  verified `Restart=no` drop-in cannot add a route, retry, standby, or fallback.
+  The original policy is still restored on both success and every failure.
+- Automatic cleanup from the failed run removed both worker runtimes, the
+  transient timer/service, exact drop-in, all provider/capacity resources and
+  packages, and returned both fixtures to `Stopped`. No manual rollback is
+  required.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

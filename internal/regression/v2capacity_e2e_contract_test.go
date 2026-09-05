@@ -120,6 +120,13 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	if stoppedCheck < 0 || unavailableProbe < 0 || !(hardKill < stoppedCheck && stoppedCheck < unavailableProbe) {
 		t.Fatal("capacity fault helper must observe the stopped state before the slower HTTPS probe")
 	}
+	restartTimestamp := strings.Index(faultHelper, "restart_started=$(awk")
+	recoveryTrigger := strings.LastIndex(faultHelper, "run_armed_recovery || true")
+	policyRestore := strings.LastIndex(faultHelper, "restore_restart_policy\n")
+	if restartTimestamp < 0 || recoveryTrigger < 0 || policyRestore < 0 ||
+		!(restartTimestamp < recoveryTrigger && recoveryTrigger < policyRestore) {
+		t.Fatal("capacity recovery must start from the observed timestamp before slow policy restoration")
+	}
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))
 	for _, required := range []string{

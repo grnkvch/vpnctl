@@ -339,6 +339,8 @@ if ! [[ "$restart_started_microseconds" =~ ^[1-9][0-9]*$ ]]; then
 fi
 restart_started=$(awk -v value="$restart_started_microseconds" 'BEGIN {printf "%.9f", value/1000000}')
 fault_stage=restarted
+recovery_result=
+run_armed_recovery || true
 systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 restart_job_armed=false
@@ -350,8 +352,6 @@ if [ "$unavailable_status" != 503 ]; then
   exit 1
 fi
 
-recovery_result=
-run_armed_recovery || true
 cleanup_armed_probe
 if ! printf '%s\n' "$recovery_result" | jq -e '
   (.status == "passed" or .status == "failed") and
