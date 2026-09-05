@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — transactional gateway join candidate activation
+
+### Planned reversible validation
+
+- Extend gateway join readiness with a transaction-scoped preparation handle.
+  Production readiness may publish the complete candidate before the
+  authoritative invite/node CAS, but must retain an exact file snapshot and
+  serialization lock until commit or rollback.
+- Compile both gateway transport peer sets and the shared frps server from the
+  candidate state. Publish the pinned tunnel certificate/key, restart only the
+  three affected data-plane units, and pass exact WireGuard peer/address,
+  restricted TCP-only listener, and overlay-bound frps listener checks.
+- On readiness, signing, secret-staging, or definitive CAS failure, restore the
+  previous generated tree byte-for-byte and restart the old service set. An
+  uncertain acknowledged state keeps the candidate, matching the existing
+  no-blind-rollback rule.
+- Validation is source-only with temporary generated trees, fake systemd,
+  kernel-socket, and WireGuard probes, and test-private credentials. It does
+  not publish production configs, restart a real service, consume a real
+  invite, bind a socket, or mutate either VM. Repository rollback removes this
+  source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests prove committed candidate retention, exact standard peer publication,
+  ordered service restart, byte-identical rollback after tunnel-health failure,
+  unconsumed invite/no partial node on failure, and generic prepared-readiness
+  commit/rollback ownership.
+- Focused and full Go suites, `go vet ./...`, strict OpenSpec validation, and
+  diff checks passed. No production secret, config, unit, process, interface,
+  socket, invite, host, or VM was changed, so no host rollback remains.
+
 ## 2026-09-05 — production joined-node service activation
 
 ### Planned reversible validation

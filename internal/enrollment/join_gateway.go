@@ -57,6 +57,21 @@ type GatewayJoinReadinessChecker interface {
 	Check(context.Context, GatewayJoinCandidate) (JoinReadinessReport, error)
 }
 
+// GatewayJoinReadinessPreparer is the production extension of the read-only
+// checker contract. It permits a gateway adapter to publish and health-check a
+// complete candidate before the authoritative state transition while keeping
+// an exact rollback handle until the invite and node are committed together.
+// Simple checkers used by protocol tests may continue to implement Check only.
+type GatewayJoinReadinessPreparer interface {
+	Prepare(context.Context, GatewayJoinCandidate) (GatewayJoinReadinessPreparation, error)
+}
+
+type GatewayJoinReadinessPreparation interface {
+	Report() JoinReadinessReport
+	Commit()
+	Rollback(context.Context) error
+}
+
 // GatewayJoinCandidate is a non-serializable, pre-commit view supplied to the
 // cross-host readiness adapter. Private node control/WireGuard keys are never
 // present. The only shared symmetric values are callback-scoped.
@@ -251,7 +266,25 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 		GatewayWireGuardPublicKey:  gatewayWireGuardPublicKey,
 		restrictedServerCredential: append([]byte(nil), restrictedUpstream...), shared: &shared,
 	}
-	report, err := builder.runtime.Readiness.Check(ctx, candidate)
+	var readinessPreparation GatewayJoinReadinessPreparation
+	keepReadinessPreparation := false
+	defer func() {
+		if readinessPreparation != nil && !keepReadinessPreparation {
+			_ = readinessPreparation.Rollback(context.Background())
+		}
+	}()
+	var report JoinReadinessReport
+	if preparer, ok := builder.runtime.Readiness.(GatewayJoinReadinessPreparer); ok {
+		readinessPreparation, err = preparer.Prepare(ctx, candidate)
+		if err == nil && readinessPreparation == nil {
+			err = fmt.Errorf("gateway join readiness preparation is unavailable")
+		}
+		if err == nil {
+			report = readinessPreparation.Report()
+		}
+	} else {
+		report, err = builder.runtime.Readiness.Check(ctx, candidate)
+	}
 	destroyGatewayJoinCandidate(&candidate)
 	if err != nil {
 		return PreparedEnrollmentArtifacts{}, fmt.Errorf("%w: %v", ErrJoinNotReady, err)
@@ -282,9 +315,11 @@ func (builder *GatewayJoinBuilder) PrepareAuthorizedEnrollment(
 		resources: resources, assignment: assignment, shared: shared,
 		controlCertificate:   append([]byte(nil), issued.CertificatePEM...),
 		tunnelTLSProvisioner: builder.runtime.TunnelTLS, tunnelTLSInstallation: tunnelTLS,
+		readinessPreparation: readinessPreparation,
 	}
 	keepShared = true
 	keepTunnelTLS = true
+	keepReadinessPreparation = true
 	return PreparedEnrollmentArtifacts{
 		NodeID: request.PublicExchange.NodeID, Transport: request.Transport,
 		Presets: append([]string{}, presetNames...), PublicKeyHashes: publicHashes,
@@ -535,6 +570,7 @@ type gatewayJoinCommitter struct {
 	controlCertificate    []byte
 	tunnelTLSProvisioner  *tunnel.GatewayTLSIdentityProvisioner
 	tunnelTLSInstallation tunnel.GatewayTLSIdentityInstallation
+	readinessPreparation  GatewayJoinReadinessPreparation
 	owned                 []model.SecretRef
 	committed             bool
 	destroyed             bool
@@ -591,21 +627,24 @@ func (committer *gatewayJoinCommitter) Commit(ctx context.Context, replayHash st
 			committer.committed = true
 			committer.owned = nil
 			committer.retainTunnelTLS()
+			committer.retainReadinessPreparation()
 			return nil
 		}
 		if loadErr == nil && !gatewayStateContainsNode(current, committer.resources.node.ID) {
-			return errors.Join(err, committer.rollbackOwned())
+			return errors.Join(err, committer.rollbackOwned(), committer.rollbackReadinessPreparation())
 		}
 		if loadErr != nil || current.Generation > committer.authorization.ExpectedStateGeneration {
 			committer.owned = nil
 			committer.retainTunnelTLS()
+			committer.retainReadinessPreparation()
 			return errors.Join(ErrJoinUncertain, err, loadErr)
 		}
-		return errors.Join(err, committer.rollbackOwned())
+		return errors.Join(err, committer.rollbackOwned(), committer.rollbackReadinessPreparation())
 	}
 	committer.committed = true
 	committer.owned = nil
 	committer.retainTunnelTLS()
+	committer.retainReadinessPreparation()
 	return nil
 }
 
@@ -651,6 +690,23 @@ func (committer *gatewayJoinCommitter) retainTunnelTLS() {
 	committer.tunnelTLSInstallation.OwnedReferences = nil
 }
 
+func (committer *gatewayJoinCommitter) rollbackReadinessPreparation() error {
+	if committer.readinessPreparation == nil {
+		return nil
+	}
+	err := committer.readinessPreparation.Rollback(context.Background())
+	committer.readinessPreparation = nil
+	return err
+}
+
+func (committer *gatewayJoinCommitter) retainReadinessPreparation() {
+	if committer.readinessPreparation == nil {
+		return
+	}
+	committer.readinessPreparation.Commit()
+	committer.readinessPreparation = nil
+}
+
 func (committer *gatewayJoinCommitter) Destroy() {
 	if committer == nil {
 		return
@@ -664,6 +720,9 @@ func (committer *gatewayJoinCommitter) Destroy() {
 	if !committer.committed && committer.tunnelTLSProvisioner != nil && len(committer.tunnelTLSInstallation.OwnedReferences) != 0 {
 		_ = committer.tunnelTLSProvisioner.Rollback(context.Background(), committer.tunnelTLSInstallation)
 		committer.tunnelTLSInstallation.OwnedReferences = nil
+	}
+	if !committer.committed {
+		_ = committer.rollbackReadinessPreparation()
 	}
 	clear(committer.controlCertificate)
 	committer.controlCertificate = nil

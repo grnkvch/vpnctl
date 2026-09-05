@@ -622,6 +622,13 @@ sudo vpnctl expose 3000 --path /telegram/webhook
   `transport switch`.
 - Invalid/expired invite ничего не меняет ни локально, ни на gateway. Успешный
   join сразу применяет и проверяет конфигурацию; deferred join отсутствует.
+- До gateway state CAS production readiness публикует полный candidate для
+  WireGuard, restricted listener и общего frps, удерживая точный rollback
+  snapshot и serialization lock. Commit сохраняет candidate; любая
+  определённая pre-commit ошибка восстанавливает прежние generated files и
+  перезапускает прежний service set. Проверка требует exact WireGuard peer и
+  pool addresses, отсутствия native UDP на restricted `8443/TCP`, а также
+  единственного управляемого frps listener на gateway overlay `17000/TCP`.
 - Invite одноразовый, действует 15 минут и копируется через существующую
   доверенную SSH-сессию. Отдельное ручное сравнение fingerprint по умолчанию не
   требуется.
