@@ -953,6 +953,31 @@ This journal records development-host mutations made while implementing and vali
   successful checks used unprivileged host `limactl` with guest-local sudo.
   Recovery is complete and no manual rollback remains.
 
+### Repeated tunnel-prepare abort and planned previous-boot diagnosis
+
+- The next clean-source attempt at commit
+  `d6b7c8d5e084d591bc269d8aff7bb6ab6410f2ad` started both exact fixtures,
+  passed initial cleanup, installed the five WireGuard peers, and completed
+  restricted prepare. Tunnel prepare then validated both generated FRPS/FRPC
+  configurations but returned before its final readiness/probe message. It did
+  not install ingress, start capacity measurement/load/fault injection, or
+  produce acceptance evidence. Combined provider output is retained at
+  `artifacts/v2lab/capacity-e2e/run-20260905T104214Z/tunnel-prepare.log`.
+- The armed parent rollback removed the owner-marked capacity, tunnel, and
+  restricted resources and its exact host build root, then returned both
+  fixtures to verified `Stopped`. No summary was written and no capacity bound
+  changed. The failure exit was `255`, while the captured provider log ends
+  immediately after the successful node config check, narrowing diagnosis to
+  subsequent node service activation or its Lima SSH command boundary.
+- Diagnosis may start only the same two contract-matching fixtures and read the
+  prior boot's persistent system journal for the exact tunnel authorization,
+  server, backend, and client units plus SSH/Lima lifecycle errors. It may also
+  run the ordinary exact-path/listener/table absence postflight. It must install
+  no fixture or package and must return both machines to `Stopped`. If prior-
+  boot evidence is unavailable, the next reproduction must first add typed
+  prepare-stage diagnostics and preserve the existing owner cleanup rather
+  than infer a provider failure.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
