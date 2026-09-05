@@ -145,6 +145,7 @@ func convergenceRepairOutput(changed bool, generation uint64, actions []operatio
 			"drift_kind":    string(action.DriftKind),
 			"action":        string(action.Action),
 			"impact":        string(action.Impact),
+			"restart_units": append([]string{}, action.RestartUnits...),
 		}
 		if action.TargetSHA256 != "" {
 			item["target_sha256"] = action.TargetSHA256
@@ -163,6 +164,11 @@ func convergenceRepairOutput(changed bool, generation uint64, actions []operatio
 
 func cloneConvergenceRepairPlan(plan operations.RepairPlan) operations.RepairPlan {
 	plan.Actions = append([]operations.RepairAction{}, plan.Actions...)
+	for index := range plan.Actions {
+		if plan.Actions[index].RestartUnits != nil {
+			plan.Actions[index].RestartUnits = append([]string{}, plan.Actions[index].RestartUnits...)
+		}
+	}
 	plan.Convergence.Changes = append([]operations.DesiredChange{}, plan.Convergence.Changes...)
 	plan.Convergence.Drift = append([]operations.OwnedDrift{}, plan.Convergence.Drift...)
 	return plan

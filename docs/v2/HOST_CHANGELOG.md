@@ -2,6 +2,37 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Applied-bound local role repair executor
+
+### Planned reversible validation
+
+- Bridge the immutable current-Applied bundle to the action-scoped Linux role
+  repair primitive without exposing target bytes. Re-read convergence and
+  rediscover owned drift around host preflight; reject any changed snapshot,
+  observation, action, target hash, role, or node scope before apply.
+- Make dependent service restarts explicit in the public repair action. Keep a
+  closed role/config-to-unit mapping and deterministic dependency order; omit
+  a dependent restart only when that same unit is already a selected drift
+  action. The initial executor remains restore-only because production
+  discovery does not enumerate unexpected owned extras.
+- Validation uses only in-memory discovery/host doubles, fake systemd state,
+  Go temporary directories, and `/private/tmp` Go caches. No real config,
+  unit, service, state, network, VM, public endpoint, or foreign resource is
+  mutated.
+
+### Acceptance
+
+- Tests prove exact manifest/material selection, explicit gateway/node restart
+  mapping, secret-free public restart disclosure, applied config transfer,
+  missing-archive refusal before host preflight, and stale observation refusal
+  between host plan and apply. Existing coordinator consent, stale-plan,
+  foreign-resource, node-gateway, output, and action-scoped rollback tests
+  remain green; focused ordinary/race tests, the complete ordinary Go suite,
+  and vet pass.
+- This slice intentionally does not switch the public command from its existing
+  committed-generation recovery adapters. Repository rollback removes the
+  executor/dependency-contract source changes; no host rollback is needed.
+
 ## 2026-09-06 — immutable applied-generation material archive
 
 ### Planned reversible validation

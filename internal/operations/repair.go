@@ -34,6 +34,7 @@ type RepairAction struct {
 	Scope          ApplyScope         `json:"scope"`
 	TargetSHA256   string             `json:"target_sha256,omitempty"`
 	ObservedSHA256 string             `json:"observed_sha256,omitempty"`
+	RestartUnits   []string           `json:"restart_units"`
 }
 
 type RepairPlan struct {
@@ -46,10 +47,11 @@ type RepairPlan struct {
 }
 
 type RepairExecutionBatch struct {
-	Role             model.Role     `json:"role"`
-	CurrentNodeID    string         `json:"current_node_id,omitempty"`
-	TargetGeneration uint64         `json:"target_generation"`
-	Actions          []RepairAction `json:"actions"`
+	Role             model.Role      `json:"role"`
+	CurrentNodeID    string          `json:"current_node_id,omitempty"`
+	TargetGeneration uint64          `json:"target_generation"`
+	Actions          []RepairAction  `json:"actions"`
+	Convergence      ConvergencePlan `json:"convergence"`
 }
 
 type RepairResourceResult struct {
@@ -73,6 +75,10 @@ type RepairResult struct {
 
 type RepairScopeResolver interface {
 	ResolveRepairScope(RepairAction) (ApplyScope, error)
+}
+
+type RepairRestartResolver interface {
+	ResolveRepairRestartUnits(RepairAction) ([]string, error)
 }
 
 // GatewayRepairExecutor intentionally has no node repair method.
@@ -168,10 +174,7 @@ func (coordinator *RepairCoordinator) Repair(ctx context.Context, approved Repai
 		}, nil
 	}
 
-	batch := RepairExecutionBatch{
-		Role: fresh.Role, CurrentNodeID: fresh.CurrentNodeID,
-		TargetGeneration: fresh.TargetGeneration, Actions: cloneRepairActions(fresh.Actions),
-	}
+	batch := repairExecutionBatch(fresh)
 	var executed RepairExecutionResult
 	switch coordinator.role {
 	case model.RoleGateway:
@@ -240,6 +243,12 @@ func BuildRepairPlan(
 			return RepairPlan{}, err
 		}
 		action.Scope = scope
+		if dependencies, ok := resolver.(RepairRestartResolver); ok {
+			action.RestartUnits, err = dependencies.ResolveRepairRestartUnits(action)
+			if err != nil {
+				return RepairPlan{}, fmt.Errorf("%w: resolve repair restarts for %s: %v", ErrRepairInvalid, resourceOrder(action.Resource), err)
+			}
+		}
 		actions[index] = action
 		impact = maximumConvergenceImpact(impact, action.Impact)
 	}
@@ -317,6 +326,7 @@ func (plan RepairPlan) Validate() error {
 		}
 		withoutScope := action
 		withoutScope.Scope = ApplyScope{}
+		withoutScope.RestartUnits = nil
 		if !reflect.DeepEqual(withoutScope, want) {
 			return fmt.Errorf("action %d differs from owned drift", index)
 		}
@@ -343,6 +353,19 @@ func (action RepairAction) validate() error {
 	}
 	if err := action.Scope.validate(); err != nil {
 		return err
+	}
+	seenRestart := make(map[string]struct{}, len(action.RestartUnits))
+	for _, name := range action.RestartUnits {
+		if name == "" {
+			return fmt.Errorf("restart unit is empty")
+		}
+		if _, duplicate := seenRestart[name]; duplicate {
+			return fmt.Errorf("restart unit %s is duplicated", name)
+		}
+		seenRestart[name] = struct{}{}
+	}
+	if action.Resource.Kind == ManagedResourceUnit && len(action.RestartUnits) != 0 {
+		return fmt.Errorf("unit repair cannot contain dependent restarts")
 	}
 	switch action.DriftKind {
 	case OwnedDriftMissing:
@@ -423,5 +446,24 @@ func repairActionFromDrift(drift OwnedDrift) (RepairAction, error) {
 }
 
 func cloneRepairActions(actions []RepairAction) []RepairAction {
-	return append([]RepairAction{}, actions...)
+	result := append([]RepairAction{}, actions...)
+	for index := range result {
+		if actions[index].RestartUnits != nil {
+			result[index].RestartUnits = append([]string{}, actions[index].RestartUnits...)
+		}
+	}
+	return result
+}
+
+func repairExecutionBatch(plan RepairPlan) RepairExecutionBatch {
+	return RepairExecutionBatch{
+		Role: plan.Role, CurrentNodeID: plan.CurrentNodeID, TargetGeneration: plan.TargetGeneration,
+		Actions: cloneRepairActions(plan.Actions), Convergence: cloneConvergencePlan(plan.Convergence),
+	}
+}
+
+func cloneConvergencePlan(plan ConvergencePlan) ConvergencePlan {
+	plan.Changes = append([]DesiredChange{}, plan.Changes...)
+	plan.Drift = append([]OwnedDrift{}, plan.Drift...)
+	return plan
 }

@@ -6,6 +6,9 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 // LocalRoleRepairScopeResolver accepts only the unit and generated-config
@@ -70,4 +73,55 @@ func (resolver *LocalRoleRepairScopeResolver) ResolveRepairScope(action RepairAc
 	return ApplyScope{Role: resolver.role, NodeID: resolver.nodeID}, nil
 }
 
+// ResolveRepairRestartUnits makes every service side effect part of the public
+// repair action. Marker/bootstrap files need no live reload; service-owned
+// configs restart only their exact consumer.
+func (resolver *LocalRoleRepairScopeResolver) ResolveRepairRestartUnits(action RepairAction) ([]string, error) {
+	if _, err := resolver.ResolveRepairScope(action); err != nil {
+		return nil, err
+	}
+	if action.Resource.Kind == ManagedResourceUnit || action.Action == RepairRemove {
+		return []string{}, nil
+	}
+	name := filepath.Base(action.Resource.ID)
+	var unit string
+	switch resolver.role {
+	case model.RoleGateway:
+		switch name {
+		case "bootstrap.conf", "gateway-controller.ready":
+			return []string{}, nil
+		case routing.GatewayDNSConfigFileName, routing.GatewayDNSReadyFileName:
+			unit = "vpnctl-dns.service"
+		case transport.StandardConfigFileName, transport.GatewayStandardReadyFileName:
+			unit = "vpnctl-standard.service"
+		case transport.RestrictedConfigFileName, transport.GatewayRestrictedReadyFileName:
+			unit = "vpnctl-restricted.service"
+		case tunnel.FRPServerConfigFileName, tunnel.FRPServerReadyFileName,
+			tunnel.FRPServerCertificateName, tunnel.FRPServerPrivateKeyName:
+			unit = "vpnctl-tunnel-server.service"
+		default:
+			return nil, fmt.Errorf("gateway config %q has no repair restart contract", name)
+		}
+	case model.RoleNode:
+		switch name {
+		case "bootstrap.conf":
+			return []string{}, nil
+		case transport.StandardConfigFileName, "node-standard.ready":
+			unit = "vpnctl-standard.service"
+		case routing.NodeRoutingConfigFileName, "node-routing.ready":
+			unit = "vpnctl-routing.service"
+		case routing.NodeRoutingGuardConfigFileName, routing.NodeDNSIntegrationConfigName, "node-routing-guard.ready":
+			unit = "vpnctl-routing-guard.service"
+		case tunnel.FRPClientConfigFileName, tunnel.FRPClientReadyFileName, tunnel.FRPServerCertificateName:
+			unit = "vpnctl-tunnel-client.service"
+		default:
+			return nil, fmt.Errorf("node config %q has no repair restart contract", name)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported local repair role %q", resolver.role)
+	}
+	return []string{unit}, nil
+}
+
 var _ RepairScopeResolver = (*LocalRoleRepairScopeResolver)(nil)
+var _ RepairRestartResolver = (*LocalRoleRepairScopeResolver)(nil)

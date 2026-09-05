@@ -16,9 +16,14 @@ Initialize/CAS; equal-snapshot retry восстанавливает отсутс
 Gateway-join rollback удаляет candidate material только после успешного CAS к
 прежнему snapshot и его повторной проверки. Архив сохраняется recoverable
 `uninstall`, удаляется `purge` и намеренно не попадает в portable backup.
-Следующий срез — загрузить только текущий Applied bundle, привязать его к
-previewed action set и подключить action-scoped executor под authoritative
-mutation lock.
+Material-to-host bridge теперь тоже готов: он загружает только текущий Applied
+bundle, повторяет convergence/owned-drift проверку вокруг Linux host preflight,
+передаёт только previewed restore actions и явно показывает dependent service
+restarts для каждого config action. Missing archive и изменившийся snapshot,
+observation, action или dependency блокируют mutation. Следующий срез —
+gateway RPC под controller mutation lock, node-local serialization/gateway
+gate и безопасный выбор между generic drift repair и recovery незавершённой
+convergence publication.
 
 Action-scoped Linux repair primitive теперь готов как безопасная restore-only
 граница для будущего generic executor. Он принимает exact subset unit/config

@@ -101,13 +101,22 @@ success. Portable backup intentionally excludes this local reconstruction
 cache; recoverable uninstall preserves it, while purge removes it with the
 state tree.
 
-The primitive is still deliberately disconnected from public generic drift
-repair. The remaining bridge must load only the current Applied bundle, bind
-its entries to the already reviewed action set, and execute under the
-authoritative host mutation lock. Re-rendering current or `previous` state is
-not equivalent: state-only mutations may advance those values without
-advancing the applied runtime. Until that executor bridge exists, public
-repair keeps using the narrower committed-generation recovery adapters below.
+The material-to-host executor bridge is also implemented. It loads only the
+current Applied bundle, reconstructs only reviewed restore actions, and
+re-plans around the Linux host preflight so changed convergence or observation
+state cannot cross the consent boundary. Config actions explicitly disclose
+their fixed dependent service restart; unknown config/dependency mappings and
+unexpected-resource removal remain closed. The gateway must invoke this
+executor under its controller mutation lock, and the node command must retain
+its gateway/serialization gate.
+
+Public `vpnctl repair` is not switched to this generic executor yet. It keeps
+using the narrower committed-generation recovery adapters below until the
+gateway RPC and node-local command composition can select generic drift repair
+without weakening recovery of a state generation whose convergence
+publication is still pending. Re-rendering current or `previous` state remains
+invalid: state-only mutations may advance those values without advancing the
+applied runtime.
 
 ## Committed-generation recovery boundary
 

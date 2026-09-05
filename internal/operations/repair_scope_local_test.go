@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
+	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
 
 func TestLocalRoleRepairScopeResolverAcceptsOnlyExactRoleOwnership(t *testing.T) {
@@ -79,6 +81,51 @@ func TestLocalRoleRepairScopeResolverAcceptsOnlyExactRoleOwnership(t *testing.T)
 			}
 			if err != nil || !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("ResolveRepairScope(%+v) = %+v, %v; want %+v", test.resource, got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestLocalRoleRepairRestartContractIsExactAndExplicit(t *testing.T) {
+	t.Parallel()
+
+	nodeID := "11111111-1111-4111-8111-111111111111"
+	for _, test := range []struct {
+		name     string
+		role     model.Role
+		nodeID   string
+		path     string
+		want     []string
+		wantFail bool
+	}{
+		{name: "gateway bootstrap", role: model.RoleGateway, path: "/etc/vpnctl/generated/gateway/bootstrap.conf", want: []string{}},
+		{name: "gateway dns", role: model.RoleGateway, path: "/etc/vpnctl/generated/gateway/" + routing.GatewayDNSConfigFileName, want: []string{"vpnctl-dns.service"}},
+		{name: "gateway tunnel trust", role: model.RoleGateway, path: "/etc/vpnctl/generated/gateway/" + tunnel.FRPServerCertificateName, want: []string{"vpnctl-tunnel-server.service"}},
+		{name: "node routing", role: model.RoleNode, nodeID: nodeID, path: "/etc/vpnctl/generated/node/" + routing.NodeRoutingConfigFileName, want: []string{"vpnctl-routing.service"}},
+		{name: "node dns integration", role: model.RoleNode, nodeID: nodeID, path: "/etc/vpnctl/generated/node/" + routing.NodeDNSIntegrationConfigName, want: []string{"vpnctl-routing-guard.service"}},
+		{name: "unknown gateway config", role: model.RoleGateway, path: "/etc/vpnctl/generated/gateway/unknown.conf", wantFail: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolver, err := NewLocalRoleRepairScopeResolver(test.role, test.nodeID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			component := gatewayInitConvergenceComponent
+			if test.role == model.RoleNode {
+				component = nodeInitConvergenceComponent
+			}
+			got, err := resolver.ResolveRepairRestartUnits(RepairAction{
+				Resource: ManagedResourceKey{Component: component, Kind: ManagedResourceFile, ID: test.path},
+				Action:   RepairRestore,
+			})
+			if test.wantFail {
+				if err == nil {
+					t.Fatalf("unknown config restart contract = %v", got)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("restart contract = %v, %v; want %v", got, err, test.want)
 			}
 		})
 	}
