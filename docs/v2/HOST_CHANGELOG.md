@@ -210,6 +210,30 @@ This journal records development-host mutations made while implementing and vali
   is left to the armed rollback, and a second driver failure remains fatal.
   This adds no retry to the measured workload and changes no capacity bound.
 
+### First successful composition and global-limit timing correction
+
+- The clean-source run at commit `69a0428` brought both exact fixtures to
+  `READY`, installed five WireGuard peers and all three provider fixtures, and
+  proved the corrected HTTPS ingress → FRP → capacity node composition with a
+  valid HTTP 200 response. The production controller then started at
+  11,567,104 bytes idle RSS against the 20 MiB target. The per-expose burst
+  produced the exact expected 40 accepted and five rejected requests.
+- The run stopped before sustained load because the gateway burst produced 63
+  accepted and nine 503 responses instead of 64/8. Its synthetic evidence is
+  at `artifacts/v2lab/capacity-e2e/run-20260905T013749Z`. The armed cleanup
+  removed capacity/provider units, files, interfaces, namespaces, nftables,
+  and ingress-owned packages, removed the host build root, and restored both
+  fixtures to verified `Stopped`. This is a limit-probe failure, not accepted
+  capacity evidence, and no product limit was changed.
+- The capacity harness had held the 72-request gateway burst for three seconds,
+  while the already accepted ingress stress gate uses five seconds and proves
+  at least 60 upstream requests were simultaneously active. The composed gate
+  now waits for zero backend handlers after the per-expose case, allows one
+  second for transport teardown, uses that established five-second hold, and
+  captures/requires the same minimum active-upstream observation. It still
+  requires exactly 64 HTTP 200 and eight HTTP 503 results; no retry or relaxed
+  acceptance is introduced.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

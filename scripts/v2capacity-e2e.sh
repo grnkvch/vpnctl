@@ -511,7 +511,7 @@ probe_webhook() {
 }
 
 run_connection_limits() {
-  local gateway_ip
+  local gateway_ip attempt active
   gateway_ip=$(lab_ip "$gateway_instance")
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/ingress-load load \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt \
@@ -519,12 +519,25 @@ run_connection_limits() {
     > "$run_root/per-expose-limit.json"
   jq -e '.responses == 45 and (.errors | length) == 0 and .status_counts["200"] == 40 and .status_counts["503"] == 5' \
     "$run_root/per-expose-limit.json" >/dev/null
+  for attempt in $(seq 1 40); do
+    active=$(guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status | jq -er '.active_requests')
+    if [ "$active" -eq 0 ]; then
+      break
+    fi
+    sleep 0.25
+  done
+  [ "$active" -eq 0 ] || { echo "capacity backend did not become idle between limit cases" >&2; exit 1; }
+  sleep 1
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/ingress-load load \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt \
-    --requests 72 --delay-ms 3000 --body-bytes 32 --timeout 20 --path /load/a --path /load/b \
+    --requests 72 --delay-ms 5000 --body-bytes 32 --timeout 20 --path /load/a --path /load/b \
     > "$run_root/gateway-limit.json"
+  guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status \
+    > "$run_root/gateway-limit-backend.json"
   jq -e '.responses == 72 and (.errors | length) == 0 and .status_counts["200"] == 64 and .status_counts["503"] == 8' \
     "$run_root/gateway-limit.json" >/dev/null
+  jq -e '.ok and .active_requests == 0 and .max_active_requests >= 60' \
+    "$run_root/gateway-limit-backend.json" >/dev/null
 }
 
 start_loads() {
@@ -621,7 +634,8 @@ write_summary() {
     --slurpfile node_resources "$run_root/node-resources.json" \
     --slurpfile reconnect "$run_root/reconnect.json" \
     --slurpfile expose_limit "$run_root/per-expose-limit.json" \
-    --slurpfile gateway_limit "$run_root/gateway-limit.json" '
+    --slurpfile gateway_limit "$run_root/gateway-limit.json" \
+    --slurpfile gateway_limit_backend "$run_root/gateway-limit-backend.json" '
     {
       schema_version: 1,
       status: "passed",
@@ -635,7 +649,11 @@ write_summary() {
       reconnect: $reconnect[0],
       connection_limits: {
         per_expose: {accepted: $expose_limit[0].status_counts["200"], rejected: $expose_limit[0].status_counts["503"]},
-        gateway: {accepted: $gateway_limit[0].status_counts["200"], rejected: $gateway_limit[0].status_counts["503"]}
+        gateway: {
+          accepted: $gateway_limit[0].status_counts["200"],
+          rejected: $gateway_limit[0].status_counts["503"],
+          observed_maximum_active_upstreams: $gateway_limit_backend[0].max_active_requests
+        }
       },
       no_oom: (([ $resources[0].services[].oom_kills, $node_resources[0].services[].oom_kills ] | add) == 0),
       no_deadlock: ($webhook[0].status == "completed" and $api[0].status == "completed" and $clients[0].status == "passed"),
@@ -667,7 +685,8 @@ assert_summary() {
     .resources.disk.growth_bytes <= $limits[0].bounds.maximum_disk_growth_bytes and
     .reconnect.recovery_seconds <= $limits[0].bounds.tunnel_reconnect_seconds and
     .connection_limits.per_expose == {accepted: 40, rejected: 5} and
-    .connection_limits.gateway == {accepted: 64, rejected: 8} and
+    .connection_limits.gateway.accepted == 64 and .connection_limits.gateway.rejected == 8 and
+    .connection_limits.gateway.observed_maximum_active_upstreams >= 60 and
     .no_oom and .no_deadlock
   ' "$run_root/summary.json" >/dev/null
 }
