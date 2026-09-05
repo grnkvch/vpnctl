@@ -34,7 +34,7 @@ Generated credentials and evidence are mode-restricted and ignored under `artifa
 
 ## Pinned frp pool normalization
 
-frpc `v0.69.0` normalizes a declared `transport.poolCount = 0` to Login `pool_count = 1`. The local version-locked Login adapter accepts exactly that expected input after identity validation and returns otherwise unchanged Login content with `pool_count = 0` before frps creates the control session. Every other input is rejected. This uses frp's documented plugin content-replacement mechanism and keeps the provider's effective pool at zero; negative pool values are not used.
+frpc `v0.69.0` normalizes a declared `transport.poolCount = 0` to Login `pool_count = 1`. The local version-locked Login adapter accepts exactly that expected input after identity validation and returns otherwise unchanged Login content with `pool_count = 0` before frps creates the control session. Every other input is rejected. This uses frp's documented plugin content-replacement mechanism and keeps the provider's effective pool at zero; negative pool values are not used. The client also pins `transport.dialServerTimeout = 2`: the upstream default is ten seconds, which by itself exceeds vpnctl's eight-second reconnect gate when a restricted outer transport remains reachable while internal frps is unavailable.
 
 This normalization is an internal provider-adapter detail, not part of the public expose model. A frp version change must update the pin and rerun the full contract before activation.
 

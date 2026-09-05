@@ -22,6 +22,29 @@ delta() {
   awk -v start="$1" -v finish="$2" 'BEGIN {value=finish-start; if (value < 0) value=0; printf "%.3f", value}'
 }
 
+emit_result() {
+  local result_status=$1 recovered=$2
+  jq -n \
+    --arg status "$result_status" \
+    --argjson unavailable_probe "$unavailable_probe" \
+    --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
+    --argjson requested_down_seconds "$down_seconds" \
+    --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
+    --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
+    --argjson recovered "$recovered" \
+    '{
+      status: $status,
+      unavailable_status: $unavailable_probe.status,
+      unavailable_probe: $unavailable_probe,
+      stop_seconds: $stop_seconds,
+      requested_down_seconds: $requested_down_seconds,
+      down_seconds: $down_seconds,
+      recovery_seconds: $recovery_seconds,
+      stable_recovery_probes: 5,
+      recovered_without_client_restart: $recovered
+    }'
+}
+
 probe() {
   python3 /usr/local/libexec/vpnctl-v2-capacity/load probe \
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1
@@ -98,12 +121,16 @@ wait "$restart_pid"
 restart_pid=
 restore_required=false
 read -r restart_started restart_finished < "$restart_timing_file"
-[ "$unavailable_status" = 503 ] || { echo 'ingress did not return 503 while frps was stopped' >&2; exit 1; }
+recovery_finished=$restart_finished
+if [ "$unavailable_status" != 503 ]; then
+  emit_result failed false
+  echo 'ingress did not return 503 while frps was stopped' >&2
+  exit 1
+fi
 
 stable=0
 recovered=false
 probe_output=
-recovery_finished=$restart_finished
 deadline=$(awk -v start="$restart_started" -v limit="$recovery_limit_seconds" 'BEGIN {printf "%.9f", start+limit}')
 while awk -v now="$(monotonic)" -v deadline="$deadline" 'BEGIN {exit !(now <= deadline)}'; do
   probe_output=$(probe 2>/dev/null || true)
@@ -119,21 +146,11 @@ while awk -v now="$(monotonic)" -v deadline="$deadline" 'BEGIN {exit !(now <= de
   fi
   sleep 0.1
 done
-[ "$recovered" = true ] || { echo 'FRP did not reconnect within the bounded recovery window' >&2; exit 1; }
+if [ "$recovered" != true ]; then
+  recovery_finished=$(monotonic)
+  emit_result failed false
+  echo 'FRP did not reconnect within the bounded recovery window' >&2
+  exit 1
+fi
 
-jq -n \
-  --argjson unavailable_probe "$unavailable_probe" \
-  --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
-  --argjson requested_down_seconds "$down_seconds" \
-  --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
-  --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
-  '{
-    unavailable_status: $unavailable_probe.status,
-    unavailable_probe: $unavailable_probe,
-    stop_seconds: $stop_seconds,
-    requested_down_seconds: $requested_down_seconds,
-    down_seconds: $down_seconds,
-    recovery_seconds: $recovery_seconds,
-    stable_recovery_probes: 5,
-    recovered_without_client_restart: true
-  }'
+emit_result passed true

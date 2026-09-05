@@ -29,6 +29,7 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 		} `json:"ports"`
 		Transport struct {
 			WireProtocol             string `json:"wire_protocol"`
+			DialServerTimeout        int    `json:"dial_server_timeout_seconds"`
 			TCPMux                   bool   `json:"tcp_mux"`
 			PoolCount                int    `json:"pool_count"`
 			NormalizedLoginPoolCount int    `json:"normalized_login_pool_count"`
@@ -50,7 +51,8 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 	}
 	if !manifest.Transport.TCPMux || manifest.Transport.PoolCount != 0 ||
 		manifest.Transport.NormalizedLoginPoolCount != 1 || manifest.Transport.PoolEnforcement != "login-plugin-rewrite" ||
-		manifest.Transport.WireProtocol != "v1" || manifest.Transport.TLSServer != "vpnctl-tunnel-gateway" ||
+		manifest.Transport.WireProtocol != "v1" || manifest.Transport.DialServerTimeout != 2 ||
+		manifest.Transport.TLSServer != "vpnctl-tunnel-gateway" ||
 		manifest.Transport.RevokeBound <= 0 {
 		t.Fatalf("unexpected tunnel transport contract: %+v", manifest.Transport)
 	}
@@ -75,6 +77,7 @@ func TestV2TunnelSpikeContract(t *testing.T) {
 	frpc := readContractFile(t, filepath.Join(fixtureRoot, "frpc.toml.tmpl"))
 	for _, required := range []string{
 		`webServer.addr = "127.0.0.1"`, `transport.poolCount = 0`, `transport.tcpMux = true`,
+		`transport.dialServerTimeout = 2`,
 		`transport.tls.trustedCaFile`, `transport.tls.serverName = "vpnctl-tunnel-gateway"`,
 		`metadatas.node_id = "node-a"`, `metadatas.generation = "1"`, `@TUNNEL_TOKEN@`, `@PROXY_URL@`,
 	} {

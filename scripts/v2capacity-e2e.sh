@@ -721,6 +721,7 @@ assert_summary() {
     .resources.memory.maximum_swap_used_bytes <= $limits[0].bounds.maximum_swap_used_bytes and
     .resources.disk.minimum_free_bytes >= $limits[0].bounds.minimum_free_disk_bytes and
     .resources.disk.growth_bytes <= $limits[0].bounds.maximum_disk_growth_bytes and
+    .reconnect.status == "passed" and
     .reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds and
     .reconnect.down_seconds >= ($limits[0].fault.frps_down_seconds - 0.25) and
     .reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5) and

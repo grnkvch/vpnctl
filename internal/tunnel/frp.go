@@ -28,6 +28,7 @@ const (
 	FRPClientAdminPort        = 17400
 	FRPAuthorizationPort      = 19091
 	FRPTLSServerName          = "vpnctl-tunnel-gateway"
+	FRPDialServerTimeoutSec   = 2
 	FRPTCPMuxKeepaliveSec     = 5
 	FRPHeartbeatSec           = 1
 	FRPHeartbeatTimeoutSec    = 4
@@ -247,6 +248,7 @@ func renderFRPClientConfig(endpoint netip.AddrPort, session NodeSession, tunnelC
 	config.WriteString("webServer.pprofEnable = false\n\n")
 	config.WriteString("transport.protocol = \"tcp\"\n")
 	config.WriteString("transport.wireProtocol = \"v1\"\n")
+	fmt.Fprintf(&config, "transport.dialServerTimeout = %d\n", FRPDialServerTimeoutSec)
 	config.WriteString("transport.poolCount = 0\n")
 	config.WriteString("transport.tcpMux = true\n")
 	fmt.Fprintf(&config, "transport.tcpMuxKeepaliveInterval = %d\n", FRPTCPMuxKeepaliveSec)
@@ -384,6 +386,7 @@ func parseFRPClientConfig(content []byte) (frpClientDocument, error) {
 	}
 	for _, expected := range []string{
 		"webServer.pprofEnable = false", "", "transport.protocol = \"tcp\"", "transport.wireProtocol = \"v1\"",
+		fmt.Sprintf("transport.dialServerTimeout = %d", FRPDialServerTimeoutSec),
 		"transport.poolCount = 0", "transport.tcpMux = true",
 		fmt.Sprintf("transport.tcpMuxKeepaliveInterval = %d", FRPTCPMuxKeepaliveSec),
 		fmt.Sprintf("transport.heartbeatInterval = %d", FRPHeartbeatSec),

@@ -63,7 +63,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	for _, required := range []string{
 		"systemctl stop --no-block", "--kill-who=main --signal=KILL",
 		"sleep \"$down_seconds\"", "restart_pid=$!", "unavailable_status: $unavailable_probe.status",
-		"stable_recovery_probes: 5", "recovered_without_client_restart: true",
+		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)
@@ -78,6 +78,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
+		".reconnect.status == \"passed\"",
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",

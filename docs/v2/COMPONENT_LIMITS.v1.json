@@ -18,7 +18,7 @@
     },
     {
       "path": "test/v2lab/tunnel/manifest.json",
-      "sha256": "6064677a7292383750e39f4563d84bb5e7a4c8be3fdbfb7ef52d34c1f14ef835"
+      "sha256": "957af3ad10a6b7112a71cc37567589106429bd3b250c6f5f86e8609f31216d66"
     },
     {
       "path": "test/v2lab/routing/manifest.json",
@@ -281,6 +281,7 @@
       "effective_pool_count": 0,
       "frpc_per_node": 1,
       "frps_per_gateway": 1,
+      "dial_server_timeout_seconds": 2,
       "heartbeat_interval_seconds": 1,
       "heartbeat_timeout_seconds": 4,
       "revoke_bound_seconds": 6,

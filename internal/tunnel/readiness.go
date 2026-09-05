@@ -37,6 +37,7 @@ var ErrTunnelNotReady = errors.New("node tunnel is not ready")
 // release. The retry loop remains provider-owned; vpnctl validates and tests
 // this contract instead of adding a second dialer or a standby endpoint.
 type FRPReconnectContract struct {
+	DialServerTimeout time.Duration
 	InitialDelay      time.Duration
 	Factor            float64
 	Jitter            float64
@@ -50,7 +51,8 @@ type FRPReconnectContract struct {
 
 func PinnedFRPReconnectContract() FRPReconnectContract {
 	return FRPReconnectContract{
-		InitialDelay: time.Second, Factor: 2, Jitter: 0.1,
+		DialServerTimeout: time.Duration(FRPDialServerTimeoutSec) * time.Second,
+		InitialDelay:      time.Second, Factor: 2, Jitter: 0.1,
 		InitialMaxDelay: 10 * time.Second, ReconnectMaxDelay: 20 * time.Second,
 		FastRetryCount: 3, FastRetryDelay: 200 * time.Millisecond,
 		FastRetryWindow: time.Minute, FastRetryJitter: 0.5,

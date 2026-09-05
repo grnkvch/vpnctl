@@ -17,6 +17,7 @@
   "transport": {
     "protocol": "tcp",
     "wire_protocol": "v1",
+    "dial_server_timeout_seconds": 2,
     "tcp_mux": true,
     "pool_count": 0,
     "normalized_login_pool_count": 1,

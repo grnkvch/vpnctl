@@ -425,6 +425,32 @@ This journal records development-host mutations made while implementing and vali
   temporary files, and retain scheduled workload success as an independent
   acceptance condition.
 
+### Guest-local fault result and bounded production dial
+
+- The clean-source run at commit
+  `313947557212d0b7eb052f521435ce4cbc42868d` proved the guest-local
+  controller reached its fault phase and
+  rejected recovery after the unchanged eight-second bound. Its EXIT path and
+  the parent owner cleanup restored FRPS, removed all fixture resources and
+  packages, and returned both VMs to `Stopped`. Because the gate intentionally
+  aborted at reconnect, remote load generators were terminated during cleanup;
+  their later partial JSON is diagnostic only and is not treated as capacity
+  evidence. The empty `reconnect.json` exposed a separate evidence defect, so
+  the helper will now emit a typed failed result before returning nonzero.
+- Review of the exact pinned upstream `v0.69.0` client source found an inner
+  reconnect dial loop whose default server-dial timeout is ten seconds. The
+  official client configuration reference documents the same default. That
+  single attempt can exceed vpnctl's eight-second reconnect requirement when
+  the restricted SOCKS/ShadowTLS outer endpoint remains reachable but its
+  internal FRPS target is down; ordinary connection-refused tests do not expose
+  this case.
+- Production and spike client renderers now explicitly pin a two-second server
+  dial timeout. The canonical parser rejects drift, the reconnect contract and
+  component limits publish the value, and focused tests cover it. This keeps
+  ownership inside the unchanged one-process, one-active-transport frpc retry
+  loop: no standby dial, process restart, or public CLI option is introduced.
+  All changes remain source-only until the next clean capacity run.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

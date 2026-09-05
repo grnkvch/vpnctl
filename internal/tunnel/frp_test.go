@@ -107,7 +107,8 @@ func TestFRPProviderRendersOneMultiplexedClientThroughActiveTransport(t *testing
 	for _, required := range []string{
 		`serverAddr = "10.67.0.1"`, `serverPort = 17000`, `loginFailExit = false`,
 		`webServer.addr = "127.0.0.1"`, `webServer.port = 17400`,
-		`transport.protocol = "tcp"`, `transport.wireProtocol = "v1"`, `transport.poolCount = 0`,
+		`transport.protocol = "tcp"`, `transport.wireProtocol = "v1"`, `transport.dialServerTimeout = 2`,
+		`transport.poolCount = 0`,
 		`transport.tcpMux = true`, `transport.tls.enable = true`,
 		`transport.tls.disableCustomTLSFirstByte = true`,
 		`transport.tls.serverName = "vpnctl-tunnel-gateway"`,
@@ -197,6 +198,7 @@ func TestFRPStrictValidatorsRejectUnsafeOrUnknownSettings(t *testing.T) {
 		{name: "server TLS disabled", server: true, content: serverConfig, replace: strings.Replace(serverConfig, "transport.tls.force = true", "transport.tls.force = false", 1)},
 		{name: "public gateway endpoint", content: clientConfig, replace: strings.Replace(clientConfig, `serverAddr = "10.67.0.1"`, `serverAddr = "203.0.113.1"`, 1)},
 		{name: "standby proxy", content: clientConfig, replace: strings.Replace(clientConfig, "transport.protocol = \"tcp\"", "transport.proxyURL = \"socks5://127.0.0.1:17890\"\ntransport.protocol = \"tcp\"", 1)},
+		{name: "long dial timeout", content: clientConfig, replace: strings.Replace(clientConfig, "transport.dialServerTimeout = 2", "transport.dialServerTimeout = 10", 1)},
 		{name: "connection pool", content: clientConfig, replace: strings.Replace(clientConfig, "transport.poolCount = 0", "transport.poolCount = 1", 1)},
 		{name: "client TLS disabled", content: clientConfig, replace: strings.Replace(clientConfig, "transport.tls.enable = true", "transport.tls.enable = false", 1)},
 		{name: "UDP proxy", content: clientConfig, replace: strings.Replace(clientConfig, `type = "tcp"`, `type = "udp"`, 1)},

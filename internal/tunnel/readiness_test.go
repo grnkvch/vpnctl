@@ -23,7 +23,8 @@ func TestPinnedFRPReconnectAndUpstreamHealthContract(t *testing.T) {
 	t.Parallel()
 
 	contract := PinnedFRPReconnectContract()
-	if contract.InitialDelay != time.Second || contract.Factor != 2 || contract.Jitter != 0.1 ||
+	if contract.DialServerTimeout != 2*time.Second || contract.InitialDelay != time.Second ||
+		contract.Factor != 2 || contract.Jitter != 0.1 ||
 		contract.InitialMaxDelay != 10*time.Second || contract.ReconnectMaxDelay != 20*time.Second ||
 		contract.FastRetryCount != 3 || contract.FastRetryDelay != 200*time.Millisecond ||
 		contract.FastRetryWindow != time.Minute || contract.FastRetryJitter != 0.5 {
@@ -32,7 +33,7 @@ func TestPinnedFRPReconnectAndUpstreamHealthContract(t *testing.T) {
 	candidate := readinessCandidate(t, "/", 2, 9)
 	config := string(candidate.Bytes())
 	for _, required := range []string{
-		"loginFailExit = false", "healthCheck.type = \"tcp\"",
+		"loginFailExit = false", "transport.dialServerTimeout = 2", "healthCheck.type = \"tcp\"",
 		"healthCheck.timeoutSeconds = 1", "healthCheck.maxFailed = 1", "healthCheck.intervalSeconds = 3",
 	} {
 		if !strings.Contains(config, required) {
