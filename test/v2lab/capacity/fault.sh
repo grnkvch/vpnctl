@@ -187,7 +187,7 @@ restart_job_armed=true
 restore_required=true
 down_started=$(monotonic)
 stop_started=$down_started
-systemctl kill --kill-whom=all --signal=KILL "$unit" >/dev/null
+systemctl kill --kill-whom=main --signal=KILL "$unit" >/dev/null
 
 unavailable_probe=$(probe 2>/dev/null || true)
 unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)

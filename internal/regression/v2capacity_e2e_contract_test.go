@@ -81,7 +81,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"runtime_dropin_directory=/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d",
 		"runtime_dropin=$runtime_dropin_directory/vpnctl-v2-capacity-fault.conf",
 		"printf '[Service]\\nRestart=no\\n'", "FRPS temporary restart policy was not applied",
-		"restore_restart_policy", "--kill-whom=all --signal=KILL",
+		"restore_restart_policy", "--kill-whom=main --signal=KILL",
 		"down_started=$(monotonic)", "systemd-run --quiet --collect", "--timer-property=AccuracySec=10ms", "unavailable_status: $unavailable_probe.status",
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
@@ -97,7 +97,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	restartTimer := strings.Index(faultHelper, "systemd-run --quiet --collect")
 	downStarted := strings.Index(faultHelper, "down_started=$(monotonic)")
-	hardKill := strings.LastIndex(faultHelper, "systemctl kill --kill-whom=all --signal=KILL")
+	hardKill := strings.LastIndex(faultHelper, "systemctl kill --kill-whom=main --signal=KILL")
 	if restartTimer < 0 || downStarted < 0 || hardKill < 0 || !(restartTimer < downStarted && downStarted < hardKill) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}

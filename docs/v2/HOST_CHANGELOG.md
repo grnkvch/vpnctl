@@ -693,6 +693,32 @@ This journal records development-host mutations made while implementing and vali
   postflight require the exact file and transient units absent. The preceding
   run returned both fixtures to verified `Stopped`; no manual rollback remains.
 
+### First runtime-policy fault attempt and MainPID correction
+
+- The clean-source run at commit
+  `d989b66cab8406eced39ec09d4b58297e92863e4` passed both composed-path
+  readiness and the exact 40/5 and 64/8 connection-limit probes, then reached
+  the planned fault at 145 seconds of sustained load. The runtime drop-in was
+  applied and the collected restart timer armed, but `systemctl kill
+  --kill-whom=all` returned `Invalid argument` after signalling the main
+  process because systemd also attempted its auxiliary-process kill path. The
+  helper therefore failed closed before writing reconnect evidence; partial
+  workload/resource JSON in
+  `artifacts/v2lab/capacity-e2e/run-20260905T080941Z` is diagnostic only and no
+  summary or capacity acceptance is claimed.
+- The helper and parent traps removed the exact transient timer/service and
+  checksum-matched runtime drop-in, restored the unit policy, removed all
+  capacity/provider resources and packages, and returned both fixtures to
+  their original `Stopped` state. The repository remained clean and no manual
+  rollback is required.
+- The exact owned service has one `frps` MainPID and no separate child process
+  is part of the fault target. The corrected injection uses systemd's supported
+  `--kill-whom=main`, with the same verified temporary `Restart=no` policy.
+  Thus a successful command terminates the one target process without asking
+  systemd to signal auxiliary cgroup entries. Timer ordering, measured
+  kill-to-active interval, cleanup, recovery, and every acceptance bound remain
+  unchanged.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
