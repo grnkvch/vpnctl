@@ -76,6 +76,28 @@ This journal records development-host mutations made while implementing and vali
   early host-only and partial VM-start failures remove the exact temporary root
   and restore any VM that this run started.
 
+### First composed-path attempt
+
+- The first escalated clean-source run at commit
+  `bd37989178022f9f257d4e839c9df141170fa750` started both exact fixtures,
+  installed five distinct WireGuard peers, prepared the three owner-marked
+  provider fixtures, validated the composed nginx configuration, and then
+  stopped before controller/resource/load phases because a valid webhook did
+  not traverse nginx → FRP → the capacity backend within the ten-second
+  readiness bound. This is a harness composition failure, not capacity
+  evidence; no acceptance bound has been relaxed.
+- The armed trap stopped and removed the capacity backend/client resources,
+  restored the node forwarding value, owner-uninstalled nginx/FRP/Mihomo,
+  purged only the ingress-owned nginx packages, removed every fixed guest and
+  host temporary path, and returned both fixtures to their prior `Stopped`
+  state. The incomplete ignored evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T002108Z`.
+- The next run records the final credential-free probe result, exact relevant
+  unit states/restart counts, listener snapshots, bounded journals, and
+  tunnel authorization counters before cleanup if composition fails again.
+  These diagnostics contain only synthetic paths/addresses and static error
+  classes; credentials and configuration bytes remain excluded.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary

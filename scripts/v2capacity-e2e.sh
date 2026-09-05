@@ -372,7 +372,7 @@ setup_controller() {
 }
 
 compose_ingress_tunnel() {
-  local gateway_ip attempt
+  local gateway_ip attempt probe_output
   gateway_ip=$(lab_ip "$gateway_instance")
   "$repository_root/scripts/v2restricted-spike.sh" prepare > "$run_root/restricted-prepare.log"
   "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
@@ -398,13 +398,39 @@ compose_ingress_tunnel() {
   chmod 0644 "$run_root/gateway.crt"
   limactl copy --backend=scp "$run_root/gateway.crt" "$node_instance:/tmp/vpnctl-v2-capacity-gateway.crt"
   for attempt in $(seq 1 40); do
-    if probe_webhook 2>/dev/null | jq -e '.status == 200 and .ok == true' >/dev/null; then
+    probe_output=$(probe_webhook 2>&1 || true)
+    printf '%s\n' "$probe_output" > "$run_root/composition-probe-last.json"
+    if printf '%s\n' "$probe_output" | jq -e '.status == 200 and .ok == true' >/dev/null 2>&1; then
       return
     fi
     sleep 0.25
   done
+  capture_composition_failure
   echo "composed ingress-to-node tunnel did not become ready" >&2
   exit 1
+}
+
+capture_composition_failure() {
+  guest "$gateway_instance" systemctl show --no-pager \
+    "$ingress_unit" "$tunnel_auth_unit" "$tunnel_server_unit" \
+    -p Id -p ActiveState -p SubState -p MainPID -p NRestarts \
+    > "$run_root/composition-gateway-units.txt" 2>&1 || true
+  guest "$node_instance" systemctl show --no-pager \
+    "$backend_unit" "$tunnel_backend_unit" vpnctl-v2-spike-tunnel-client.service \
+    -p Id -p ActiveState -p SubState -p MainPID -p NRestarts \
+    > "$run_root/composition-node-units.txt" 2>&1 || true
+  guest "$gateway_instance" sudo ss -H -ltnp \
+    > "$run_root/composition-gateway-listeners.txt" 2>&1 || true
+  guest "$node_instance" sudo ss -H -ltnp \
+    > "$run_root/composition-node-listeners.txt" 2>&1 || true
+  guest "$gateway_instance" sudo journalctl --no-pager -n 80 \
+    -u "$ingress_unit" -u "$tunnel_auth_unit" -u "$tunnel_server_unit" \
+    > "$run_root/composition-gateway-journal.txt" 2>&1 || true
+  guest "$node_instance" sudo journalctl --no-pager -n 80 \
+    -u "$backend_unit" -u vpnctl-v2-spike-tunnel-client.service \
+    > "$run_root/composition-node-journal.txt" 2>&1 || true
+  guest "$gateway_instance" sudo cat /var/lib/vpnctl-v2-spike-tunnel-auth/metrics.json \
+    > "$run_root/composition-tunnel-metrics.json" 2>/dev/null || true
 }
 
 probe_webhook() {
