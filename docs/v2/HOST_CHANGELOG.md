@@ -963,12 +963,12 @@ This journal records development-host mutations made while implementing and vali
   not install ingress, start capacity measurement/load/fault injection, or
   produce acceptance evidence. Combined provider output is retained at
   `artifacts/v2lab/capacity-e2e/run-20260905T104214Z/tunnel-prepare.log`.
-- The armed parent rollback removed the owner-marked capacity, tunnel, and
-  restricted resources and its exact host build root, then returned both
-  fixtures to verified `Stopped`. No summary was written and no capacity bound
-  changed. The failure exit was `255`, while the captured provider log ends
-  immediately after the successful node config check, narrowing diagnosis to
-  subsequent node service activation or its Lima SSH command boundary.
+- The armed parent rollback removed its exact host build root and returned both
+  fixtures to verified `Stopped`, but could not perform distributed guest
+  cleanup after node became unavailable. No summary was written and no capacity
+  bound changed. The failure exit was `255`, while the captured provider log
+  ends during node installation, narrowing diagnosis to that VM or its Lima SSH
+  command boundary.
 - Diagnosis may start only the same two contract-matching fixtures and read the
   prior boot's persistent system journal for the exact tunnel authorization,
   server, backend, and client units plus SSH/Lima lifecycle errors. It may also
@@ -977,6 +977,39 @@ This journal records development-host mutations made while implementing and vali
   boot evidence is unavailable, the next reproduction must first add typed
   prepare-stage diagnostics and preserve the existing owner cleanup rather
   than infer a provider failure.
+
+### QEMU crash diagnosis and owner-closed recovery plan
+
+- Persistent previous-boot journals prove gateway tunnel authorization and
+  FRPS both started successfully at `13:50:24`, with FRPS listening on only the
+  expected lab address. Node journal stops abruptly while installing
+  `frpc.toml`, before daemon-reload or either node tunnel unit start; it contains
+  no shutdown, provider, kernel, OOM, or warning/error record. Gateway units
+  were stopped only during subsequent normal parent rollback.
+- The system-owned macOS report
+  `~/Library/Logs/DiagnosticReports/qemu-system-x86_64-2026-09-05-135035.ips`
+  belongs to the QEMU process launched for node at `13:45:21` and records its
+  crash at `13:50:34`: host-side `EXC_BAD_ACCESS`/`SIGSEGV` on the TCG thread in
+  `tb_target_set_jmp_target`. It is left untouched. This classifies the run as
+  an external VM-driver failure, not a tunnel-provider or capacity result.
+- Read-only inventory after diagnostic boot found no active task unit,
+  listener, interface, namespace, or task nftables table; node forwarding is
+  restored to `0`, and each VM retains only its pre-existing `table ip nat`.
+  Both capacity roots carry the exact `vpnctl-v2-capacity-v1` marker and the
+  installed cleanup helpers match checked-in SHA-256
+  `2522254e04e34d6378289c846d42a7a37f73f14dd779a3f018e4cadf7a9ca69a`.
+  Both restricted roots have the exact marker and complete inactive resources.
+  Both tunnel roots have the exact marker: gateway is complete and inactive;
+  node contains only the expected interrupted-install paths, with four copied
+  files and two helpers truncated to zero bytes when QEMU crashed.
+- Recovery will first return the diagnostic boots to `Stopped`. The next clean
+  capacity `verify` starts both exact fixtures, and its existing initial
+  owner-checked cleanup then invokes the installed capacity helper plus the
+  tunnel/restricted fixed-role uninstalls before installing a fresh generation.
+  It must refuse if any marker/helper/path closure changes. Its normal EXIT trap
+  returns both VMs to their original `Stopped` states. This removes only
+  reproducible disposable fixture material; no foreign resource or crash report
+  is in scope.
 
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
