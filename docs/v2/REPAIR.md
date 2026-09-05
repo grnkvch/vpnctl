@@ -84,15 +84,30 @@ Rollback re-observes the full pre-repair file and unit shape; if systemd cannot
 reproduce an unusual prior substate, the operation reports the incomplete
 rollback explicitly instead of claiming success.
 
-This primitive is deliberately not yet a production generic-repair bridge. A
-caller must obtain target bytes and unit runtime from immutable material for
-the exact `Applied` manifest and execute under the authoritative host mutation
-lock. Re-rendering current or `previous` state is not equivalent: state-only
-mutations may advance those values without advancing the applied runtime. The
-next layer is therefore a root-only, content-addressed applied-material archive
-whose bundle is validated one-to-one against every applied file/unit runtime
-hash. Until that archive and transaction coupling exist, public repair keeps
-using the narrower committed-generation recovery adapters above.
+The required material source is now a root-only, content-addressed archive
+under `/var/lib/vpnctl/applied-material`. Its ID is derived only from the
+canonical `Applied` manifest; loading by an arbitrary ID is impossible. Each
+immutable `0600` bundle is bounded and validated one-to-one against every
+applied file/unit runtime hash, including complete systemd state. APIs redact
+and wipe retained bytes, reject symlinks/hardlinks/unsafe modes, and remove
+only a fully validated uncommitted gateway-join bundle after convergence has
+been conclusively rolled back.
+
+Every role-generation publisher now follows `durable material -> convergence
+Initialize/CAS`. This covers gateway and node initialization, active gateway
+join, committed gateway repair, and active node join/repair. An equal-snapshot
+retry still ensures the archive, so it heals a missing bundle before reporting
+success. Portable backup intentionally excludes this local reconstruction
+cache; recoverable uninstall preserves it, while purge removes it with the
+state tree.
+
+The primitive is still deliberately disconnected from public generic drift
+repair. The remaining bridge must load only the current Applied bundle, bind
+its entries to the already reviewed action set, and execute under the
+authoritative host mutation lock. Re-rendering current or `previous` state is
+not equivalent: state-only mutations may advance those values without
+advancing the applied runtime. Until that executor bridge exists, public
+repair keeps using the narrower committed-generation recovery adapters below.
 
 ## Committed-generation recovery boundary
 

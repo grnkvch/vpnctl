@@ -74,6 +74,7 @@ func (installer *GatewayLayoutInstaller) PlanFresh() (GatewayLayoutPlan, error) 
 		{Path: installer.paths.ConfigDir, Mode: 0o755},
 		{Path: installer.paths.PresetsDir, Mode: 0o755},
 		{Path: installer.paths.StateDir, Mode: 0o700},
+		{Path: installer.paths.AppliedMaterialDir, Mode: 0o700},
 		{Path: installer.paths.SecretsDir, Mode: 0o700},
 		{Path: filepath.Join(installer.paths.SecretsDir, "pki"), Mode: 0o700},
 		{Path: filepath.Join(installer.paths.SecretsDir, "enrollment"), Mode: 0o700},

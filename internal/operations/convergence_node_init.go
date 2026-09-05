@@ -18,6 +18,7 @@ const nodeInitConvergenceComponent = "role.node"
 var ErrNodeServiceConvergencePending = errors.New("node services are active but convergence baseline is pending")
 
 type NodeInitializationConvergenceStore interface {
+	Read(context.Context) (ConvergenceSnapshot, error)
 	EnsureInitialized(context.Context, ConvergenceSnapshot) (bool, error)
 }
 
@@ -32,26 +33,35 @@ type NodeServiceConvergenceStore interface {
 // baseline. It is intentionally post-state-commit and idempotent so retrying a
 // partially reported initialization can finish metadata publication safely.
 type NodeInitializationConvergencePublisher struct {
-	store NodeInitializationConvergenceStore
+	store    NodeInitializationConvergenceStore
+	material AppliedMaterialEnsurer
 }
 
 type NodeServiceConvergencePublisher struct {
 	store      NodeServiceConvergenceStore
+	material   AppliedMaterialEnsurer
 	binaryPath string
 }
 
-func NewNodeInitializationConvergencePublisher(store NodeInitializationConvergenceStore) (*NodeInitializationConvergencePublisher, error) {
-	if store == nil {
-		return nil, fmt.Errorf("node initialization convergence store is required")
+func NewNodeInitializationConvergencePublisher(
+	store NodeInitializationConvergenceStore,
+	material AppliedMaterialEnsurer,
+) (*NodeInitializationConvergencePublisher, error) {
+	if store == nil || material == nil {
+		return nil, fmt.Errorf("node initialization convergence store and applied material archive are required")
 	}
-	return &NodeInitializationConvergencePublisher{store: store}, nil
+	return &NodeInitializationConvergencePublisher{store: store, material: material}, nil
 }
 
-func NewNodeServiceConvergencePublisher(store NodeServiceConvergenceStore, binaryPath string) (*NodeServiceConvergencePublisher, error) {
-	if store == nil || !filepath.IsAbs(binaryPath) || filepath.Clean(binaryPath) != binaryPath {
+func NewNodeServiceConvergencePublisher(
+	store NodeServiceConvergenceStore,
+	material AppliedMaterialEnsurer,
+	binaryPath string,
+) (*NodeServiceConvergencePublisher, error) {
+	if store == nil || material == nil || !filepath.IsAbs(binaryPath) || filepath.Clean(binaryPath) != binaryPath {
 		return nil, fmt.Errorf("node service convergence dependencies are invalid")
 	}
-	return &NodeServiceConvergencePublisher{store: store, binaryPath: binaryPath}, nil
+	return &NodeServiceConvergencePublisher{store: store, material: material, binaryPath: binaryPath}, nil
 }
 
 func (publisher *NodeInitializationConvergencePublisher) PublishNodeInitialization(
@@ -59,12 +69,27 @@ func (publisher *NodeInitializationConvergencePublisher) PublishNodeInitializati
 	generation uint64,
 	request linuxplatform.RoleInstallationRequest,
 ) error {
-	if ctx == nil || publisher == nil || publisher.store == nil {
+	if ctx == nil || publisher == nil || publisher.store == nil || publisher.material == nil {
 		return fmt.Errorf("node initialization convergence publisher is incomplete")
 	}
 	snapshot, err := StagedNodeRoleConvergenceSnapshot(generation, request)
 	if err != nil {
 		return err
+	}
+	material, err := nodeRoleAppliedMaterial(snapshot.Applied, request, false)
+	if err != nil {
+		return err
+	}
+	defer material.Destroy()
+	current, err := publisher.store.Read(ctx)
+	if err == nil && !reflect.DeepEqual(current, snapshot) {
+		return ErrConvergenceSnapshotConflict
+	}
+	if err != nil && !errors.Is(err, ErrConvergenceSnapshotUnavailable) {
+		return fmt.Errorf("read initial node convergence snapshot: %w", err)
+	}
+	if _, err := publisher.material.Ensure(ctx, snapshot.Applied, material); err != nil {
+		return fmt.Errorf("publish initial node applied material: %w", err)
 	}
 	if _, err := publisher.store.EnsureInitialized(ctx, snapshot); err != nil {
 		return fmt.Errorf("publish initial node convergence snapshot: %w", err)
@@ -113,11 +138,9 @@ func nodeRoleConvergenceSnapshot(
 		if unit.Name == "" || filepath.Base(unit.Name) != unit.Name || len(unit.Content) == 0 || unit.Enable != active || unit.Start {
 			return ConvergenceSnapshot{}, fmt.Errorf("staged node unit %q is invalid", unit.Name)
 		}
-		content := append([]byte(nil), unit.Content...)
-		if content[len(content)-1] != '\n' {
-			content = append(content, '\n')
-		}
+		content := normalizedRoleUnitContent(unit.Content)
 		contentSHA256 := ManagedFingerprint(content)
+		clear(content)
 		activeState, subState, enablement := "inactive", "dead", "disabled"
 		if active {
 			activeState, subState, enablement = "active", "running", "enabled"
@@ -125,10 +148,7 @@ func nodeRoleConvergenceSnapshot(
 				subState = "exited"
 			}
 		}
-		runtimeSHA256, err := ManagedUnitRuntimeFingerprint(ManagedUnitRuntime{
-			FileType: "regular", Mode: "0644", ContentSHA256: contentSHA256,
-			LoadState: "loaded", ActiveState: activeState, SubState: subState, Enablement: enablement,
-		})
+		runtimeSHA256, err := ManagedUnitRuntimeFingerprint(expectedRoleUnitRuntime(contentSHA256, activeState, subState, enablement))
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
@@ -182,7 +202,7 @@ func (publisher *NodeServiceConvergencePublisher) PublishActiveNodeGeneration(
 	generation uint64,
 	configs []linuxplatform.RoleConfigFile,
 ) error {
-	if ctx == nil || publisher == nil || publisher.store == nil {
+	if ctx == nil || publisher == nil || publisher.store == nil || publisher.material == nil {
 		return fmt.Errorf("node service convergence publisher is incomplete")
 	}
 	request, err := linuxplatform.RenderNodeRoleInstallation(publisher.binaryPath)
@@ -198,8 +218,16 @@ func (publisher *NodeServiceConvergencePublisher) PublishActiveNodeGeneration(
 	if err != nil {
 		return err
 	}
+	material, err := nodeRoleAppliedMaterial(candidate.Applied, request, true)
+	if err != nil {
+		return err
+	}
+	defer material.Destroy()
 	current, err := publisher.store.Read(ctx)
 	if errors.Is(err, ErrConvergenceSnapshotUnavailable) {
+		if _, materialErr := publisher.material.Ensure(ctx, candidate.Applied, material); materialErr != nil {
+			return fmt.Errorf("publish recovered node applied material: %w", materialErr)
+		}
 		_, err = publisher.store.EnsureInitialized(ctx, candidate)
 		return err
 	}
@@ -207,11 +235,17 @@ func (publisher *NodeServiceConvergencePublisher) PublishActiveNodeGeneration(
 		return err
 	}
 	if reflect.DeepEqual(current, candidate) {
+		if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+			return fmt.Errorf("ensure node applied material: %w", err)
+		}
 		return nil
 	}
 	if generation <= 1 || current.Desired.Generation != generation-1 || current.Applied.Generation != generation-1 ||
 		!reflect.DeepEqual(current.Desired, current.Applied) || len(current.Pending) != 0 {
 		return fmt.Errorf("%w: prior node convergence baseline is not clean generation %d", ErrConvergenceSnapshotConflict, generation-1)
+	}
+	if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+		return fmt.Errorf("publish node applied material: %w", err)
 	}
 	_, err = publisher.store.CompareAndSwap(ctx, current, candidate)
 	return err

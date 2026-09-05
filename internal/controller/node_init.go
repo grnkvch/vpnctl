@@ -32,7 +32,11 @@ func NewSystemNodeInitializer(paths store.Paths, snapshot linuxplatform.HostSnap
 	if err != nil {
 		return nil, fmt.Errorf("create node convergence store: %w", err)
 	}
-	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		return nil, fmt.Errorf("create node applied material archive: %w", err)
+	}
+	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore, materialArchive)
 	if err != nil {
 		return nil, fmt.Errorf("create node convergence publisher: %w", err)
 	}

@@ -331,8 +331,9 @@ sudo vpnctl backup /srv/backups/vpnctl.backup
 ```
 
 The authenticated archive includes gateway state/trust and required client
-material, but excludes node private keys and application data. Existing output
-is never overwritten.
+material, but excludes node private keys, application data, and the local
+applied-generation reconstruction archive. Existing output is never
+overwritten.
 
 Restore is non-merging and always requires an explicit public IPv4. Use
 `--replace` only after reviewing replacement of an initialized gateway:
@@ -362,7 +363,8 @@ sudo vpnctl update rollback
 
 `uninstall` removes only validated vpnctl runtime and restores owned DNS/network
 state while preserving recoverable state, secrets, presets, exports, backups,
-and managed-swap ownership metadata:
+the applied-generation reconstruction archive, and managed-swap ownership
+metadata:
 
 ```console vpnctl-doc-test id=uninstall role=node
 sudo vpnctl uninstall

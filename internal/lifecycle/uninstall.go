@@ -303,7 +303,7 @@ func activeUninstallResources(state model.State) ([]string, []string, []string) 
 
 func uninstallPreservedPaths() []string {
 	return []string{
-		"/etc/vpnctl/presets.d", "/var/lib/vpnctl/backups", "/var/lib/vpnctl/exports",
+		"/etc/vpnctl/presets.d", "/var/lib/vpnctl/applied-material", "/var/lib/vpnctl/backups", "/var/lib/vpnctl/exports",
 		"/var/lib/vpnctl/secrets", "/var/lib/vpnctl/state.json",
 	}
 }

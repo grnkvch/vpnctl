@@ -187,7 +187,11 @@ func TestNodeInitConcreteInstallerStagesNoGatewayOrActiveUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convergence, err := operations.NewNodeInitializationConvergencePublisher(convergenceStore, materialArchive)
 	if err != nil {
 		t.Fatal(err)
 	}

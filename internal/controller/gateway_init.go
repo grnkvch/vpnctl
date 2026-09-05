@@ -91,7 +91,11 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway convergence store: %w", err)
 	}
-	convergence, err := operations.NewGatewayInitializationConvergencePublisher(convergenceStore)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway applied material archive: %w", err)
+	}
+	convergence, err := operations.NewGatewayInitializationConvergencePublisher(convergenceStore, materialArchive)
 	if err != nil {
 		return nil, fmt.Errorf("create gateway convergence publisher: %w", err)
 	}

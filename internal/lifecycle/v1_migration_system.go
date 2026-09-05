@@ -904,6 +904,7 @@ func ensureV1MigrationStageLayout(paths store.Paths) error {
 		mode os.FileMode
 	}{
 		{paths.SecretsDir, 0o700}, {paths.BackupsDir, 0o700}, {paths.SnapshotsDir, 0o700},
+		{paths.AppliedMaterialDir, 0o700},
 		{paths.OperationsDir, 0o700}, {paths.WatchdogDir, 0o700},
 		{filepath.Join(paths.ConfigDir, "generated"), 0o700},
 		{filepath.Join(paths.ConfigDir, "generated", string(model.RoleGateway)), 0o700},

@@ -58,6 +58,7 @@ func (installer *NodeLayoutInstaller) PlanFresh() (NodeLayoutPlan, error) {
 		Directories: []NodeLayoutDirectory{
 			{Path: installer.paths.ConfigDir, Mode: 0o755},
 			{Path: installer.paths.StateDir, Mode: 0o700},
+			{Path: installer.paths.AppliedMaterialDir, Mode: 0o700},
 			{Path: installer.paths.SecretsDir, Mode: 0o700},
 			{Path: installer.paths.SnapshotsDir, Mode: 0o700},
 			{Path: installer.paths.OperationsDir, Mode: 0o700},

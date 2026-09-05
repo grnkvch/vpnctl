@@ -11,17 +11,18 @@ type Paths struct {
 	ConfigDir  string
 	PresetsDir string
 
-	StateDir          string
-	StateFile         string
-	PreviousStateFile string
-	ConvergenceFile   string
-	SecretsDir        string
-	ExportsDir        string
-	ClientExportsDir  string
-	BackupsDir        string
-	SnapshotsDir      string
-	OperationsDir     string
-	WatchdogDir       string
+	StateDir           string
+	StateFile          string
+	PreviousStateFile  string
+	ConvergenceFile    string
+	AppliedMaterialDir string
+	SecretsDir         string
+	ExportsDir         string
+	ClientExportsDir   string
+	BackupsDir         string
+	SnapshotsDir       string
+	OperationsDir      string
+	WatchdogDir        string
 
 	RuntimeDir    string
 	ControlSocket string
@@ -53,17 +54,18 @@ func NewPaths(root string) (Paths, error) {
 		ConfigDir:  configDir,
 		PresetsDir: filepath.Join(configDir, "presets.d"),
 
-		StateDir:          stateDir,
-		StateFile:         filepath.Join(stateDir, "state.json"),
-		PreviousStateFile: filepath.Join(stateDir, "state.previous.json"),
-		ConvergenceFile:   filepath.Join(stateDir, "convergence.json"),
-		SecretsDir:        filepath.Join(stateDir, "secrets"),
-		ExportsDir:        filepath.Join(stateDir, "exports"),
-		ClientExportsDir:  filepath.Join(stateDir, "exports", "clients"),
-		BackupsDir:        filepath.Join(stateDir, "backups"),
-		SnapshotsDir:      filepath.Join(stateDir, "snapshots"),
-		OperationsDir:     filepath.Join(stateDir, "operations"),
-		WatchdogDir:       filepath.Join(stateDir, "operations", "watchdog"),
+		StateDir:           stateDir,
+		StateFile:          filepath.Join(stateDir, "state.json"),
+		PreviousStateFile:  filepath.Join(stateDir, "state.previous.json"),
+		ConvergenceFile:    filepath.Join(stateDir, "convergence.json"),
+		AppliedMaterialDir: filepath.Join(stateDir, "applied-material"),
+		SecretsDir:         filepath.Join(stateDir, "secrets"),
+		ExportsDir:         filepath.Join(stateDir, "exports"),
+		ClientExportsDir:   filepath.Join(stateDir, "exports", "clients"),
+		BackupsDir:         filepath.Join(stateDir, "backups"),
+		SnapshotsDir:       filepath.Join(stateDir, "snapshots"),
+		OperationsDir:      filepath.Join(stateDir, "operations"),
+		WatchdogDir:        filepath.Join(stateDir, "operations", "watchdog"),
 
 		RuntimeDir:    runtimeDir,
 		ControlSocket: filepath.Join(runtimeDir, "control.sock"),

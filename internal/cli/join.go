@@ -205,7 +205,11 @@ func buildSystemCommittedNodeActivator(
 	if err != nil {
 		return nil, err
 	}
-	convergence, err := operations.NewNodeServiceConvergencePublisher(convergenceStore, linuxplatform.DefaultVPNCTLBinaryPath)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		return nil, err
+	}
+	convergence, err := operations.NewNodeServiceConvergencePublisher(convergenceStore, materialArchive, linuxplatform.DefaultVPNCTLBinaryPath)
 	if err != nil {
 		return nil, err
 	}

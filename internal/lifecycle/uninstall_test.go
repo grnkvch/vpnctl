@@ -77,6 +77,9 @@ func TestGatewayUninstallRequiresForceAndPublishesCompleteImpact(t *testing.T) {
 	if !blocked.Blocked || !blocked.ForceRequired || len(blocked.ActiveNodeIDs) != 1 || blocked.ActiveNodeIDs[0] != state.Nodes[0].ID {
 		t.Fatalf("blocked gateway plan = %+v", blocked)
 	}
+	if !containsString(blocked.Preserved, "/var/lib/vpnctl/applied-material") {
+		t.Fatalf("recoverable uninstall does not preserve applied material: %v", blocked.Preserved)
+	}
 	if _, err := uninstaller.Apply(context.Background(), blocked); !errors.Is(err, ErrUninstallForceRequired) {
 		t.Fatalf("blocked Apply() error = %v", err)
 	}

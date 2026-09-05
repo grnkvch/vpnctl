@@ -9,6 +9,17 @@
 
 Последнее обновление: **2026-09-06**.
 
+Immutable applied-material foundation теперь подключён ко всем production
+publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в
+root-only content-addressed bundle до соответствующего convergence
+Initialize/CAS; equal-snapshot retry восстанавливает отсутствующий bundle.
+Gateway-join rollback удаляет candidate material только после успешного CAS к
+прежнему snapshot и его повторной проверки. Архив сохраняется recoverable
+`uninstall`, удаляется `purge` и намеренно не попадает в portable backup.
+Следующий срез — загрузить только текущий Applied bundle, привязать его к
+previewed action set и подключить action-scoped executor под authoritative
+mutation lock.
+
 Action-scoped Linux repair primitive теперь готов как безопасная restore-only
 граница для будущего generic executor. Он принимает exact subset unit/config
 ресурсов текущей роли, проверяет весь batch и повторяет preflight после consent,
@@ -18,9 +29,9 @@ Action-scoped Linux repair primitive теперь готов как безопа
 и bytes восстанавливаются, полный runtime перепроверяется (невоспроизводимый
 старый substate становится явным incomplete rollback), а retained material
 стирается при one-shot apply.
-Примитив намеренно ещё не подключён к public repair: следующий обязательный
-слой — immutable root-only applied-material archive, one-to-one связанный с
-точным Applied manifest, и выполнение под authoritative host mutation lock.
+Примитив намеренно ещё не подключён к public generic drift repair: immutable
+archive уже готов, остаётся executor bridge под authoritative host mutation
+lock.
 
 Следующий generic-repair слой начат с безопасной read-only границы:
 `operations.BuildRepairPlan` теперь строит exact applied-generation plan без

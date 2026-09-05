@@ -59,7 +59,11 @@ func newSystemPublicEnrollmentServer(
 	if err != nil {
 		return nil, fmt.Errorf("create gateway service convergence store: %w", err)
 	}
-	convergence, err := operations.NewGatewayServiceConvergencePublisher(convergenceStore)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway applied material archive: %w", err)
+	}
+	convergence, err := operations.NewGatewayServiceConvergencePublisher(convergenceStore, materialArchive)
 	if err != nil {
 		return nil, fmt.Errorf("create gateway service convergence publisher: %w", err)
 	}

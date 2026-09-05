@@ -55,7 +55,7 @@ func TestNodeInitializationConvergencePublisherIsIdempotentAndRejectsDifferentBa
 
 	path := newConvergenceSnapshotStorePath(t)
 	store, _ := NewFileConvergenceSnapshotStore(path)
-	publisher, err := NewNodeInitializationConvergencePublisher(store)
+	publisher, err := NewNodeInitializationConvergencePublisher(store, newConvergenceAppliedMaterialArchive(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestNodeServiceConvergencePublisherAdvancesAndRecoversExactGeneration(t *te
 					t.Fatal(err)
 				}
 			}
-			publisher, err := NewNodeServiceConvergencePublisher(store, linuxplatform.DefaultVPNCTLBinaryPath)
+			publisher, err := NewNodeServiceConvergencePublisher(store, newConvergenceAppliedMaterialArchive(t, path), linuxplatform.DefaultVPNCTLBinaryPath)
 			if err != nil {
 				t.Fatal(err)
 			}

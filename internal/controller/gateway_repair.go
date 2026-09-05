@@ -195,7 +195,11 @@ func NewSystemGatewayRepairDispatcher(paths store.Paths) (*GatewayRepairDispatch
 	if err != nil {
 		return nil, err
 	}
-	convergence, err := operations.NewGatewayServiceConvergencePublisher(convergenceStore)
+	materialArchive, err := operations.NewFileAppliedMaterialArchive(paths.AppliedMaterialDir)
+	if err != nil {
+		return nil, err
+	}
+	convergence, err := operations.NewGatewayServiceConvergencePublisher(convergenceStore, materialArchive)
 	if err != nil {
 		return nil, err
 	}

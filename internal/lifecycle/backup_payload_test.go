@@ -282,7 +282,7 @@ func newBackupAllowlistFixture(t *testing.T) backupAllowlistFixture {
 	}
 	for _, directory := range []string{
 		paths.StateDir, paths.PresetsDir, paths.ExportsDir, paths.ClientExportsDir,
-		filepath.Join(paths.ClientExportsDir, ".metadata"), paths.BackupsDir,
+		filepath.Join(paths.ClientExportsDir, ".metadata"), paths.BackupsDir, paths.AppliedMaterialDir,
 	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -319,6 +319,7 @@ func newBackupAllowlistFixture(t *testing.T) backupAllowlistFixture {
 		{name: "application export", archivePath: "exports/clients/application.sqlite", content: []byte("EXCLUDED-APPLICATION-EXPORT-CANARY")},
 		{name: "non-preset config", archivePath: "config/presets.d/application.notes", content: []byte("EXCLUDED-PRESET-ADJACENT-APPLICATION-CANARY")},
 		{name: "application state", archivePath: "state/application/data.db", content: []byte("EXCLUDED-APPLICATION-STATE-CANARY")},
+		{name: "applied material", archivePath: "state/applied-material/test.bundle", content: []byte("EXCLUDED-APPLIED-MATERIAL-CANARY")},
 	}
 	for _, canary := range excluded[:3] {
 		reference := model.SecretRef(strings.TrimPrefix(canary.archivePath, "secrets/"))
@@ -350,6 +351,9 @@ func newBackupAllowlistFixture(t *testing.T) backupAllowlistFixture {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(applicationDirectory, "data.db"), excluded[5].content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.AppliedMaterialDir, "test.bundle"), excluded[6].content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	source, err := NewGatewayBackupPayloadSource(paths, secrets)

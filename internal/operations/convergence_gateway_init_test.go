@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -105,7 +107,8 @@ func TestGatewayInitializationConvergencePublisherIsIdempotentAndConflicting(t *
 
 	path := newConvergenceSnapshotStorePath(t)
 	store, _ := NewFileConvergenceSnapshotStore(path)
-	publisher, err := NewGatewayInitializationConvergencePublisher(store)
+	archive := newConvergenceAppliedMaterialArchive(t, path)
+	publisher, err := NewGatewayInitializationConvergencePublisher(store, archive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +116,19 @@ func TestGatewayInitializationConvergencePublisherIsIdempotentAndConflicting(t *
 	if err := publisher.PublishGatewayInitialization(context.Background(), 1, request); err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.PublishGatewayInitialization(context.Background(), 1, request); err != nil {
-		t.Fatalf("idempotent gateway publish: %v", err)
+	snapshot, _ := InitialGatewayRoleConvergenceSnapshot(1, request)
+	materialID, _ := AppliedMaterialIDFor(snapshot.Applied)
+	if err := os.Remove(filepath.Join(archive.directory, appliedMaterialBundleName(materialID))); err != nil {
+		t.Fatal(err)
 	}
+	if err := publisher.PublishGatewayInitialization(context.Background(), 1, request); err != nil {
+		t.Fatalf("idempotent gateway publish did not heal applied material: %v", err)
+	}
+	loaded, err := archive.Load(context.Background(), snapshot.Applied)
+	if err != nil {
+		t.Fatalf("load healed gateway material: %v", err)
+	}
+	loaded.Destroy()
 	got, err := store.Read(context.Background())
 	if err != nil || got.Applied.Generation != 1 || len(got.Applied.Resources) != 13 {
 		t.Fatalf("gateway baseline = %+v, %v", got, err)
@@ -124,6 +137,10 @@ func TestGatewayInitializationConvergencePublisherIsIdempotentAndConflicting(t *
 	changed.Configs[0].Content = []byte("changed\n")
 	if err := publisher.PublishGatewayInitialization(context.Background(), 1, changed); !errors.Is(err, ErrConvergenceSnapshotConflict) {
 		t.Fatalf("changed gateway baseline error = %v", err)
+	}
+	entries, err := os.ReadDir(archive.directory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("conflicting gateway initialization retained candidate material: entries=%d error=%v", len(entries), err)
 	}
 }
 
@@ -136,7 +153,8 @@ func TestGatewayServiceConvergencePreparationRollsBackOrCommitsExactCAS(t *testi
 	if err := store.Initialize(context.Background(), initial); err != nil {
 		t.Fatal(err)
 	}
-	publisher, err := NewGatewayServiceConvergencePublisher(store)
+	archive := newConvergenceAppliedMaterialArchive(t, path)
+	publisher, err := NewGatewayServiceConvergencePublisher(store, archive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +168,10 @@ func TestGatewayServiceConvergencePreparationRollsBackOrCommitsExactCAS(t *testi
 	}
 	if err := prepared.Rollback(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	active, _ := ActiveGatewayRoleConvergenceSnapshot(3, request)
+	if _, err := archive.Load(context.Background(), active.Applied); !errors.Is(err, ErrAppliedMaterialUnavailable) {
+		t.Fatalf("rolled-back candidate material remains: %v", err)
 	}
 	if got, _ := store.Read(context.Background()); !reflect.DeepEqual(got, initial) {
 		t.Fatalf("rolled back gateway baseline = %+v, want %+v", got, initial)
@@ -166,6 +188,11 @@ func TestGatewayServiceConvergencePreparationRollsBackOrCommitsExactCAS(t *testi
 	if got, _ := store.Read(context.Background()); got.Applied.Generation != 3 {
 		t.Fatalf("committed generation = %d", got.Applied.Generation)
 	}
+	retained, err := archive.Load(context.Background(), active.Applied)
+	if err != nil {
+		t.Fatalf("committed candidate material is unavailable: %v", err)
+	}
+	retained.Destroy()
 	if _, err := publisher.PrepareActiveGatewayGeneration(context.Background(), 3, request); err != nil {
 		t.Fatalf("idempotent stage: %v", err)
 	}
@@ -189,7 +216,7 @@ func TestGatewayServiceConvergenceRecoveryCanReconstructMissingOrAdvanceOlderBas
 				t.Fatal(err)
 			}
 		}
-		publisher, _ := NewGatewayServiceConvergencePublisher(store)
+		publisher, _ := NewGatewayServiceConvergencePublisher(store, newConvergenceAppliedMaterialArchive(t, path))
 		if err := publisher.PublishActiveGatewayGeneration(context.Background(), 3, request); err != nil {
 			t.Fatalf("seed=%t publish: %v", seed, err)
 		}
@@ -213,7 +240,7 @@ func TestGatewayServiceConvergenceInactiveRecoveryCanReconstructInviteOnlyGenera
 				t.Fatal(err)
 			}
 		}
-		publisher, _ := NewGatewayServiceConvergencePublisher(store)
+		publisher, _ := NewGatewayServiceConvergencePublisher(store, newConvergenceAppliedMaterialArchive(t, path))
 		if err := publisher.PublishInactiveGatewayGeneration(context.Background(), 3, request); err != nil {
 			t.Fatalf("seed=%t inactive publish: %v", seed, err)
 		}
@@ -253,9 +280,31 @@ func TestGatewayServiceConvergenceRefusesPendingOrNewerBaseline(t *testing.T) {
 	if err := store.Initialize(context.Background(), pending); err != nil {
 		t.Fatal(err)
 	}
-	publisher, _ := NewGatewayServiceConvergencePublisher(store)
+	material := &recordingAppliedMaterialEnsurer{}
+	publisher, _ := NewGatewayServiceConvergencePublisher(store, material)
 	if _, err := publisher.PrepareActiveGatewayGeneration(context.Background(), 3, activeGatewayConvergenceRequest(t)); !errors.Is(err, ErrConvergenceSnapshotConflict) {
 		t.Fatalf("pending gateway baseline error = %v", err)
+	}
+	if material.calls != 0 {
+		t.Fatalf("invalid prior baseline archived an ineligible candidate %d time(s)", material.calls)
+	}
+}
+
+func TestGatewayInitializationConvergenceDoesNotPublishWithoutDurableMaterial(t *testing.T) {
+	t.Parallel()
+
+	path := newConvergenceSnapshotStorePath(t)
+	store, _ := NewFileConvergenceSnapshotStore(path)
+	materialErr := errors.New("injected applied material failure")
+	publisher, err := NewGatewayInitializationConvergencePublisher(store, &recordingAppliedMaterialEnsurer{err: materialErr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishGatewayInitialization(context.Background(), 1, initialGatewayConvergenceRequest(t)); !errors.Is(err, materialErr) {
+		t.Fatalf("publication error = %v", err)
+	}
+	if _, err := store.Read(context.Background()); !errors.Is(err, ErrConvergenceSnapshotUnavailable) {
+		t.Fatalf("convergence became authoritative without material: %v", err)
 	}
 }
 

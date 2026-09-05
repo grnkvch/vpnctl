@@ -19,6 +19,7 @@ import (
 const gatewayInitConvergenceComponent = "role.gateway"
 
 type GatewayInitializationConvergenceStore interface {
+	Read(context.Context) (ConvergenceSnapshot, error)
 	EnsureInitialized(context.Context, ConvergenceSnapshot) (bool, error)
 }
 
@@ -29,11 +30,13 @@ type GatewayServiceConvergenceStore interface {
 }
 
 type GatewayInitializationConvergencePublisher struct {
-	store GatewayInitializationConvergenceStore
+	store    GatewayInitializationConvergenceStore
+	material AppliedMaterialEnsurer
 }
 
 type GatewayServiceConvergencePublisher struct {
-	store GatewayServiceConvergenceStore
+	store    GatewayServiceConvergenceStore
+	material AppliedMaterialArchive
 }
 
 // GatewayServiceConvergencePreparation is the metadata half of the gateway
@@ -43,24 +46,31 @@ type GatewayServiceConvergencePublisher struct {
 type GatewayServiceConvergencePreparation struct {
 	mu        sync.Mutex
 	store     GatewayServiceConvergenceStore
+	material  AppliedMaterialArchive
 	before    ConvergenceSnapshot
 	candidate ConvergenceSnapshot
 	changed   bool
 	finished  bool
 }
 
-func NewGatewayInitializationConvergencePublisher(store GatewayInitializationConvergenceStore) (*GatewayInitializationConvergencePublisher, error) {
-	if store == nil {
-		return nil, fmt.Errorf("gateway initialization convergence store is required")
+func NewGatewayInitializationConvergencePublisher(
+	store GatewayInitializationConvergenceStore,
+	material AppliedMaterialEnsurer,
+) (*GatewayInitializationConvergencePublisher, error) {
+	if store == nil || material == nil {
+		return nil, fmt.Errorf("gateway initialization convergence store and applied material archive are required")
 	}
-	return &GatewayInitializationConvergencePublisher{store: store}, nil
+	return &GatewayInitializationConvergencePublisher{store: store, material: material}, nil
 }
 
-func NewGatewayServiceConvergencePublisher(store GatewayServiceConvergenceStore) (*GatewayServiceConvergencePublisher, error) {
-	if store == nil {
-		return nil, fmt.Errorf("gateway service convergence store is required")
+func NewGatewayServiceConvergencePublisher(
+	store GatewayServiceConvergenceStore,
+	material AppliedMaterialArchive,
+) (*GatewayServiceConvergencePublisher, error) {
+	if store == nil || material == nil {
+		return nil, fmt.Errorf("gateway service convergence store and applied material archive are required")
 	}
-	return &GatewayServiceConvergencePublisher{store: store}, nil
+	return &GatewayServiceConvergencePublisher{store: store, material: material}, nil
 }
 
 func (publisher *GatewayInitializationConvergencePublisher) PublishGatewayInitialization(
@@ -68,12 +78,27 @@ func (publisher *GatewayInitializationConvergencePublisher) PublishGatewayInitia
 	generation uint64,
 	request linuxplatform.RoleInstallationRequest,
 ) error {
-	if ctx == nil || publisher == nil || publisher.store == nil {
+	if ctx == nil || publisher == nil || publisher.store == nil || publisher.material == nil {
 		return fmt.Errorf("gateway initialization convergence publisher is incomplete")
 	}
 	snapshot, err := InitialGatewayRoleConvergenceSnapshot(generation, request)
 	if err != nil {
 		return err
+	}
+	material, err := gatewayRoleAppliedMaterial(snapshot.Applied, request, false)
+	if err != nil {
+		return err
+	}
+	defer material.Destroy()
+	current, err := publisher.store.Read(ctx)
+	if err == nil && !reflect.DeepEqual(current, snapshot) {
+		return ErrConvergenceSnapshotConflict
+	}
+	if err != nil && !errors.Is(err, ErrConvergenceSnapshotUnavailable) {
+		return fmt.Errorf("read initial gateway convergence snapshot: %w", err)
+	}
+	if _, err := publisher.material.Ensure(ctx, snapshot.Applied, material); err != nil {
+		return fmt.Errorf("publish initial gateway applied material: %w", err)
 	}
 	if _, err := publisher.store.EnsureInitialized(ctx, snapshot); err != nil {
 		return fmt.Errorf("publish initial gateway convergence snapshot: %w", err)
@@ -146,19 +171,14 @@ func gatewayRoleConvergenceSnapshot(
 		if unit.Name == "" || filepath.Base(unit.Name) != unit.Name || len(unit.Content) == 0 || !unit.Enable || !unit.Start {
 			return ConvergenceSnapshot{}, fmt.Errorf("initial gateway unit %q is invalid", unit.Name)
 		}
-		content := append([]byte(nil), unit.Content...)
-		if content[len(content)-1] != '\n' {
-			content = append(content, '\n')
-		}
+		content := normalizedRoleUnitContent(unit.Content)
+		contentSHA256 := ManagedFingerprint(content)
+		clear(content)
 		activeState, subState := "active", "running"
 		if unit.Name == "vpnctl-tunnel-server.service" && !activeTunnel {
 			activeState, subState = "inactive", "dead"
 		}
-		contentSHA256 := ManagedFingerprint(content)
-		runtimeSHA256, err := ManagedUnitRuntimeFingerprint(ManagedUnitRuntime{
-			FileType: "regular", Mode: "0644", ContentSHA256: contentSHA256,
-			LoadState: "loaded", ActiveState: activeState, SubState: subState, Enablement: "enabled",
-		})
+		runtimeSHA256, err := ManagedUnitRuntimeFingerprint(expectedRoleUnitRuntime(contentSHA256, activeState, subState, "enabled"))
 		if err != nil {
 			return ConvergenceSnapshot{}, err
 		}
@@ -212,23 +232,36 @@ func (publisher *GatewayServiceConvergencePublisher) PrepareActiveGatewayGenerat
 	generation uint64,
 	request linuxplatform.RoleInstallationRequest,
 ) (*GatewayServiceConvergencePreparation, error) {
-	if ctx == nil || publisher == nil || publisher.store == nil {
+	if ctx == nil || publisher == nil || publisher.store == nil || publisher.material == nil {
 		return nil, fmt.Errorf("gateway service convergence publisher is incomplete")
 	}
 	candidate, err := ActiveGatewayRoleConvergenceSnapshot(generation, request)
 	if err != nil {
 		return nil, err
 	}
+	material, err := gatewayRoleAppliedMaterial(candidate.Applied, request, true)
+	if err != nil {
+		return nil, err
+	}
+	defer material.Destroy()
 	current, err := publisher.store.Read(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read prior gateway convergence baseline: %w", err)
 	}
-	preparation := &GatewayServiceConvergencePreparation{store: publisher.store, before: current, candidate: candidate}
+	preparation := &GatewayServiceConvergencePreparation{
+		store: publisher.store, material: publisher.material, before: current, candidate: candidate,
+	}
 	if reflect.DeepEqual(current, candidate) {
+		if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+			return nil, fmt.Errorf("ensure active gateway applied material: %w", err)
+		}
 		return preparation, nil
 	}
 	if err := validatePriorGatewayConvergence(current, generation); err != nil {
 		return nil, err
+	}
+	if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+		return nil, fmt.Errorf("publish active gateway applied material: %w", err)
 	}
 	changed, err := publisher.store.CompareAndSwap(ctx, current, candidate)
 	if err != nil {
@@ -270,7 +303,7 @@ func (publisher *GatewayServiceConvergencePublisher) publishGatewayGeneration(
 	request linuxplatform.RoleInstallationRequest,
 	activeTunnel bool,
 ) error {
-	if ctx == nil || publisher == nil || publisher.store == nil {
+	if ctx == nil || publisher == nil || publisher.store == nil || publisher.material == nil {
 		return fmt.Errorf("gateway service convergence publisher is incomplete")
 	}
 	var candidate ConvergenceSnapshot
@@ -283,8 +316,16 @@ func (publisher *GatewayServiceConvergencePublisher) publishGatewayGeneration(
 	if err != nil {
 		return err
 	}
+	material, err := gatewayRoleAppliedMaterial(candidate.Applied, request, activeTunnel)
+	if err != nil {
+		return err
+	}
+	defer material.Destroy()
 	current, err := publisher.store.Read(ctx)
 	if errors.Is(err, ErrConvergenceSnapshotUnavailable) {
+		if _, materialErr := publisher.material.Ensure(ctx, candidate.Applied, material); materialErr != nil {
+			return fmt.Errorf("publish recovered gateway applied material: %w", materialErr)
+		}
 		_, err = publisher.store.EnsureInitialized(ctx, candidate)
 		return err
 	}
@@ -292,10 +333,16 @@ func (publisher *GatewayServiceConvergencePublisher) publishGatewayGeneration(
 		return err
 	}
 	if reflect.DeepEqual(current, candidate) {
+		if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+			return fmt.Errorf("ensure gateway applied material: %w", err)
+		}
 		return nil
 	}
 	if err := validatePriorGatewayConvergence(current, generation); err != nil {
 		return err
+	}
+	if _, err := publisher.material.Ensure(ctx, candidate.Applied, material); err != nil {
+		return fmt.Errorf("publish gateway applied material: %w", err)
 	}
 	_, err = publisher.store.CompareAndSwap(ctx, current, candidate)
 	return err
@@ -319,7 +366,7 @@ func (preparation *GatewayServiceConvergencePreparation) Commit() {
 }
 
 func (preparation *GatewayServiceConvergencePreparation) Rollback(ctx context.Context) error {
-	if ctx == nil || preparation == nil || preparation.store == nil {
+	if ctx == nil || preparation == nil || preparation.store == nil || preparation.material == nil {
 		return fmt.Errorf("gateway convergence rollback is incomplete")
 	}
 	preparation.mu.Lock()
@@ -333,6 +380,15 @@ func (preparation *GatewayServiceConvergencePreparation) Rollback(ctx context.Co
 	}
 	if _, err := preparation.store.CompareAndSwap(ctx, preparation.candidate, preparation.before); err != nil {
 		return fmt.Errorf("rollback active gateway convergence generation: %w", err)
+	}
+	observed, err := preparation.store.Read(ctx)
+	if err != nil || !reflect.DeepEqual(observed, preparation.before) {
+		return fmt.Errorf("verify active gateway convergence rollback: %w", errors.Join(err, ErrConvergenceSnapshotConflict))
+	}
+	if !reflect.DeepEqual(preparation.candidate.Applied, preparation.before.Applied) {
+		if _, err := preparation.material.Discard(ctx, preparation.candidate.Applied); err != nil {
+			return fmt.Errorf("discard rolled-back gateway applied material: %w", err)
+		}
 	}
 	return nil
 }

@@ -2,6 +2,43 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — immutable applied-generation material archive
+
+### Planned reversible validation
+
+- Add a root-only, content-addressed archive for exact file/unit material bound
+  to one canonical Applied manifest. Require `0700` same-owner directories,
+  immutable `0600` single-link bundles, no-follow descriptor-relative access,
+  bounded decoding, complete file/runtime fingerprint validation, redacted
+  serialization, and explicit byte wiping.
+- Couple every gateway/node role-generation publisher to the ordering `durable
+  material -> convergence Initialize/CAS`. Equal-snapshot retries must heal a
+  missing bundle. A rolled-back gateway join may discard only its exact
+  validated candidate and only after CAS restoration plus reread proves the
+  prior convergence snapshot.
+- Create `/var/lib/vpnctl/applied-material` in fresh role and v1-migration
+  layouts. Recoverable uninstall preserves it, purge removes it as part of the
+  state tree, and portable backup excludes it by structural allowlist with a
+  secret canary regression.
+- Validation writes only Go `t.TempDir()`/`/private/tmp/vpnctl-go-cache`
+  fixtures and fake state/systemd adapters. It does not touch real
+  `/var/lib/vpnctl`, `/etc/vpnctl`, a service, listener, route, firewall, VM,
+  public endpoint, or foreign resource.
+
+### Acceptance
+
+- Focused tests cover canonical IDs/order, exact file/unit and full systemd
+  runtime binding, state/network exclusion, immutable idempotent publication,
+  corrupt/unequal/symlink/hardlink/mode/parent rejection, bounded streaming
+  decode, crash-candidate cleanup, manifest-derived load, redaction/wiping,
+  cancellation, exact discard, durable-before-convergence failure, missing
+  bundle healing, and discard-after-proven gateway convergence rollback.
+- Lifecycle tests cover both fresh role layouts, migration staging, recoverable
+  uninstall preservation, purge ownership, and portable-backup exclusion.
+  The focused race suite, complete ordinary Go suite, `go vet ./...`, strict
+  OpenSpec validation, formatting, and diff checks pass. Repository rollback
+  removes this source/documentation slice; no host rollback is needed.
+
 ## 2026-09-06 — action-scoped Linux role repair primitive
 
 ### Planned reversible validation
