@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import pathlib
+import types
 import unittest
 
 
@@ -31,6 +32,59 @@ class CapacityLoadTest(unittest.TestCase):
     def test_percentiles_use_nearest_rank(self):
         self.assertEqual(MODULE.percentile([4, 1, 3, 2], 0.50), 2)
         self.assertEqual(MODULE.percentile([4, 1, 3, 2], 0.95), 4)
+
+    def test_recovery_probe_reuses_one_process_and_requires_five_successes_before_deadline(self):
+        clock = FakeClock()
+        operation = RecoveryOperation(clock, [(0.2, False)] + [(0.2, True)] * 5)
+        result = MODULE.run_recovery_probe(recovery_args(), operation, clock, clock.sleep)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["recovery_probe_attempts"], 6)
+        self.assertEqual(result["successful_recovery_probes"], 5)
+        self.assertEqual(result["maximum_stable_recovery_probes"], 5)
+        self.assertEqual(result["first_recovery_seconds"], 0.5)
+        self.assertEqual(result["recovery_seconds"], 1.7)
+
+    def test_recovery_probe_does_not_count_response_completed_after_deadline(self):
+        clock = FakeClock()
+        operation = RecoveryOperation(clock, [(2.0, True)] * 5)
+        result = MODULE.run_recovery_probe(recovery_args(), operation, clock, clock.sleep)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["recovery_probe_attempts"], 4)
+        self.assertEqual(result["successful_recovery_probes"], 3)
+        self.assertEqual(result["maximum_stable_recovery_probes"], 3)
+        self.assertEqual(result["first_recovery_seconds"], 2.0)
+        self.assertEqual(result["last_recovery_seconds"], 6.2)
+
+
+class FakeClock:
+    def __init__(self):
+        self.value = 0.0
+
+    def __call__(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.value += seconds
+
+
+class RecoveryOperation:
+    def __init__(self, clock, outcomes):
+        self.clock = clock
+        self.outcomes = outcomes
+
+    def __call__(self, _args, index, _started):
+        duration, successful = self.outcomes[min(index, len(self.outcomes) - 1)]
+        self.clock.value += duration
+        return {"ok": successful, "status": 200 if successful else 503}
+
+
+def recovery_args():
+    return types.SimpleNamespace(
+        started_monotonic=0.0,
+        recovery_limit_seconds=8.0,
+        stable_probes=5,
+        probe_interval=0.1,
+    )
 
 
 if __name__ == "__main__":

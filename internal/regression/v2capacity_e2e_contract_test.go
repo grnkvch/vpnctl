@@ -78,13 +78,15 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
-		"systemctl stop --no-block", "--kill-who=main --signal=KILL",
-		"down_started=$(monotonic)", "sleep \"$scheduled_down_seconds\"", "restart_pid=$!", "unavailable_status: $unavailable_probe.status",
+		"systemctl stop --no-block", "--kill-who=all --signal=KILL",
+		"down_started=$(monotonic)", "systemd-run --quiet --collect", "--timer-property=AccuracySec=10ms", "unavailable_status: $unavailable_probe.status",
+		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
-		"recovery_probe_attempts: $recovery_probe_attempts",
+		"recovery_probe_attempts: $recovery_probe_attempts", "load recover", "--started-monotonic \"$restart_started\"",
+		"--stable-probes 5 --probe-interval 0.1",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)

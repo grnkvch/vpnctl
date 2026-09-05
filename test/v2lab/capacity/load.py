@@ -166,6 +166,60 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
     }
 
 
+def run_recovery_probe(
+    args: argparse.Namespace,
+    operation=webhook_request,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> dict[str, object]:
+    started = args.started_monotonic
+    deadline = started + args.recovery_limit_seconds
+    stable = 0
+    maximum_stable = 0
+    attempts = 0
+    successes = 0
+    first_success = None
+    last_success = None
+    observed_at = started
+    while clock() <= deadline:
+        result = operation(args, attempts, started)
+        attempts += 1
+        observed_at = clock()
+        successful = bool(result.get("ok")) and result.get("status") == 200 and observed_at <= deadline
+        if successful:
+            elapsed = observed_at - started
+            if first_success is None:
+                first_success = elapsed
+            last_success = elapsed
+            successes += 1
+            stable += 1
+            maximum_stable = max(maximum_stable, stable)
+            if stable == args.stable_probes:
+                return {
+                    "status": "passed",
+                    "recovery_seconds": round(elapsed, 3),
+                    "first_recovery_seconds": round(first_success, 3),
+                    "last_recovery_seconds": round(last_success, 3),
+                    "maximum_stable_recovery_probes": maximum_stable,
+                    "recovery_probe_attempts": attempts,
+                    "successful_recovery_probes": successes,
+                }
+        else:
+            stable = 0
+        if observed_at >= deadline:
+            break
+        sleeper(min(args.probe_interval, deadline - observed_at))
+    return {
+        "status": "failed",
+        "recovery_seconds": round(max(0.0, observed_at - started), 3),
+        "first_recovery_seconds": None if first_success is None else round(first_success, 3),
+        "last_recovery_seconds": None if last_success is None else round(last_success, 3),
+        "maximum_stable_recovery_probes": maximum_stable,
+        "recovery_probe_attempts": attempts,
+        "successful_recovery_probes": successes,
+    }
+
+
 def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--duration", type=int, required=True)
     parser.add_argument("--rate", type=int, required=True)
@@ -189,6 +243,15 @@ def main() -> None:
     probe.add_argument("--certificate", required=True)
     probe.add_argument("--body-bytes", type=int, default=128)
     probe.add_argument("--timeout", type=float, default=5.0)
+    recover = commands.add_parser("recover")
+    recover.add_argument("--public-ip", required=True)
+    recover.add_argument("--certificate", required=True)
+    recover.add_argument("--body-bytes", type=int, default=128)
+    recover.add_argument("--timeout", type=float, default=1.0)
+    recover.add_argument("--started-monotonic", type=float, required=True)
+    recover.add_argument("--recovery-limit-seconds", type=float, required=True)
+    recover.add_argument("--stable-probes", type=int, default=5)
+    recover.add_argument("--probe-interval", type=float, default=0.1)
     api = commands.add_parser("api")
     add_common(api)
     api.add_argument("--proxy-port", type=int, default=17890)
@@ -198,6 +261,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "probe":
         print(json.dumps(webhook_request(args, 0, time.monotonic()), separators=(",", ":"), sort_keys=True))
+        return
+    if args.command == "recover":
+        if args.started_monotonic <= 0 or args.recovery_limit_seconds <= 0 or args.stable_probes < 1 or args.probe_interval < 0:
+            raise ValueError("recovery probe bounds are invalid")
+        print(json.dumps(run_recovery_probe(args), separators=(",", ":"), sort_keys=True))
         return
     if args.duration < 1 or args.rate < 1 or args.workers < 1:
         raise ValueError("duration, rate, and workers must be positive")

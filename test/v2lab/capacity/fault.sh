@@ -6,8 +6,8 @@ public_ip=
 certificate=
 down_seconds=
 recovery_limit_seconds=
-restart_pid=
-restart_timing_file=
+restart_job=vpnctl-v2-capacity-frps-restart
+restart_job_armed=false
 restore_required=false
 restart_advance_seconds=0.1
 first_recovery_seconds=null
@@ -15,6 +15,7 @@ last_recovery_seconds=null
 maximum_stable_recovery_probes=0
 recovery_probe_attempts=0
 successful_recovery_probes=0
+recovery_seconds=0
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
@@ -37,7 +38,7 @@ emit_result() {
     --argjson requested_down_seconds "$down_seconds" \
     --argjson scheduled_down_seconds "$scheduled_down_seconds" \
     --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
-    --argjson recovery_seconds "$(delta "$restart_started" "$recovery_finished")" \
+    --argjson recovery_seconds "$recovery_seconds" \
     --argjson first_recovery_seconds "$first_recovery_seconds" \
     --argjson last_recovery_seconds "$last_recovery_seconds" \
     --argjson maximum_stable_recovery_probes "$maximum_stable_recovery_probes" \
@@ -68,16 +69,22 @@ probe() {
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1
 }
 
+recover() {
+  python3 /usr/local/libexec/vpnctl-v2-capacity/load recover \
+    --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1 \
+    --started-monotonic "$restart_started" --recovery-limit-seconds "$recovery_limit_seconds" \
+    --stable-probes 5 --probe-interval 0.1
+}
+
 cleanup() {
   local status=$?
-  if [ -n "$restart_pid" ]; then
-    wait "$restart_pid" >/dev/null 2>&1 || true
+  if [ "$restart_job_armed" = true ]; then
+    systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
+    systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
+    restart_job_armed=false
   fi
   if [ "$restore_required" = true ]; then
     systemctl start "$unit" >/dev/null 2>&1 || true
-  fi
-  if [ -n "$restart_timing_file" ]; then
-    rm -f -- "$restart_timing_file"
   fi
   exit "$status"
 }
@@ -110,16 +117,11 @@ systemctl stop --no-block "$unit"
 restore_required=true
 sleep 0.25
 down_started=$(monotonic)
-systemctl kill --kill-who=main --signal=KILL "$unit" >/dev/null 2>&1 || true
-restart_timing_file=$(mktemp /run/vpnctl-v2-capacity-restart.XXXXXX)
-(
-  sleep "$scheduled_down_seconds"
-  restart_started=$(monotonic)
-  systemctl start "$unit"
-  restart_finished=$(monotonic)
-  printf '%s %s\n' "$restart_started" "$restart_finished" > "$restart_timing_file"
-) &
-restart_pid=$!
+systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
+systemd-run --quiet --collect --unit="$restart_job" \
+  --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \
+  /bin/systemctl start "$unit"
+restart_job_armed=true
 
 unavailable_probe=$(probe 2>/dev/null || true)
 unavailable_status=$(printf '%s\n' "$unavailable_probe" | jq -r '.status' 2>/dev/null || true)
@@ -136,48 +138,57 @@ if [ "$stop_state" != inactive ] && [ "$stop_state" != failed ]; then
   exit 1
 fi
 stop_finished=$(monotonic)
-
-wait "$restart_pid"
-restart_pid=
+restart_state=
+for _attempt in $(seq 1 120); do
+  restart_state=$(systemctl show --value -p ActiveState "$unit")
+  if [ "$restart_state" = active ]; then
+    break
+  fi
+  sleep 0.1
+done
+if [ "$restart_state" != active ]; then
+  echo 'FRP server did not restart within the bounded fault-injection window' >&2
+  exit 1
+fi
+restart_started_microseconds=$(systemctl show --value -p ActiveEnterTimestampMonotonic "$unit")
+if ! [[ "$restart_started_microseconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'FRP server restart timestamp is invalid' >&2
+  exit 1
+fi
+restart_started=$(awk -v value="$restart_started_microseconds" 'BEGIN {printf "%.9f", value/1000000}')
+systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
+systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
+restart_job_armed=false
 restore_required=false
-read -r restart_started restart_finished < "$restart_timing_file"
-recovery_finished=$restart_finished
 if [ "$unavailable_status" != 503 ]; then
   emit_result failed false
   echo 'ingress did not return 503 while frps was stopped' >&2
   exit 1
 fi
 
-stable=0
-recovered=false
-probe_output=
-deadline=$(awk -v start="$restart_started" -v limit="$recovery_limit_seconds" 'BEGIN {printf "%.9f", start+limit}')
-while awk -v now="$(monotonic)" -v deadline="$deadline" 'BEGIN {exit !(now <= deadline)}'; do
-  probe_output=$(probe 2>/dev/null || true)
-  recovery_probe_attempts=$((recovery_probe_attempts + 1))
-  if printf '%s\n' "$probe_output" | jq -e '.status == 200 and .ok == true' >/dev/null 2>&1; then
-    observed_at=$(monotonic)
-    if [ "$first_recovery_seconds" = null ]; then
-      first_recovery_seconds=$(delta "$restart_started" "$observed_at")
-    fi
-    last_recovery_seconds=$(delta "$restart_started" "$observed_at")
-    successful_recovery_probes=$((successful_recovery_probes + 1))
-    stable=$((stable + 1))
-    if [ "$stable" -gt "$maximum_stable_recovery_probes" ]; then
-      maximum_stable_recovery_probes=$stable
-    fi
-    if [ "$stable" -eq 5 ]; then
-      recovered=true
-      recovery_finished=$observed_at
-      break
-    fi
-  else
-    stable=0
-  fi
-  sleep 0.1
-done
-if [ "$recovered" != true ]; then
-  recovery_finished=$(monotonic)
+recovery_result=$(recover 2>/dev/null || true)
+if ! printf '%s\n' "$recovery_result" | jq -e '
+  (.status == "passed" or .status == "failed") and
+  (.recovery_seconds | type == "number" and . >= 0) and
+  ((.first_recovery_seconds == null) or (.first_recovery_seconds | type == "number" and . >= 0)) and
+  ((.last_recovery_seconds == null) or (.last_recovery_seconds | type == "number" and . >= 0)) and
+  (.maximum_stable_recovery_probes | type == "number" and . >= 0 and . <= 5 and floor == .) and
+  (.recovery_probe_attempts | type == "number" and . > 0 and floor == .) and
+  (.successful_recovery_probes | type == "number" and . >= 0 and floor == .) and
+  (.successful_recovery_probes <= .recovery_probe_attempts)
+' >/dev/null 2>&1; then
+  emit_result failed false
+  echo 'FRP recovery probe returned invalid evidence' >&2
+  exit 1
+fi
+recovery_status=$(printf '%s\n' "$recovery_result" | jq -r '.status')
+recovery_seconds=$(printf '%s\n' "$recovery_result" | jq -c '.recovery_seconds')
+first_recovery_seconds=$(printf '%s\n' "$recovery_result" | jq -c '.first_recovery_seconds')
+last_recovery_seconds=$(printf '%s\n' "$recovery_result" | jq -c '.last_recovery_seconds')
+maximum_stable_recovery_probes=$(printf '%s\n' "$recovery_result" | jq -c '.maximum_stable_recovery_probes')
+recovery_probe_attempts=$(printf '%s\n' "$recovery_result" | jq -c '.recovery_probe_attempts')
+successful_recovery_probes=$(printf '%s\n' "$recovery_result" | jq -c '.successful_recovery_probes')
+if [ "$recovery_status" != passed ]; then
   emit_result failed false
   echo 'FRP did not reconnect within the bounded recovery window' >&2
   exit 1

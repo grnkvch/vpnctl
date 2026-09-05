@@ -594,6 +594,37 @@ This journal records development-host mutations made while implementing and vali
   rule, temporary guest file, or manual rollback remains; the next repeat has
   the same boundary.
 
+### Recovery-measurement diagnosis and deterministic fault plan
+
+- The clean-source diagnostic repeat at commit
+  `2e3ba92706827c69d6cf1bd40efb8300fad1c261` produced
+  `artifacts/v2lab/capacity-e2e/run-20260905T065628Z/reconnect.json`. All three
+  recovery attempts succeeded with HTTP `200`: first at `4.516s`, last at
+  `10.229s`, and maximum stable count three. The fixture could not issue five
+  probes because each iteration launched a fresh Python interpreter and TLS
+  client on the already loaded 1-vCPU gateway. This is measurement-process
+  startup, not an intermittent tunnel or HTTP failure.
+- That run also observed `5.228s` down time and is independently invalid: the
+  background shell's nominal 2.9-second sleep was descheduled during a
+  100-percent CPU interval. The monitor still recorded only `57.255%` average
+  gateway CPU, but a guest shell wake-up is not a reliable fault clock. No
+  capacity result is claimed, and production recovery remains unchanged.
+- The corrected source-only fixture uses one long-lived Python process to make
+  the same five sequential fresh HTTPS connections. It measures completion
+  against the existing gateway monotonic deadline and refuses to count a
+  response completed after eight seconds. Deterministic unit tests cover a
+  success and an over-deadline response; no request count, timeout, or
+  stability condition is relaxed.
+- The exact owner-only FRPS fault uses a transient collected systemd timer
+  `vpnctl-v2-capacity-frps-restart.timer/service` with 10-ms accuracy rather
+  than a best-effort background sleep. It kills the complete already-stopping
+  fixture cgroup, derives actual restart time from systemd's monotonic active
+  timestamp, and still rejects measured down time outside `2.75--3.50s`.
+  Failure cleanup stops/resets only those exact transient units, restores the
+  tunnel server if required, and the parent cleanup retains its complete
+  fixture/package/VM rollback. The prior run again returned both VMs to
+  `Stopped`; no manual cleanup remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
