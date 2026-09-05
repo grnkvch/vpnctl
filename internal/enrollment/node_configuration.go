@@ -42,6 +42,9 @@ type NodeConfigurationRuntime struct {
 type NodeConfiguration struct {
 	stateGeneration uint64
 	configs         []linuxplatform.RoleConfigFile
+	standard        transport.StandardNodeCandidate
+	routing         routing.NodeRoutingCandidate
+	tunnel          tunnel.FRPCandidate
 }
 
 func (configuration NodeConfiguration) StateGeneration() uint64 {
@@ -54,6 +57,18 @@ func (configuration NodeConfiguration) ConfigFiles() []linuxplatform.RoleConfigF
 		result[index] = linuxplatform.RoleConfigFile{Name: config.Name, Content: append([]byte(nil), config.Content...)}
 	}
 	return result
+}
+
+func (configuration NodeConfiguration) StandardCandidate() transport.StandardNodeCandidate {
+	return configuration.standard
+}
+
+func (configuration NodeConfiguration) RoutingCandidate() routing.NodeRoutingCandidate {
+	return configuration.routing
+}
+
+func (configuration NodeConfiguration) TunnelCandidate() tunnel.FRPCandidate {
+	return configuration.tunnel
 }
 
 type NodeConfigurationCompiler struct {
@@ -213,7 +228,10 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 		))},
 	}
 	sort.Slice(configs, func(left, right int) bool { return configs[left].Name < configs[right].Name })
-	return NodeConfiguration{stateGeneration: state.Generation, configs: configs}, nil
+	return NodeConfiguration{
+		stateGeneration: state.Generation, configs: configs,
+		standard: standardCandidate, routing: routingBundle.Routing(), tunnel: tunnelCandidate,
+	}, nil
 }
 
 func joinedNodeTransport(state model.State, node model.Node, kind model.TransportKind) (model.Transport, error) {

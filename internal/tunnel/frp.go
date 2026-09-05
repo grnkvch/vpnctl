@@ -171,6 +171,14 @@ func (candidate FRPCandidate) Bytes() []byte { return append([]byte(nil), candid
 
 func (candidate FRPCandidate) Descriptor() CandidateDescriptor { return candidate.descriptor }
 
+func (candidate FRPCandidate) ServerEndpoint() (netip.AddrPort, error) {
+	document, err := parseFRPClientConfig(candidate.content)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("read frp candidate server endpoint: %w", err)
+	}
+	return document.ServerEndpoint, nil
+}
+
 func (provider *FRPProvider) serverCertificatePath() string {
 	return filepath.Join(provider.root, "etc", "vpnctl", "generated", "gateway", FRPServerCertificateName)
 }

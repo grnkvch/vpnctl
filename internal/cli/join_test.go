@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
@@ -75,6 +76,34 @@ func TestNodeJoinMutationRejectsAlreadyJoinedNodeDuringReadOnlyPlan(t *testing.T
 	}
 }
 
+func TestSystemNodeJoinerActivatesOnlyCommittedLocalGeneration(t *testing.T) {
+	core := &recordingNodeJoiner{}
+	activation := &recordingCommittedNodeActivation{}
+	joiner, err := newSystemNodeJoiner(core, activation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := output.NewSecret([]byte("secret-token-canary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Destroy()
+	result, err := joiner.Join(context.Background(), &token, model.TransportRestricted, []string{"telegram"})
+	if err != nil || result.LocalStateGeneration != 2 || activation.calls != 1 || activation.generation != 2 {
+		t.Fatalf("Join() = %+v, %v; activation=%+v", result, err, activation)
+	}
+
+	activation.err = errors.New("systemd unavailable")
+	result, err = joiner.Join(context.Background(), &token, model.TransportRestricted, []string{"telegram"})
+	if !errors.Is(err, enrollment.ErrNodeActivationPending) || result.LocalStateGeneration != 2 || activation.calls != 2 {
+		t.Fatalf("pending Join() = %+v, %v; activation=%+v", result, err, activation)
+	}
+	category, code, message := classifyJoinError(err)
+	if category != output.CategoryUnavailable || code != "join_activation_pending" || !strings.Contains(message, "join is committed") {
+		t.Fatalf("pending classification = %s %s %q", category, code, message)
+	}
+}
+
 type recordingNodeJoiner struct {
 	planCalls int
 	planErr   error
@@ -82,6 +111,18 @@ type recordingNodeJoiner struct {
 	token     string
 	transport model.TransportKind
 	presets   []string
+}
+
+type recordingCommittedNodeActivation struct {
+	calls      int
+	generation uint64
+	err        error
+}
+
+func (activation *recordingCommittedNodeActivation) Activate(_ context.Context, generation uint64) error {
+	activation.calls++
+	activation.generation = generation
+	return activation.err
 }
 
 func (joiner *recordingNodeJoiner) PlanJoin(transportKind model.TransportKind, presets []string) (enrollment.NodeJoinPlan, error) {

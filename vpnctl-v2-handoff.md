@@ -612,8 +612,11 @@ sudo vpnctl expose 3000 --path /telegram/webhook
   guard, DNS integration, frpc, pinned tunnel certificate и readiness markers.
   Recovery underlay выбирается только по однозначному effective IPv4 default
   route; разрешены точные bootstrap endpoints TCP 443, TCP 8443 и UDP 51820.
-  Публикация файлов и запуск units остаются отдельной runtime-фазой, чтобы тот
-  же compiler мог использовать `repair`.
+  Production runtime публикует весь набор и запускает units строго
+  `standard -> guard -> routing -> tunnel`, затем проверяет exact routing/DNS
+  candidate и единственное established frpc-соединение с gateway overlay.
+  Ошибка после commit получает `join_activation_pending`, не удаляет identity
+  и не снимает уже установленный fail-closed guard; требуется local `repair`.
 - `join` разрешён только на initialized, но ещё не joined node. Повторный join
   подключённого node ничего не меняет и направляет пользователя к manual
   `transport switch`.

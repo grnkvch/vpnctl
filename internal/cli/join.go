@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
@@ -157,11 +158,40 @@ func buildSystemNodeJoiner(paths store.Paths) (NodeJoiner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return enrollment.NewNodeJoinWorkflow(state, secrets, exchanger, enrollment.NodeJoinRuntime{WireGuardRunner: wireguard.ExecRunner{}})
+	workflow, err := enrollment.NewNodeJoinWorkflow(state, secrets, exchanger, enrollment.NodeJoinRuntime{WireGuardRunner: wireguard.ExecRunner{}})
+	if err != nil {
+		return nil, err
+	}
+	discoverer, err := linuxplatform.NewDiscoverer(paths.Root)
+	if err != nil {
+		return nil, err
+	}
+	compiler, err := enrollment.NewNodeConfigurationCompiler(paths.Root, secrets, enrollment.NodeConfigurationRuntime{WireGuardRunner: wireguard.ExecRunner{}})
+	if err != nil {
+		return nil, err
+	}
+	runner := linuxplatform.OSProbeRunner{}
+	roles, err := linuxplatform.NewRoleSystemdInstaller(paths.Root, paths.ConfigDir, runner)
+	if err != nil {
+		return nil, err
+	}
+	readiness, err := enrollment.NewSystemNodeConfigurationReadiness(paths, runner)
+	if err != nil {
+		return nil, err
+	}
+	activator, err := enrollment.NewNodeConfigurationActivator(linuxplatform.DefaultVPNCTLBinaryPath, roles, runner, readiness)
+	if err != nil {
+		return nil, err
+	}
+	return newSystemNodeJoiner(workflow, &systemCommittedNodeActivator{
+		state: state, discoverer: discoverer, compiler: compiler, activator: activator,
+	})
 }
 
 func classifyJoinError(err error) (output.ExitCategory, string, string) {
 	switch {
+	case errors.Is(err, enrollment.ErrNodeActivationPending):
+		return output.CategoryUnavailable, "join_activation_pending", "join is committed but local node services are not ready; inspect status and run vpnctl repair"
 	case errors.Is(err, enrollment.ErrJoinUncertain):
 		return output.CategoryUnavailable, "join_outcome_uncertain", "gateway commit may have completed; inspect both hosts before retrying"
 	case errors.Is(err, enrollment.ErrJoinNotReady), errors.Is(err, enrollment.ErrPublicEnrollmentUnavailable), errors.Is(err, ErrGatewayUnavailable):
@@ -180,6 +210,13 @@ func classifyJoinError(err error) (output.ExitCategory, string, string) {
 func emitJoinFailure(emitter *ResultEmitter, category output.ExitCategory, warningCode, warningMessage string) int {
 	result := output.NewResult("join", output.StatusFailed, category, output.SafeObject{"changed": false})
 	result.Warnings = append(result.Warnings, output.Message{Code: warningCode, Message: singleLineGatewayInitMessage(warningMessage)})
+	if warningCode == "join_activation_pending" {
+		result.Data["changed"] = true
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code: "repair_node_services", Message: "Reconcile the committed node service generation after resolving the reported host issue.",
+			Command: "vpnctl repair",
+		})
+	}
 	code, err := emitter.Emit(result)
 	if err != nil {
 		return ExitInternal
@@ -202,6 +239,89 @@ type NodeJoiner interface {
 	PlanJoin(model.TransportKind, []string) (enrollment.NodeJoinPlan, error)
 	Join(context.Context, *output.Secret, model.TransportKind, []string) (enrollment.NodeJoinResult, error)
 }
+
+type committedNodeActivator interface {
+	Activate(context.Context, uint64) error
+}
+
+type systemNodeJoiner struct {
+	joiner     NodeJoiner
+	activation committedNodeActivator
+}
+
+func newSystemNodeJoiner(joiner NodeJoiner, activation committedNodeActivator) (*systemNodeJoiner, error) {
+	if joiner == nil || activation == nil {
+		return nil, fmt.Errorf("system node join dependencies are incomplete")
+	}
+	return &systemNodeJoiner{joiner: joiner, activation: activation}, nil
+}
+
+func (joiner *systemNodeJoiner) PlanJoin(transportKind model.TransportKind, presets []string) (enrollment.NodeJoinPlan, error) {
+	if joiner == nil || joiner.joiner == nil {
+		return enrollment.NodeJoinPlan{}, fmt.Errorf("system node joiner is incomplete")
+	}
+	return joiner.joiner.PlanJoin(transportKind, presets)
+}
+
+func (joiner *systemNodeJoiner) Join(ctx context.Context, token *output.Secret, transportKind model.TransportKind, presets []string) (enrollment.NodeJoinResult, error) {
+	if joiner == nil || joiner.joiner == nil || joiner.activation == nil {
+		return enrollment.NodeJoinResult{}, fmt.Errorf("system node joiner is incomplete")
+	}
+	result, err := joiner.joiner.Join(ctx, token, transportKind, presets)
+	if err != nil {
+		return enrollment.NodeJoinResult{}, err
+	}
+	if err := joiner.activation.Activate(ctx, result.LocalStateGeneration); err != nil {
+		return result, errors.Join(enrollment.ErrNodeActivationPending, err)
+	}
+	return result, nil
+}
+
+type nodeJoinSnapshotDiscoverer interface {
+	Discover(context.Context) (linuxplatform.HostSnapshot, error)
+}
+
+type nodeJoinConfigurationCompiler interface {
+	Compile(context.Context, model.State, linuxplatform.HostSnapshot) (enrollment.NodeConfiguration, error)
+}
+
+type nodeJoinConfigurationActivator interface {
+	Activate(context.Context, enrollment.NodeConfiguration) error
+}
+
+type systemCommittedNodeActivator struct {
+	state      interface{ Load() (model.State, error) }
+	discoverer nodeJoinSnapshotDiscoverer
+	compiler   nodeJoinConfigurationCompiler
+	activator  nodeJoinConfigurationActivator
+}
+
+func (runtime *systemCommittedNodeActivator) Activate(ctx context.Context, expectedGeneration uint64) error {
+	if ctx == nil || runtime == nil || runtime.state == nil || runtime.discoverer == nil || runtime.compiler == nil || runtime.activator == nil || expectedGeneration == 0 {
+		return fmt.Errorf("committed node activation is incomplete")
+	}
+	state, err := runtime.state.Load()
+	if err != nil {
+		return fmt.Errorf("load committed node state: %w", err)
+	}
+	if state.Generation != expectedGeneration || state.Host.Role != model.RoleNode || len(state.Nodes) != 1 || state.Nodes[0].Gateway == nil {
+		return fmt.Errorf("committed node generation changed before service activation")
+	}
+	snapshot, err := runtime.discoverer.Discover(ctx)
+	if err != nil {
+		return fmt.Errorf("discover node host for service activation: %w", err)
+	}
+	configuration, err := runtime.compiler.Compile(ctx, state, snapshot)
+	if err != nil {
+		return fmt.Errorf("compile committed node service generation: %w", err)
+	}
+	if configuration.StateGeneration() != expectedGeneration {
+		return fmt.Errorf("compiled node service generation changed before activation")
+	}
+	return runtime.activator.Activate(ctx, configuration)
+}
+
+var _ NodeJoiner = (*systemNodeJoiner)(nil)
 
 // NodeJoinMutationWorkflow keeps token input in the common hidden-input
 // boundary. Plan is read-only; key generation and public enrollment begin only

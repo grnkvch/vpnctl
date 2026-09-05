@@ -193,8 +193,16 @@ default route for recovery-marked traffic and admits only the exact public
 bootstrap paths TCP `443`, TCP `8443`, and UDP `51820`; equal-priority defaults
 with different next hops fail closed. Readiness markers bind state, policy,
 credential, config, and tunnel-certificate generations without containing raw
-credentials. File publication, ordered unit activation, and live readiness are
-separate system-runtime phases so the same compiler can be reused by `repair`.
+credentials. The production system runtime then publishes the whole role set,
+enables every staged unit, and starts `standard`, fail-closed routing guard,
+routing engine, and tunnel client in that order. Routing readiness is bound to
+the exact installed candidate, TUN, and both DNS listeners. Initial tunnel
+readiness, before any expose exists, requires exactly one established `frpc`
+control connection to the signed gateway overlay endpoint; an empty admin
+mapping response is insufficient. A post-commit activation failure preserves
+state, credentials, generated artifacts, and any installed guard, reports
+`join_activation_pending`, and requires explicit local repair rather than
+reusing the consumed invite.
 
 ## Joined-node behavior and gateway inspection
 

@@ -59,6 +59,9 @@ func TestNodeConfigurationCompilerRendersCompleteJoinedServiceBoundary(t *testin
 			if configuration.StateGeneration() != state.Generation {
 				t.Fatalf("configuration generation = %d", configuration.StateGeneration())
 			}
+			if err := validateNodeConfigurationForActivation(configuration); err != nil {
+				t.Fatalf("activation validation: %v", err)
+			}
 			files := nodeConfigurationFiles(t, configuration)
 			wantNames := []string{
 				nodeRoutingGuardReadyFileName, nodeRoutingReadyFileName, nodeStandardReadyFileName,

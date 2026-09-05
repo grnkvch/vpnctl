@@ -2,6 +2,39 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — production joined-node service activation
+
+### Planned reversible validation
+
+- Compose the public node `join` command with the committed-state compiler,
+  fresh host discovery, atomic role-scoped file publication, unit enablement,
+  ordered `standard -> routing guard -> routing -> tunnel` startup, and exact
+  generation readiness. A post-commit failure is reported as pending rather
+  than misrepresented as an unused invite or automatically retried exchange.
+- Preserve an installed fail-closed guard after any later routing/tunnel
+  failure; activation compensation must not stop or disable it. The operator
+  receives an explicit local-repair action while the committed identity and
+  credentials remain intact.
+- Add a passive bounded zero-mapping frpc readiness probe. It requires exactly
+  one established socket owned by `frpc` to the candidate's exact gateway
+  overlay TCP `17000`; an empty admin mapping set alone is not proof that the
+  initial tunnel is connected.
+- Validation is source-only. Fake systemd/`ss` runners and generated
+  `t.TempDir()` credentials/configs are used; no real generated file, unit,
+  interface, route, DNS setting, socket, invite, host, or VM is changed.
+  Repository rollback removes this source slice; no host rollback is needed.
+
+### Acceptance
+
+- Tests prove publication-before-start, exact start/readiness ordering,
+  guard retention on later failure, exact generation handoff from join,
+  distinct post-commit pending classification, bounded connection polling,
+  wrong-process/endpoint/ambiguous-socket refusal, and defensive candidate
+  endpoint parsing.
+- The full Go suite, `go vet ./...`, strict OpenSpec validation, and diff checks
+  passed. No production config, unit, process, interface, route, DNS setting,
+  socket, invite, host, or VM was changed, so no host rollback remains.
+
 ## 2026-09-05 — joined-node service configuration compiler
 
 ### Planned reversible validation
