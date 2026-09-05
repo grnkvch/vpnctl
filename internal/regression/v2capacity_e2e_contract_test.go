@@ -171,6 +171,23 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	if strings.Count(harness, "--failure-window-start \"$fault_start\" --failure-window-end \"$fault_end\"") != 2 {
 		t.Fatal("capacity webhook and Bot API loads must record the same fault-window latency partition")
 	}
+	verifyStart := strings.LastIndex(harness, "verify() {")
+	if verifyStart < 0 {
+		t.Fatal("capacity verify function is absent")
+	}
+	verifyHarness := harness[verifyStart:]
+	beforeState := strings.Index(verifyHarness, "capture_tunnel_client_process_state_before\n")
+	startLoads := strings.Index(verifyHarness, "start_loads\n")
+	fault := strings.Index(verifyHarness, "inject_reconnect\n")
+	waitLoads := strings.Index(verifyHarness, "wait_loads\n")
+	afterState := strings.Index(verifyHarness, "finalize_reconnect_process_state\n")
+	if beforeState < 0 || startLoads < 0 || fault < 0 || waitLoads < 0 || afterState < 0 ||
+		!(beforeState < startLoads && startLoads < fault && fault < waitLoads && waitLoads < afterState) {
+		t.Fatal("capacity tunnel PID snapshots must remain outside the measured workload")
+	}
+	if !strings.Contains(harness, "guest \"$node_instance\" sudo bash -c") {
+		t.Fatal("capacity tunnel process snapshot must use one bounded guest session")
+	}
 	loadReporter := readContractFile(t, filepath.Join(fixtureRoot, "load.py"))
 	for _, required := range []string{
 		"successful_latency_by_30_second_start_bucket", "dispatch_lag_ms",

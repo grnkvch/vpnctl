@@ -41,6 +41,9 @@ node_started=false
 temporary_root=
 run_root=
 background_pids=()
+tunnel_service_pid_before=
+tunnel_service_restarts_before=
+tunnel_frpc_pid_before=
 
 usage() {
   cat <<'EOF'
@@ -603,24 +606,56 @@ probe_webhook() {
 }
 
 tunnel_client_process_state() {
-  local service_pid service_restarts frpc_pid attempt
-  for attempt in $(seq 1 20); do
-    service_pid=$(guest "$node_instance" systemctl show --value -p MainPID "$tunnel_client_unit")
-    service_restarts=$(guest "$node_instance" systemctl show --value -p NRestarts "$tunnel_client_unit")
-    case "$service_pid:$service_restarts" in
-      :*|*:|*[!0-9:]*) ;;
-      *)
-        frpc_pid=$(guest "$node_instance" sudo pgrep -P "$service_pid" -x frpc || true)
-        case "$frpc_pid" in
-          ''|*[!0-9]*) ;;
-          *) printf '%s %s %s\n' "$service_pid" "$service_restarts" "$frpc_pid"; return ;;
-        esac
-        ;;
-    esac
-    sleep 0.1
-  done
-  echo 'expected one active tunnel client service and supervised frpc child' >&2
-  return 1
+  guest "$node_instance" sudo bash -c '
+    set -euo pipefail
+    unit=$1
+    for _attempt in $(seq 1 20); do
+      service_pid=$(systemctl show --value -p MainPID "$unit")
+      service_restarts=$(systemctl show --value -p NRestarts "$unit")
+      case "$service_pid:$service_restarts" in
+        :*|*:|*[!0-9:]*) ;;
+        *)
+          frpc_pid=$(pgrep -P "$service_pid" -x frpc || true)
+          case "$frpc_pid" in
+            ""|*[!0-9]*) ;;
+            *) printf "%s %s %s\n" "$service_pid" "$service_restarts" "$frpc_pid"; exit 0 ;;
+          esac
+          ;;
+      esac
+      sleep 0.1
+    done
+    echo "expected one active tunnel client service and supervised frpc child" >&2
+    exit 1
+  ' vpnctl-capacity-state "$tunnel_client_unit"
+}
+
+capture_tunnel_client_process_state_before() {
+  read -r tunnel_service_pid_before tunnel_service_restarts_before tunnel_frpc_pid_before \
+    < <(tunnel_client_process_state)
+}
+
+finalize_reconnect_process_state() {
+  local service_pid_after service_restarts_after frpc_pid_after
+  read -r service_pid_after service_restarts_after frpc_pid_after < <(tunnel_client_process_state)
+  jq \
+    --argjson service_pid_before "$tunnel_service_pid_before" \
+    --argjson service_restarts_before "$tunnel_service_restarts_before" \
+    --argjson frpc_pid_before "$tunnel_frpc_pid_before" \
+    --argjson service_pid_after "$service_pid_after" \
+    --argjson service_restarts_after "$service_restarts_after" \
+    --argjson frpc_pid_after "$frpc_pid_after" '
+    . + {
+      client_service_pid_before: $service_pid_before,
+      client_service_pid_after: $service_pid_after,
+      client_service_restarts_before: $service_restarts_before,
+      client_service_restarts_after: $service_restarts_after,
+      frpc_child_pid_before: $frpc_pid_before,
+      frpc_child_pid_after: $frpc_pid_after,
+      frpc_child_recycled: ($frpc_pid_before != $frpc_pid_after),
+      recovered_without_client_service_restart:
+        ($service_pid_before == $service_pid_after and $service_restarts_before == $service_restarts_after)
+    }' "$run_root/reconnect.base.json" > "$run_root/reconnect.json"
+  rm -f -- "$run_root/reconnect.base.json"
 }
 
 run_connection_limits() {
@@ -721,40 +756,20 @@ start_loads() {
 
 inject_reconnect() {
   local gateway_ip down_seconds recovery_limit reconnect_base fault_status=0
-  local service_pid_before service_restarts_before frpc_pid_before
-  local service_pid_after service_restarts_after frpc_pid_after
   gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
   recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
-  read -r service_pid_before service_restarts_before frpc_pid_before < <(tunnel_client_process_state)
   reconnect_base="$run_root/reconnect.base.json"
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/fault \
     --unit "$tunnel_server_unit" --public-ip "$gateway_ip" \
     --certificate /etc/vpnctl-v2-spike/ingress/gateway.crt \
     --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
     > "$reconnect_base" || fault_status=$?
-  read -r service_pid_after service_restarts_after frpc_pid_after < <(tunnel_client_process_state)
-  jq \
-    --argjson service_pid_before "$service_pid_before" \
-    --argjson service_restarts_before "$service_restarts_before" \
-    --argjson frpc_pid_before "$frpc_pid_before" \
-    --argjson service_pid_after "$service_pid_after" \
-    --argjson service_restarts_after "$service_restarts_after" \
-    --argjson frpc_pid_after "$frpc_pid_after" '
-    . + {
-      client_service_pid_before: $service_pid_before,
-      client_service_pid_after: $service_pid_after,
-      client_service_restarts_before: $service_restarts_before,
-      client_service_restarts_after: $service_restarts_after,
-      frpc_child_pid_before: $frpc_pid_before,
-      frpc_child_pid_after: $frpc_pid_after,
-      frpc_child_recycled: ($frpc_pid_before != $frpc_pid_after),
-      recovered_without_client_service_restart:
-        ($service_pid_before == $service_pid_after and $service_restarts_before == $service_restarts_after)
-    }' "$reconnect_base" > "$run_root/reconnect.json"
-  rm -f -- "$reconnect_base"
-  jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
-  [ "$fault_status" -eq 0 ] || return "$fault_status"
+  if [ "$fault_status" -ne 0 ]; then
+    finalize_reconnect_process_state
+    jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
+    return "$fault_status"
+  fi
 }
 
 wait_loads() {
@@ -882,6 +897,7 @@ verify() {
   compose_ingress_tunnel
   setup_controller
   run_connection_limits
+  capture_tunnel_client_process_state_before
   start_loads
 
   fault_after=$(value '.fault.frps_stop_after_seconds')
@@ -907,6 +923,8 @@ verify() {
     printf 'capacity sustained load: %ss/%ss after FRP recovery\n' "$elapsed" "$duration"
   done
   wait_loads
+  finalize_reconnect_process_state
+  jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
 
   stop_background
   cleanup_owned

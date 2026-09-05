@@ -1144,6 +1144,45 @@ This journal records development-host mutations made while implementing and vali
   request, fault, resource, and connection bounds; the instrumentation neither
   retries traffic nor changes offered load or acceptance semantics.
 
+### Temporal diagnosis and out-of-band process snapshots
+
+- The clean-source diagnostic run at commit
+  `bfe9477909db2dfa3991d4edeb079766b659499b` completed the full workload and
+  remains `candidate` at
+  `artifacts/v2lab/capacity-e2e/run-20260905T125521Z/summary.json`. FRPS returned
+  the armed `503`, stayed down `2.887s`, and recovered with first success at
+  `1.869s` and five stable successes at `2.974s`; service identity remained
+  stable and the supervised frpc child recycled. Webhook delivery was
+  2928/3000, Bot API-like delivery 1500/1500, all failures were in the accepted
+  window, all five clients had zero loss, the 40/5 and 64/8 limits were exact,
+  and every memory/CPU/swap/disk/OOM/deadlock bound other than latency passed.
+- The new aggregate evidence localizes the failure instead of just correlating
+  it with the broad fault window. Webhook's first four 30-second buckets had
+  p99 at most 187.493 ms and its last three had p99 at most 157.819 ms; its
+  only post-window bad bucket was 180--210 seconds at p95/p99
+  `2029.865/2425.736ms`. Bot API-like traffic had the same isolated 180--210
+  second degradation at `5242.042/5913.710ms`, while its immediately preceding
+  and following buckets were below the original p95/p99 bounds. Generator
+  dispatch lag was much smaller than response latency, so request scheduling
+  is not the transport tail's source.
+- The harness's nominal 145-second injection actually reached FRPS at webhook
+  offsets 162--169 seconds because it opened three separate node SSH sessions
+  for service PID/restart/child PID immediately before the fault. It repeated
+  those three loaded-guest sessions immediately after recovery, overlapping
+  exactly the correlated 180--210 second degradation on the emulated 1-vCPU
+  node. These sessions are measurement control traffic, not the specified
+  Telegram/client workload.
+- Process identity is now sampled once before any load starts and once only
+  after every load process completes. Each snapshot executes all bounded
+  systemd/pgrep checks within one guest shell, while failed fault injection
+  still captures its after-state before aborting. The same before/after PID,
+  restart-count, and child-recycle assertions remain in the final summary.
+  Fault duration, recovery, offered traffic, request counts, connection limits,
+  resources, and overall p95/p99 hard gates are unchanged.
+- Owner cleanup again returned both exact fixtures to independently verified
+  `Stopped` states, and no QEMU crash report appeared. The correction changes
+  only source and aggregate ignored evidence; no manual host rollback remains.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
