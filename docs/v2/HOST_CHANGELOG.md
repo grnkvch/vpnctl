@@ -29,7 +29,9 @@ This journal records development-host mutations made while implementing and vali
   checksums. The composed route changes only the ingress-owned upstream from
   loopback `18081` to the FRP loopback mapping `18111`, stops the unused local
   receiver, and replaces the tunnel-owned node test backend with an explicitly
-  capacity-owned HTTP receiver for the duration of the run.
+  capacity-owned HTTP receiver for the duration of the run. The receiver runs
+  through a capacity-owned `ExecStart` drop-in on the tunnel backend unit so
+  the existing FRP client's required-unit relationship remains intact.
 - New capacity resources use exact owner `vpnctl-v2-capacity-v1` under
   `/etc/vpnctl-v2-capacity`, `/usr/local/libexec/vpnctl-v2-capacity`, and
   `/var/lib/vpnctl-v2-capacity`. Gateway scope is one `v2capwg` interface on
@@ -39,7 +41,9 @@ This journal records development-host mutations made while implementing and vali
   measured without PKI-generation heap residue. Node scope is five exact
   `v2capc1`–`v2capc5` namespaces/veth pairs, the owner-only
   `ip/vpnctl_v2_capacity_clients` NAT table, temporary forwarding enabled from
-  a saved exact prior value, and `vpnctl-v2-capacity-backend.service`.
+  a saved exact prior value, and the exact
+  `/etc/systemd/system/vpnctl-v2-spike-tunnel-backend.service.d/vpnctl-v2-capacity-backend.conf`
+  drop-in.
 - The gateway sampler is intentionally included in whole-host memory/CPU
   totals. Acceptance requires controller idle RSS at most 20 MiB, average CPU
   at most 85%, at least 64 MiB `MemAvailable`, no more than 512 MiB swap use,
@@ -116,6 +120,30 @@ This journal records development-host mutations made while implementing and vali
   removing that exact file it removes only the now-empty ingress/spike
   directories; ordinary owned runs remove the same exact backup before child
   uninstall if one is ever present.
+
+### Second composed-path attempt and required-unit correction
+
+- The clean-source run at commit
+  `7394751ca0283f055477480275f9478b225c4a77` again stopped at composed-path
+  readiness with HTTP 503, before the controller, limit, and sustained-load
+  phases. Captured diagnostics show nginx, FRPS, tunnel authorization, and the
+  replacement capacity receiver active, but the FRP client and its original
+  backend inactive and no listener on the gateway's forwarded port 18111.
+  The incomplete ignored evidence is at
+  `artifacts/v2lab/capacity-e2e/run-20260905T004235Z`.
+- Root cause was the child FRP client unit's explicit `Requires=` dependency on
+  `vpnctl-v2-spike-tunnel-backend.service`: stopping that backend to launch a
+  separate capacity service correctly stopped FRPC as well. The capacity
+  fixture now leaves the required unit identity active and installs only the
+  exact owner-scoped `ExecStart` drop-in named above, then daemon-reloads and
+  restarts the backend and FRP client. Cleanup removes that exact drop-in
+  before the child tunnel owner-uninstall. No acceptance bound changed.
+- The armed trap removed all owned guest resources, temporary copies, the
+  exact host build directory, and child provider fixtures, then restored both
+  machines to `Stopped`. The next run also samples the node's Mihomo, backend,
+  and FRP client cgroups; the whole-stack no-OOM assertion now combines those
+  results with the gateway services while gateway sizing thresholds remain
+  scoped to the specified 1-vCPU/512-MiB target.
 
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 

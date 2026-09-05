@@ -14,12 +14,14 @@ capacity_owner=vpnctl-v2-capacity-v1
 capacity_root=/etc/vpnctl-v2-capacity
 capacity_owner_path=$capacity_root/.owner
 controller_unit=vpnctl-v2-capacity-controller.service
-backend_unit=vpnctl-v2-capacity-backend.service
+capacity_backend_dropin=vpnctl-v2-capacity-backend.conf
 tunnel_server_unit=vpnctl-v2-spike-tunnel-server.service
 tunnel_backend_unit=vpnctl-v2-spike-tunnel-backend.service
+tunnel_client_unit=vpnctl-v2-spike-tunnel-client.service
 ingress_unit=vpnctl-v2-spike-ingress.service
 ingress_webhook_unit=vpnctl-v2-spike-webhook.service
 restricted_gateway_unit=vpnctl-v2-spike-restricted-gateway.service
+restricted_node_unit=vpnctl-v2-spike-restricted-node.service
 restricted_echo_unit=vpnctl-v2-spike-echo.service
 restricted_udp_unit=vpnctl-v2-spike-udp-echo.service
 tunnel_auth_unit=vpnctl-v2-spike-tunnel-auth.service
@@ -143,20 +145,22 @@ cleanup_capacity_instance() {
       fi
       ;;
     node)
-      guest "$instance" sudo systemctl stop "$backend_unit" >/dev/null 2>&1 || true
       if guest "$instance" sudo test -x /usr/local/libexec/vpnctl-v2-capacity/clients; then
         guest "$instance" sudo /usr/local/libexec/vpnctl-v2-capacity/clients cleanup-node
       else
         echo "capacity node cleanup helper is absent" >&2
         return 3
       fi
+      guest "$instance" sudo rm -f \
+        "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
+      guest "$instance" sudo rmdir "/etc/systemd/system/$tunnel_backend_unit.d" >/dev/null 2>&1 || true
       ;;
     *) return 2 ;;
   esac
-  guest "$instance" sudo rm -f "/etc/systemd/system/$controller_unit" "/etc/systemd/system/$backend_unit"
+  guest "$instance" sudo rm -f "/etc/systemd/system/$controller_unit"
   guest "$instance" sudo rm -rf -- /usr/local/libexec/vpnctl-v2-capacity /var/lib/vpnctl-v2-capacity
   guest "$instance" sudo systemctl daemon-reload
-  guest "$instance" sudo systemctl reset-failed "$controller_unit" "$backend_unit" >/dev/null 2>&1 || true
+  guest "$instance" sudo systemctl reset-failed "$controller_unit" >/dev/null 2>&1 || true
 }
 
 cleanup_capacity() {
@@ -200,7 +204,7 @@ cleanup_guest_temporary() {
     /tmp/clients.sh /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" \
     /tmp/vpnctl-v2-capacity-peers.conf >/dev/null 2>&1 || true
   guest "$node_instance" sudo rm -f \
-    /tmp/clients.sh /tmp/client_load.py /tmp/load.py "/tmp/$backend_unit" \
+    /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
     /tmp/webhook_receiver.py /tmp/ingress_load.py /tmp/vpnctl-v2-capacity-gateway.crt \
     >/dev/null 2>&1 || true
 }
@@ -294,13 +298,11 @@ assert_clean() {
       exit 3
     fi
   done
-  for unit in "$controller_unit" "$backend_unit"; do
-    if guest "$gateway_instance" systemctl is-active --quiet "$unit" ||
-       guest "$node_instance" systemctl is-active --quiet "$unit"; then
-      echo "capacity unit remains active: $unit" >&2
-      exit 3
-    fi
-  done
+  if guest "$gateway_instance" systemctl is-active --quiet "$controller_unit"; then
+    echo "capacity controller remains active" >&2
+    exit 3
+  fi
+  assert_path_absent "$node_instance" "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
   for package in nginx nginx-common; do
     if guest "$gateway_instance" dpkg-query -W "$package" >/dev/null 2>&1; then
       echo "owned capacity nginx package remains: $package" >&2
@@ -314,7 +316,7 @@ assert_capacity_temporary_absent() {
   for path in /tmp/clients.sh /tmp/monitor.py /tmp/controller "/tmp/$controller_unit" /tmp/vpnctl-v2-capacity-peers.conf; do
     assert_path_absent "$gateway_instance" "$path"
   done
-  for path in /tmp/clients.sh /tmp/client_load.py /tmp/load.py "/tmp/$backend_unit" \
+  for path in /tmp/clients.sh /tmp/client_load.py /tmp/load.py /tmp/monitor.py "/tmp/$capacity_backend_dropin" \
     /tmp/webhook_receiver.py /tmp/ingress_load.py /tmp/vpnctl-v2-capacity-gateway.crt; do
     assert_path_absent "$node_instance" "$path"
   done
@@ -346,8 +348,8 @@ copy_capacity_files() {
     "$fixture_root/clients.sh" "$fixture_root/monitor.py" "$fixture_root/$controller_unit" \
     "$temporary_root/controller" "$gateway_instance:/tmp/"
   limactl copy --backend=scp \
-    "$fixture_root/clients.sh" "$fixture_root/client_load.py" "$fixture_root/load.py" \
-    "$fixture_root/$backend_unit" "$repository_root/test/v2lab/ingress/webhook_receiver.py" \
+    "$fixture_root/clients.sh" "$fixture_root/client_load.py" "$fixture_root/load.py" "$fixture_root/monitor.py" \
+    "$fixture_root/$capacity_backend_dropin" "$repository_root/test/v2lab/ingress/webhook_receiver.py" \
     "$repository_root/test/v2lab/ingress/ingress_load.py" "$node_instance:/tmp/"
 }
 
@@ -413,10 +415,12 @@ compose_ingress_tunnel() {
   guest "$node_instance" sudo install -m 0755 /tmp/load.py /usr/local/libexec/vpnctl-v2-capacity/load
   guest "$node_instance" sudo install -m 0755 /tmp/client_load.py /usr/local/libexec/vpnctl-v2-capacity/client-load
   guest "$node_instance" sudo install -m 0755 /tmp/ingress_load.py /usr/local/libexec/vpnctl-v2-capacity/ingress-load
-  guest "$node_instance" sudo install -m 0644 "/tmp/$backend_unit" "/etc/systemd/system/$backend_unit"
-  guest "$node_instance" sudo systemctl stop "$tunnel_backend_unit"
+  guest "$node_instance" sudo install -d -m 0755 "/etc/systemd/system/$tunnel_backend_unit.d"
+  guest "$node_instance" sudo install -m 0644 "/tmp/$capacity_backend_dropin" \
+    "/etc/systemd/system/$tunnel_backend_unit.d/$capacity_backend_dropin"
   guest "$node_instance" sudo systemctl daemon-reload
-  guest "$node_instance" sudo systemctl start "$backend_unit"
+  guest "$node_instance" sudo systemctl restart "$tunnel_backend_unit"
+  guest "$node_instance" sudo systemctl restart "$tunnel_client_unit"
 
   guest "$gateway_instance" sudo sed -i \
     's|127.0.0.1:18081|127.0.0.1:18111|g' /etc/vpnctl-v2-spike/ingress/nginx.conf
@@ -446,7 +450,7 @@ capture_composition_failure() {
     -p Id -p ActiveState -p SubState -p MainPID -p NRestarts \
     > "$run_root/composition-gateway-units.txt" 2>&1 || true
   guest "$node_instance" systemctl show --no-pager \
-    "$backend_unit" "$tunnel_backend_unit" vpnctl-v2-spike-tunnel-client.service \
+    "$tunnel_backend_unit" "$tunnel_client_unit" \
     -p Id -p ActiveState -p SubState -p MainPID -p NRestarts \
     > "$run_root/composition-node-units.txt" 2>&1 || true
   guest "$gateway_instance" sudo ss -H -ltnp \
@@ -457,7 +461,7 @@ capture_composition_failure() {
     -u "$ingress_unit" -u "$tunnel_auth_unit" -u "$tunnel_server_unit" \
     > "$run_root/composition-gateway-journal.txt" 2>&1 || true
   guest "$node_instance" sudo journalctl --no-pager -n 80 \
-    -u "$backend_unit" -u vpnctl-v2-spike-tunnel-client.service \
+    -u "$tunnel_backend_unit" -u "$tunnel_client_unit" \
     > "$run_root/composition-node-journal.txt" 2>&1 || true
   guest "$gateway_instance" sudo cat /var/lib/vpnctl-v2-spike-tunnel-auth/metrics.json \
     > "$run_root/composition-tunnel-metrics.json" 2>/dev/null || true
@@ -506,6 +510,11 @@ start_loads() {
     --unit "$tunnel_server_unit" --unit "$restricted_gateway_unit" \
     --unit "$restricted_echo_unit" --unit "$restricted_udp_unit" \
     > "$run_root/gateway-resources.json" &
+  background_pids+=("$!")
+  guest "$node_instance" sudo /tmp/monitor.py \
+    --duration "$monitor_duration" --interval 2 \
+    --unit "$restricted_node_unit" --unit "$tunnel_backend_unit" --unit "$tunnel_client_unit" \
+    > "$run_root/node-resources.json" &
   background_pids+=("$!")
   guest "$node_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/client-load --duration "$duration" \
     > "$run_root/clients.json" &
@@ -574,6 +583,7 @@ write_summary() {
     --slurpfile api "$run_root/api-load.json" \
     --slurpfile clients "$run_root/clients.json" \
     --slurpfile resources "$run_root/gateway-resources.json" \
+    --slurpfile node_resources "$run_root/node-resources.json" \
     --slurpfile reconnect "$run_root/reconnect.json" \
     --slurpfile expose_limit "$run_root/per-expose-limit.json" \
     --slurpfile gateway_limit "$run_root/gateway-limit.json" '
@@ -586,12 +596,13 @@ write_summary() {
       controller: $controller[0],
       workload: {webhook: $webhook[0], bot_api: $api[0], clients: $clients[0]},
       resources: $resources[0],
+      node_resources: $node_resources[0],
       reconnect: $reconnect[0],
       connection_limits: {
         per_expose: {accepted: $expose_limit[0].status_counts["200"], rejected: $expose_limit[0].status_counts["503"]},
         gateway: {accepted: $gateway_limit[0].status_counts["200"], rejected: $gateway_limit[0].status_counts["503"]}
       },
-      no_oom: ([ $resources[0].services[].oom_kills ] | add) == 0,
+      no_oom: (([ $resources[0].services[].oom_kills, $node_resources[0].services[].oom_kills ] | add) == 0),
       no_deadlock: ($webhook[0].status == "completed" and $api[0].status == "completed" and $clients[0].status == "passed"),
       cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}
     }' > "$run_root/summary.json"
