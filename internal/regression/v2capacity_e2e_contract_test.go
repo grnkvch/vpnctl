@@ -78,7 +78,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	faultHelper := readContractFile(t, filepath.Join(fixtureRoot, "fault.sh"))
 	for _, required := range []string{
-		"systemctl stop --no-block", "--kill-who=all --signal=KILL",
+		"systemctl stop --no-block", "fault_active_state=$(systemctl show", "--kill-whom=all --signal=KILL",
 		"down_started=$(monotonic)", "systemd-run --quiet --collect", "--timer-property=AccuracySec=10ms", "unavailable_status: $unavailable_probe.status",
 		"ActiveEnterTimestampMonotonic",
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
@@ -109,6 +109,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".reconnect.status == \"passed\"",
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
+		"status: \"candidate\"", "finalize_summary", ".status = \"passed\"",
 		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {

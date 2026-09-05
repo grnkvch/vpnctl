@@ -742,7 +742,7 @@ write_summary() {
     --slurpfile gateway_limit_backend "$run_root/gateway-limit-backend.json" '
     {
       schema_version: 1,
-      status: "passed",
+      status: "candidate",
       source_commit: $source_commit,
       profile: $profile[0].profile,
       target: $profile[0].target,
@@ -767,7 +767,7 @@ write_summary() {
 
 assert_summary() {
   jq -e --slurpfile limits "$manifest" '
-    .status == "passed" and
+    .status == "candidate" and
     .profile.logical_telegram_users == 300 and .profile.personal_clients == 5 and
     .controller.within_target and
     .workload.webhook.scheduled_requests == (.profile.duration_seconds * .profile.webhook_requests_per_second) and
@@ -798,6 +798,13 @@ assert_summary() {
     .connection_limits.gateway.observed_maximum_active_upstreams >= 60 and
     .no_oom and .no_deadlock
   ' "$run_root/summary.json" >/dev/null
+}
+
+finalize_summary() {
+  local candidate="$run_root/summary.json"
+  local accepted="$run_root/summary.json.accepted"
+  jq '.status = "passed"' "$candidate" > "$accepted"
+  mv -f -- "$accepted" "$candidate"
 }
 
 verify() {
@@ -874,6 +881,7 @@ verify() {
   temporary_root=
   write_summary "$source_commit"
   assert_summary
+  finalize_summary
   printf 'minimum-gateway capacity E2E evidence: %s\n' "$run_root/summary.json"
 }
 

@@ -117,7 +117,10 @@ systemctl stop --no-block "$unit"
 restore_required=true
 sleep 0.25
 down_started=$(monotonic)
-systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
+fault_active_state=$(systemctl show --value -p ActiveState "$unit")
+if [ "$fault_active_state" != inactive ] && [ "$fault_active_state" != failed ]; then
+  systemctl kill --kill-whom=all --signal=KILL "$unit" >/dev/null
+fi
 systemd-run --quiet --collect --unit="$restart_job" \
   --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \
   /bin/systemctl start "$unit"

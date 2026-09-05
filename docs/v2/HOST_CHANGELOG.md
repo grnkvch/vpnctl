@@ -625,6 +625,38 @@ This journal records development-host mutations made while implementing and vali
   fixture/package/VM rollback. The prior run again returned both VMs to
   `Stopped`; no manual cleanup remains.
 
+### Persistent-probe result and corrected hard-kill option
+
+- The clean-source run at commit
+  `03f6229582caab63564b80dd3bea81c96b82f2fd` completed all 300 seconds and
+  wrote diagnostic summary
+  `artifacts/v2lab/capacity-e2e/run-20260905T072127Z/summary.json`. The
+  persistent recovery process observed first HTTPS success at `4.207s` and
+  five consecutive successes by `5.033s`; one frpc child recycle kept the
+  tunnel-client service PID/restart count unchanged. Webhook delivery was
+  `2912/3000` with all 88 expected `503` responses inside the accepted window,
+  p95/p99 `98.751/525.761ms`; Bot API-like delivery was `1500/1500` with
+  p95/p99 `376.350/1915.529ms`; and all five clients had zero packet loss.
+  Controller idle RSS was 11 MiB. Gateway/node average CPU was
+  `38.688/52.749%`, minimum available memory `251944960/193273856` bytes,
+  maximum swap `35434496/14012416` bytes, disk growth `106496/0` bytes, and
+  every measured unit had zero OOM kills.
+- The run is nevertheless not accepted: actual FRPS down time was `4.247s`,
+  outside the unchanged `2.75--3.50s` injection bound, and the final hard-check
+  returned nonzero. The apparent collected-timer delay was the remaining
+  graceful stop job. Inspection found that the fixture used unsupported
+  `systemctl kill --kill-who=...`; its ignored error left frps to exit softly.
+  Systemd 255 names the option `--kill-whom`.
+- The correction calls `--kill-whom=all` only while the exact owned unit is
+  still stopping and no longer suppresses that command's failure. The same
+  collected timer then starts from a genuinely terminated cgroup. The harness
+  also writes summary status `candidate`, validates every hard bound, and only
+  then atomically rewrites it to `passed`; failed diagnostic summaries can no
+  longer claim acceptance. Neither change alters production code or bounds.
+- Cleanup removed the transient timer/service, all composed owner resources
+  and packages, and returned both VMs to `Stopped`. No manual rollback remains;
+  the next clean repeat retains the same exact mutation boundary.
+
 ## 2026-09-05 — planned update/rollback and backup/restore E2E
 
 ### Source-only execution boundary
