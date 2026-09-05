@@ -66,6 +66,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isPresetCatalogInvocation(args) {
 		return executePresetCatalog(args, stdout, stderr)
 	}
+	if isPolicyInvocation(args) {
+		return executePolicy(args, stdout, stderr)
+	}
 	if isInviteInvocation(args) {
 		return executeInvite(args, stdout, stderr)
 	}

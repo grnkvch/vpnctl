@@ -2,6 +2,39 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-05 — public policy commands and node-to-gateway policy RPC
+
+### Source-only implementation boundary
+
+- The public v2 entrypoint now executes `policy show/set/clear`. Gateway calls
+  require one explicit `--client` target; node calls can target only the
+  authenticated current node. Full replacement and clear remain the only
+  mutation forms, and node `--defer` has no offline/local fallback.
+- Node planning and commit use bounded short-lived mTLS control RPC requests.
+  The gateway reconstructs every plan from authoritative state and rejects a
+  commit when the reviewed state/preset-source fingerprint is stale. A
+  deferred command durably stores a real UUID-addressed pending `apply`
+  operation on the gateway, including the no-op-policy case, and returns that
+  operation ID in the stable result.
+- The joined-node control client loads the exact current certificate
+  generation and trusted CA bundle from root-only secret storage, clears
+  credential buffers after TLS construction, and exposes no secret material.
+  Policy inspection and classification-boundary output are secret-free.
+- Changes are confined to repository source/tests and disposable Go build
+  cache. Test fixtures write only under exact temporary roots. No vpnctl role
+  was initialized, no external gateway or node was contacted, and no host
+  service, firewall, route, DNS, swap, package, certificate, `/etc`, or `/var`
+  resource was changed. Repository rollback is one ordinary `git revert` of
+  the implementation commit.
+
+### Acceptance
+
+- Routing, control, operations, controller, CLI, and regression suites pass.
+  Coverage proves authoritative plan/commit, stale-source rejection, durable
+  changed and no-op defer receipts, public dry-run/defer dispatch, role/target
+  rejection before service construction, stable operation IDs, secret-free
+  policy views, and preservation of the repository dependency direction.
+
 ## 2026-09-05 — public client, node lifecycle, and preset command wiring
 
 ### Source-only implementation boundary

@@ -1,11 +1,15 @@
 package routing
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
@@ -44,6 +48,61 @@ type DesiredPolicy struct {
 	GatewayStateGeneration  uint64
 }
 
+// PolicyView is the secret-free effective assignment exposed by policy show.
+// A zero PolicyGeneration with present empty arrays means the target is
+// explicitly all-direct and has no materialized policy record.
+type PolicyView struct {
+	TargetKind       model.TargetKind
+	TargetID         string
+	TargetName       string
+	PresetNames      []string
+	Selectors        []model.Selector
+	EffectiveHash    string
+	PolicyGeneration uint64
+	StateGeneration  uint64
+}
+
+func ShowCurrentNodePolicy(state model.State) (PolicyView, error) {
+	if err := state.Validate(); err != nil {
+		return PolicyView{}, fmt.Errorf("validate node policy state: %w", err)
+	}
+	if state.Host.Role != model.RoleNode || len(state.Nodes) != 1 {
+		return PolicyView{}, fmt.Errorf("current policy inspection requires one initialized node")
+	}
+	return policyView(state, model.TargetNode, state.Nodes[0].ID, state.Nodes[0].Name, state.Nodes[0].AssignedPresets)
+}
+
+func ShowClientPolicy(state model.State, reference string) (PolicyView, error) {
+	if err := state.Validate(); err != nil {
+		return PolicyView{}, fmt.Errorf("validate gateway policy state: %w", err)
+	}
+	if state.Host.Role != model.RoleGateway {
+		return PolicyView{}, fmt.Errorf("client policy inspection requires gateway state")
+	}
+	targetID, targetName, presets, err := resolvePolicyTarget(state, model.TargetClient, reference)
+	if err != nil {
+		return PolicyView{}, err
+	}
+	return policyView(state, model.TargetClient, targetID, targetName, presets)
+}
+
+func policyView(state model.State, kind model.TargetKind, targetID, targetName string, presets []string) (PolicyView, error) {
+	view := PolicyView{
+		TargetKind: kind, TargetID: targetID, TargetName: targetName,
+		PresetNames: append([]string{}, presets...), Selectors: []model.Selector{}, StateGeneration: state.Generation,
+	}
+	if policy, found := findTargetPolicy(state.Policies, kind, targetID); found {
+		view.PresetNames = append([]string{}, policy.PresetNames...)
+		view.Selectors = append([]model.Selector{}, policy.Selectors...)
+		view.EffectiveHash = policy.EffectiveHash
+		view.PolicyGeneration = policy.Generation
+	}
+	if view.PresetNames == nil || view.Selectors == nil {
+		return PolicyView{}, fmt.Errorf("policy view arrays are absent")
+	}
+	return view, nil
+}
+
 type PolicyReplacementPlan struct {
 	Command                 PolicyCommand
 	TargetKind              model.TargetKind
@@ -62,10 +121,43 @@ type PolicyReplacementPlan struct {
 	candidate     model.State
 }
 
+// Fingerprint binds a remotely reviewed plan to its exact effective source
+// snapshot and candidate state without exposing either internal value.
+func (plan PolicyReplacementPlan) Fingerprint() (string, error) {
+	if err := validatePolicyPlan(plan); err != nil {
+		return "", err
+	}
+	candidate, err := json.Marshal(plan.candidate)
+	if err != nil {
+		return "", err
+	}
+	material := struct {
+		Command       PolicyCommand `json:"command"`
+		TargetID      string        `json:"target_id"`
+		PresetNames   []string      `json:"preset_names"`
+		Expected      uint64        `json:"expected"`
+		Deferred      bool          `json:"deferred"`
+		SourceSetHash string        `json:"source_set_hash"`
+		CandidateHash string        `json:"candidate_hash"`
+	}{
+		Command: plan.Command, TargetID: plan.TargetID, PresetNames: append([]string{}, plan.PresetNames...),
+		Expected: plan.ExpectedStateGeneration, Deferred: plan.Deferred, SourceSetHash: plan.sourceSetHash,
+	}
+	candidateDigest := sha256.Sum256(candidate)
+	material.CandidateHash = hex.EncodeToString(candidateDigest[:])
+	encoded, err := json.Marshal(material)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 type PolicyCommitResult struct {
 	Command                PolicyCommand
 	Changed                bool
 	Pending                bool
+	OperationID            string
 	StateGeneration        uint64
 	RequiresClientReExport bool
 	Desired                DesiredPolicy
@@ -132,6 +224,10 @@ func (result PolicyCommitResult) OutputResult() output.Result {
 		resourceKey = "client_id"
 	}
 	public.ResourceIDs = map[string]string{resourceKey: result.Desired.TargetID}
+	if result.OperationID != "" {
+		public.ResourceIDs["operation_id"] = result.OperationID
+		public.Data["operation_id"] = result.OperationID
+	}
 	if result.RequiresClientReExport {
 		public.RequiresAction = append(public.RequiresAction, output.Action{
 			Code:    "re_export_client",
@@ -154,6 +250,8 @@ func (result PolicyCommitResult) OutputResult() output.Result {
 type PolicyManager struct {
 	paths store.Paths
 	state PolicyStateStore
+	now   func() time.Time
+	uuid  model.UUIDGenerator
 }
 
 func NewPolicyManager(paths store.Paths, state PolicyStateStore) (*PolicyManager, error) {
@@ -164,7 +262,7 @@ func NewPolicyManager(paths store.Paths, state PolicyStateStore) (*PolicyManager
 	if err != nil || want != paths {
 		return nil, fmt.Errorf("policy manager paths do not match the system root")
 	}
-	return &PolicyManager{paths: paths, state: state}, nil
+	return &PolicyManager{paths: paths, state: state, now: time.Now, uuid: model.NewUUID}, nil
 }
 
 func (manager *PolicyManager) PlanClientSet(clientReference string, presetNames []string) (PolicyReplacementPlan, error) {
@@ -229,6 +327,13 @@ func (manager *PolicyManager) planGatewayPolicy(kind model.TargetKind, reference
 	nextGeneration := state.Generation
 	if changed {
 		nextGeneration = candidate.Generation
+	} else if deferred {
+		nextGeneration, err = model.NextGeneration(state.Generation)
+		if err != nil {
+			return PolicyReplacementPlan{}, err
+		}
+		candidate.Generation = nextGeneration
+		desired.GatewayStateGeneration = nextGeneration
 	}
 	return PolicyReplacementPlan{
 		Command: command, TargetKind: kind, TargetID: targetID, TargetName: targetName,
@@ -265,6 +370,34 @@ func (manager *PolicyManager) Commit(plan PolicyReplacementPlan) (PolicyCommitRe
 			return PolicyCommitResult{}, resolveErr
 		}
 	}
+	if plan.Deferred {
+		candidate := plan.candidate
+		operationID, err := model.AllocateUUID(occupiedPolicyOperationIDs(current), manager.uuid)
+		if err != nil {
+			return PolicyCommitResult{}, err
+		}
+		at := manager.now().UTC()
+		operation := model.Operation{
+			SchemaVersion: model.ResourceSchemaVersion, ID: operationID, Type: model.OperationApply,
+			State: model.OperationPending, TargetKind: "policy", TargetID: plan.TargetID,
+			ExpectedGeneration: current.Generation, DesiredGeneration: candidate.Generation,
+			Steps: []model.OperationStep{}, CreatedAt: at, UpdatedAt: at,
+		}
+		if err := operation.Validate(); err != nil {
+			return PolicyCommitResult{}, err
+		}
+		candidate.Operations = append(append([]model.Operation{}, candidate.Operations...), operation)
+		if err := model.ValidateTransition(current, candidate); err != nil {
+			return PolicyCommitResult{}, fmt.Errorf("%w: deferred candidate transition is no longer valid: %v", ErrPolicyStalePlan, err)
+		}
+		if err := manager.state.Save(current.Generation, candidate); err != nil {
+			return PolicyCommitResult{}, err
+		}
+		result := policyCommitResult(plan, candidate.Generation)
+		result.Pending = true
+		result.OperationID = operationID
+		return result, nil
+	}
 	if !plan.Changed {
 		if !reflect.DeepEqual(current, plan.candidate) {
 			return PolicyCommitResult{}, fmt.Errorf("%w: no-op candidate differs from current state", ErrPolicyStalePlan)
@@ -287,6 +420,17 @@ func policyCommitResult(plan PolicyReplacementPlan, generation uint64) PolicyCom
 		Command: plan.Command, Changed: plan.Changed, Pending: plan.Changed && plan.TargetKind == model.TargetNode && plan.Deferred,
 		StateGeneration: generation, RequiresClientReExport: plan.RequiresClientReExport, Desired: desired,
 	}
+}
+
+func occupiedPolicyOperationIDs(state model.State) map[string]struct{} {
+	occupied := make(map[string]struct{}, len(state.Operations)*2)
+	for _, operation := range state.Operations {
+		occupied[operation.ID] = struct{}{}
+		if operation.RequestID != "" {
+			occupied[operation.RequestID] = struct{}{}
+		}
+	}
+	return occupied
 }
 
 func (manager *PolicyManager) loadGatewayState() (model.State, error) {
@@ -561,7 +705,7 @@ func validatePolicyPlan(plan PolicyReplacementPlan) error {
 		return fmt.Errorf("policy plan has invalid desired policy: %w", err)
 	}
 	wantNext := plan.ExpectedStateGeneration
-	if plan.Changed {
+	if plan.Changed || plan.Deferred {
 		var err error
 		wantNext, err = model.NextGeneration(plan.ExpectedStateGeneration)
 		if err != nil {
@@ -745,6 +889,12 @@ func validateDesiredNodePolicy(desired DesiredPolicy) error {
 		return fmt.Errorf("invalid desired node policy: %w", err)
 	}
 	return nil
+}
+
+// ValidateDesiredNodePolicy validates the gateway-to-node policy handoff
+// without exposing PolicyManager's persistence internals.
+func ValidateDesiredNodePolicy(desired DesiredPolicy) error {
+	return validateDesiredNodePolicy(desired)
 }
 
 type NodePolicyResult struct {

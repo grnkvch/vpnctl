@@ -11,6 +11,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -113,7 +114,15 @@ func newSystemControlRPC(ctx context.Context, controller *Controller, stateStore
 	if err != nil {
 		return nil, err
 	}
-	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose}
+	policyManager, err := routing.NewPolicyManager(paths, stateStore)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := operations.NewPolicyGatewayRPCHandler(&controller.mutationMu, policyManager, stateStore)
+	if err != nil {
+		return nil, err
+	}
+	handler := systemRPCMux{update: preflight, uninstall: uninstall, expose: expose, policy: policy}
 	handlers := make(map[int]control.RPCHandler, len(state.Components.ControlProtocols))
 	for _, rawVersion := range state.Components.ControlProtocols {
 		version, parseErr := control.ParseRPCProtocolVersion(rawVersion)

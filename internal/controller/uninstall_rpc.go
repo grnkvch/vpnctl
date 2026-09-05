@@ -104,6 +104,7 @@ type systemRPCMux struct {
 	update    control.RPCHandler
 	uninstall control.RPCHandler
 	expose    control.RPCHandler
+	policy    control.RPCHandler
 }
 
 func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, request control.RPCRequest) (control.RPCHandlerResult, error) {
@@ -115,6 +116,8 @@ func (mux systemRPCMux) HandleRPC(ctx context.Context, peer control.RPCPeer, req
 	case operations.ExposePlanRPCOperation, operations.ExposeReserveRPCOperation, operations.ExposePublishRPCOperation,
 		operations.ExposeAbortRPCOperation, operations.ExposeDeferRPCOperation:
 		return mux.expose.HandleRPC(ctx, peer, request)
+	case operations.PolicyPlanRPCOperation, operations.PolicyCommitRPCOperation:
+		return mux.policy.HandleRPC(ctx, peer, request)
 	default:
 		return uninstallRPCFailure(request, http.StatusUnprocessableEntity, "validation", 0, "unsupported_operation", "the requested control operation is unsupported"), nil
 	}
