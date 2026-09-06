@@ -1,0 +1,28 @@
+## Why
+
+The clean deployed v2 release gate spends roughly 90% of its wall time in Lima stages, including about 18 minutes repeatedly booting and stopping the same two constrained x86_64 fixtures. A late deterministic failure currently makes the next source commit pay that full cost again, so the gate needs a faster execution topology without weakening or hiding any evidence.
+
+## What Changes
+
+- Split automated execution into explicit host-only `fast` and Lima-backed `vm` phases while retaining the existing full `run-automated` composition and explicit resume behavior.
+- Record structured monotonic phase timings so future optimization is based on comparable evidence rather than reconstructed timestamps.
+- Run all pending VM stages inside one owner-scoped Lima session per invocation, with a fail-closed clean-state witness between stages and stopped fixtures before and after the invocation.
+- Make tunnel and ingress release checks canonical VM attempts and let the unique failure-path stage depend on their exact immutable result hashes instead of executing both release harnesses a second time.
+- Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal.
+- Keep parallel VM boot, background-service quiescence, lean images, deeper standard/tunnel/routing deduplication, and APT caching outside this change until separate measurements justify them.
+
+## Capabilities
+
+### New Capabilities
+
+None.
+
+### Modified Capabilities
+
+- `release-delivery-and-migration`: Add phase-selective execution, structured timings, a single isolated VM session with clean-state witnesses, and hash-bound canonical stage dependencies to the resumable deployed release gate.
+
+## Impact
+
+- Affects `scripts/v2deployed-release-gate.sh`, the Lima E2E harness boundary, failure/tunnel/ingress orchestration, release-gate evidence schemas, regression fixtures, traceability, and operator documentation.
+- Adds no product command, daemon, network endpoint, dependency, relaxed threshold, or migration of existing evidence.
+- The next release candidate must use a newly prepared evidence directory because these source and evidence-contract changes invalidate earlier candidates by design.

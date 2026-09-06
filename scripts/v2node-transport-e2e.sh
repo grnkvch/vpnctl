@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/node-transport-e2e"
 gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
@@ -213,6 +214,8 @@ write_summary() {
 
 verify() {
   local stamp
+  VPNCTL_V2_TIMING_PRODUCER=node-transport
+  v2_timing_begin
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root="$artifact_root/run-$stamp"
   mkdir -p "$run_root"
@@ -226,16 +229,20 @@ verify() {
   # by the clean preflight below.
   cleanup_harnesses
   assert_preflight_clean
+  v2_timing_mark preflight
 
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./internal/transport ./internal/cli \
     -run 'TestV2ManualTransportRoundTrip|TestTransportSwitchWorkflowDefer' -count=1 \
     > "$run_root/source-flows.log"
+  v2_timing_mark source_checks
 
   "$repository_root/scripts/v2standard-test.sh" verify > "$run_root/standard.log"
   "$repository_root/scripts/v2restricted-uot-test.sh" verify > "$run_root/restricted-uot.log"
+  v2_timing_mark transport_checks
 
   "$repository_root/scripts/v2routing-spike.sh" prepare > "$run_root/routing-prepare.log"
   "$repository_root/scripts/v2routing-spike.sh" verify "$run_root/routing" > "$run_root/routing-verify.log"
+  v2_timing_mark routing_checks
 
   "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
   "$repository_root/scripts/v2tunnel-spike.sh" verify "$run_root/tunnel" > "$run_root/tunnel-verify.log"
@@ -244,6 +251,7 @@ verify() {
     /etc/vpnctl-v2-spike/restricted/.owner vpnctl-v2-restricted-spike-v1; then
     "$repository_root/scripts/v2restricted-spike.sh" uninstall > "$run_root/restricted-uninstall.log"
   fi
+  v2_timing_mark tunnel_checks
 
   verify_final_cleanup
   write_summary
@@ -262,6 +270,7 @@ verify() {
     (.reverse_tunnel.standard_direct_packets > 0) and
     (.reverse_tunnel.restricted_shadowtls_packets > 0) and
     .cleanup.temporary_resources_absent' "$run_root/summary.json" >/dev/null
+  v2_timing_finish cleanup_and_validation
   printf 'node transport E2E evidence: %s\n' "$run_root/summary.json"
 }
 

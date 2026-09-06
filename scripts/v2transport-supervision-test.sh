@@ -14,6 +14,16 @@ standard_unit_path="/etc/systemd/system/$standard_unit"
 restricted_unit_path="/etc/systemd/system/$restricted_unit"
 standard_test_port=19091
 restricted_test_port=8443
+boot_restart_ms=0
+
+monotonic_ms() {
+  perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f\n", clock_gettime(CLOCK_MONOTONIC) * 1000'
+}
+
+elapsed_ms() {
+  if [ "$2" -ge "$1" ]; then printf '%s\n' "$(( $2 - $1 ))"; else printf '0\n'; fi
+}
+
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 local_binary=
 local_standard_unit=
@@ -202,8 +212,12 @@ verify_failure_restart() {
 }
 
 verify_boot_restore() {
+  local started finished
+  started=$(monotonic_ms)
   limactl stop "$gateway_instance"
   limactl start "$gateway_instance"
+  finished=$(monotonic_ms)
+  boot_restart_ms=$(elapsed_ms "$started" "$finished")
   assert_lab_instance
   wait_ready
   if [ "$(guest systemctl is-enabled "$standard_unit")" != enabled ] || [ "$(guest systemctl is-enabled "$restricted_unit")" != enabled ]; then
@@ -246,6 +260,7 @@ cleanup_all() {
 }
 
 verify() {
+  local timing_output=${VPNCTL_V2_TIMING_OUTPUT:-}
   assert_lab_instance
   assert_spikes_inactive
   assert_host_ports_free
@@ -261,6 +276,14 @@ verify() {
   assert_host_ports_free
   trap - EXIT INT TERM
   cleanup_all
+  if [ -n "$timing_output" ]; then
+    [ ! -e "$timing_output" ] && [ ! -L "$timing_output" ] || {
+      echo "transport timing output already exists" >&2
+      return 3
+    }
+    jq -n --argjson boot_restart_ms "$boot_restart_ms" \
+      '{schema_version:1,producer:"transport-supervision",phases:{boot_restart_ms:$boot_restart_ms}}' > "$timing_output"
+  fi
 }
 
 status() {

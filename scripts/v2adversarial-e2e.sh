@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/adversarial-e2e"
 cache_root="$repository_root/artifacts/v2lab/cache"
 gateway_instance=vpnctl-v2-gateway
@@ -312,6 +313,8 @@ write_summary() {
 
 verify() {
   local stamp source_commit control_evidence backup_evidence routing_evidence dns_evidence
+  VPNCTL_V2_TIMING_PRODUCER=adversarial
+  v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
     echo "adversarial E2E requires a clean source tree" >&2
     exit 3
@@ -328,6 +331,7 @@ verify() {
   assert_cached_archive "$repository_root/test/v2lab/routing/manifest.json" '.mihomo'
   assert_cached_archive "$repository_root/test/v2lab/dns/manifest.json" '.mihomo'
   run_source_tests
+  v2_timing_mark source_checks
 
   assert_instance_contract "$gateway_instance"
   assert_instance_contract "$node_instance"
@@ -338,19 +342,24 @@ verify() {
   trap cleanup_on_exit EXIT INT TERM
   cleanup_owned
   assert_clean
+  v2_timing_mark preflight
 
   "$repository_root/scripts/v2control-spike.sh" verify "$control_evidence" > "$run_root/control.log"
   assert_clean
   "$repository_root/scripts/v2backup-spike.sh" verify "$backup_evidence" > "$run_root/backup.log"
   assert_clean
+  v2_timing_mark control_and_backup
   "$repository_root/scripts/v2firewall-test.sh" verify > "$run_root/firewall.log"
   assert_clean
+  v2_timing_mark firewall
   "$repository_root/scripts/v2routing-spike.sh" prepare > "$run_root/routing-prepare.log"
   "$repository_root/scripts/v2routing-spike.sh" verify "$routing_evidence" > "$run_root/routing-verify.log"
   assert_clean
+  v2_timing_mark routing
   "$repository_root/scripts/v2dns-spike.sh" prepare > "$run_root/dns-prepare.log"
   "$repository_root/scripts/v2dns-spike.sh" verify "$dns_evidence" > "$run_root/dns-verify.log"
   assert_clean
+  v2_timing_mark dns
 
   trap - EXIT INT TERM
   restore_fixture_states
@@ -378,6 +387,7 @@ verify() {
     .providers.routing_native and .providers.dns_native and .cleanup.owner_scoped and
     .cleanup.temporary_resources_absent and .cleanup.prior_fixture_states_restored' \
     "$run_root/summary.json" >/dev/null
+  v2_timing_finish cleanup_and_validation
   printf 'adversarial E2E evidence: %s\n' "$run_root/summary.json"
 }
 

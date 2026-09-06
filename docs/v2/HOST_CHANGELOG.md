@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — phase-selective optimized deployed release gate
+
+### Reversible orchestration change
+
+- Split the automated gate into host-only `run-fast`, Lima-backed `run-vm`, and
+  the compatible full composition. Added a versioned stage registry,
+  schema-2 attempt/session timings, immutable clean-state witness records, one
+  sequential parent Lima session, and capacity-last fail-fast order. The
+  existing `transport-supervision` real boot-recovery check is the only
+  additional Gateway restart inside that session.
+- Canonical tunnel and ingress attempts now provide exact result and summary
+  hashes to the failure stage. Standalone failure verification remains
+  self-contained; only top-level orchestration skips the duplicate provider
+  runs. The sustained 300-second workload and every capacity/product bound are
+  unchanged.
+- Implementation validation used disposable fake-Lima repositories and host Go
+  caches only. It did not start, stop, or otherwise mutate either real Lima VM,
+  a deployed host, service, route, firewall, listener, credential, webhook, or
+  external provider. Earlier ignored evidence directories remain unchanged.
+  Bash syntax, diff checks, strict OpenSpec validation, targeted orchestration,
+  cleanup, dependency and timing regressions, the full Go suite, and `go vet`
+  were run locally. The complete Lima/capacity gate was left to the operator;
+  the full race suite was not repeated because this change does not alter
+  production Go code and its relevant orchestration behavior is exercised by
+  the targeted Go regression tests.
+  Rollback is the eventual source commit; generated temporary test directories
+  are automatically removed and ordinary `/private/tmp/vpnctl-go-*` caches may
+  be deleted independently.
+
 ## 2026-09-06 — resumable deployed gate and watchdog fixture correction
 
 ### Reversible validation and retained evidence

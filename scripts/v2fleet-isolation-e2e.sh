@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/fleet-isolation-e2e"
 cache_root="$repository_root/artifacts/v2lab/cache"
 gateway_instance=vpnctl-v2-gateway
@@ -284,6 +285,8 @@ write_summary() {
 
 verify() {
   local stamp
+  VPNCTL_V2_TIMING_PRODUCER=fleet-isolation
+  v2_timing_begin
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root="$artifact_root/run-$stamp"
   mkdir -p "$run_root"
@@ -292,19 +295,23 @@ verify() {
   assert_cached_archive "$repository_root/test/v2lab/tunnel/manifest.json" '.frp'
   assert_cached_archive "$repository_root/test/v2lab/restricted/manifest.json" '.mihomo'
   run_source_tests
+  v2_timing_mark source_checks
 
   start_fixture "$gateway_instance" gateway_started
   start_fixture "$node_instance" node_started
   trap cleanup_all EXIT INT TERM
   cleanup_harnesses
   assert_clean
+  v2_timing_mark preflight
 
   "$repository_root/scripts/v2standard-test.sh" verify > "$run_root/standard.log"
+  v2_timing_mark client_isolation
   "$repository_root/scripts/v2tunnel-spike.sh" prepare > "$run_root/tunnel-prepare.log"
   "$repository_root/scripts/v2tunnel-spike.sh" verify "$run_root/tunnel" > "$run_root/tunnel-verify.log"
   "$repository_root/scripts/v2tunnel-spike.sh" uninstall > "$run_root/tunnel-uninstall.log"
   cleanup_pair_if_fully_owned v2restricted-spike.sh /etc/vpnctl-v2-spike/restricted \
     /etc/vpnctl-v2-spike/restricted/.owner vpnctl-v2-restricted-spike-v1
+  v2_timing_mark tunnel_and_mapping
 
   assert_clean
   write_summary
@@ -320,6 +327,7 @@ verify() {
     .mappings.global_port_collision_rejected and .removal.only_target_removed and
     .removal.other_mapping_continued and .removal.other_node_preserved and
     .cleanup.owner_scoped and .cleanup.temporary_resources_absent' "$run_root/summary.json" >/dev/null
+  v2_timing_finish cleanup_and_validation
   printf 'fleet isolation E2E evidence: %s\n' "$run_root/summary.json"
 }
 

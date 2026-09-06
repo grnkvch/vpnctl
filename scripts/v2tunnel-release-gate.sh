@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 spike_script="$repository_root/scripts/v2tunnel-spike.sh"
 restricted_script="$repository_root/scripts/v2restricted-spike.sh"
 manifest="$repository_root/test/v2lab/tunnel/manifest.json"
@@ -250,6 +251,8 @@ write_summary() {
 
 run_gate() {
   local instance port
+  VPNCTL_V2_TIMING_PRODUCER=tunnel-release
+  v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
     echo "release gate requires a clean source tree" >&2
     exit 3
@@ -265,6 +268,7 @@ run_gate() {
   for port in 3000 17000 17001 17400 19091 20000 20001 20002; do
     assert_port_free "$gateway_instance" "$port"
   done
+  v2_timing_mark preflight
 
   mkdir -p "$artifact_root"
   if [ -e "$evidence_dir" ]; then
@@ -282,6 +286,7 @@ run_gate() {
   copy_native_binaries
   run_native_gate
   cleanup_native_guest
+  v2_timing_mark native_provider
 
   tunnel_cleanup=true
   "$spike_script" prepare > "$evidence_dir/spike-prepare.log"
@@ -293,6 +298,7 @@ run_gate() {
     "$restricted_script" uninstall > "$evidence_dir/restricted-uninstall.log"
     restricted_cleanup=false
   fi
+  v2_timing_mark spike_regression
 
   for path in "$guest_test" "$guest_frps" "$guest_frpc"; do
     assert_guest_path_absent "$path"
@@ -302,6 +308,7 @@ run_gate() {
     assert_port_free "$node_instance" "$port"
   done
   write_summary
+  v2_timing_finish cleanup_and_validation
   printf 'tunnel release gate evidence: %s\n' "$evidence_dir/summary.json"
 }
 

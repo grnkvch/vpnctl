@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 fixture_root=$repository_root/test/v2lab/capacity
 manifest=$fixture_root/manifest.json
 artifact_root=$repository_root/artifacts/v2lab/capacity-e2e
@@ -865,6 +866,8 @@ finalize_summary() {
 
 verify() {
   local stamp source_commit duration fault_after elapsed remaining step
+  VPNCTL_V2_TIMING_PRODUCER=capacity
+  v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
     echo "capacity E2E requires a clean source tree" >&2
     exit 3
@@ -879,6 +882,7 @@ verify() {
   bash -n "$fixture_root/fault.sh"
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./test/v2lab/capacity/controller > "$run_root/controller-build-test.log"
   prepare_capacity_binaries
+  v2_timing_mark source_and_build
   trap cleanup_on_exit EXIT INT TERM
 
   assert_instance_contract "$gateway_instance"
@@ -899,6 +903,7 @@ verify() {
   run_connection_limits
   capture_tunnel_client_process_state_before
   start_loads
+  v2_timing_mark fixture_and_provider_setup
 
   fault_after=$(value '.fault.frps_stop_after_seconds')
   elapsed=0
@@ -925,6 +930,7 @@ verify() {
   wait_loads
   finalize_reconnect_process_state
   jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
+  v2_timing_mark sustained_load_and_reconnect
 
   stop_background
   cleanup_owned
@@ -941,6 +947,7 @@ verify() {
   write_summary "$source_commit"
   assert_summary
   finalize_summary
+  v2_timing_finish cleanup_and_validation
   printf 'minimum-gateway capacity E2E evidence: %s\n' "$run_root/summary.json"
 }
 

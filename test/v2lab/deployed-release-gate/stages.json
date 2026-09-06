@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "contract_version": 2,
+  "stages": [
+    {"name":"traceability","phase":"fast","order":10,"uses_lima":false,"command":"go test ./internal/regression -run ^TestV2RequirementTraceabilityIsComplete$ -count=1","cleanup_adapter":null,"dependencies":[]},
+    {"name":"openspec","phase":"fast","order":20,"uses_lima":false,"command":"openspec validate vpnctl-v2 --strict --no-interactive","cleanup_adapter":null,"dependencies":[]},
+    {"name":"go-test","phase":"fast","order":30,"uses_lima":false,"command":"go test -p 1 ./... -count=1","cleanup_adapter":null,"dependencies":[]},
+    {"name":"go-race","phase":"fast","order":40,"uses_lima":false,"command":"go test -race -p 1 ./... -count=1","cleanup_adapter":null,"dependencies":[]},
+    {"name":"go-vet","phase":"fast","order":50,"uses_lima":false,"command":"go vet ./...","cleanup_adapter":null,"dependencies":[]},
+    {"name":"credential-lifecycle","phase":"fast","order":60,"uses_lima":false,"command":"scripts/v2credential-lifecycle-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
+    {"name":"update-restore","phase":"fast","order":70,"uses_lima":false,"command":"scripts/v2update-restore-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
+
+    {"name":"personal-client","phase":"vm","order":110,"uses_lima":true,"command":"scripts/v2personal-client-test.sh verify","cleanup_adapter":"scripts/v2personal-client-test.sh cleanup","dependencies":[]},
+    {"name":"restricted-process","phase":"vm","order":120,"uses_lima":true,"command":"scripts/v2restricted-test.sh verify","cleanup_adapter":"scripts/v2restricted-test.sh cleanup","dependencies":[]},
+    {"name":"transport-supervision","phase":"vm","order":130,"uses_lima":true,"command":"scripts/v2transport-supervision-test.sh verify","cleanup_adapter":"scripts/v2transport-supervision-test.sh cleanup","dependencies":[]},
+    {"name":"watchdog-confirm","phase":"vm","order":140,"uses_lima":true,"command":"scripts/v2watchdog-test.sh verify-confirm artifacts/v2lab/watchdog-confirm-test/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":"scripts/v2watchdog-test.sh cleanup","dependencies":[]},
+    {"name":"watchdog-timeout","phase":"vm","order":150,"uses_lima":true,"command":"scripts/v2watchdog-test.sh verify artifacts/v2lab/watchdog-test/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":"scripts/v2watchdog-test.sh cleanup","dependencies":[]},
+    {"name":"node-transport","phase":"vm","order":160,"uses_lima":true,"command":"scripts/v2node-transport-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
+    {"name":"fleet-isolation","phase":"vm","order":170,"uses_lima":true,"command":"scripts/v2fleet-isolation-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
+    {"name":"adversarial","phase":"vm","order":180,"uses_lima":true,"command":"scripts/v2adversarial-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
+    {"name":"tunnel-release","phase":"vm","order":190,"uses_lima":true,"command":"scripts/v2tunnel-release-gate.sh run artifacts/v2lab/tunnel-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
+    {"name":"ingress-release","phase":"vm","order":200,"uses_lima":true,"command":"scripts/v2ingress-release-gate.sh run artifacts/v2lab/ingress-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
+    {"name":"failure","phase":"vm","order":210,"uses_lima":true,"command":"scripts/v2failure-e2e.sh verify-dependencies {tunnel-result} {tunnel-sha} {ingress-result} {ingress-sha}","cleanup_adapter":null,"dependencies":["tunnel-release","ingress-release"]},
+    {"name":"capacity","phase":"vm","order":220,"uses_lima":true,"command":"scripts/v2capacity-e2e.sh verify","cleanup_adapter":null,"dependencies":[]}
+  ]
+}

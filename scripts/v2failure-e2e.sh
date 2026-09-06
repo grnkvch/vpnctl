@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/failure-e2e"
 cache_root="$repository_root/artifacts/v2lab/cache"
 gateway_instance=vpnctl-v2-gateway
@@ -18,6 +19,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/v2failure-e2e.sh verify
+  scripts/v2failure-e2e.sh verify-dependencies <tunnel-result.json> <tunnel-result-sha256> <ingress-result.json> <ingress-result-sha256>
   scripts/v2failure-e2e.sh status
 EOF
 }
@@ -276,6 +278,8 @@ write_summary() {
 
 verify() {
   local stamp source_commit tunnel_evidence ingress_evidence
+  VPNCTL_V2_TIMING_PRODUCER=failure-full
+  v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
     echo "failure E2E requires a clean source tree" >&2
     exit 3
@@ -290,6 +294,7 @@ verify() {
   assert_cached_archive "$repository_root/test/v2lab/tunnel/manifest.json" '.frp'
   assert_cached_archive "$repository_root/test/v2lab/restricted/manifest.json" '.mihomo'
   run_source_tests
+  v2_timing_mark source_checks
 
   assert_instance_contract "$gateway_instance"
   assert_instance_contract "$node_instance"
@@ -300,12 +305,14 @@ verify() {
   trap cleanup_on_exit EXIT INT TERM
   cleanup_owned
   assert_clean
+  v2_timing_mark preflight
 
-  "$repository_root/scripts/v2tunnel-release-gate.sh" run "$tunnel_evidence" \
+  env -u VPNCTL_V2_TIMING_OUTPUT "$repository_root/scripts/v2tunnel-release-gate.sh" run "$tunnel_evidence" \
     > "$run_root/tunnel-release.log"
-  "$repository_root/scripts/v2ingress-release-gate.sh" run "$ingress_evidence" \
+  env -u VPNCTL_V2_TIMING_OUTPUT "$repository_root/scripts/v2ingress-release-gate.sh" run "$ingress_evidence" \
     > "$run_root/ingress-release.log"
   assert_clean
+  v2_timing_mark provider_release_gates
 
   trap - EXIT INT TERM
   restore_fixture_states
@@ -325,7 +332,78 @@ verify() {
     .providers.frp_native and .providers.nginx_native and .cleanup.owner_scoped and
     .cleanup.temporary_resources_absent and .cleanup.prior_fixture_states_restored' \
     "$run_root/summary.json" >/dev/null
+  v2_timing_finish cleanup_and_validation
   printf 'ingress and tunnel failure E2E evidence: %s\n' "$run_root/summary.json"
+}
+
+path_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+validated_dependency_summary() {
+  local result=$1 expected_sha=$2 expected_stage=$3 source_commit=$4 actual_sha summary summary_sha
+  case "$result" in
+    "$repository_root"/artifacts/v2lab/deployed-release-gate/*/automated-attempts/"$expected_stage"/attempt-[0-9][0-9][0-9][0-9]/result.json) ;;
+    *) echo "failure dependency is outside its canonical attempt ledger: $expected_stage" >&2; return 3 ;;
+  esac
+  [ -f "$result" ] && [ ! -L "$result" ] && [ "$(path_mode "$result")" = 400 ] && \
+    [ "$(path_mode "$(dirname -- "$result")")" = 500 ] || {
+      echo "failure dependency is not immutable: $expected_stage" >&2
+      return 3
+    }
+  actual_sha=$(shasum -a 256 "$result" | awk '{print $1}')
+  [ "$actual_sha" = "$expected_sha" ] || { echo "failure dependency result hash mismatch: $expected_stage" >&2; return 3; }
+  jq -e --arg stage "$expected_stage" --arg source_commit "$source_commit" --arg digest "$lab_image_digest" '
+    .schema_version == 2 and .stage == $stage and .status == "passed" and .exit_code == 0 and
+    .source_commit == $source_commit and (.release_version | type == "string" and length > 0) and
+    .lima_image_digest == $digest and (.contract_sha256 | test("^[0-9a-f]{64}$")) and
+    .dependencies == {} and
+    (.artifact | keys == ["summary_path","summary_sha256"]) and
+    (.artifact.summary_path | type == "string") and (.artifact.summary_sha256 | test("^[0-9a-f]{64}$"))
+  ' "$result" >/dev/null || { echo "failure dependency result is invalid: $expected_stage" >&2; return 3; }
+  summary=$(jq -er '.artifact.summary_path' "$result")
+  summary_sha=$(jq -er '.artifact.summary_sha256' "$result")
+  [ -f "$summary" ] && [ ! -L "$summary" ] || { echo "failure dependency summary is absent: $expected_stage" >&2; return 3; }
+  [ "$(shasum -a 256 "$summary" | awk '{print $1}')" = "$summary_sha" ] || {
+    echo "failure dependency summary hash mismatch: $expected_stage" >&2
+    return 3
+  }
+  printf '%s\n' "$summary"
+}
+
+verify_dependencies() {
+  local tunnel_result=$1 tunnel_sha=$2 ingress_result=$3 ingress_sha=$4 source_commit stamp tunnel_summary ingress_summary
+  VPNCTL_V2_TIMING_PRODUCER=failure-dependencies
+  v2_timing_begin
+  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+    echo "failure E2E requires a clean source tree" >&2
+    exit 3
+  fi
+  source_commit=$(git rev-parse HEAD)
+  tunnel_summary=$(validated_dependency_summary "$tunnel_result" "$tunnel_sha" tunnel-release "$source_commit")
+  ingress_summary=$(validated_dependency_summary "$ingress_result" "$ingress_sha" ingress-release "$source_commit")
+  [ "$(jq -er '.release_version' "$tunnel_result")" = "$(jq -er '.release_version' "$ingress_result")" ] || {
+    echo "failure dependencies use different release versions" >&2
+    exit 3
+  }
+  v2_timing_mark dependency_validation
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  run_root="$artifact_root/run-$stamp"
+  (umask 077; mkdir -p "$run_root")
+  run_source_tests
+  v2_timing_mark source_checks
+  write_summary "$source_commit" "$tunnel_summary" "$ingress_summary"
+  jq -e '.status == "passed" and
+    .failures.application_down_503 and .failures.tunnel_reconnect and
+    .failures.gateway_controller_down_data_plane_preserved and
+    .failures.gateway_controller_down_new_auth_rejected and .failures.proxy_reload_rollback and
+    .failures.partial_response_connection_close and .failures.node_revoke_connection_close and
+    .failures.expose_removal_isolated and .http.unknown == 404 and .http.body_limit == 413 and
+    .http.unavailable == 503 and .http.timeout == 504 and (.http.request_replay | not) and
+    .providers.frp_native and .providers.nginx_native and .cleanup.owner_scoped and
+    .cleanup.temporary_resources_absent and .cleanup.prior_fixture_states_restored' "$run_root/summary.json" >/dev/null
+  v2_timing_finish aggregation_and_validation
+  printf 'dependency-bound ingress and tunnel failure E2E evidence: %s\n' "$run_root/summary.json"
 }
 
 status() {
@@ -338,6 +416,7 @@ status() {
 
 case "${1:-}" in
   verify) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; verify ;;
+  verify-dependencies) [ "$#" -eq 5 ] || { usage >&2; exit 2; }; verify_dependencies "$2" "$3" "$4" "$5" ;;
   status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
   *) usage >&2; exit 2 ;;
 esac

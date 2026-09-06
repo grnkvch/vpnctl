@@ -9,6 +9,8 @@ The gate intentionally has four explicit phases:
 
 ```text
 scripts/v2deployed-release-gate.sh prepare v2.0.0
+scripts/v2deployed-release-gate.sh run-fast <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-vm <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh run-automated <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh run-automated --resume <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh status <absolute-evidence-directory>
@@ -16,7 +18,10 @@ scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absol
 ```
 
 `prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
-server. `run-automated` executes the full local/Lima regression set and may
+server. `run-fast` executes the host-only checks without resolving, inspecting,
+or invoking `limactl`. `run-vm` executes the Lima-backed checks only after every
+fast result is reusable. `run-automated` is the backward-compatible ordered
+composition of those two phases and may
 start only the two exact owner-controlled minimum-host fixtures. Each child
 harness retains its existing owner checks and cleanup; the top-level gate
 requires both fixtures `Stopped` before starting and restores every fixture it
@@ -34,7 +39,15 @@ candidate.
 
 ## Automated phase
 
-`run-automated` re-runs:
+The preferred split workflow is:
+
+```text
+scripts/v2deployed-release-gate.sh run-fast <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-vm <absolute-evidence-directory>
+```
+
+After a phase failure, repeat only that phase with `--resume`. The complete
+compatibility command remains `run-automated [--resume]`. Both workflows run:
 
 - requirement traceability, strict OpenSpec validation, full ordinary and race
   Go suites, and vet;
@@ -44,18 +57,20 @@ candidate.
 - personal-client, transport supervision, restricted child-process, both SSH
   watchdog paths, native reverse-tunnel, and native ingress release gates.
 
-The first invocation uses `run-automated <evidence-directory>`. Every stage
+Every stage
 creates a new
 `automated-attempts/<stage>/attempt-NNNN/` containing `input.json`,
-`output.log`, and `result.json`. A completed attempt is sealed mode `0500` with
+`output.log`, `child-timing.json`, and `result.json`. A completed attempt is sealed mode `0500` with
 mode-`0400` files. Failed attempts are retained exactly like passing attempts;
 an interrupted, unsealed attempt is retained but is never reusable. The gate
 never overwrites an attempt or hides a failed measurement.
 
-After a failure, use the exact command printed by the gate:
+After a failure, use the exact phase-specific command printed by the gate, for
+example:
 
 ```text
-scripts/v2deployed-release-gate.sh run-automated --resume <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-fast --resume <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-vm --resume <absolute-evidence-directory>
 ```
 
 Resume validates the complete attempt ledger and reuses a passing result only
@@ -65,16 +80,40 @@ is intentionally conservative: it covers the complete Git tree, including all
 relevant scripts, fixtures, configuration, specs, and tests. A mismatching,
 failed, malformed, or interrupted attempt is retained and a new numbered
 attempt is appended for that stage. Unaffected matching passes are not run
-again. A normal `run-automated` refuses an evidence directory that already has
-attempts, making continuation an explicit opt-in.
+again. Fresh-attempt refusal is scoped to the selected phase; a normal
+`run-automated` still refuses any existing attempt, making continuation an
+explicit opt-in. Neither standalone phase writes `automated.json`; the common
+aggregator does so only after the complete mandatory set passes.
 
-Self-managed Lima stages must begin and finish with both exact fixtures
-`Stopped`. The final shared-fixture stages use an append-only private
-`automated-fixture-sessions/session-NNNN/` log; their owner-scoped cleanup
-returns both fixtures to `Stopped` after success, stage failure, or an ordinary
-interrupt. Resume again refuses to proceed unless both fixtures satisfy the
-pinned name, image, CPU, memory, disk, network, architecture, and stopped-state
-contract.
+Each `run-vm` invocation requires both exact fixtures `Stopped`, creates an
+append-only `automated-fixture-sessions/session-NNNN/`, starts Gateway and Node
+once in the parent, and runs every pending VM attempt sequentially without
+per-stage cold boots. The existing `transport-supervision` boot-recovery check
+is the only exception: it performs and records one additional Gateway restart.
+A checked-in bounded manifest and read-only witness prove the absence of every
+known stage-owned path, unit, process, listener, namespace, nftables object,
+network object, and package mutation before the first attempt and between
+attempts. Witness failure blocks later stages; only the registered harness
+owner-scoped cleanup adapter may run. Success, failure, `INT`, and `TERM` all
+stop Node before Gateway and verify both exact fixtures `Stopped`.
+
+Session `input.json`, `session.log`, numbered witness JSON files, and
+`result.json` are sealed together. Attempt and session results contain
+non-negative monotonic diagnostic timings for validation, execution, witness,
+cleanup, boot, and shutdown where applicable. These timings never change a
+product latency, reconnect, capacity, or workload acceptance result.
+
+The VM order is versioned in
+`test/v2lab/deployed-release-gate/stages.json`; inexpensive checks run first and
+the unchanged 300-second capacity workload runs last. `tunnel-release` and
+`ingress-release` are canonical attempts. `failure` consumes their exact
+immutable result SHA-256 values and runs only its unique source failure checks,
+instead of executing both complete provider release gates a second time. Its
+standalone `scripts/v2failure-e2e.sh verify` behavior remains self-contained.
+The expected speedup comes only from starting the two fixtures once per VM
+phase and removing those duplicate provider runs. The gate records timings for
+measurement, but deliberately defines neither an estimated percentage nor a
+new duration threshold.
 
 The gate writes schema-v2 `automated.json` only after every mandatory stage has
 a matching passing attempt and both fixtures are back in `Stopped`. The final

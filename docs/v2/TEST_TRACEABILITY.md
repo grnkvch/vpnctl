@@ -4,6 +4,12 @@ This table is the release traceability source for every requirement scenario in 
 Verification assignments name the required test layers; task coverage points to the implementation-plan tasks that must supply those checks.
 The regression test fails when a spec scenario is added, removed, or renamed without updating this table.
 
+The deployed-release execution topology is separately traced by the versioned
+`test/v2lab/deployed-release-gate/stages.json` registry and the OpenSpec change
+`speed-up-v2-release-gate`. Contract tests require its exact stage set, phase,
+order, command, dependency, cleanup, and capacity-last semantics; the table
+below remains the capability-scenario source of truth.
+
 | Capability | Requirement | Scenario | Verification | Task coverage |
 | --- | --- | --- | --- | --- |
 | `desired-state-and-operations` | Immediate, dry-run, and deferred mutations | Dry-run expose | integration, e2e | 4.1-4.6, 13.1-13.11, 16.7, 16.11 |

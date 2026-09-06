@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "gateway": {
+    "paths_absent": [
+      "/etc/vpnctl-v2-capacity", "/usr/local/libexec/vpnctl-v2-capacity", "/var/lib/vpnctl-v2-capacity",
+      "/tmp/vpnctl-v2-personal-client-e2e", "/run/vpnctl-v2-personal-e2e", "/opt/vpnctl-v2-task86",
+      "/etc/systemd/system/vpnctl-v2-task86-standard.service", "/etc/systemd/system/vpnctl-v2-task86-restricted.service",
+      "/tmp/vpnctl-v2-restricted-uot-test", "/etc/vpnctl-v2-spike/tunnel", "/etc/vpnctl-v2-spike/restricted",
+      "/etc/vpnctl-v2-spike/ingress", "/run/vpnctl-v2-spike-ingress", "/var/lib/vpnctl-v2-spike-tunnel-auth",
+      "/tmp/vpnctl-v2-tunnel-release-gate.test", "/tmp/vpnctl-v2-tunnel-release-frps", "/tmp/vpnctl-v2-tunnel-release-frpc",
+      "/tmp/vpnctl-v2-ingress-production-task-12.11.test", "/tmp/vpnctl-v2-ingress-production-task-12.11.json",
+      "/tmp/vpnctl-v2-telegram-harness-task-12.11", "/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d"
+    ],
+    "units_inactive": [
+      "vpnctl-v2-task86-standard.service", "vpnctl-v2-task86-restricted.service", "vpnctl-v2-capacity-controller.service",
+      "vpnctl-v2-spike-tunnel-auth.service", "vpnctl-v2-spike-tunnel-server.service",
+      "vpnctl-v2-spike-restricted-gateway.service", "vpnctl-v2-spike-echo.service", "vpnctl-v2-spike-udp-echo.service",
+      "vpnctl-v2-spike-ingress.service", "vpnctl-v2-spike-webhook.service",
+      "vpnctl-v2-capacity-frps-restart.service", "vpnctl-v2-capacity-frps-restart.timer"
+    ],
+    "process_prefixes_absent": ["/opt/vpnctl-v2-task86/", "/usr/local/libexec/vpnctl-v2-capacity/", "/tmp/vpnctl-v2-tunnel-release-", "/tmp/vpnctl-v2-ingress-production-"],
+    "tcp_ports_free": [8443, 9443, 19091],
+    "udp_ports_free": [19091, 51820],
+    "namespaces_absent": ["vpnctl-v2-pc-net", "vpnctl-v2-pc-gw", "vpnctl-v2-pc-clash", "vpnctl-v2-pc-wg", "vpnctl-v2-pc-wan"],
+    "nftables_absent": [{"family":"inet","table":"vpnctl_v2_spike_uot_capture"}],
+    "interfaces_absent": ["v2capwg"], "ip_rules_absent": [], "routes_absent": [],
+    "packages_absent": ["nginx", "nginx-common"]
+  },
+  "node": {
+    "paths_absent": [
+      "/etc/vpnctl-v2-capacity", "/usr/local/libexec/vpnctl-v2-capacity", "/var/lib/vpnctl-v2-capacity",
+      "/tmp/vpnctl-v2-standard-test", "/tmp/vpnctl-v2-restricted-test", "/tmp/vpnctl-v2-restricted-uot-test",
+      "/etc/vpnctl-v2-spike/routing", "/run/vpnctl-v2-spike-routing", "/usr/local/libexec/vpnctl-v2-spike-routing",
+      "/etc/vpnctl-v2-spike/dns", "/run/vpnctl-v2-spike-dns", "/var/lib/vpnctl-v2-spike-dns", "/usr/local/libexec/vpnctl-v2-spike-dns",
+      "/etc/systemd/resolved.conf.d/vpnctl-v2-dns-spike.conf",
+      "/etc/vpnctl-v2-spike/tunnel", "/etc/vpnctl-v2-spike/restricted",
+      "/var/lib/vpnctl", "/usr/local/libexec/vpnctl-v2-watchdog-test", "/tmp/vpnctl-v2-watchdog-test",
+      "/etc/systemd/system/vpnctl-watchdog@.service.d",
+      "/etc/systemd/system/vpnctl-v2-spike-tunnel-backend.service.d/vpnctl-v2-capacity-backend.conf",
+      "/etc/systemd/system/vpnctl-v2-spike-tunnel-client.service.d/vpnctl-v2-capacity-client.conf"
+    ],
+    "units_inactive": [
+      "vpnctl-v2-capacity-controller.service", "vpnctl-v2-spike-tunnel-client.service",
+      "vpnctl-v2-spike-tunnel-backend.service", "vpnctl-v2-spike-restricted-node.service",
+      "vpnctl-v2-spike-routing-guard.service", "vpnctl-v2-spike-routing-engine.service",
+      "vpnctl-v2-spike-routing-direct.service", "vpnctl-v2-spike-routing-gateway.service", "vpnctl-v2-spike-routing-node.service",
+      "vpnctl-v2-spike-dns-resolver.service", "vpnctl-v2-spike-dns-direct.service", "vpnctl-v2-spike-dns-gateway.service"
+    ],
+    "process_prefixes_absent": ["/usr/local/libexec/vpnctl-v2-capacity/", "/usr/local/libexec/vpnctl-v2-watchdog-test/", "/usr/local/libexec/vpnctl-v2-spike-routing/", "/usr/local/libexec/vpnctl-v2-spike-dns/", "/tmp/vpnctl-v2-standard-test/", "/tmp/vpnctl-v2-restricted-test/"],
+    "tcp_ports_free": [], "udp_ports_free": [51820],
+    "namespaces_absent": [
+      "vpnctl-v2-wg-gateway", "vpnctl-v2-wg-network", "vpnctl-v2-wg-wan", "vpnctl-v2-wg-c1", "vpnctl-v2-wg-c2",
+      "vpnctl-v2-wg-c3", "vpnctl-v2-wg-c4", "vpnctl-v2-wg-c5", "vpnctl-v2-wg-n1", "vpnctl-v2-wg-n2",
+      "vpnctl-v2-restricted", "vpnctl-v2-watchdog-test", "vpnctl-v2-rnode", "vpnctl-v2-rdirect", "vpnctl-v2-rgateway",
+      "vpnctl-v2-dns-direct", "vpnctl-v2-dns-gateway", "v2capc1", "v2capc2", "v2capc3", "v2capc4", "v2capc5"
+    ],
+    "nftables_absent": [
+      {"family":"inet","table":"vpnctl_v2_task84_capture"}, {"family":"inet","table":"vpnctl_v2_spike_tunnel_capture"},
+      {"family":"inet","table":"vpnctl_v2_spike_uot_capture"}, {"family":"inet","table":"vpnctl_v2_spike_routing"},
+      {"family":"inet","table":"vpnctl_v2_spike_dns"}, {"family":"ip","table":"vpnctl_v2_capacity_clients"}
+    ],
+    "interfaces_absent": ["v2ndtmp", "v2ddtmp", "v2ngtmp", "v2ggtmp", "v2dnsdirect0", "v2dnsgateway0", "v2ddnstmp", "v2gdnstmp", "v2cap1h", "v2cap2h", "v2cap3h", "v2cap4h", "v2cap5h"],
+    "ip_rules_absent": [], "routes_absent": [], "packages_absent": []
+  }
+}

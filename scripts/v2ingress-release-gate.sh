@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-stage-timing.sh"
 spike_script="$repository_root/scripts/v2ingress-spike.sh"
 fixture_root="$repository_root/test/v2lab/ingress"
 manifest="$fixture_root/manifest.json"
@@ -258,6 +259,8 @@ write_summary() {
 
 run_gate() {
   local instance public_ip
+  VPNCTL_V2_TIMING_PRODUCER=ingress-release
+  v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
     echo "ingress release gate requires a clean source tree" >&2
     exit 3
@@ -274,6 +277,7 @@ run_gate() {
     echo "ingress release gate could not discover the isolated gateway fixture IPv4" >&2
     exit 3
   fi
+  v2_timing_mark preflight
 
   mkdir -p "$artifact_root"
   if [ -e "$evidence_dir" ]; then
@@ -292,9 +296,11 @@ run_gate() {
   "$spike_script" prepare "$public_ip" > "$evidence_dir/spike-prepare.log"
   run_production_native_gate
   run_offline_telegram_harness_tests
+  v2_timing_mark native_and_offline
   "$spike_script" verify "$evidence_dir/spike-verify" > "$evidence_dir/spike-verify.log"
   "$spike_script" stress "$evidence_dir/spike-stress" > "$evidence_dir/spike-stress.log"
   validate_spike_summaries
+  v2_timing_mark spike_verification_and_stress
   "$spike_script" uninstall > "$evidence_dir/spike-uninstall.log"
   ingress_cleanup=false
   cleanup_native_guest
@@ -310,6 +316,7 @@ run_gate() {
     fi
   done
   write_summary
+  v2_timing_finish cleanup_and_validation
   printf 'ingress release gate evidence: %s\n' "$evidence_dir/summary.json"
 }
 
