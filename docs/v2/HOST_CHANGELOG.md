@@ -2,6 +2,34 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — resumable deployed gate and watchdog fixture correction
+
+### Reversible validation and retained evidence
+
+- The resumable gate implementation itself changed only repository sources,
+  OpenSpec artifacts, documentation, and tests. Its regression suite used
+  disposable temporary repositories and fake Lima commands; it did not start
+  a VM. Rollback is the single implementation commit.
+- The operator-created evidence directory
+  `artifacts/v2lab/deployed-release-gate/evidence-2026-09-06T143607Z` is bound
+  to source commit `aa0098a51dfcdce7583b1298073ff2dac20c5717` and is retained
+  unchanged. Capacity attempt 1 failed only the fixed steady-state webhook p99
+  bound; explicit resume reused every earlier pass, retained that failure, and
+  passed capacity attempt 2.
+- The same resumed run then stopped at watchdog-confirm attempt 1 before
+  activation because its test helper omitted the now-required empty `Invites`
+  collection from the synthetic gateway state. This is a deterministic fixture
+  defect, so the failed attempt is retained and is not retried as though it were
+  transient.
+- Both exact owner-controlled Lima fixtures were verified `Stopped` after each
+  failure. Owner-scoped harness cleanup removed its temporary guest units,
+  namespace, processes, files, and host build directory; no deployed server,
+  foreign VM, firewall, route, listener, credential, or external provider was
+  changed. The corrective source change adds the missing collection and a
+  direct state-validation test. Reverting its commit restores the prior source;
+  the ignored evidence is independently removable but is intentionally kept
+  for audit.
+
 ## 2026-09-06 — v2.0 checksum-only release delivery
 
 ### Implementation and trust boundary

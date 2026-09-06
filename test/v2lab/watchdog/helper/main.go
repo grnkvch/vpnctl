@@ -96,8 +96,11 @@ func writeGatewayState() error {
 	if err != nil {
 		return err
 	}
-	initializedAt := time.Now().UTC()
-	state := model.State{
+	return stateStore.Save(0, newGatewayState(time.Now().UTC()))
+}
+
+func newGatewayState(initializedAt time.Time) model.State {
+	return model.State{
 		SchemaVersion: model.StateSchemaVersion,
 		Generation:    1,
 		Host: model.Host{
@@ -107,7 +110,7 @@ func writeGatewayState() error {
 			PublicIPv4: "203.0.113.10", ExternalInterface: "eth0", SSHPort: 22,
 			ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
 		},
-		Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
+		Invites: []model.Invite{}, Nodes: []model.Node{}, Clients: []model.Client{}, Presets: []model.Preset{}, Policies: []model.Policy{},
 		Transports: []model.Transport{}, Exposes: []model.Expose{}, Certificates: []model.Certificate{},
 		Operations: []model.Operation{}, Logging: []model.LoggingSession{}, Backups: []model.Backup{},
 		Components: model.ComponentManifest{
@@ -122,7 +125,6 @@ func writeGatewayState() error {
 			}},
 		},
 	}
-	return stateStore.Save(0, state)
 }
 
 func armAndRejectOriginalSession() error {
