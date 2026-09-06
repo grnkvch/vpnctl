@@ -2,6 +2,44 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Unified deployed-service release gate
+
+### Implementation and non-mutation boundary
+
+- Added a fail-closed task-16.11 orchestrator with explicit `prepare`,
+  `run-automated`, `status`, and `finalize` phases. Evidence is bound to one
+  clean source commit and canonical stable version in a new owner-marked,
+  mode-`0700`, ignored directory. Manual deployment, Clash Mi, and Telegram
+  inputs are bounded mode-`0600` JSON; the candidate helper is copied at
+  prepare time and checksum-bound. No bot token, provider secret, profile,
+  private key, request body, or dynamic webhook path is accepted as evidence.
+- `run-automated` requires both exact minimum-host fixtures initially stopped,
+  invokes all existing owner-scoped unit/integration/E2E/security/resource/
+  migration/release harnesses, and restores only fixtures it started. Partial
+  logs are retained as a failed audit and are never overwritten. This phase
+  was not invoked during implementation because the current automated suites
+  and ingress requalification were already run separately; it remains part of
+  the final same-commit task-16.11 execution.
+- Added a maintainer-only, network-free release verifier. It uses the embedded
+  production Ed25519 public key to authenticate checksum metadata, verifies
+  exact binary/bundle size and SHA-256, inspects the complete signed bundle and
+  every artifact without installation, enforces Ubuntu 24.04/amd64 and
+  backward-reversible migration, and requires the standalone vpnctl record to
+  equal the bundle record. It never reads a signing key.
+- `finalize` is read-only with respect to deployed hosts and refuses until the
+  automated manifest, actual gateway/node attestation, all nine Clash Mi
+  checks, provider-authenticated Telegram request and owner-checked cleanup,
+  temporary expose removal, identical public-certificate digest, and signed
+  release assets all pass. It writes `production_ready=true` only to ignored
+  evidence and deliberately leaves `release_labeled=false`; it cannot run
+  `git tag`, push, publish, or modify OpenSpec progress.
+- Development validation for this change uses only repository files, Go test
+  temporary directories, and ordinary `/private/tmp` caches. No Lima VM,
+  deployed gateway/node, listener, route, firewall, service, credential,
+  webhook, Clash Mi installation, or external provider is contacted or
+  changed. Task 16.11 remains pending. Repository rollback is the single
+  implementation commit; no host rollback is required.
+
 ## 2026-09-06 — Deployed Telegram gate loopback receiver
 
 ### Reversible validation

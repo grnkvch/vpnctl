@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "status": "pending",
+  "source_commit": "",
+  "release_version": "",
+  "tested_at": "",
+  "app": {
+    "name": "Clash Mi",
+    "version": "",
+    "platform": "iOS",
+    "platform_version": ""
+  },
+  "profile_sha256": "",
+  "checks": {
+    "profile_import": false,
+    "selected_tcp": false,
+    "proxy_bound_dns": false,
+    "selected_uot": false,
+    "strict_wrong_host_rejected": false,
+    "selected_tcp_blocked_without_gateway": false,
+    "selected_udp_blocked_without_gateway": false,
+    "no_fail_direct_observed": false,
+    "reconnect_after_gateway_return": false
+  }
+}

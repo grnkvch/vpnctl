@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "status": "pending",
+  "source_commit": "",
+  "release_version": "",
+  "actual_deployment": false,
+  "target": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64"
+  },
+  "gateway": {
+    "role": "gateway",
+    "public_ipv4": "",
+    "healthy": false
+  },
+  "node": {
+    "role": "node",
+    "healthy": false,
+    "connected_to_gateway": false,
+    "active_transport": "restricted",
+    "assigned_presets": ["telegram"]
+  },
+  "public_certificate": {
+    "sha256": "",
+    "rsa_bits": 2048,
+    "signature": "SHA-256",
+    "validity_days": 1825,
+    "ip_san": false,
+    "private_key_exported": false
+  },
+  "checks": {
+    "candidate_installed_on_both_hosts": false,
+    "gateway_node_control_healthy": false,
+    "restricted_transport_healthy": false,
+    "temporary_telegram_expose_ready": false,
+    "temporary_telegram_expose_removed_after_provider_cleanup": false,
+    "logging_disabled_by_default": false
+  }
+}

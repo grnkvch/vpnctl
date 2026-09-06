@@ -1,0 +1,137 @@
+# Deployed-service v2.0 release gate
+
+Task 16.11 is the only gate that can turn the development candidate into a
+production-ready v2.0 release. It binds all evidence to the same clean Git commit
+and one explicit stable version. It does not weaken the earlier automated
+gates and it never labels or publishes a release.
+
+The gate intentionally has four explicit phases:
+
+```text
+scripts/v2deployed-release-gate.sh prepare v2.0.0
+scripts/v2deployed-release-gate.sh run-automated <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh status <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absolute-release-assets-directory>
+```
+
+`prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
+server. `run-automated` executes the full local/Lima regression set and may
+start only the two exact owner-controlled minimum-host fixtures. Each child
+harness retains its existing owner checks and cleanup; the top-level gate
+requires both fixtures `Stopped` before starting and restores every fixture it
+starts to `Stopped` on success or failure.
+
+The evidence directory is a new mode-`0700` direct child of
+`artifacts/v2lab/deployed-release-gate/`. Its JSON and checksum files are
+mode `0600`, ignored by Git, and contain no credential, request body, webhook
+path beyond the fixed public test route, or Clash profile. `prepare` refuses to
+replace an earlier directory and copies the exact Telegram helper bound to the
+candidate commit.
+
+## Automated phase
+
+`run-automated` re-runs:
+
+- requirement traceability, strict OpenSpec validation, full ordinary and race
+  Go suites, and vet;
+- credential lifecycle plus update/restore/migration suites;
+- node transport, fleet isolation, failure, adversarial security, and sustained
+  minimum-host capacity E2Es;
+- personal-client, transport supervision, restricted child-process, both SSH
+  watchdog paths, native reverse-tunnel, and native ingress release gates.
+
+It writes a final `automated.json` only after every command passes and both
+fixtures are back in `Stopped`. Logs remain private inside the ignored evidence
+directory. A failed or interrupted run keeps its partial directory for audit
+and cannot be mistaken for success or silently overwritten.
+
+## Deployed gateway and node
+
+Build the signed assets from the same clean commit with the real offline
+release key and pinned provider archives, transfer them with `scp`, and install
+the same version on a dedicated Ubuntu 24.04/amd64 gateway and private node.
+Supply the gateway public IPv4 manually. Verify healthy role/status output,
+gateway-node control, restricted transport, the assigned `telegram` preset,
+the five-year RSA-2048/SHA-256 IP-SAN certificate, and default-off logging.
+
+Fill `deployment.json` without adding secrets. Its certificate SHA-256 is the
+digest of the exact exported public PEM bytes:
+
+```text
+shasum -a 256 gateway.crt
+```
+
+The temporary Telegram expose must be created from the private node and may
+use only an otherwise unused loopback port:
+
+```text
+sudo vpnctl expose 18081 --name vpnctl-v2-telegram-gate \
+  --path /telegram/webhook
+```
+
+Do not mark its removal as passed until provider cleanup below is proven.
+
+## Clash Mi manual phase
+
+Copy the candidate Clash profile through the accepted `scp` workflow and keep
+the profile itself outside release evidence. Record its SHA-256, exact Clash Mi
+version, iOS version, UTC test time, and only the boolean results in
+`clash-mi.json`.
+
+The same profile and deployed gateway must pass import, selected TCP,
+proxy-bound DNS, selected UoT, strict wrong-host rejection, selected TCP and UDP
+blocking while the gateway is unavailable, no observed fail-direct behavior,
+and reconnect after the gateway returns. Restore the valid profile and healthy
+service after the negative cases. This phase remains manual because
+Mihomo-on-Linux is not evidence for supported Clash Mi behavior.
+
+## Telegram manual phase
+
+Use a dedicated bot whose current webhook URL is empty. Export only the public
+gateway certificate, then copy that certificate and the prepared
+`telegram-webhook-gate.py` to the private node. On the node:
+
+```text
+umask 077
+./telegram-webhook-gate.py \
+  --public-ip <manually-entered-gateway-ipv4> \
+  --certificate <absolute-path-to-exported-gateway.crt> \
+  --receiver-port 18081 > telegram.json
+```
+
+The bot token is read only from `/dev/tty`. The helper keeps a random Telegram
+`secret_token` only in process memory, starts a bounded `127.0.0.1` receiver,
+uploads only the public certificate, and accepts only a structurally valid
+update carrying the matching `X-Telegram-Bot-Api-Secret-Token` provider header.
+Send one update while it waits.
+Its sanitized JSON is successful only after it re-reads the provider URL and
+deletes the registration it created.
+
+If the helper reports failure after registration, do not remove the expose:
+first inspect and remove the dedicated bot webhook manually. Once cleanup is
+proven, copy `telegram.json` into the evidence directory, remove only
+`vpnctl-v2-telegram-gate`, and set the two expose booleans in `deployment.json`.
+The helper does not make Telegram integration a vpnctl product responsibility;
+it is a test-only release witness.
+
+## Signed assets and finalization
+
+The release asset directory must contain the four outputs of `scripts/release.sh`:
+
+- `vpnctl-linux-amd64`;
+- `vpnctl-v2-linux-amd64.bundle`;
+- `release-checksums.txt`;
+- `release-checksums.txt.sig`.
+
+`finalize` uses the maintainer-only `vpnctl-release-verify` command and the
+embedded production Ed25519 public key. It verifies the checksum signature,
+binary and bundle sizes/digests, the complete signed manifest and every bundled
+artifact, Ubuntu 24.04/amd64, backward-reversible migration, the requested
+version, and that the standalone vpnctl binary matches the bundle record. It
+also requires the Telegram certificate digest to equal the deployed certificate
+digest and every automated/manual boolean to be true.
+
+Only then is `final-summary.json` written with `production_ready=true`. It
+deliberately retains `release_labeled=false`: reviewing the private evidence,
+checking the host journal, completing task 16.11, creating the Git tag, and
+publishing the four assets remain separate explicit maintainer actions.

@@ -81,3 +81,14 @@ that exact local file.
 
 The explicit online update flow, fleet ordering, health checks, and interruption
 contract are documented in [`UPDATE.md`](UPDATE.md).
+
+Before labeling v2.0, verify all four signed outputs together with the deployed
+service evidence. The complete procedure is defined in
+[`DEPLOYED_RELEASE_GATE.md`](DEPLOYED_RELEASE_GATE.md); its maintainer-only
+verifier performs no installation or network access:
+
+```text
+go run ./cmd/vpnctl-release-verify \
+  -assets <absolute-release-assets-directory> \
+  -version v2.0.0
+```

@@ -99,5 +99,7 @@ GOOS=linux GOARCH=amd64 go build -o vpnctl ./cmd/vpnctl
 The signed release builder, provider pins, reproducibility contract, and
 maintainer-only signing-key flow are documented in
 [`docs/v2/RELEASE_BUNDLE.md`](docs/v2/RELEASE_BUNDLE.md) and
-[`docs/v2/RELEASE_MANIFEST.md`](docs/v2/RELEASE_MANIFEST.md). The preserved v1
+[`docs/v2/RELEASE_MANIFEST.md`](docs/v2/RELEASE_MANIFEST.md). The mandatory
+actual-service/Clash Mi/Telegram release procedure is
+[`docs/v2/DEPLOYED_RELEASE_GATE.md`](docs/v2/DEPLOYED_RELEASE_GATE.md). The preserved v1
 installer/release code exists only for migration and regression.
