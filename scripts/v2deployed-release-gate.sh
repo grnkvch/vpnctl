@@ -207,7 +207,7 @@ run_logged() {
   local name=$1
   shift
   printf 'running release gate: %s\n' "$name"
-  "$@" > "$evidence_dir/automated-logs/$name.log" 2>&1
+  (umask 022; "$@") > "$evidence_dir/automated-logs/$name.log" 2>&1
 }
 
 run_automated_gate() {
@@ -229,8 +229,8 @@ run_automated_gate() {
 
   run_logged traceability env GOCACHE=/private/tmp/vpnctl-go-cache go test ./internal/regression -run '^TestV2RequirementTraceabilityIsComplete$' -count=1
   run_logged openspec openspec validate vpnctl-v2 --strict --no-interactive
-  run_logged go-test env GOCACHE=/private/tmp/vpnctl-go-cache go test ./... -count=1
-  run_logged go-race env GOCACHE=/private/tmp/vpnctl-go-race-cache go test -race ./... -count=1
+  run_logged go-test env GOCACHE=/private/tmp/vpnctl-go-cache go test -p 1 ./... -count=1
+  run_logged go-race env GOCACHE=/private/tmp/vpnctl-go-race-cache go test -race -p 1 ./... -count=1
   run_logged go-vet env GOCACHE=/private/tmp/vpnctl-go-vet-cache go vet ./...
   run_logged credential-lifecycle "$repository_root/scripts/v2credential-lifecycle-e2e.sh" verify
   run_logged update-restore "$repository_root/scripts/v2update-restore-e2e.sh" verify

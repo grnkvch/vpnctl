@@ -27,7 +27,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"grep -Eq -- '^- \\[ \\] 16[.]11 '",
 		"source_commit_matches_clean_tree", "production_ready: true", "release_labeled: false",
 		"TestV2RequirementTraceabilityIsComplete", "openspec validate vpnctl-v2 --strict --no-interactive",
-		"go test ./... -count=1", "go test -race ./... -count=1", "go vet ./...",
+		"go test -p 1 ./... -count=1", "go test -race -p 1 ./... -count=1", "go vet ./...",
 		"v2credential-lifecycle-e2e.sh", "v2update-restore-e2e.sh", "v2node-transport-e2e.sh",
 		"v2fleet-isolation-e2e.sh", "v2failure-e2e.sh", "v2adversarial-e2e.sh", "v2capacity-e2e.sh",
 		"v2personal-client-test.sh", "v2transport-supervision-test.sh", "v2restricted-test.sh",
@@ -36,6 +36,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"Telegram helper differs from the candidate prepared by this gate", "shasum -a 256 -c",
 		"go run ./cmd/vpnctl-release-verify", "Telegram gate used a different public certificate",
 		"labeling remains a separate manual action", "cleanup_started_fixtures",
+		"(umask 022; \"$@\") > \"$evidence_dir/automated-logs/$name.log\" 2>&1",
 	} {
 		if !strings.Contains(script, required) {
 			t.Errorf("deployed release gate is missing %q", required)
