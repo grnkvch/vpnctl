@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -193,6 +194,12 @@ func TestWaitNodeTransportCandidateSOCKSObservesReadinessOrEarlyExit(t *testing.
 		_ = listener.Close()
 		t.Fatal(err)
 	}
+	exited := make(chan struct{})
+	close(exited)
+	if err := waitNodeTransportCandidateSOCKS(context.Background(), listener.Addr().String(), exited); err == nil || !strings.Contains(err.Error(), "exited") {
+		_ = listener.Close()
+		t.Fatalf("foreign ready listener hid exited process: %v", err)
+	}
 	_ = listener.Close()
 	close(done)
 
@@ -205,9 +212,53 @@ func TestWaitNodeTransportCandidateSOCKSObservesReadinessOrEarlyExit(t *testing.
 	}
 }
 
+func TestVerifyNodeTransportCandidateSOCKSRequiresExactProcessOwnership(t *testing.T) {
+	const address = "127.0.0.1:17890"
+	runner := &nodeTransportCandidateProbeRunner{result: linuxplatform.ProbeResult{
+		Stdout: []byte(`LISTEN 0 4096 127.0.0.1:17890 0.0.0.0:* users:(("mihomo",pid=41,fd=7))` + "\n"),
+	}}
+	if err := verifyNodeTransportCandidateSOCKS(context.Background(), runner, address, 41); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 1 || runner.command.Name != "ss" ||
+		strings.Join(runner.command.Args, " ") != "-H -ltnp sport = :17890" {
+		t.Fatalf("listener ownership probe = %+v calls=%d", runner.command, runner.calls)
+	}
+	for name, output := range map[string]string{
+		"another PID":     `LISTEN 0 4096 127.0.0.1:17890 0.0.0.0:* users:(("mihomo",pid=42,fd=7))`,
+		"another process": `LISTEN 0 4096 127.0.0.1:17890 0.0.0.0:* users:(("proxy",pid=41,fd=7))`,
+		"another binding": `LISTEN 0 4096 0.0.0.0:17890 0.0.0.0:* users:(("mihomo",pid=41,fd=7))`,
+		"multiple listeners": `LISTEN 0 4096 127.0.0.1:17890 0.0.0.0:* users:(("mihomo",pid=41,fd=7))` + "\n" +
+			`LISTEN 0 4096 127.0.0.1:17890 0.0.0.0:* users:(("proxy",pid=42,fd=7))`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := &nodeTransportCandidateProbeRunner{result: linuxplatform.ProbeResult{Stdout: []byte(output + "\n")}}
+			if err := verifyNodeTransportCandidateSOCKS(context.Background(), candidate, address, 41); err == nil {
+				t.Fatal("foreign candidate SOCKS listener ownership was accepted")
+			}
+		})
+	}
+}
+
 type recordingCandidateNetworkPath struct {
 	tcpCalls int
 	udpCalls int
+}
+
+type nodeTransportCandidateProbeRunner struct {
+	result  linuxplatform.ProbeResult
+	err     error
+	command linuxplatform.ProbeCommand
+	calls   int
+}
+
+func (runner *nodeTransportCandidateProbeRunner) Run(
+	_ context.Context,
+	command linuxplatform.ProbeCommand,
+) (linuxplatform.ProbeResult, error) {
+	runner.calls++
+	runner.command = command
+	return runner.result, runner.err
 }
 
 func (path *recordingCandidateNetworkPath) DialContext(context.Context, string, string) (net.Conn, error) {

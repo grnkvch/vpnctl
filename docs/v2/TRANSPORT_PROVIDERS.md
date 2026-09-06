@@ -170,6 +170,11 @@ For `restricted`, the tester renders the retained standalone candidate into a
 unique owner-only `/run/vpnctl/.transport-test-*` directory, validates it with
 the pinned Mihomo binary, and starts one loopback-only SOCKS process. TCP uses
 SOCKS5 CONNECT; UDP uses SOCKS5 UDP ASSOCIATE over the configured UoT path.
+Each UDP response must come from the exact loopback relay returned by the
+association and carry the exact requested inner gateway target.
+Listener readiness additionally requires exactly one loopback TCP binding
+owned by the PID of the newly started pinned Mihomo child; a foreign binding
+cannot stand in for a candidate that failed to start.
 The production config, service, TUN, routing selector, and published files are
 unchanged. The child receives Linux parent-death `SIGKILL`, and normal cleanup
 stops it before removing its directory.

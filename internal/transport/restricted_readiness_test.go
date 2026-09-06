@@ -2,7 +2,11 @@ package transport
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +163,75 @@ func TestRestrictedSOCKSPathHasNoNonLoopbackProxyOrNonIPv4Fallback(t *testing.T)
 	}
 	if _, err := path.ExchangeUDP(context.Background(), "10.67.0.1:53", nil); err == nil {
 		t.Fatal("empty restricted SOCKS UDP payload was accepted")
+	}
+}
+
+func TestRestrictedSOCKSPathRejectsUDPResponseFromAnotherRelay(t *testing.T) {
+	proxy, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	legitimate, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legitimate.Close()
+	spoof, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spoof.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		connection, acceptErr := proxy.Accept()
+		if acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		defer connection.Close()
+		request := make([]byte, 3)
+		if _, acceptErr = io.ReadFull(connection, request); acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		if _, acceptErr = connection.Write([]byte{5, 0}); acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		request = make([]byte, 10)
+		if _, acceptErr = io.ReadFull(connection, request); acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		relay := legitimate.LocalAddr().(*net.UDPAddr).AddrPort()
+		reply := []byte{5, 0, 0, restrictedSOCKSIPv4}
+		reply = append(reply, relay.Addr().AsSlice()...)
+		reply = binary.BigEndian.AppendUint16(reply, relay.Port())
+		if _, acceptErr = connection.Write(reply); acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		packet := make([]byte, 128)
+		count, client, acceptErr := legitimate.ReadFromUDPAddrPort(packet)
+		if acceptErr == nil {
+			_, acceptErr = spoof.WriteToUDPAddrPort(packet[:count], client)
+		}
+		serverDone <- acceptErr
+	}()
+
+	path, err := NewRestrictedSOCKSPath(proxy.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := path.ExchangeUDP(ctx, netip.MustParseAddrPort("10.67.0.1:53").String(), []byte("probe")); err == nil || !strings.Contains(err.Error(), "another relay") {
+		t.Fatalf("spoofed SOCKS UDP response error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("SOCKS fixture: %v", err)
 	}
 }
 

@@ -149,6 +149,9 @@ func (factory *systemNodeTransportCandidatePathFactory) openRestricted(
 	if err := waitNodeTransportCandidateSOCKS(ctx, proxyAddress, process.Done()); err != nil {
 		return nil, err
 	}
+	if err := verifyNodeTransportCandidateSOCKS(ctx, factory.runner, proxyAddress, process.PID()); err != nil {
+		return nil, err
+	}
 	socks, err := transport.NewRestrictedSOCKSPath(proxyAddress)
 	if err != nil {
 		return nil, err
@@ -271,6 +274,7 @@ func (path *gatewayBoundCandidatePath) target(value string) (netip.AddrPort, err
 type nodeTransportCandidateProcess struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	pid    int
 	once   sync.Once
 }
 
@@ -290,12 +294,19 @@ func startNodeTransportCandidateProcess(ctx context.Context, binaryPath string, 
 		cancel()
 		return nil, fmt.Errorf("start restricted candidate process: %w", err)
 	}
-	process := &nodeTransportCandidateProcess{cancel: cancel, done: make(chan struct{})}
+	process := &nodeTransportCandidateProcess{cancel: cancel, done: make(chan struct{}), pid: command.Process.Pid}
 	go func() {
 		_ = command.Wait()
 		close(process.done)
 	}()
 	return process, nil
+}
+
+func (process *nodeTransportCandidateProcess) PID() int {
+	if process == nil {
+		return 0
+	}
+	return process.pid
 }
 
 func (process *nodeTransportCandidateProcess) Done() <-chan struct{} {
@@ -479,7 +490,12 @@ func waitNodeTransportCandidateSOCKS(ctx context.Context, address string, done <
 		connection, err := (&net.Dialer{Timeout: nodeTransportCandidateSOCKSPoll}).DialContext(waitContext, "tcp4", address)
 		if err == nil {
 			_ = connection.Close()
-			return nil
+			select {
+			case <-done:
+				return fmt.Errorf("restricted candidate process exited before readiness")
+			default:
+				return nil
+			}
 		}
 		select {
 		case <-waitContext.Done():
@@ -489,6 +505,33 @@ func waitNodeTransportCandidateSOCKS(ctx context.Context, address string, done <
 		case <-ticker.C:
 		}
 	}
+}
+
+func verifyNodeTransportCandidateSOCKS(
+	ctx context.Context,
+	runner linuxplatform.ProbeRunner,
+	address string,
+	pid int,
+) error {
+	endpoint, err := netip.ParseAddrPort(address)
+	if ctx == nil || runner == nil || err != nil || endpoint.String() != address ||
+		!endpoint.Addr().Is4() || !endpoint.Addr().IsLoopback() || endpoint.Port() < 1024 || pid <= 1 {
+		return fmt.Errorf("restricted candidate SOCKS ownership input is invalid")
+	}
+	result, err := runner.Run(ctx, linuxplatform.ProbeCommand{
+		Name: "ss", Args: []string{"-H", "-ltnp", "sport = :" + strconv.Itoa(int(endpoint.Port()))},
+	})
+	if err != nil || result.ExitCode != 0 {
+		return errors.Join(fmt.Errorf("inspect restricted candidate SOCKS listener ownership"), err)
+	}
+	line := strings.TrimSpace(string(result.Stdout))
+	fields := strings.Fields(line)
+	owner := `(("mihomo",pid=` + strconv.Itoa(pid) + `,`
+	if line == "" || strings.Count(line, "\n") != 0 || len(fields) < 6 || fields[3] != address ||
+		!strings.Contains(fields[len(fields)-1], owner) {
+		return fmt.Errorf("restricted candidate SOCKS listener is not owned by the candidate process")
+	}
+	return nil
 }
 
 var _ enrollment.NodeTransportCandidatePathFactory = (*systemNodeTransportCandidatePathFactory)(nil)

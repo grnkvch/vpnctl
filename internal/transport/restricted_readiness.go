@@ -239,9 +239,12 @@ func (path *RestrictedSOCKSPath) ExchangeUDP(ctx context.Context, address string
 		return nil, err
 	}
 	response := make([]byte, 10+maximumRestrictedProbeBytes)
-	count, _, err := client.ReadFromUDPAddrPort(response)
+	count, source, err := client.ReadFromUDPAddrPort(response)
 	if err != nil {
 		return nil, err
+	}
+	if source != relay {
+		return nil, fmt.Errorf("restricted SOCKS UDP response came from another relay")
 	}
 	responseTarget, responsePayload, err := restrictedSOCKSUDPResponse(response[:count])
 	if err != nil {

@@ -2,6 +2,31 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Restricted candidate local endpoint binding
+
+### Implementation and non-mutation boundary
+
+- Bind every transient SOCKS5 UDP response to both identities established by
+  the request: the exact loopback relay endpoint returned by UDP ASSOCIATE and
+  the exact inner gateway target. A datagram from another local socket is now
+  rejected before its payload can satisfy the selected-UDP transport probe.
+- After listener readiness, require one exact `127.0.0.1:<ephemeral>` TCP
+  binding owned by the PID of the just-started pinned Mihomo child. An exited
+  child can no longer be hidden by another process already occupying the
+  reserved port, and a foreign or ambiguous listener fails before any probe.
+- Validation uses a temporary loopback SOCKS fixture that deliberately returns
+  a structurally valid response from a different UDP socket plus synthetic
+  listener ownership observations. No real host/VM process, config, route,
+  firewall, transport, endpoint, webhook, or client is changed; no rollback is
+  required.
+
+### Acceptance
+
+- Spoofed relay, wrong PID/process/binding, multiple listener, and exited-child
+  cases are rejected with the expected diagnostics, while the existing pinned
+  UoT and restricted readiness paths remain covered by the focused and full
+  suites recorded before commit.
+
 ## 2026-09-06 — Isolated production node transport probes
 
 ### Implementation and reversible host boundary
