@@ -2,6 +2,35 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Private restricted transport test candidate
+
+### Implementation and non-mutation boundary
+
+- Extend the joined-node compiler with one standalone restricted candidate for
+  isolated target-path testing. It is derived from the same authoritative node,
+  gateway trust, credential generation, pinned Mihomo component, public IPv4,
+  and handshake host as the production routing bundle.
+- Keep the candidate private to the in-process node transport runtime. It is
+  validated as part of the complete generation boundary but is deliberately
+  absent from `ConfigFiles`, role repair, convergence archives, and the live
+  routing service configuration. Compilation therefore cannot publish a
+  listener, change selection, or alter a host.
+- Tests use temporary stores, in-memory host/runtime doubles, disposable Go
+  caches, and existing loopback test listeners. No real host/VM config, unit,
+  process, route, firewall, transport, public endpoint, webhook, or client was
+  changed; no host rollback is required.
+
+### Acceptance
+
+- Both standard-active and restricted-active joined generations validate the
+  candidate's exact node identity, restricted kind, credential generation, and
+  strict ShadowTLS/UoT configuration. The exact published artifact set remains
+  unchanged, proving the test-only candidate cannot leak into production files.
+- Focused and full Go suites, changed-package race tests, vet, strict OpenSpec,
+  formatting, and diff checks pass. The next slice consumes this opaque
+  candidate in a bounded loopback-only Mihomo test process while preserving
+  the production selector.
+
 ## 2026-09-06 — Transactional node transport host provider
 
 ### Implementation and non-mutation boundary

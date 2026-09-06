@@ -112,6 +112,12 @@ func validateNodeConfigurationForActivation(configuration NodeConfiguration) err
 	if err := configuration.standard.Descriptor().Validate(); err != nil {
 		return fmt.Errorf("validate node standard activation candidate: %w", err)
 	}
+	if err := configuration.restricted.Descriptor().Validate(); err != nil {
+		return fmt.Errorf("validate node restricted test candidate: %w", err)
+	}
+	if err := transport.ValidateNodeRestrictedConfig(configuration.restricted.Bytes()); err != nil {
+		return fmt.Errorf("validate node restricted test configuration: %w", err)
+	}
 	if err := configuration.routing.Descriptor().Validate(); err != nil {
 		return fmt.Errorf("validate node routing activation candidate: %w", err)
 	}
@@ -123,7 +129,11 @@ func validateNodeConfigurationForActivation(configuration NodeConfiguration) err
 		configuration.tunnel.Descriptor().HostRole != model.RoleNode ||
 		configuration.tunnel.Descriptor().Generation != configuration.stateGeneration ||
 		configuration.standard.Descriptor().OwnerID != configuration.tunnel.Descriptor().NodeID ||
+		configuration.restricted.Descriptor().OwnerKind != model.TargetNode ||
+		configuration.restricted.Descriptor().OwnerID != configuration.standard.Descriptor().OwnerID ||
+		configuration.restricted.Descriptor().Kind != model.TransportRestricted ||
 		configuration.standard.Descriptor().CredentialGeneration != configuration.routing.Descriptor().CredentialGeneration ||
+		configuration.restricted.Descriptor().CredentialGeneration != configuration.standard.Descriptor().CredentialGeneration ||
 		configuration.standard.Descriptor().CredentialGeneration != configuration.tunnel.Descriptor().CredentialGeneration ||
 		configuration.routing.Descriptor().ActiveTransport != configuration.tunnel.Descriptor().ActiveTransport {
 		return fmt.Errorf("node service candidates do not share one joined generation")

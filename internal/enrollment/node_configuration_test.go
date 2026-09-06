@@ -81,6 +81,20 @@ func TestNodeConfigurationCompilerRendersCompleteJoinedServiceBoundary(t *testin
 				!bytes.Contains(files[transport.StandardConfigFileName], []byte("AllowedIPs = 0.0.0.0/0")) {
 				t.Fatalf("standard config is not route-neutral: %s", files[transport.StandardConfigFileName])
 			}
+			restrictedCandidate := configuration.RestrictedCandidate()
+			restrictedDescriptor := restrictedCandidate.Descriptor()
+			if restrictedDescriptor.OwnerKind != model.TargetNode ||
+				restrictedDescriptor.OwnerID != state.Nodes[0].ID ||
+				restrictedDescriptor.Kind != model.TransportRestricted ||
+				restrictedDescriptor.CredentialGeneration != state.Nodes[0].CredentialGeneration {
+				t.Fatalf("restricted test candidate descriptor = %+v", restrictedDescriptor)
+			}
+			if err := transport.ValidateNodeRestrictedConfig(restrictedCandidate.Bytes()); err != nil {
+				t.Fatalf("restricted test candidate: %v", err)
+			}
+			if _, published := files["node-restricted.yaml"]; published {
+				t.Fatal("standalone restricted test candidate escaped into published service files")
+			}
 			if err := routing.ValidateNodeRoutingConfig(files[routing.NodeRoutingConfigFileName], routing.NodeRoutingDNSPolicy); err != nil {
 				t.Fatalf("routing config: %v", err)
 			}

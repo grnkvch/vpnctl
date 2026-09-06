@@ -13,6 +13,7 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/restricted"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -43,6 +44,7 @@ type NodeConfiguration struct {
 	stateGeneration uint64
 	configs         []linuxplatform.RoleConfigFile
 	standard        transport.StandardNodeCandidate
+	restricted      transport.RestrictedNodeCandidate
 	routing         routing.NodeRoutingCandidate
 	tunnel          tunnel.FRPCandidate
 }
@@ -61,6 +63,10 @@ func (configuration NodeConfiguration) ConfigFiles() []linuxplatform.RoleConfigF
 
 func (configuration NodeConfiguration) StandardCandidate() transport.StandardNodeCandidate {
 	return configuration.standard
+}
+
+func (configuration NodeConfiguration) RestrictedCandidate() transport.RestrictedNodeCandidate {
+	return configuration.restricted
 }
 
 func (configuration NodeConfiguration) RoutingCandidate() routing.NodeRoutingCandidate {
@@ -135,6 +141,36 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 	if err != nil {
 		return NodeConfiguration{}, fmt.Errorf("render node standard configuration: %w", err)
 	}
+	restrictedTransport, err := joinedNodeTransport(state, node, model.TransportRestricted)
+	if err != nil {
+		return NodeConfiguration{}, err
+	}
+	restrictedGatewayContent, err := compiler.secrets.Get(trust.RestrictedServerCredentialRef)
+	if err != nil {
+		return NodeConfiguration{}, fmt.Errorf("read restricted gateway credential: %w", err)
+	}
+	defer clear(restrictedGatewayContent)
+	restrictedGateway, err := restricted.DecodeNodeUpstreamSecret(restrictedGatewayContent)
+	if err != nil {
+		return NodeConfiguration{}, fmt.Errorf("validate restricted gateway credential: %w", err)
+	}
+	restrictedIdentity, err := compiler.secrets.Get(restrictedTransport.CredentialRef)
+	if err != nil {
+		return NodeConfiguration{}, fmt.Errorf("read node restricted credential: %w", err)
+	}
+	defer clear(restrictedIdentity)
+	restrictedComponent, err := nodeConfigurationComponent(state.Components, transport.RestrictedProviderName)
+	if err != nil {
+		return NodeConfiguration{}, err
+	}
+	restrictedCandidate, err := transport.RenderNodeRestrictedConfig(transport.NodeRestrictedRenderRequest{
+		Transport: restrictedTransport, Node: node, GatewayPublicIPv4: trust.PublicIPv4,
+		ServerPassword: restrictedGateway.ShadowsocksPassword,
+		IdentitySecret: restrictedIdentity, Component: restrictedComponent,
+	})
+	if err != nil {
+		return NodeConfiguration{}, fmt.Errorf("render node restricted test candidate: %w", err)
+	}
 
 	matcher, policyGeneration, err := routing.CompileCurrentNodePolicyMatcher(state)
 	if err != nil {
@@ -145,7 +181,7 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 		return NodeConfiguration{}, err
 	}
 	defer clear(active.RestrictedIdentitySecret)
-	mihomoComponent, err := nodeConfigurationComponent(state.Components, routing.NodeRoutingProviderName)
+	routingComponent, err := nodeConfigurationComponent(state.Components, routing.NodeRoutingProviderName)
 	if err != nil {
 		return NodeConfiguration{}, err
 	}
@@ -156,7 +192,7 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 	routingBundle, err := routing.RenderNodeRoutingBundle(routing.NodeRoutingRenderRequest{
 		Matcher: matcher, PolicyGeneration: policyGeneration, DNSMode: routing.NodeRoutingDNSPolicy,
 		DirectDNSServers: append([]string(nil), state.DNS.IPv4...), GatewayDNSIPv4: trust.GatewayOverlayIPv4,
-		ActiveOutbound: active, Component: mihomoComponent,
+		ActiveOutbound: active, Component: routingComponent,
 	}, routing.NodeRoutingGuardConfig{
 		DirectRoute: directRoute,
 		RecoveryPorts: []routing.NodeRoutingRecoveryPort{
@@ -237,7 +273,8 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 	sort.Slice(configs, func(left, right int) bool { return configs[left].Name < configs[right].Name })
 	return NodeConfiguration{
 		stateGeneration: state.Generation, configs: configs,
-		standard: standardCandidate, routing: routingBundle.Routing(), tunnel: tunnelCandidate,
+		standard: standardCandidate, restricted: restrictedCandidate,
+		routing: routingBundle.Routing(), tunnel: tunnelCandidate,
 	}, nil
 }
 

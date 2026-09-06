@@ -129,6 +129,13 @@ rollback generation. Until the isolated production candidate tester is wired,
 `StartTest` fails before `Activate`; host replacement is therefore not yet
 reachable from the public test/switch commands.
 
+Each compiled generation also retains one opaque standalone restricted
+candidate derived from the same trust and credential generation. It is
+validated with the complete bundle but is not part of the published role files
+or convergence material. Its sole purpose is to let the isolated tester launch
+a loopback-only target process without modifying the live routing configuration
+or production selector.
+
 The concrete standard renderer, service, credential ownership, passive health
 semantics, and packet-level acceptance contract are documented in
 [`STANDARD_TRANSPORT.md`](./STANDARD_TRANSPORT.md).
