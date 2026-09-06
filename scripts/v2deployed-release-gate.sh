@@ -12,8 +12,22 @@ gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 owner_value=vpnctl-v2-deployed-release-gate-v1
+attempts_directory_name=automated-attempts
+fixture_sessions_directory_name=automated-fixture-sessions
+all_automated_stages='traceability openspec go-test go-race go-vet credential-lifecycle update-restore node-transport fleet-isolation failure adversarial capacity personal-client transport-supervision restricted-process watchdog-timeout watchdog-confirm tunnel-release ingress-release'
+self_managed_lima_stages='node-transport fleet-isolation failure adversarial capacity'
+shared_lima_stages='personal-client transport-supervision restricted-process watchdog-timeout watchdog-confirm tunnel-release ingress-release'
 gateway_started=false
 node_started=false
+fixture_session_directory=
+fixture_session_log=
+current_source_commit=
+current_release_version=
+current_source_tree_sha256=
+current_short_commit=
+current_run_id=
+current_attempt_name=
+current_attempt_directory=
 
 cd "$repository_root"
 
@@ -22,6 +36,7 @@ usage() {
 Usage:
   scripts/v2deployed-release-gate.sh prepare <vMAJOR.MINOR.PATCH> [evidence-directory]
   scripts/v2deployed-release-gate.sh run-automated <evidence-directory>
+  scripts/v2deployed-release-gate.sh run-automated --resume <evidence-directory>
   scripts/v2deployed-release-gate.sh status <evidence-directory>
   scripts/v2deployed-release-gate.sh finalize <evidence-directory> <absolute-release-assets-directory>
 
@@ -118,14 +133,31 @@ assert_candidate() {
   release_version=$(candidate_value '.release_version')
   assert_release_version "$release_version"
   jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
-    .schema_version == 1 and .status == "collecting-evidence" and
+    .schema_version == 2 and .automated_attempts_schema_version == 1 and
+    .status == "collecting-evidence" and
     .source_commit == $source_commit and .release_version == $release_version and
     .production_ready == false and
     (.created_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
   ' "$evidence_dir/candidate.json" >/dev/null || {
-    echo "release evidence candidate does not match the clean source commit" >&2
+    if jq -e '.schema_version == 1' "$evidence_dir/candidate.json" >/dev/null 2>&1; then
+      echo "legacy release evidence is read-only; prepare a new resumable evidence directory" >&2
+    else
+      echo "release evidence candidate does not match the clean source commit" >&2
+    fi
     exit 3
   }
+  if [ ! -d "$evidence_dir/$attempts_directory_name" ] ||
+     [ -L "$evidence_dir/$attempts_directory_name" ] ||
+     [ "$(path_mode "$evidence_dir/$attempts_directory_name")" != 700 ]; then
+    echo "resumable release evidence attempt directory is absent or unsafe" >&2
+    exit 3
+  fi
+  if [ ! -d "$evidence_dir/$fixture_sessions_directory_name" ] ||
+     [ -L "$evidence_dir/$fixture_sessions_directory_name" ] ||
+     [ "$(path_mode "$evidence_dir/$fixture_sessions_directory_name")" != 700 ]; then
+    echo "resumable release evidence fixture-session directory is absent or unsafe" >&2
+    exit 3
+  fi
 }
 
 prepare_gate() {
@@ -151,7 +183,8 @@ prepare_gate() {
   trap 'rm -rf -- "$temporary"' EXIT INT TERM
   printf '%s\n' "$owner_value" > "$temporary/.owner"
   jq -n --arg source_commit "$source_commit" --arg release_version "$version" --arg created_at "$created_at" '{
-    schema_version: 1,
+    schema_version: 2,
+    automated_attempts_schema_version: 1,
     status: "collecting-evidence",
     source_commit: $source_commit,
     release_version: $release_version,
@@ -165,9 +198,13 @@ prepare_gate() {
     .source_commit = $source_commit | .release_version = $release_version
   ' "$fixture_root/clash-mi.example.json" > "$temporary/clash-mi.json"
   install -m 0700 "$telegram_helper" "$temporary/telegram-webhook-gate.py"
+  mkdir "$temporary/$attempts_directory_name"
+  mkdir "$temporary/$fixture_sessions_directory_name"
   (cd "$temporary" && shasum -a 256 telegram-webhook-gate.py) > "$temporary/telegram-helper.sha256"
   chmod 0600 "$temporary/.owner" "$temporary/candidate.json" "$temporary/deployment.json" \
     "$temporary/clash-mi.json" "$temporary/telegram-helper.sha256"
+  chmod 0700 "$temporary/$attempts_directory_name"
+  chmod 0700 "$temporary/$fixture_sessions_directory_name"
   mv "$temporary" "$evidence_dir"
   trap - EXIT INT TERM
   printf 'deployed release gate evidence prepared: %s\n' "$evidence_dir"
@@ -185,7 +222,7 @@ assert_lab_instance() {
     .config.images[0].digest == $digest and any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
     echo "release gate fixture does not match contract: $instance/$expected_status" >&2
-    exit 4
+    return 4
   fi
 }
 
@@ -194,111 +231,535 @@ assert_fixtures_stopped() {
   assert_lab_instance "$node_instance" Stopped
 }
 
+stage_in_list() {
+  local stage=$1 stages=$2
+  case " $stages " in
+    *" $stage "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_known_stage() {
+  stage_in_list "$1" "$all_automated_stages"
+}
+
+stage_uses_lima() {
+  stage_in_list "$1" "$self_managed_lima_stages $shared_lima_stages"
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+source_tree_sha256() {
+  git ls-tree -r --full-tree HEAD | shasum -a 256 | awk '{print $1}'
+}
+
+stage_command_contract() {
+  case "$1" in
+    traceability) printf '%s\n' "go test ./internal/regression -run ^TestV2RequirementTraceabilityIsComplete$ -count=1" ;;
+    openspec) printf '%s\n' "openspec validate vpnctl-v2 --strict --no-interactive" ;;
+    go-test) printf '%s\n' "go test -p 1 ./... -count=1" ;;
+    go-race) printf '%s\n' "go test -race -p 1 ./... -count=1" ;;
+    go-vet) printf '%s\n' "go vet ./..." ;;
+    credential-lifecycle) printf '%s\n' "scripts/v2credential-lifecycle-e2e.sh verify" ;;
+    update-restore) printf '%s\n' "scripts/v2update-restore-e2e.sh verify" ;;
+    node-transport) printf '%s\n' "scripts/v2node-transport-e2e.sh verify" ;;
+    fleet-isolation) printf '%s\n' "scripts/v2fleet-isolation-e2e.sh verify" ;;
+    failure) printf '%s\n' "scripts/v2failure-e2e.sh verify" ;;
+    adversarial) printf '%s\n' "scripts/v2adversarial-e2e.sh verify" ;;
+    capacity) printf '%s\n' "scripts/v2capacity-e2e.sh verify" ;;
+    personal-client) printf '%s\n' "scripts/v2personal-client-test.sh verify" ;;
+    transport-supervision) printf '%s\n' "scripts/v2transport-supervision-test.sh verify" ;;
+    restricted-process) printf '%s\n' "scripts/v2restricted-test.sh verify" ;;
+    watchdog-timeout) printf '%s\n' "scripts/v2watchdog-test.sh verify artifacts/v2lab/watchdog-test/task-16.11-{candidate}-{evidence}-{attempt}" ;;
+    watchdog-confirm) printf '%s\n' "scripts/v2watchdog-test.sh verify-confirm artifacts/v2lab/watchdog-confirm-test/task-16.11-{candidate}-{evidence}-{attempt}" ;;
+    tunnel-release) printf '%s\n' "scripts/v2tunnel-release-gate.sh run artifacts/v2lab/tunnel-release-gate/task-16.11-{candidate}-{evidence}-{attempt}" ;;
+    ingress-release) printf '%s\n' "scripts/v2ingress-release-gate.sh run artifacts/v2lab/ingress-release-gate/task-16.11-{candidate}-{evidence}-{attempt}" ;;
+    *) echo "unknown deployed release gate stage: $1" >&2; return 3 ;;
+  esac
+}
+
+stage_contract_sha256() {
+  local stage=$1 command lima_digest=none
+  command=$(stage_command_contract "$stage")
+  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+    "vpnctl-v2-deployed-stage-contract-v1" "$stage" "$current_source_commit" \
+    "$current_release_version" "$current_source_tree_sha256" "$command|$lima_digest" |
+    shasum -a 256 | awk '{print $1}'
+}
+
+execute_stage() {
+  local stage=$1 attempt=$2 scoped
+  scoped="$current_short_commit-$current_run_id-$attempt"
+  case "$stage" in
+    traceability) env GOCACHE=/private/tmp/vpnctl-go-cache go test ./internal/regression -run '^TestV2RequirementTraceabilityIsComplete$' -count=1 ;;
+    openspec) openspec validate vpnctl-v2 --strict --no-interactive ;;
+    go-test) env GOCACHE=/private/tmp/vpnctl-go-cache go test -p 1 ./... -count=1 ;;
+    go-race) env GOCACHE=/private/tmp/vpnctl-go-race-cache go test -race -p 1 ./... -count=1 ;;
+    go-vet) env GOCACHE=/private/tmp/vpnctl-go-vet-cache go vet ./... ;;
+    credential-lifecycle) "$repository_root/scripts/v2credential-lifecycle-e2e.sh" verify ;;
+    update-restore) "$repository_root/scripts/v2update-restore-e2e.sh" verify ;;
+    node-transport) "$repository_root/scripts/v2node-transport-e2e.sh" verify ;;
+    fleet-isolation) "$repository_root/scripts/v2fleet-isolation-e2e.sh" verify ;;
+    failure) "$repository_root/scripts/v2failure-e2e.sh" verify ;;
+    adversarial) "$repository_root/scripts/v2adversarial-e2e.sh" verify ;;
+    capacity) "$repository_root/scripts/v2capacity-e2e.sh" verify ;;
+    personal-client) "$repository_root/scripts/v2personal-client-test.sh" verify ;;
+    transport-supervision) "$repository_root/scripts/v2transport-supervision-test.sh" verify ;;
+    restricted-process) "$repository_root/scripts/v2restricted-test.sh" verify ;;
+    watchdog-timeout) "$repository_root/scripts/v2watchdog-test.sh" verify \
+      "$repository_root/artifacts/v2lab/watchdog-test/task-16.11-$scoped" ;;
+    watchdog-confirm) "$repository_root/scripts/v2watchdog-test.sh" verify-confirm \
+      "$repository_root/artifacts/v2lab/watchdog-confirm-test/task-16.11-$scoped" ;;
+    tunnel-release) "$repository_root/scripts/v2tunnel-release-gate.sh" run \
+      "$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.11-$scoped" ;;
+    ingress-release) "$repository_root/scripts/v2ingress-release-gate.sh" run \
+      "$repository_root/artifacts/v2lab/ingress-release-gate/task-16.11-$scoped" ;;
+    *) echo "unknown deployed release gate stage: $stage" >&2; return 3 ;;
+  esac
+}
+
+assert_bounded_regular_file() {
+  local path=$1 allowed_modes=$2 maximum_bytes=$3 mode
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
+    echo "release attempt contains an unsafe file: $path" >&2
+    return 3
+  fi
+  mode=$(path_mode "$path")
+  case " $allowed_modes " in
+    *" $mode "*) ;;
+    *) echo "release attempt file has unsafe mode $mode: $path" >&2; return 3 ;;
+  esac
+  if [ "$(wc -c < "$path" | tr -d ' ')" -gt "$maximum_bytes" ]; then
+    echo "release attempt file exceeds its bound: $path" >&2
+    return 3
+  fi
+}
+
+assert_attempt_ledger() {
+  local root="$evidence_dir/$attempts_directory_name" stage_dir stage attempt_dir attempt mode entry name count
+  for stage_dir in "$root"/*; do
+    [ -e "$stage_dir" ] || [ -L "$stage_dir" ] || continue
+    stage=$(basename -- "$stage_dir")
+    if ! is_known_stage "$stage" || [ ! -d "$stage_dir" ] || [ -L "$stage_dir" ] ||
+       [ "$(path_mode "$stage_dir")" != 700 ]; then
+      echo "release attempt ledger contains an unsafe stage directory: $stage" >&2
+      return 3
+    fi
+    for attempt_dir in "$stage_dir"/*; do
+      [ -e "$attempt_dir" ] || [ -L "$attempt_dir" ] || continue
+      attempt=$(basename -- "$attempt_dir")
+      if ! [[ "$attempt" =~ ^attempt-[0-9]{4}$ ]] || [ ! -d "$attempt_dir" ] || [ -L "$attempt_dir" ]; then
+        echo "release attempt ledger contains an unsafe attempt: $stage/$attempt" >&2
+        return 3
+      fi
+      mode=$(path_mode "$attempt_dir")
+      if [ "$mode" != 500 ] && [ "$mode" != 700 ]; then
+        echo "release attempt directory has unsafe mode $mode: $stage/$attempt" >&2
+        return 3
+      fi
+      count=0
+      for entry in "$attempt_dir"/*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name=$(basename -- "$entry")
+        case "$name" in input.json|output.log|result.json) ;; *)
+          echo "release attempt contains an unexpected entry: $stage/$attempt/$name" >&2
+          return 3 ;;
+        esac
+        count=$((count + 1))
+      done
+      if [ "$mode" = 500 ]; then
+        [ "$count" -eq 3 ] || { echo "sealed release attempt is incomplete: $stage/$attempt" >&2; return 3; }
+        assert_bounded_regular_file "$attempt_dir/input.json" 400 65536
+        assert_bounded_regular_file "$attempt_dir/output.log" 400 134217728
+        assert_bounded_regular_file "$attempt_dir/result.json" 400 65536
+      else
+        [ "$count" -le 3 ] || {
+          echo "interrupted release attempt has an unsafe shape: $stage/$attempt" >&2
+          return 3
+        }
+        if [ -e "$attempt_dir/input.json" ] || [ -L "$attempt_dir/input.json" ]; then
+          assert_bounded_regular_file "$attempt_dir/input.json" '400 600' 65536
+        fi
+        if [ -e "$attempt_dir/output.log" ] || [ -L "$attempt_dir/output.log" ]; then
+          assert_bounded_regular_file "$attempt_dir/output.log" '400 600' 134217728
+        fi
+        if [ -e "$attempt_dir/result.json" ] || [ -L "$attempt_dir/result.json" ]; then
+          assert_bounded_regular_file "$attempt_dir/result.json" '400 600' 65536
+        fi
+      fi
+    done
+  done
+}
+
+assert_fixture_session_ledger() {
+  local root="$evidence_dir/$fixture_sessions_directory_name" session_dir session mode entry name count
+  for session_dir in "$root"/*; do
+    [ -e "$session_dir" ] || [ -L "$session_dir" ] || continue
+    session=$(basename -- "$session_dir")
+    mode=$(path_mode "$session_dir")
+    if ! [[ "$session" =~ ^session-[0-9]{4}$ ]] || [ ! -d "$session_dir" ] || [ -L "$session_dir" ] ||
+       { [ "$mode" != 500 ] && [ "$mode" != 700 ]; }; then
+      echo "release fixture-session ledger contains an unsafe entry: $session" >&2
+      return 3
+    fi
+    count=0
+    for entry in "$session_dir"/*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      name=$(basename -- "$entry")
+      [ "$name" = session.log ] || {
+        echo "release fixture-session contains an unexpected entry: $session/$name" >&2
+        return 3
+      }
+      count=$((count + 1))
+    done
+    if [ "$mode" = 500 ]; then
+      [ "$count" -eq 1 ] || { echo "sealed release fixture-session is incomplete: $session" >&2; return 3; }
+      assert_bounded_regular_file "$session_dir/session.log" 400 134217728
+    elif [ "$count" -eq 1 ]; then
+      assert_bounded_regular_file "$session_dir/session.log" '400 600' 134217728
+    fi
+  done
+}
+
+find_reusable_attempt() {
+  local stage=$1 stage_dir="$evidence_dir/$attempts_directory_name/$1" attempt_dir attempt contract input_sha log_sha lima_digest=
+  [ -d "$stage_dir" ] && [ ! -L "$stage_dir" ] || return 1
+  contract=$(stage_contract_sha256 "$stage")
+  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  for attempt_dir in "$stage_dir"/attempt-*; do
+    [ -d "$attempt_dir" ] && [ ! -L "$attempt_dir" ] && [ "$(path_mode "$attempt_dir")" = 500 ] || continue
+    attempt=$(basename -- "$attempt_dir")
+    input_sha=$(sha256_file "$attempt_dir/input.json")
+    log_sha=$(sha256_file "$attempt_dir/output.log")
+    if jq -e --arg stage "$stage" --arg attempt "$attempt" --arg source_commit "$current_source_commit" \
+      --arg release_version "$current_release_version" --arg source_tree "$current_source_tree_sha256" \
+      --arg contract "$contract" --arg lima "$lima_digest" '
+        .schema_version == 1 and .stage == $stage and .attempt == $attempt and
+        .source_commit == $source_commit and .release_version == $release_version and
+        .source_tree_sha256 == $source_tree and .contract_sha256 == $contract and
+        (($lima == "" and .lima_image_digest == null) or .lima_image_digest == $lima)
+      ' "$attempt_dir/input.json" >/dev/null 2>&1 &&
+      jq -e --arg stage "$stage" --arg attempt "$attempt" --arg source_commit "$current_source_commit" \
+        --arg release_version "$current_release_version" --arg contract "$contract" --arg input_sha "$input_sha" \
+        --arg log_sha "$log_sha" --arg lima "$lima_digest" '
+          .schema_version == 1 and .stage == $stage and .attempt == $attempt and .status == "passed" and
+          .exit_code == 0 and .source_commit == $source_commit and .release_version == $release_version and
+          .contract_sha256 == $contract and .input_sha256 == $input_sha and .log_sha256 == $log_sha and
+          (($lima == "" and .lima_image_digest == null) or .lima_image_digest == $lima)
+        ' "$attempt_dir/result.json" >/dev/null 2>&1; then
+      printf '%s\n' "$attempt"
+      return 0
+    fi
+  done
+  return 1
+}
+
+allocate_attempt() {
+  local stage=$1 stage_dir="$evidence_dir/$attempts_directory_name/$1" number=1 candidate
+  if [ ! -e "$stage_dir" ] && [ ! -L "$stage_dir" ]; then
+    mkdir "$stage_dir"
+    chmod 0700 "$stage_dir"
+  fi
+  while [ "$number" -le 9999 ]; do
+    printf -v candidate 'attempt-%04d' "$number"
+    if [ ! -e "$stage_dir/$candidate" ] && [ ! -L "$stage_dir/$candidate" ]; then break; fi
+    number=$((number + 1))
+  done
+  [ "$number" -le 9999 ] || { echo "release stage attempt limit reached: $stage" >&2; return 3; }
+  current_attempt_name=$candidate
+  current_attempt_directory="$stage_dir/$candidate"
+  mkdir "$current_attempt_directory"
+  chmod 0700 "$current_attempt_directory"
+}
+
+run_stage_attempt() {
+  local stage=$1 reused command contract started_at finished_at exit_status status input_sha log_sha
+  local lima_digest= fixtures_stopped=null cleanup_status=0
+  if reused=$(find_reusable_attempt "$stage"); then
+    printf 'reusing release gate: %s (%s)\n' "$stage" "$reused"
+    return 0
+  fi
+  if stage_in_list "$stage" "$self_managed_lima_stages"; then assert_fixtures_stopped; fi
+  allocate_attempt "$stage"
+  command=$(stage_command_contract "$stage")
+  contract=$(stage_contract_sha256 "$stage")
+  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg stage "$stage" --arg attempt "$current_attempt_name" \
+    --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
+    --arg source_tree "$current_source_tree_sha256" --arg command "$command" --arg contract "$contract" \
+    --arg lima "$lima_digest" --arg started_at "$started_at" '{
+      schema_version: 1, stage: $stage, attempt: $attempt,
+      source_commit: $source_commit, release_version: $release_version,
+      source_tree_sha256: $source_tree, command: $command, contract_sha256: $contract,
+      lima_image_digest: (if $lima == "" then null else $lima end), started_at: $started_at
+    }' > "$current_attempt_directory/input.json"
+  chmod 0400 "$current_attempt_directory/input.json"
+  : > "$current_attempt_directory/output.log"
+  chmod 0600 "$current_attempt_directory/output.log"
+  printf 'running release gate: %s (%s)\n' "$stage" "$current_attempt_name"
+  set +e
+  (umask 022; execute_stage "$stage" "$current_attempt_name") > "$current_attempt_directory/output.log" 2>&1
+  exit_status=$?
+  set -e
+  if stage_in_list "$stage" "$self_managed_lima_stages"; then
+    if assert_fixtures_stopped >> "$current_attempt_directory/output.log" 2>&1; then
+      fixtures_stopped=true
+    else
+      printf '%s\n' 'stage did not restore the exact Lima fixtures; applying owner-scoped cleanup' >> "$current_attempt_directory/output.log"
+      set +e
+      restore_exact_fixtures_stopped >> "$current_attempt_directory/output.log" 2>&1
+      cleanup_status=$?
+      set -e
+      [ "$cleanup_status" -eq 0 ] && fixtures_stopped=true || fixtures_stopped=false
+      exit_status=4
+    fi
+  fi
+  [ "$exit_status" -eq 0 ] && status=passed || status=failed
+  finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  input_sha=$(sha256_file "$current_attempt_directory/input.json")
+  log_sha=$(sha256_file "$current_attempt_directory/output.log")
+  jq -n --arg stage "$stage" --arg attempt "$current_attempt_name" --arg status "$status" \
+    --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
+    --arg contract "$contract" --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
+    --arg lima "$lima_digest" --arg started_at "$started_at" --arg finished_at "$finished_at" \
+    --argjson exit_code "$exit_status" --argjson fixtures_stopped "$fixtures_stopped" '{
+      schema_version: 1, stage: $stage, attempt: $attempt, status: $status, exit_code: $exit_code,
+      source_commit: $source_commit, release_version: $release_version, contract_sha256: $contract,
+      lima_image_digest: (if $lima == "" then null else $lima end),
+      input_sha256: $input_sha, log_sha256: $log_sha,
+      fixtures_stopped_after: $fixtures_stopped, started_at: $started_at, finished_at: $finished_at
+    }' > "$current_attempt_directory/result.json"
+  chmod 0400 "$current_attempt_directory/input.json" "$current_attempt_directory/output.log" "$current_attempt_directory/result.json"
+  chmod 0500 "$current_attempt_directory"
+  if [ "$exit_status" -ne 0 ]; then
+    printf 'release gate stage failed: %s (%s)\n' "$stage" "$current_attempt_name" >&2
+    printf 'inspect: %s/output.log\n' "$current_attempt_directory" >&2
+    printf 'continue: scripts/v2deployed-release-gate.sh run-automated --resume %s\n' "$evidence_dir" >&2
+    return "$exit_status"
+  fi
+}
+
+restore_exact_fixtures_stopped() {
+  local instance status
+  for instance in "$node_instance" "$gateway_instance"; do
+    status=$(instance_json "$instance" | jq -er '.status') || return 4
+    case "$status" in
+      Stopped) assert_lab_instance "$instance" Stopped || return ;;
+      Running)
+        assert_lab_instance "$instance" Running || return
+        limactl stop "$instance" || return 4
+        ;;
+      *) echo "release fixture is in an unsafe transitional state: $instance/$status" >&2; return 4 ;;
+    esac
+  done
+  assert_fixtures_stopped
+}
+
+allocate_fixture_session() {
+  local root="$evidence_dir/$fixture_sessions_directory_name" number=1 candidate
+  while [ "$number" -le 9999 ]; do
+    printf -v candidate 'session-%04d' "$number"
+    if [ ! -e "$root/$candidate" ] && [ ! -L "$root/$candidate" ]; then break; fi
+    number=$((number + 1))
+  done
+  [ "$number" -le 9999 ] || { echo "release fixture-session limit reached" >&2; return 3; }
+  fixture_session_directory="$root/$candidate"
+  fixture_session_log="$fixture_session_directory/session.log"
+  mkdir "$fixture_session_directory"
+  chmod 0700 "$fixture_session_directory"
+  : > "$fixture_session_log"
+  chmod 0600 "$fixture_session_log"
+}
+
+seal_fixture_session() {
+  local status=0
+  if [ -n "$fixture_session_directory" ] && [ -d "$fixture_session_directory" ]; then
+    if [ ! -e "$fixture_session_log" ] && [ ! -L "$fixture_session_log" ]; then
+      : > "$fixture_session_log" || status=4
+      chmod 0600 "$fixture_session_log" || status=4
+    fi
+    chmod 0400 "$fixture_session_log" || status=4
+    chmod 0500 "$fixture_session_directory" || status=4
+  fi
+  fixture_session_directory=
+  fixture_session_log=
+  return "$status"
+}
+
+stop_started_fixtures() {
+  local status=0
+  set +e
+  if [ "$node_started" = true ]; then
+    limactl stop "$node_instance" >> "$fixture_session_log" 2>&1 || status=4
+    node_started=false
+  fi
+  if [ "$gateway_started" = true ]; then
+    limactl stop "$gateway_instance" >> "$fixture_session_log" 2>&1 || status=4
+    gateway_started=false
+  fi
+  set -e
+  return "$status"
+}
+
 cleanup_started_fixtures() {
-  local status=$?
+  local status=${1:-1} cleanup_status=0
   trap - EXIT INT TERM
   set +e
-  if [ "$node_started" = true ]; then limactl stop "$node_instance" >/dev/null 2>&1; fi
-  if [ "$gateway_started" = true ]; then limactl stop "$gateway_instance" >/dev/null 2>&1; fi
+  stop_started_fixtures || cleanup_status=$?
+  if [ -n "$fixture_session_log" ]; then
+    assert_fixtures_stopped >> "$fixture_session_log" 2>&1 || cleanup_status=4
+  else
+    assert_fixtures_stopped >/dev/null 2>&1 || cleanup_status=4
+  fi
+  seal_fixture_session || cleanup_status=$?
+  [ "$cleanup_status" -eq 0 ] || status=$cleanup_status
   exit "$status"
 }
 
-run_logged() {
-  local name=$1
-  shift
-  printf 'running release gate: %s\n' "$name"
-  (umask 022; "$@") > "$evidence_dir/automated-logs/$name.log" 2>&1
+run_shared_lima_stages() {
+  local stage needed=false stage_status=0 cleanup_status=0
+  for stage in $shared_lima_stages; do
+    if ! find_reusable_attempt "$stage" >/dev/null; then needed=true; break; fi
+  done
+  [ "$needed" = true ] || return 0
+  assert_fixtures_stopped
+  allocate_fixture_session
+  trap 'cleanup_started_fixtures $?' EXIT
+  trap 'cleanup_started_fixtures 130' INT
+  trap 'cleanup_started_fixtures 143' TERM
+  gateway_started=true
+  limactl start "$gateway_instance" >> "$fixture_session_log" 2>&1
+  assert_lab_instance "$gateway_instance" Running
+  node_started=true
+  limactl start "$node_instance" >> "$fixture_session_log" 2>&1
+  assert_lab_instance "$node_instance" Running
+  for stage in $shared_lima_stages; do
+    if run_stage_attempt "$stage"; then
+      :
+    else
+      stage_status=$?
+      stop_started_fixtures || cleanup_status=$?
+      seal_fixture_session || cleanup_status=$?
+      trap - EXIT INT TERM
+      assert_fixtures_stopped || cleanup_status=4
+      [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
+      return "$stage_status"
+    fi
+  done
+  stop_started_fixtures || cleanup_status=$?
+  seal_fixture_session || cleanup_status=$?
+  trap - EXIT INT TERM
+  assert_fixtures_stopped || cleanup_status=4
+  [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
+}
+
+attempt_ledger_has_entries() {
+  local stage_dir attempt_dir
+  for stage_dir in "$evidence_dir/$attempts_directory_name"/*; do
+    [ -d "$stage_dir" ] && [ ! -L "$stage_dir" ] || continue
+    for attempt_dir in "$stage_dir"/*; do
+      [ -e "$attempt_dir" ] || [ -L "$attempt_dir" ] || continue
+      return 0
+    done
+  done
+  return 1
+}
+
+aggregate_automated_evidence() {
+  local records output attempts_json stage attempt attempt_dir result_sha
+  assert_fixtures_stopped
+  [ ! -e "$evidence_dir/automated.json" ] && [ ! -L "$evidence_dir/automated.json" ] || {
+    echo "deployed release gate refuses to replace automated evidence" >&2
+    return 3
+  }
+  records=$(mktemp /private/tmp/vpnctl-v2-automated-records.XXXXXX)
+  output=$(mktemp "$evidence_dir/.automated.XXXXXX")
+  trap 'rm -f -- "$records" "$output"' EXIT INT TERM
+  for stage in $all_automated_stages; do
+    attempt=$(find_reusable_attempt "$stage") || {
+      echo "mandatory release stage has no reusable passing attempt: $stage" >&2
+      return 3
+    }
+    attempt_dir="$evidence_dir/$attempts_directory_name/$stage/$attempt"
+    result_sha=$(sha256_file "$attempt_dir/result.json")
+    jq -cn --arg stage "$stage" --arg attempt "$attempt" --arg result_sha "$result_sha" \
+      '{stage: $stage, attempt: $attempt, result_sha256: $result_sha}' >> "$records"
+  done
+  attempts_json=$(jq -sc 'map({key: .stage, value: {attempt: .attempt, result_sha256: .result_sha256}}) | from_entries' "$records")
+  jq -n --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
+    --arg source_tree "$current_source_tree_sha256" --argjson stage_attempts "$attempts_json" '{
+      schema_version: 2,
+      status: "passed",
+      source_commit: $source_commit,
+      release_version: $release_version,
+      source_tree_sha256: $source_tree,
+      stage_attempts: $stage_attempts,
+      checks: {
+        requirement_traceability: true,
+        strict_openspec: true,
+        go_unit_integration: true,
+        race_detector: true,
+        vet: true,
+        credential_lifecycle: true,
+        update_restore_migration: true,
+        node_transport: true,
+        fleet_isolation: true,
+        failure_paths: true,
+        adversarial_security: true,
+        minimum_host_capacity: true,
+        personal_clients: true,
+        transport_supervision: true,
+        restricted_process_lifecycle: true,
+        ssh_watchdog_timeout_and_confirm: true,
+        reverse_tunnel_release: true,
+        ingress_release: true,
+        fixtures_restored_stopped: true
+      }
+    }' > "$output"
+  chmod 0600 "$output"
+  mv "$output" "$evidence_dir/automated.json"
+  rm -f -- "$records"
+  trap - EXIT INT TERM
+  printf 'automated release evidence: %s\n' "$evidence_dir/automated.json"
 }
 
 run_automated_gate() {
-  local source_commit release_version short run_id
+  local resume=$1 stage
   assert_clean_source
   assert_only_deployed_task_pending
   assert_evidence_directory "$evidence_dir"
   assert_candidate
   assert_fixtures_stopped
-  source_commit=$(candidate_value '.source_commit')
-  release_version=$(candidate_value '.release_version')
-  short=${source_commit:0:7}
-  run_id=$(basename -- "$evidence_dir")
-  if [ -e "$evidence_dir/automated.json" ] || [ -e "$evidence_dir/automated-logs" ]; then
+  assert_attempt_ledger
+  assert_fixture_session_ledger
+  current_source_commit=$(candidate_value '.source_commit')
+  current_release_version=$(candidate_value '.release_version')
+  current_source_tree_sha256=$(source_tree_sha256)
+  current_short_commit=${current_source_commit:0:7}
+  current_run_id=$(basename -- "$evidence_dir")
+  if [ -e "$evidence_dir/automated.json" ] || [ -L "$evidence_dir/automated.json" ]; then
+    if [ "$resume" = true ] && assert_private_regular_file "$evidence_dir/automated.json" &&
+       assert_automated_evidence; then
+      printf 'automated release evidence already complete: %s\n' "$evidence_dir/automated.json"
+      return 0
+    fi
     echo "deployed release gate refuses to replace automated evidence" >&2
-    exit 3
+    return 3
   fi
-  (umask 077; mkdir "$evidence_dir/automated-logs")
-
-  run_logged traceability env GOCACHE=/private/tmp/vpnctl-go-cache go test ./internal/regression -run '^TestV2RequirementTraceabilityIsComplete$' -count=1
-  run_logged openspec openspec validate vpnctl-v2 --strict --no-interactive
-  run_logged go-test env GOCACHE=/private/tmp/vpnctl-go-cache go test -p 1 ./... -count=1
-  run_logged go-race env GOCACHE=/private/tmp/vpnctl-go-race-cache go test -race -p 1 ./... -count=1
-  run_logged go-vet env GOCACHE=/private/tmp/vpnctl-go-vet-cache go vet ./...
-  run_logged credential-lifecycle "$repository_root/scripts/v2credential-lifecycle-e2e.sh" verify
-  run_logged update-restore "$repository_root/scripts/v2update-restore-e2e.sh" verify
-  run_logged node-transport "$repository_root/scripts/v2node-transport-e2e.sh" verify
-  assert_fixtures_stopped
-  run_logged fleet-isolation "$repository_root/scripts/v2fleet-isolation-e2e.sh" verify
-  assert_fixtures_stopped
-  run_logged failure "$repository_root/scripts/v2failure-e2e.sh" verify
-  assert_fixtures_stopped
-  run_logged adversarial "$repository_root/scripts/v2adversarial-e2e.sh" verify
-  assert_fixtures_stopped
-  run_logged capacity "$repository_root/scripts/v2capacity-e2e.sh" verify
-  assert_fixtures_stopped
-
-  trap cleanup_started_fixtures EXIT INT TERM
-  gateway_started=true
-  limactl start "$gateway_instance" > "$evidence_dir/automated-logs/gateway-start.log" 2>&1
-  assert_lab_instance "$gateway_instance" Running
-  node_started=true
-  limactl start "$node_instance" > "$evidence_dir/automated-logs/node-start.log" 2>&1
-  assert_lab_instance "$node_instance" Running
-  run_logged personal-client "$repository_root/scripts/v2personal-client-test.sh" verify
-  run_logged transport-supervision "$repository_root/scripts/v2transport-supervision-test.sh" verify
-  run_logged restricted-process "$repository_root/scripts/v2restricted-test.sh" verify
-  run_logged watchdog-timeout "$repository_root/scripts/v2watchdog-test.sh" verify \
-    "$repository_root/artifacts/v2lab/watchdog-test/task-16.11-$short-$run_id"
-  run_logged watchdog-confirm "$repository_root/scripts/v2watchdog-test.sh" verify-confirm \
-    "$repository_root/artifacts/v2lab/watchdog-confirm-test/task-16.11-$short-$run_id"
-  run_logged tunnel-release "$repository_root/scripts/v2tunnel-release-gate.sh" run \
-    "$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.11-$short-$run_id"
-  run_logged ingress-release "$repository_root/scripts/v2ingress-release-gate.sh" run \
-    "$repository_root/artifacts/v2lab/ingress-release-gate/task-16.11-$short-$run_id"
-  limactl stop "$node_instance" > "$evidence_dir/automated-logs/node-stop.log" 2>&1
-  node_started=false
-  limactl stop "$gateway_instance" > "$evidence_dir/automated-logs/gateway-stop.log" 2>&1
-  gateway_started=false
-  trap - EXIT INT TERM
-  assert_fixtures_stopped
-
-  jq -n --arg source_commit "$source_commit" --arg release_version "$release_version" '{
-    schema_version: 1,
-    status: "passed",
-    source_commit: $source_commit,
-    release_version: $release_version,
-    checks: {
-      requirement_traceability: true,
-      strict_openspec: true,
-      go_unit_integration: true,
-      race_detector: true,
-      vet: true,
-      credential_lifecycle: true,
-      update_restore_migration: true,
-      node_transport: true,
-      fleet_isolation: true,
-      failure_paths: true,
-      adversarial_security: true,
-      minimum_host_capacity: true,
-      personal_clients: true,
-      transport_supervision: true,
-      restricted_process_lifecycle: true,
-      ssh_watchdog_timeout_and_confirm: true,
-      reverse_tunnel_release: true,
-      ingress_release: true,
-      fixtures_restored_stopped: true
-    }
-  }' > "$evidence_dir/automated.json"
-  chmod 0600 "$evidence_dir/automated.json"
-  printf 'automated release evidence: %s\n' "$evidence_dir/automated.json"
+  if [ "$resume" != true ] && attempt_ledger_has_entries; then
+    echo "automated attempts already exist; continue explicitly with run-automated --resume" >&2
+    return 3
+  fi
+  for stage in traceability openspec go-test go-race go-vet credential-lifecycle update-restore \
+    node-transport fleet-isolation failure adversarial capacity; do
+    run_stage_attempt "$stage"
+  done
+  run_shared_lima_stages
+  aggregate_automated_evidence
 }
 
 json_passes() {
@@ -310,6 +771,42 @@ json_matches_candidate() {
   local path=$1 filter=$2 source_commit=$3 release_version=$4
   [ -f "$path" ] && [ ! -L "$path" ] && jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" \
     ".source_commit == \$source_commit and .release_version == \$release_version and ($filter)" "$path" >/dev/null 2>&1
+}
+
+assert_automated_evidence() {
+  local stage attempt expected_attempt result_sha
+  jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
+    --arg source_tree "$current_source_tree_sha256" '
+    (keys == ["checks", "release_version", "schema_version", "source_commit", "source_tree_sha256", "stage_attempts", "status"]) and
+    .schema_version == 2 and .status == "passed" and
+    .source_commit == $source_commit and .release_version == $release_version and
+    .source_tree_sha256 == $source_tree and
+    (.stage_attempts | keys == ["adversarial", "capacity", "credential-lifecycle", "failure", "fleet-isolation", "go-race", "go-test", "go-vet", "ingress-release", "node-transport", "openspec", "personal-client", "restricted-process", "traceability", "transport-supervision", "tunnel-release", "update-restore", "watchdog-confirm", "watchdog-timeout"]) and
+    (.stage_attempts | length == 19 and all(.[];
+      keys == ["attempt", "result_sha256"] and
+      (.attempt | test("^attempt-[0-9]{4}$")) and (.result_sha256 | test("^[0-9a-f]{64}$")))) and
+    (.checks | keys == ["adversarial_security", "credential_lifecycle", "failure_paths", "fixtures_restored_stopped", "fleet_isolation", "go_unit_integration", "ingress_release", "minimum_host_capacity", "node_transport", "personal_clients", "race_detector", "requirement_traceability", "restricted_process_lifecycle", "reverse_tunnel_release", "ssh_watchdog_timeout_and_confirm", "strict_openspec", "transport_supervision", "update_restore_migration", "vet"]) and
+    (.checks | length == 19 and all(.[]; . == true))
+  ' "$evidence_dir/automated.json" >/dev/null || {
+    echo "automated release evidence is incomplete" >&2
+    return 3
+  }
+  for stage in $all_automated_stages; do
+    attempt=$(jq -er --arg stage "$stage" '.stage_attempts[$stage].attempt' "$evidence_dir/automated.json") || return 3
+    expected_attempt=$(find_reusable_attempt "$stage") || {
+      echo "automated release evidence references a non-reusable stage: $stage" >&2
+      return 3
+    }
+    [ "$attempt" = "$expected_attempt" ] || {
+      echo "automated release evidence selected an unexpected stage attempt: $stage/$attempt" >&2
+      return 3
+    }
+    result_sha=$(sha256_file "$evidence_dir/$attempts_directory_name/$stage/$attempt/result.json")
+    [ "$result_sha" = "$(jq -er --arg stage "$stage" '.stage_attempts[$stage].result_sha256' "$evidence_dir/automated.json")" ] || {
+      echo "automated release evidence stage result changed: $stage/$attempt" >&2
+      return 3
+    }
+  done
 }
 
 status_gate() {
@@ -358,6 +855,13 @@ finalize_gate() {
   assert_candidate
   source_commit=$(candidate_value '.source_commit')
   release_version=$(candidate_value '.release_version')
+  current_source_commit=$source_commit
+  current_release_version=$release_version
+  current_source_tree_sha256=$(source_tree_sha256)
+  current_short_commit=${source_commit:0:7}
+  current_run_id=$(basename -- "$evidence_dir")
+  assert_attempt_ledger
+  assert_fixture_session_ledger
   for file in automated.json deployment.json clash-mi.json telegram.json; do
     assert_private_regular_file "$evidence_dir/$file"
   done
@@ -371,13 +875,7 @@ finalize_gate() {
     echo "deployed release gate refuses to replace final evidence" >&2
     exit 3
   fi
-  jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
-    (keys == ["checks", "release_version", "schema_version", "source_commit", "status"]) and
-    .schema_version == 1 and .status == "passed" and
-    .source_commit == $source_commit and .release_version == $release_version and
-    (.checks | keys == ["adversarial_security", "credential_lifecycle", "failure_paths", "fixtures_restored_stopped", "fleet_isolation", "go_unit_integration", "ingress_release", "minimum_host_capacity", "node_transport", "personal_clients", "race_detector", "requirement_traceability", "restricted_process_lifecycle", "reverse_tunnel_release", "ssh_watchdog_timeout_and_confirm", "strict_openspec", "transport_supervision", "update_restore_migration", "vet"]) and
-    (.checks | type == "object" and length == 19 and all(.[]; . == true))
-  ' "$evidence_dir/automated.json" >/dev/null || { echo "automated release evidence is incomplete" >&2; exit 3; }
+  assert_automated_evidence
   jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
     (keys == ["actual_deployment", "checks", "gateway", "node", "public_certificate", "release_version", "schema_version", "source_commit", "status", "target"]) and
     .schema_version == 1 and .status == "passed" and .source_commit == $source_commit and
@@ -479,9 +977,16 @@ case "$command" in
     prepare_gate "$2" "${3:-}"
     ;;
   run-automated)
-    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
-    evidence_dir=$2
-    run_automated_gate
+    if [ "$#" -eq 2 ]; then
+      evidence_dir=$2
+      run_automated_gate false
+    elif [ "$#" -eq 3 ] && [ "$2" = --resume ]; then
+      evidence_dir=$3
+      run_automated_gate true
+    else
+      usage >&2
+      exit 2
+    fi
     ;;
   status)
     [ "$#" -eq 2 ] || { usage >&2; exit 2; }

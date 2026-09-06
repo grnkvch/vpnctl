@@ -10,6 +10,7 @@ The gate intentionally has four explicit phases:
 ```text
 scripts/v2deployed-release-gate.sh prepare v2.0.0
 scripts/v2deployed-release-gate.sh run-automated <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-automated --resume <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh status <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absolute-release-assets-directory>
 ```
@@ -22,11 +23,14 @@ requires both fixtures `Stopped` before starting and restores every fixture it
 starts to `Stopped` on success or failure.
 
 The evidence directory is a new mode-`0700` direct child of
-`artifacts/v2lab/deployed-release-gate/`. Its JSON and checksum files are
-mode `0600`, ignored by Git, and contain no credential, request body, webhook
-path beyond the fixed public test route, or Clash profile. `prepare` refuses to
-replace an earlier directory and copies the exact Telegram helper bound to the
-candidate commit.
+`artifacts/v2lab/deployed-release-gate/`. Its top-level JSON and checksum files
+are mode `0600`, ignored by Git, and contain no credential, request body,
+webhook path beyond the fixed public test route, or Clash profile. `prepare` refuses to
+replace an earlier directory, creates the versioned append-only automated
+attempt ledger, and copies the exact Telegram helper bound to the candidate
+commit. Evidence created by the previous one-shot schema remains read-only; it
+is never migrated or rewritten and cannot be resumed or finalized as a new
+candidate.
 
 ## Automated phase
 
@@ -40,12 +44,44 @@ candidate commit.
 - personal-client, transport supervision, restricted child-process, both SSH
   watchdog paths, native reverse-tunnel, and native ingress release gates.
 
-It writes a final `automated.json` only after every command passes and both
-fixtures are back in `Stopped`. Logs remain private inside the ignored evidence
-directory. A failed or interrupted run keeps its partial directory for audit
-and cannot be mistaken for success or silently overwritten. The evidence
-directory name also scopes nested watchdog/tunnel/ingress evidence, so a fresh
-directory can repeat the same commit without adopting a prior run.
+The first invocation uses `run-automated <evidence-directory>`. Every stage
+creates a new
+`automated-attempts/<stage>/attempt-NNNN/` containing `input.json`,
+`output.log`, and `result.json`. A completed attempt is sealed mode `0500` with
+mode-`0400` files. Failed attempts are retained exactly like passing attempts;
+an interrupted, unsealed attempt is retained but is never reusable. The gate
+never overwrites an attempt or hides a failed measurement.
+
+After a failure, use the exact command printed by the gate:
+
+```text
+scripts/v2deployed-release-gate.sh run-automated --resume <absolute-evidence-directory>
+```
+
+Resume validates the complete attempt ledger and reuses a passing result only
+when the source commit, release version, stage command contract, tracked-input
+SHA-256, and required Lima image digest still match. The tracked-input digest
+is intentionally conservative: it covers the complete Git tree, including all
+relevant scripts, fixtures, configuration, specs, and tests. A mismatching,
+failed, malformed, or interrupted attempt is retained and a new numbered
+attempt is appended for that stage. Unaffected matching passes are not run
+again. A normal `run-automated` refuses an evidence directory that already has
+attempts, making continuation an explicit opt-in.
+
+Self-managed Lima stages must begin and finish with both exact fixtures
+`Stopped`. The final shared-fixture stages use an append-only private
+`automated-fixture-sessions/session-NNNN/` log; their owner-scoped cleanup
+returns both fixtures to `Stopped` after success, stage failure, or an ordinary
+interrupt. Resume again refuses to proceed unless both fixtures satisfy the
+pinned name, image, CPU, memory, disk, network, architecture, and stopped-state
+contract.
+
+The gate writes schema-v2 `automated.json` only after every mandatory stage has
+a matching passing attempt and both fixtures are back in `Stopped`. The final
+document records the selected attempt name and result SHA-256 for all 19 stages;
+`finalize` revalidates those references. The evidence directory name also
+scopes each nested watchdog/tunnel/ingress attempt, so retries append new child
+evidence rather than colliding with or adopting a prior attempt.
 
 ## Deployed gateway and node
 

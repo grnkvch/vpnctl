@@ -102,6 +102,9 @@ The regression test fails when a spec scenario is added, removed, or renamed wit
 | `release-delivery-and-migration` | One-time v1 migration | Migrate existing v1 clients | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Minimum capacity target | Minimum-host benchmark | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Full non-backlog release gate | Vertical slice passes before remaining capabilities | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
+| `release-delivery-and-migration` | Resumable immutable automated release evidence | Capacity retry after a late failure | integration, e2e, documentation | 16.11-16.12 |
+| `release-delivery-and-migration` | Resumable immutable automated release evidence | Stage input no longer matches | integration, e2e | 16.11-16.12 |
+| `release-delivery-and-migration` | Resumable immutable automated release evidence | Automated evidence remains incomplete | integration, e2e, documentation | 16.11-16.12 |
 | `release-delivery-and-migration` | Explicit v2.0 exclusions | Request for excluded capability | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `reverse-tunnel` | One multiplexed tunnel per node | Add second expose | spike, integration, e2e | 2.7, 11.1-11.9, 16.4, 16.6-16.7 |
 | `reverse-tunnel` | Outbound-only private-node connection | Private node behind inbound firewall | spike, integration, e2e | 2.7, 11.1-11.9, 16.4, 16.6-16.7 |

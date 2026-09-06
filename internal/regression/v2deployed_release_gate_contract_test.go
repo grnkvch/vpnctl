@@ -22,6 +22,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 	script := readContractFile(t, scriptPath)
 	for _, required := range []string{
 		"prepare <vMAJOR.MINOR.PATCH>", "run-automated <evidence-directory>",
+		"run-automated --resume <evidence-directory>",
 		"status <evidence-directory>", "finalize <evidence-directory>",
 		"deployed release gate requires a clean source tree", "task 16.11 to be the only pending task",
 		"grep -Eq -- '^- \\[ \\] 16[.]11 '",
@@ -36,7 +37,9 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"Telegram helper differs from the candidate prepared by this gate", "shasum -a 256 -c",
 		"go run ./cmd/vpnctl-release-verify", "Telegram gate used a different public certificate",
 		"labeling remains a separate manual action", "cleanup_started_fixtures",
-		"(umask 022; \"$@\") > \"$evidence_dir/automated-logs/$name.log\" 2>&1",
+		"automated-attempts", "stage_contract_sha256", "find_reusable_attempt",
+		"source_tree_sha256", "lima_image_digest", "stage_attempts",
+		"restore_exact_fixtures_stopped", "(umask 022; execute_stage",
 	} {
 		if !strings.Contains(script, required) {
 			t.Errorf("deployed release gate is missing %q", required)

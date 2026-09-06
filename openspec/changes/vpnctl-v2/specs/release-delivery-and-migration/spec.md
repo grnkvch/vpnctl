@@ -96,6 +96,21 @@ v2.0 SHALL not be declared complete until every requirement in all capabilities 
 - **WHEN** one node, restricted Telegram egress, and one webhook expose pass E2E but other non-backlog requirements remain incomplete
 - **THEN** the build is treated as an internal milestone and not a completed v2.0 release
 
+### Requirement: Resumable immutable automated release evidence
+The deployed-service automated release gate SHALL store every stage attempt in a separate append-only evidence directory and SHALL create `automated.json` only after every mandatory stage has a reusable passing attempt and the exact Lima fixtures are stopped. An explicit resume invocation SHALL reuse a passing attempt only when its source commit, release version, stage command contract, tracked source/script/fixture/configuration fingerprint, and, for VM stages, pinned Lima image digest match the current candidate. A failed, interrupted, malformed, or invalidated attempt MUST NOT be treated as passing, overwritten, or hidden; resume SHALL append a new attempt for the first stage without reusable passing evidence while retaining all earlier attempts. Legacy evidence SHALL remain read-only and SHALL not be migrated in place.
+
+#### Scenario: Capacity retry after a late failure
+- **WHEN** every earlier automated stage passed but a capacity attempt failed and the operator explicitly resumes the same unchanged candidate
+- **THEN** the gate reuses the matching earlier passes, appends a second capacity attempt, and retains the failed capacity attempt for audit
+
+#### Scenario: Stage input no longer matches
+- **WHEN** a recorded passing attempt does not match the current stage command, relevant tracked inputs, release version, source commit, or required Lima image digest
+- **THEN** the gate does not reuse that attempt or aggregate final automated evidence from it
+
+#### Scenario: Automated evidence remains incomplete
+- **WHEN** any mandatory stage has no matching passing attempt or the Lima fixtures are not restored to their required stopped state
+- **THEN** `automated.json` is absent and the gate reports the explicit resume action without changing prior attempts
+
 ### Requirement: Explicit v2.0 exclusions
 v2.0 SHALL exclude multi-gateway mesh/failover/load balancing, node-to-node networking, automatic transport selection/fallback, multiple steady-state node transports, process/container-scoped policy, raw Mihomo config passthrough, public or remote management UI/API, Docker/Kubernetes deployment, generic ingress, full IPv6, domain/ACME, URL/subscription/QR delivery, scheduled remote backups/external secret stores, portable node backup/cloning, invite files, and user applications on the gateway.
 
