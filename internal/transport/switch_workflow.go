@@ -430,6 +430,29 @@ func switchedNodeState(before model.State, nodeID string, previous, target model
 	return candidate, nil
 }
 
+// DesiredNodeSwitchState returns the exact next local state for one immediate
+// manual selection change without mutating the source. It is also the shared
+// compilation boundary used by system providers before any host preparation.
+func DesiredNodeSwitchState(before model.State, target model.TransportKind) (model.State, error) {
+	if err := before.Validate(); err != nil {
+		return model.State{}, fmt.Errorf("validate node transport switch source: %w", err)
+	}
+	if !isTransportKind(target) {
+		return model.State{}, fmt.Errorf("unsupported transport switch target %q", target)
+	}
+	node, transports, err := localNodeSwitchPair(before)
+	if err != nil {
+		return model.State{}, err
+	}
+	if target == node.ActiveTransport {
+		return before, nil
+	}
+	if transports[target].State != model.TransportStandby {
+		return model.State{}, fmt.Errorf("transport switch target %s must be standby", target)
+	}
+	return switchedNodeState(before, node.ID, node.ActiveTransport, target)
+}
+
 // DeferredSwitchDesiredState reconstructs the exact node-side state that a
 // previously registered transport-switch operation intends to make active.
 // The retained node state is the intermediate N+1 mirror; this function only

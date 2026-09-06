@@ -66,10 +66,18 @@ func TestNodeConfigurationActivatorRetainsGuardAfterLaterFailure(t *testing.T) {
 }
 
 func compiledNodeActivationFixture(t *testing.T) NodeConfiguration {
+	return compiledNodeActivationFixtureFor(t, model.TransportRestricted)
+}
+
+func compiledNodeActivationFixtureFor(t *testing.T, active model.TransportKind) NodeConfiguration {
 	t.Helper()
 	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
 	t.Cleanup(fixture.destroy)
-	if _, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); err != nil {
+	presets := []string{}
+	if active == model.TransportRestricted {
+		presets = []string{"telegram"}
+	}
+	if _, err := fixture.workflow.Join(context.Background(), fixture.token, active, presets); err != nil {
 		t.Fatal(err)
 	}
 	state, err := fixture.nodeState.Load()

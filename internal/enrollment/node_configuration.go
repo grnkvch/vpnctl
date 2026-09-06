@@ -71,6 +71,13 @@ func (configuration NodeConfiguration) TunnelCandidate() tunnel.FRPCandidate {
 	return configuration.tunnel
 }
 
+// Validate verifies that every service artifact belongs to one complete node
+// generation and that routing plus tunnel selection cannot diverge. It does
+// not read secrets, inspect the host, or mutate runtime state.
+func (configuration NodeConfiguration) Validate() error {
+	return validateNodeConfigurationForActivation(configuration)
+}
+
 type NodeConfigurationCompiler struct {
 	root    string
 	secrets NodeConfigurationSecretReader

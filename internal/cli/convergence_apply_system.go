@@ -97,7 +97,7 @@ func buildSystemNodeTransportSwitchApplyExecutor(
 	paths store.Paths,
 	state *store.StateStore,
 ) (*operations.NodeTransportSwitchApplyExecutor, error) {
-	registry, err := buildSystemTransportRegistry()
+	registry, err := buildSystemTransportRegistry(paths, state)
 	if err != nil {
 		return nil, err
 	}

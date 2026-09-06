@@ -116,6 +116,19 @@ reboot restores the listeners through systemd; it does not inspect, rewrite,
 or repair a node's active/standby pair. An active node-path outage therefore
 remains unavailable/degraded until an operator explicitly tests and switches.
 
+The production node adapter now compiles both complete generation-bound
+standard/routing/DNS/tunnel bundles from one state and host snapshot. It uses
+the role-repair transaction for exact config replacement, dependency-ordered
+service restart, and rollback of any failed host mutation. The two provider
+instances share one in-memory selector and one replacer, so `Activate` cannot
+move control, frpc, selected TCP, and selected UDP independently. Immediate
+planning remains lazy and state-only. A deferred operation reconstructs the
+last Applied `N` configuration separately from its retained `N+1` intent mirror
+and compiles the already published Desired `N+2` target, preserving an exact
+rollback generation. Until the isolated production candidate tester is wired,
+`StartTest` fails before `Activate`; host replacement is therefore not yet
+reachable from the public test/switch commands.
+
 The concrete standard renderer, service, credential ownership, passive health
 semantics, and packet-level acceptance contract are documented in
 [`STANDARD_TRANSPORT.md`](./STANDARD_TRANSPORT.md).

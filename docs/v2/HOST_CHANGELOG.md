@@ -2,6 +2,47 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Transactional node transport host provider
+
+### Implementation and non-mutation boundary
+
+- Replace the all-methods-unavailable transport provider with two concrete
+  provider adapters sharing one node runtime coordinator. A target candidate
+  carries one complete generation-bound standard/routing/DNS/tunnel bundle;
+  successful activation changes the shared selector only after the whole host
+  generation has been replaced and passed readiness. Control, reverse tunnel,
+  selected TCP, and selected UDP therefore have no independent activation
+  surface.
+- Add an active-node configuration replacer on top of the existing role-repair
+  transaction. Read-only preflight snapshots exact current config bytes and
+  unit runtime, apply restarts standard, routing guard, routing, and tunnel in
+  dependency order, and every host-level failure rolls back locally. A later
+  readiness failure is explicitly returned for the outer make-before-break
+  workflow to reactivate its exact old candidate before target cleanup.
+- Add a lazy production adapter so dry-run remains state-only. Runtime use
+  compiles both transports from one verified state/host snapshot and rejects a
+  concurrent state change. Deferred intent reconstructs the Applied `N`
+  source separately from the `N+1` mirror and compiles the exact Desired `N+2`
+  target. The isolated candidate tester remains deliberately unavailable, so
+  public test/switch/apply still stop before any provider activation.
+- Validation used repository source, temporary state/secret fixtures,
+  disposable `/private/tmp/vpnctl-go-cache`, in-memory host/runtime doubles,
+  and existing loopback/Unix test listeners. No real host/VM config, systemd
+  unit, process, route, firewall, transport, public endpoint, webhook, or
+  client was changed; no host rollback is required.
+
+### Acceptance
+
+- Focused tests cover complete replacement requests, dependency restart order,
+  pre-activation discard, host-error/readiness-error separation, a successful
+  standard-to-restricted-to-standard round trip, target-health compensation,
+  failed-test no-activation, lazy planning, and immediate/deferred compilation
+  coordinates.
+- Full Go, changed-package race, vet, strict OpenSpec, formatting, and diff
+  checks passed. The next slice is the isolated production target tester;
+  `StartTest` must prove control, reverse-tunnel viability, selected TCP, and
+  selected UDP without mutating the production selector.
+
 ## 2026-09-06 — Deferred transport current-node apply executor
 
 ### Implementation and non-mutation boundary

@@ -38,9 +38,19 @@ staged make-before-break activation, gateway finalize, единый terminal nod
 state `N+2` и promotion convergence Desired в Applied. Доказанный reject
 откатывает runtime, а неопределённый gateway commit не вызывает blind rollback;
 повтор сначала reconciles stable operation. Сбой convergence после terminal
-node commit восстанавливается без повторного переключения. Concrete host
-transport provider для apply/test/immediate switch пока закрыт typed
-`system transport runtime adapter is unavailable`; это следующий slice.
+node commit восстанавливается без повторного переключения. Concrete node host
+provider теперь заменяет весь generation-bound standard/routing/DNS/tunnel
+bundle одной транзакцией поверх role-repair: preflight сохраняет exact старые
+bytes/runtime, restart идёт в fail-closed порядке, host failure локально
+откатывается, а readiness failure передаётся общему workflow для восстановления
+старого bundle. Оба provider разделяют один selector, поэтому control, reverse
+tunnel и selected TCP/UDP нельзя переключить раздельно. Production adapter
+лениво компилирует active/standby из одного state+host snapshot и повторно
+проверяет state; `--dry-run` не читает secrets и не делает host discovery. Для
+deferred apply он компилирует Applied `N` и Desired `N+2`, не принимая pending
+mirror `N+1` за rollback generation. Оставшийся закрытый runtime-шаг —
+изолированный target `StartTest`; до его подключения команда возвращает typed
+`system transport runtime adapter is unavailable` до host mutation.
 
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
 через v2 registry и подключён к production state/network runtime. Closed runner
@@ -66,10 +76,13 @@ exact staged material; operation-specific current-node executor подключё
 Public `vpnctl apply` строит из этого Desired точный
 availability-impact preview, связывает operation только с текущим node и после
 consent повторно проверяет authoritative state, plan и доступность gateway,
-после чего выполняет описанную cross-host финализацию. Пока concrete runtime
-adapter не подключён, команда fail-closed возвращает
-`transport_runtime_unavailable` до provider mutation. Следующий implementation
-slice — production standard/restricted host adapter.
+после чего выполняет описанную cross-host финализацию. Bundle activation,
+health, drain и compensation уже подключены к production provider, но
+обязательный isolated target probe ещё fail-closed возвращает
+`transport_runtime_unavailable` до provider activation. Следующий
+implementation slice — production standard/restricted candidate tester для
+control, reverse-tunnel viability и selected TCP/UDP без изменения production
+selection.
 
 Immutable applied-material foundation теперь подключён ко всем production
 publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в
