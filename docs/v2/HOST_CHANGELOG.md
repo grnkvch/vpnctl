@@ -36,10 +36,31 @@ This journal records development-host mutations made while implementing and vali
   the counter exactly once. Local macOS execution passes the six non-socket
   cases and explicitly skips only the sandbox-prohibited bind case.
 - This validation does not contact Telegram and does not satisfy task 16.11.
-  The current ingress release harness now makes the Linux socket case
-  mandatory before packaging the helper. The complete clean-tree ingress gate
-  will be rerun against this source revision before it is treated as the
-  current task-12.11 evidence.
+  The current ingress release harness makes the Linux socket case mandatory
+  before packaging the helper.
+- The complete clean-tree ingress gate then passed on commit
+  `12d7546029ce9c3ca8018142ce82c64b4dc69b8d`. It temporarily moved the exact
+  `vpnctl-v2-gateway` and `vpnctl-v2-node` fixtures from `Stopped` to `Running`,
+  installed only the owner-recorded `nginx`/`nginx-common` packages in the
+  gateway, created only its documented owner-marked ingress units/tree,
+  bounded native-test and harness files, loopback/public-lab listeners, node
+  request inputs, and ignored evidence directory. The pre-existing Lima
+  port-443 ignore remained unchanged.
+- Production-native and minimum-host regressions passed HTTP/1.1/2 forwarding,
+  exact 40/64 concurrency boundaries, `404/413/503/504`, no request replay, no
+  body files, graceful reload, RSS limits, and zero OOM events. The packaged
+  helper SHA-256 is
+  `e201a087c711789a32bebeb819aab4894d64c976c01e4af481852b514ac30346`;
+  its seven offline/Linux tests passed and `provider_calls_executed` remained
+  false.
+- Owner cleanup removed the temporary nginx packages, units, config, keys,
+  processes, listeners, guest test paths, and host build root. Independent
+  postflight found the exact gateway paths and TCP/443 listener absent, both
+  nginx packages absent, and no node `/tmp/vpnctl-v2-ingress-*` residue. Both
+  fixtures were returned to `Stopped`. Sanitized ignored evidence remains only
+  at
+  `artifacts/v2lab/ingress-release-gate/task-12.11-12d7546/summary.json` and is
+  independently removable; no manual rollback remains.
 
 ## 2026-09-06 — Transient Mihomo parent-death gate
 
