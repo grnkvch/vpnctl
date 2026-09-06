@@ -306,17 +306,24 @@ json_passes() {
   [ -f "$path" ] && [ ! -L "$path" ] && jq -e "$filter" "$path" >/dev/null 2>&1
 }
 
+json_matches_candidate() {
+  local path=$1 filter=$2 source_commit=$3 release_version=$4
+  [ -f "$path" ] && [ ! -L "$path" ] && jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" \
+    ".source_commit == \$source_commit and .release_version == \$release_version and ($filter)" "$path" >/dev/null 2>&1
+}
+
 status_gate() {
   local source_commit release_version source_matches=false automated=false deployment=false clash=false telegram=false final=false
   assert_evidence_directory "$evidence_dir"
-  source_commit=$(candidate_value '.source_commit')
-  release_version=$(candidate_value '.release_version')
+  source_commit=$(jq -er '.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$evidence_dir/candidate.json")
+  release_version=$(jq -er '.release_version | select(type == "string")' "$evidence_dir/candidate.json")
+  assert_release_version "$release_version"
   if [ "$(git rev-parse HEAD)" = "$source_commit" ] && [ -z "$(git status --porcelain --untracked-files=normal)" ]; then source_matches=true; fi
-  json_passes "$evidence_dir/automated.json" ".status == \"passed\" and .source_commit == \"$source_commit\" and .release_version == \"$release_version\"" && automated=true
-  json_passes "$evidence_dir/deployment.json" ".status == \"passed\" and .actual_deployment == true and .source_commit == \"$source_commit\" and .release_version == \"$release_version\"" && deployment=true
-  json_passes "$evidence_dir/clash-mi.json" ".status == \"passed\" and .source_commit == \"$source_commit\" and .release_version == \"$release_version\"" && clash=true
+  json_matches_candidate "$evidence_dir/automated.json" '.status == "passed"' "$source_commit" "$release_version" && automated=true
+  json_matches_candidate "$evidence_dir/deployment.json" '.status == "passed" and .actual_deployment == true' "$source_commit" "$release_version" && deployment=true
+  json_matches_candidate "$evidence_dir/clash-mi.json" '.status == "passed"' "$source_commit" "$release_version" && clash=true
   json_passes "$evidence_dir/telegram.json" '.status == "passed" and .provider_authenticated_request == true and .cleanup_succeeded == true' && telegram=true
-  json_passes "$evidence_dir/final-summary.json" ".status == \"passed\" and .production_ready == true and .source_commit == \"$source_commit\" and .release_version == \"$release_version\"" && final=true
+  json_matches_candidate "$evidence_dir/final-summary.json" '.status == "passed" and .production_ready == true' "$source_commit" "$release_version" && final=true
   if [ "$source_matches" != true ]; then final=false; fi
   jq -n --argjson source_matches "$source_matches" --argjson automated "$automated" --argjson deployment "$deployment" --argjson clash "$clash" \
     --argjson telegram "$telegram" --argjson final "$final" '{
@@ -365,22 +372,30 @@ finalize_gate() {
     exit 3
   fi
   jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
+    (keys == ["checks", "release_version", "schema_version", "source_commit", "status"]) and
     .schema_version == 1 and .status == "passed" and
     .source_commit == $source_commit and .release_version == $release_version and
+    (.checks | keys == ["adversarial_security", "credential_lifecycle", "failure_paths", "fixtures_restored_stopped", "fleet_isolation", "go_unit_integration", "ingress_release", "minimum_host_capacity", "node_transport", "personal_clients", "race_detector", "requirement_traceability", "restricted_process_lifecycle", "reverse_tunnel_release", "ssh_watchdog_timeout_and_confirm", "strict_openspec", "transport_supervision", "update_restore_migration", "vet"]) and
     (.checks | type == "object" and length == 19 and all(.[]; . == true))
   ' "$evidence_dir/automated.json" >/dev/null || { echo "automated release evidence is incomplete" >&2; exit 3; }
   jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
+    (keys == ["actual_deployment", "checks", "gateway", "node", "public_certificate", "release_version", "schema_version", "source_commit", "status", "target"]) and
     .schema_version == 1 and .status == "passed" and .source_commit == $source_commit and
     .release_version == $release_version and .actual_deployment == true and
+    (.target | keys == ["architecture", "os"]) and
     .target == {os: "Ubuntu 24.04", architecture: "amd64"} and
+    (.gateway | keys == ["healthy", "public_ipv4", "role"]) and
     .gateway.role == "gateway" and .gateway.healthy == true and
     (.gateway.public_ipv4 | type == "string") and
+    (.node | keys == ["active_transport", "assigned_presets", "connected_to_gateway", "healthy", "role"]) and
     .node.role == "node" and .node.healthy == true and .node.connected_to_gateway == true and
     .node.active_transport == "restricted" and .node.assigned_presets == ["telegram"] and
+    (.public_certificate | keys == ["ip_san", "private_key_exported", "rsa_bits", "sha256", "signature", "validity_days"]) and
     (.public_certificate.sha256 | test("^[0-9a-f]{64}$")) and
     .public_certificate.rsa_bits == 2048 and .public_certificate.signature == "SHA-256" and
     .public_certificate.validity_days == 1825 and .public_certificate.ip_san == true and
     .public_certificate.private_key_exported == false and
+    (.checks | keys == ["candidate_installed_on_both_hosts", "gateway_node_control_healthy", "logging_disabled_by_default", "restricted_transport_healthy", "temporary_telegram_expose_ready", "temporary_telegram_expose_removed_after_provider_cleanup"]) and
     (.checks | type == "object" and length == 6 and all(.[]; . == true))
   ' "$evidence_dir/deployment.json" >/dev/null || { echo "deployed gateway/node evidence is incomplete" >&2; exit 3; }
   assert_global_ipv4 "$(jq -er '.gateway.public_ipv4' "$evidence_dir/deployment.json")" || {
@@ -388,15 +403,19 @@ finalize_gate() {
     exit 3
   }
   jq -e --arg source_commit "$source_commit" --arg release_version "$release_version" '
+    (keys == ["app", "checks", "profile_sha256", "release_version", "schema_version", "source_commit", "status", "tested_at"]) and
     .schema_version == 1 and .status == "passed" and .source_commit == $source_commit and
     .release_version == $release_version and
     (.tested_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+    (.app | keys == ["name", "platform", "platform_version", "version"]) and
     .app.name == "Clash Mi" and (.app.version | type == "string" and length > 0 and length <= 128) and
     .app.platform == "iOS" and (.app.platform_version | type == "string" and length > 0 and length <= 128) and
     (.profile_sha256 | test("^[0-9a-f]{64}$")) and
+    (.checks | keys == ["no_fail_direct_observed", "profile_import", "proxy_bound_dns", "reconnect_after_gateway_return", "selected_tcp", "selected_tcp_blocked_without_gateway", "selected_udp_blocked_without_gateway", "selected_uot", "strict_wrong_host_rejected"]) and
     (.checks | type == "object" and length == 9 and all(.[]; . == true))
   ' "$evidence_dir/clash-mi.json" >/dev/null || { echo "Clash Mi evidence is incomplete" >&2; exit 3; }
   jq -e '
+    (keys == ["cleanup_succeeded", "custom_certificate", "provider_authenticated_request", "public_certificate_sha256", "real_request_received", "registered", "schema_version", "sensitive_values_emitted", "status"]) and
     .schema_version == 1 and .status == "passed" and .registered == true and
     .custom_certificate == true and .real_request_received == true and
     .provider_authenticated_request == true and .cleanup_succeeded == true and
