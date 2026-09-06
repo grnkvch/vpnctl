@@ -3,6 +3,8 @@
 ### Requirement: Phase-selective automated release execution
 The deployed release gate SHALL expose a host-only fast phase and a Lima-backed VM phase while retaining the existing full automated command as the ordered composition of both phases. `run-fast` MUST execute no Lima command and MUST NOT require Lima to be installed. `run-vm` SHALL require reusable passing evidence for every mandatory fast stage before starting a fixture. Fresh-versus-resume refusal SHALL be scoped to the selected phase, and the explicit `--resume` form SHALL retain the same immutable-attempt reuse rules as the full gate. Partial phase completion MUST NOT create `automated.json`.
 
+Private VM-harness timing and shared-session environment variables MUST NOT be inherited by fast-stage commands or their nested test processes.
+
 #### Scenario: Cheap candidate rejection
 - **WHEN** the operator runs `run-fast` for a newly prepared candidate and a host-only stage fails
 - **THEN** the failed attempt is retained, no Lima command is executed, and the operator can explicitly resume the fast phase without rerunning its matching passes

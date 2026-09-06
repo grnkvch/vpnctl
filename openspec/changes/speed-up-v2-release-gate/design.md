@@ -35,6 +35,8 @@ run-automated [--resume] <evidence-directory>
 
 `run-automated` remains the compatibility path and calls the same fast phase followed by the same VM phase. `run-fast` contains traceability, strict OpenSpec, ordinary Go, race, vet, credential lifecycle, and update/restore. It performs candidate/ledger validation but does not resolve, inspect, or execute `limactl`. `run-vm` refuses until all fast attempts are reusable.
 
+The private child timing path and shared-Lima-session marker are supplied only to VM harness commands. Fast commands explicitly remove both variables from their child environment, including when the operator's shell already defines them, so a full Go regression cannot mistake the enclosing attempt timing file for its own nested harness output.
+
 Fresh-attempt refusal is phase-scoped: a first `run-vm` is valid after completed fast attempts, but a second invocation with an existing non-passing VM attempt requires `run-vm --resume`. `run-automated` without `--resume` still requires an empty complete ledger. This keeps retries explicit without forcing the split workflow to pretend that its second phase is an error recovery.
 
 Alternatives considered:

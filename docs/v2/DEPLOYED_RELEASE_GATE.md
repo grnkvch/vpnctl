@@ -19,8 +19,10 @@ scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absol
 
 `prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
 server. `run-fast` executes the host-only checks without resolving, inspecting,
-or invoking `limactl`. `run-vm` executes the Lima-backed checks only after every
-fast result is reusable. `run-automated` is the backward-compatible ordered
+or invoking `limactl`; it also removes the private VM timing/session variables
+from every child command so nested tests cannot adopt the enclosing attempt's
+output path. `run-vm` executes the Lima-backed checks only after every fast
+result is reusable. `run-automated` is the backward-compatible ordered
 composition of those two phases and may
 start only the two exact owner-controlled minimum-host fixtures. Each child
 harness retains its existing owner checks and cleanup; the top-level gate

@@ -96,6 +96,22 @@ func TestV2DeployedReleaseGateRefusesVMBeforeFastWithoutLima(t *testing.T) {
 	}
 }
 
+func TestV2DeployedReleaseGateDoesNotLeakPrivateVMEnvironmentIntoFastStages(t *testing.T) {
+	fixture := newDeployedGateFixture(t)
+	evidence := fixture.prepare(t, "evidence-fast-environment")
+	output, code := fixture.runExtra(t, []string{
+		"VPNCTL_TEST_REQUIRE_FAST_ENV_CLEAN=true",
+		"VPNCTL_V2_TIMING_OUTPUT=/tmp/foreign-child-timing.json",
+		"VPNCTL_V2_SHARED_LIMA_SESSION=true",
+	}, "", "run-fast", evidence)
+	if code != 0 {
+		t.Fatalf("run-fast leaked private VM environment: code=%d output=%s", code, output)
+	}
+	if countLimaInvocations(t, fixture.runLog) != 0 {
+		t.Fatal("environment-isolated run-fast invoked Lima")
+	}
+}
+
 func TestV2DeployedReleaseGateRejectsInvalidStageRegistries(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -600,6 +616,11 @@ func fakeStageScript(stage string) string {
 set -euo pipefail
 stage=%q
 printf '%%s\n' "$stage" >> "$VPNCTL_TEST_RUN_LOG"
+if [ "${VPNCTL_TEST_REQUIRE_FAST_ENV_CLEAN:-}" = true ] && [ "$stage" = openspec ] && \
+   { [ -n "${VPNCTL_V2_TIMING_OUTPUT:-}" ] || [ -n "${VPNCTL_V2_SHARED_LIMA_SESSION:-}" ]; }; then
+  echo "private VM environment leaked into fast stage: $stage" >&2
+  exit 10
+fi
 if [ "${1:-}" = cleanup ] && [ "${VPNCTL_TEST_FAIL_CLEANUP_STAGE:-}" = "$stage" ]; then
   exit 8
 fi
@@ -666,6 +687,11 @@ case " $* " in
   *' vet '*) stage=go-vet ;;
 esac
 printf '%s\n' "$stage" >> "$VPNCTL_TEST_RUN_LOG"
+if [ "${VPNCTL_TEST_REQUIRE_FAST_ENV_CLEAN:-}" = true ] && \
+   { [ -n "${VPNCTL_V2_TIMING_OUTPUT:-}" ] || [ -n "${VPNCTL_V2_SHARED_LIMA_SESSION:-}" ]; }; then
+  echo "private VM environment leaked into fast stage: $stage" >&2
+  exit 10
+fi
 if [ "${VPNCTL_TEST_FAIL_STAGE:-}" = "$stage" ]; then
   echo "forced failure: $stage" >&2
   exit 9

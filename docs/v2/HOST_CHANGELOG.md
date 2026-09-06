@@ -2,6 +2,22 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — fast-stage timing-environment isolation
+
+### Retained failure and reversible correction
+
+- The first real `run-fast` for candidate
+  `53aeb35d1febdee96f31dca0a85b5384a2d4281c` retained successful
+  traceability/OpenSpec attempts and an immutable failed `go-test` attempt in
+  `evidence-2026-09-06T195646Z`. A regression child inherited the enclosing
+  attempt's private timing path and correctly refused to replace it; no Lima
+  command or deployed host mutation occurred.
+- Fast-stage execution now explicitly removes the private timing-output and
+  shared-Lima-session variables from child environments. VM harnesses still
+  receive both. A focused regression covers even an operator shell that already
+  exports those names. Rollback is the corrective source commit; the failed
+  evidence remains unchanged and cannot be resumed after the commit changes.
+
 ## 2026-09-06 — phase-selective optimized deployed release gate
 
 ### Reversible orchestration change

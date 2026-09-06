@@ -393,8 +393,13 @@ execute_stage() {
   command=$(render_stage_command "$stage" "$attempt")
   [ "$stage" = go-race ] && cache=/private/tmp/vpnctl-go-race-cache
   [ "$stage" = go-vet ] && cache=/private/tmp/vpnctl-go-vet-cache
-  env GOCACHE="$cache" VPNCTL_V2_TIMING_OUTPUT="$current_attempt_directory/child-timing.json" \
-    VPNCTL_V2_SHARED_LIMA_SESSION=true bash -c "cd \"$repository_root\" && $command"
+  if stage_uses_lima "$stage"; then
+    env GOCACHE="$cache" VPNCTL_V2_TIMING_OUTPUT="$current_attempt_directory/child-timing.json" \
+      VPNCTL_V2_SHARED_LIMA_SESSION=true bash -c "cd \"$repository_root\" && $command"
+  else
+    env -u VPNCTL_V2_TIMING_OUTPUT -u VPNCTL_V2_SHARED_LIMA_SESSION GOCACHE="$cache" \
+      bash -c "cd \"$repository_root\" && $command"
+  fi
 }
 
 assert_bounded_regular_file() {

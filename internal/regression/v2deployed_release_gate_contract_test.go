@@ -45,6 +45,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"automated-attempts", "stage_contract_sha256", "find_reusable_attempt",
 		"source_tree_sha256", "lima_image_digest", "stage_attempts",
 		"restore_exact_fixtures_stopped", "(umask 022; execute_stage",
+		"env -u VPNCTL_V2_TIMING_OUTPUT -u VPNCTL_V2_SHARED_LIMA_SESSION",
 	} {
 		if !strings.Contains(contract, required) {
 			t.Errorf("deployed release gate is missing %q", required)
