@@ -44,27 +44,40 @@ SHA-256 checksums. Offline tests prove that it:
 - accepts only a manually supplied global IPv4 and a bounded, regular,
   no-symlink public certificate file with no private key;
 - refuses to replace a pre-existing webhook;
-- registers the fixed test route `/telegram/webhook`, confirms the custom
-  certificate and one new receiver request, and emits no sensitive value;
+- runs a bounded temporary receiver only on a private-node loopback port;
+- registers the fixed test route `/telegram/webhook` with the custom
+  certificate and a random Telegram `secret_token` held only in process
+  memory;
+- accepts one structurally valid Telegram update only when the reverse proxy
+  preserved that secret header, and emits neither token nor secret;
 - calls `deleteWebhook` only if the provider's current URL still equals the URL
   created by this run, so it cannot knowingly remove a concurrent registration.
 
 Task 12.11 runs only mocked/offline harness tests and never contacts Telegram.
 The packaged script is reserved for task 16.11 on an actually deployed gateway
-and private-node test receiver. At that gate, invoke it interactively:
+and private node. Create a temporary exact-path expose from the node to an
+otherwise unused loopback port, transfer the exported public certificate and
+helper to that node with `scp`, and invoke it interactively on the node:
 
 ```text
+sudo vpnctl expose 18081 --name vpnctl-v2-telegram-gate \
+  --path /telegram/webhook
 ./telegram-webhook-gate.py \
   --public-ip <manually-entered-gateway-ipv4> \
-  --certificate <absolute-path-to-exported-gateway.crt>
+  --certificate <absolute-path-to-exported-gateway.crt> \
+  --receiver-port 18081
 ```
 
-The bot token is then requested through `/dev/tty`. If registration ownership
-or cleanup cannot be proven, the script fails with a generic message and the
-operator must inspect/remove the test webhook manually. Passing task 12.11 does
-not claim Telegram compatibility or production readiness; only the real
-registration, incoming request, and owner-checked cleanup in task 16.11 can do
-that.
+The bot token is then requested through `/dev/tty`. While the helper waits,
+send one update to the dedicated bot. A successful JSON result proves that the
+provider accepted the five-year certificate, delivered a secret-authenticated
+update through the production gateway/node route, and that the helper removed
+its registration. Only then run
+`sudo vpnctl expose remove vpnctl-v2-telegram-gate`. If registration
+ownership or cleanup cannot be proven, the script fails with a generic message:
+inspect/remove the test webhook manually before removing the expose. Passing
+task 12.11 does not claim Telegram compatibility or production readiness; only
+the real task-16.11 run can do that.
 
 ## Accepted task-12.11 run
 

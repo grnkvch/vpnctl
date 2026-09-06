@@ -2,6 +2,45 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Deployed Telegram gate loopback receiver
+
+### Reversible validation
+
+- Reworked the task-16.11-only Telegram helper so it can run directly on the
+  deployed private node. It starts its own temporary receiver on an explicitly
+  selected `127.0.0.1` port, registers a random provider `secret_token` held
+  only in process memory, accepts only a bounded JSON update with an integer
+  `update_id` and matching provider header, and emits only sanitized booleans
+  plus the public-certificate SHA-256. The helper still refuses an existing
+  webhook and deletes only a registration whose current URL matches its own.
+- The exact Ubuntu 24.04 QEMU/amd64, 1-vCPU/512-MiB/10-GiB
+  `vpnctl-v2-node` fixture was confirmed `Stopped`, then temporarily started.
+  Preflight required `/tmp/vpnctl-v2-telegram-receiver-socket-test` absent. The
+  run created only that mode-`0700` directory and copied
+  `telegram_webhook_gate.py` plus `test_telegram_webhook_gate.py` into it.
+  Bot API calls in the suite were mocked; the only live network operation was
+  an ephemeral IPv4 loopback listener and three local HTTP requests.
+- Cleanup removed the two exact files with `rm -f`, removed the now-empty exact
+  directory with `rmdir`, and returned the VM to `Stopped`. No package, unit,
+  persistent process, route, firewall rule, interface, credential, webhook,
+  public endpoint, production vpnctl state, or foreign resource was changed.
+  The first sandboxed start attempt failed before VM start while trying to
+  access Lima's owner directory; the approved retry performed the recorded
+  lifecycle transition.
+
+### Acceptance
+
+- All seven tests passed in the Linux fixture. The socket case proved the
+  listener binds exactly `127.0.0.1`, rejects a wrong provider secret and a
+  body without `update_id`, accepts one authenticated update, and increments
+  the counter exactly once. Local macOS execution passes the six non-socket
+  cases and explicitly skips only the sandbox-prohibited bind case.
+- This validation does not contact Telegram and does not satisfy task 16.11.
+  The current ingress release harness now makes the Linux socket case
+  mandatory before packaging the helper. The complete clean-tree ingress gate
+  will be rerun against this source revision before it is treated as the
+  current task-12.11 evidence.
+
 ## 2026-09-06 — Transient Mihomo parent-death gate
 
 ### Reversible validation

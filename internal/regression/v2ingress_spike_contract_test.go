@@ -154,7 +154,8 @@ func TestV2IngressSpikeContract(t *testing.T) {
 	telegramGate := readContractFile(t, filepath.Join(fixtureRoot, "telegram_webhook_gate.py"))
 	for _, required := range []string{
 		"getpass.getpass", "refusing to replace an existing Telegram webhook", "setWebhook", "getWebhookInfo",
-		"deleteWebhook", "receiver_count", "has_custom_certificate", "sensitive_values_emitted",
+		"deleteWebhook", "LocalWebhookReceiver", "secret_token", "has_custom_certificate",
+		"provider_authenticated_request", "public_certificate_sha256", "sensitive_values_emitted",
 		`open("/dev/tty"`, "cleanup_created_webhook", "current.get(\"url\") != expected_url",
 	} {
 		if !strings.Contains(telegramGate, required) {
@@ -206,6 +207,7 @@ func TestV2IngressReleaseGateContract(t *testing.T) {
 		".gateway_accepted == 64", ".maximum_rss_bytes < 134217728", ".body_temp_files == 0",
 		"v2ingress-spike.sh", "validate_spike_summaries", ".resources.oom_events == 0",
 		"run_offline_telegram_harness_tests", "provider_calls_executed: false", "deferred_gate: \"task 16.11\"",
+		"execution_host: \"deployed-private-node\"", "provider_authentication: \"memory-only-secret-token\"",
 		"cleanup_native_guest", "ingress_cleanup", "ingress release gate refuses to replace evidence", "source_commit",
 	} {
 		if !strings.Contains(harness, required) {
@@ -236,8 +238,12 @@ func TestV2IngressReleaseGateContract(t *testing.T) {
 	var manifest struct {
 		Status                      string   `json:"status"`
 		ProviderGate                string   `json:"provider_gate"`
+		ExecutionHost               string   `json:"execution_host"`
 		TokenInput                  string   `json:"token_input"`
 		TokenForbiddenChannels      []string `json:"token_forbidden_channels"`
+		Registration                string   `json:"registration"`
+		Receiver                    string   `json:"receiver"`
+		Success                     []string `json:"success"`
 		Cleanup                     string   `json:"cleanup"`
 		MaximumWaitSeconds          int      `json:"maximum_wait_seconds"`
 		ProviderCallsDuringTask1211 bool     `json:"provider_calls_during_task_12_11"`
@@ -246,7 +252,10 @@ func TestV2IngressReleaseGateContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if manifest.Status != "release-gate-only" || manifest.ProviderGate != "task-16.11" ||
+		manifest.ExecutionHost != "deployed-private-node" ||
 		manifest.TokenInput != "hidden-controlling-tty-only" || len(manifest.TokenForbiddenChannels) != 5 ||
+		manifest.Registration != "setWebhook-with-public-certificate-and-memory-only-secret-token" ||
+		manifest.Receiver != "ephemeral-loopback-only-bounded-json" || len(manifest.Success) != 3 ||
 		manifest.Cleanup != "delete-only-when-current-url-matches-created-url" || manifest.MaximumWaitSeconds != 600 ||
 		manifest.ProviderCallsDuringTask1211 {
 		t.Fatalf("Telegram harness manifest = %+v", manifest)
@@ -258,6 +267,9 @@ func TestV2IngressReleaseGateContract(t *testing.T) {
 		"test_existing_webhook_is_never_replaced_or_deleted",
 		"test_concurrent_provider_change_is_not_deleted",
 		"test_public_certificate_reader_rejects_private_and_symlink_inputs",
+		"test_local_receiver_accepts_only_authenticated_telegram_updates",
+		"test_local_receiver_socket_is_loopback_and_fail_closed",
+		"test_receiver_port_is_bounded_before_token_input",
 		"mock.patch.object", "self.assertNotIn(\"deleteWebhook\"",
 	} {
 		if !strings.Contains(offlineTests, required) {

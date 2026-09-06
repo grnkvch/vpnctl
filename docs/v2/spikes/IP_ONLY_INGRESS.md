@@ -64,17 +64,29 @@ The local address is not reachable by Telegram, so local POSTs cannot satisfy th
 - refuses to replace an existing webhook;
 - uploads only the public PEM certificate as multipart `certificate` data;
 - validates `getWebhookInfo` in memory without emitting its URL/path;
-- waits for the loopback receiver counter to increase after a real Telegram update;
+- runs on the private node, starts a bounded receiver on an explicitly exposed
+  loopback port, and accepts only a structurally valid update carrying the
+  random `secret_token` retained in helper process memory;
 - calls `deleteWebhook` in cleanup and emits only sanitized booleans.
 
-On the deployed test gateway, the gate command is:
+On the deployed private node, after creating an exact `/telegram/webhook`
+expose to the otherwise unused receiver port and copying the exported gateway
+certificate, the gate command is:
 
 ```bash
-sudo /usr/local/libexec/vpnctl-v2-spike/telegram-webhook-gate \
-  --public-ip 203.0.113.10
+sudo vpnctl expose 18081 --name vpnctl-v2-telegram-gate \
+  --path /telegram/webhook
+./telegram-webhook-gate.py \
+  --public-ip 203.0.113.10 \
+  --certificate /absolute/path/gateway.crt \
+  --receiver-port 18081
 ```
 
-The example address must be replaced manually. Use a dedicated bot with no existing webhook and send it one message while the helper waits. A bot token is strictly test input and remains outside vpnctl's product responsibility.
+The example address must be replaced manually. Use a dedicated bot with no
+existing webhook and send it one message while the helper waits. Remove the
+temporary expose only after the helper reports owner-checked provider cleanup.
+A bot token and Telegram application authentication remain outside vpnctl's
+product responsibility; this helper exists only as release evidence.
 
 Telegram documents that `setWebhook` sends HTTPS POST updates, requires the public certificate to be uploaded as an `InputFile` for self-signed TLS, and accepts webhook ports 443, 80, 88, and 8443. Its self-signed guide shows RSA-2048/SHA-256 PEM generation and says only the public PEM is uploaded. Telegram does not document a maximum certificate lifetime, so the accepted five-year value still needs the real gate. Primary references: [Telegram Bot API `setWebhook`](https://core.telegram.org/bots/api#setwebhook), [Telegram self-signed certificate guide](https://core.telegram.org/bots/self-signed), [nginx HTTP/2 module](https://nginx.org/en/docs/http/ngx_http_v2_module.html), and [nginx HTTPS configuration](https://nginx.org/en/docs/http/configuring_https_servers.html).
 

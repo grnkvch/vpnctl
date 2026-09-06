@@ -171,9 +171,9 @@ run_offline_telegram_harness_tests() {
   limactl shell --tty=false "$gateway_instance" -- sudo chmod 0600 \
     "$guest_harness_dir/test_telegram_webhook_gate.py"
   limactl shell --tty=false "$gateway_instance" -- sudo sh -c \
-    "cd '$guest_harness_dir' && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_telegram_webhook_gate.py" \
+    "cd '$guest_harness_dir' && VPNCTL_TELEGRAM_RECEIVER_SOCKET_TEST=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_telegram_webhook_gate.py" \
     > "$evidence_dir/telegram-harness-tests.log" 2>&1
-  grep -Fq 'Ran 4 tests' "$evidence_dir/telegram-harness-tests.log"
+  grep -Fq 'Ran 7 tests' "$evidence_dir/telegram-harness-tests.log"
   grep -Fxq 'OK' "$evidence_dir/telegram-harness-tests.log"
 
   install -m 0700 "$harness_source" "$evidence_dir/telegram-webhook-gate.py"
@@ -183,7 +183,8 @@ run_offline_telegram_harness_tests() {
   for required in \
     'open("/dev/tty"' 'getpass.getpass' 'refusing to replace an existing Telegram webhook' \
     'cleanup_created_webhook' 'setWebhook' 'getWebhookInfo' 'deleteWebhook' \
-    'has_custom_certificate' 'sensitive_values_emitted'; do
+    'has_custom_certificate' 'secret_token' 'LocalWebhookReceiver' \
+    'provider_authenticated_request' 'sensitive_values_emitted'; do
     grep -Fq "$required" "$evidence_dir/telegram-webhook-gate.py"
   done
   for forbidden in 'os.environ' 'token = args.' 'print(token' 'logging.'; do
@@ -243,6 +244,9 @@ write_summary() {
         status: "packaged-offline-tested",
         sha256: $harness_sha256,
         token_channel: "controlling-tty-only",
+        execution_host: "deployed-private-node",
+        receiver: "ephemeral-loopback-only",
+        provider_authentication: "memory-only-secret-token",
         existing_webhook_replacement: false,
         ownership_checked_cleanup: true,
         provider_calls_executed: false,
