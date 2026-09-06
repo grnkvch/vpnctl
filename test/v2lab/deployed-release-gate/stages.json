@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": 2,
+  "contract_version": 3,
   "stages": [
     {"name":"traceability","phase":"fast","order":10,"uses_lima":false,"command":"go test ./internal/regression -run ^TestV2RequirementTraceabilityIsComplete$ -count=1","cleanup_adapter":null,"dependencies":[]},
     {"name":"openspec","phase":"fast","order":20,"uses_lima":false,"command":"openspec validate vpnctl-v2 --strict --no-interactive","cleanup_adapter":null,"dependencies":[]},
@@ -18,8 +18,8 @@
     {"name":"node-transport","phase":"vm","order":160,"uses_lima":true,"command":"scripts/v2node-transport-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
     {"name":"fleet-isolation","phase":"vm","order":170,"uses_lima":true,"command":"scripts/v2fleet-isolation-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
     {"name":"adversarial","phase":"vm","order":180,"uses_lima":true,"command":"scripts/v2adversarial-e2e.sh verify","cleanup_adapter":null,"dependencies":[]},
-    {"name":"tunnel-release","phase":"vm","order":190,"uses_lima":true,"command":"scripts/v2tunnel-release-gate.sh run artifacts/v2lab/tunnel-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
-    {"name":"ingress-release","phase":"vm","order":200,"uses_lima":true,"command":"scripts/v2ingress-release-gate.sh run artifacts/v2lab/ingress-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
+    {"name":"tunnel-release","phase":"vm","order":190,"uses_lima":true,"command":"scripts/v2tunnel-release-gate.sh run {repository}/artifacts/v2lab/tunnel-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
+    {"name":"ingress-release","phase":"vm","order":200,"uses_lima":true,"command":"scripts/v2ingress-release-gate.sh run {repository}/artifacts/v2lab/ingress-release-gate/task-16.11-{candidate}-{evidence}-{attempt}","cleanup_adapter":null,"dependencies":[]},
     {"name":"failure","phase":"vm","order":210,"uses_lima":true,"command":"scripts/v2failure-e2e.sh verify-dependencies {tunnel-result} {tunnel-sha} {ingress-result} {ingress-sha}","cleanup_adapter":null,"dependencies":["tunnel-release","ingress-release"]},
     {"name":"capacity","phase":"vm","order":220,"uses_lima":true,"command":"scripts/v2capacity-e2e.sh verify","cleanup_adapter":null,"dependencies":[]}
   ]

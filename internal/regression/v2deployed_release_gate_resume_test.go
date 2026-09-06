@@ -637,6 +637,10 @@ if [ "$stage" = transport-supervision ] && [ "${VPNCTL_V2_SHARED_LIMA_SESSION:-}
 fi
 case "$stage" in
   tunnel-release|ingress-release)
+    case "$2" in
+      /*) ;;
+      *) echo "provider release evidence path is not absolute: $2" >&2; exit 11 ;;
+    esac
     mkdir -p "$2"
     printf '{"schema_version":1,"status":"passed"}\n' > "$2/summary.json"
     ;;

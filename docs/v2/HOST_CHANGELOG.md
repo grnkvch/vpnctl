@@ -2,6 +2,27 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 — canonical provider evidence-path correction
+
+### Retained VM failure and recovery boundary
+
+- The VM session in `evidence-2026-09-06T200709Z` passed personal-client,
+  restricted-process, transport-supervision, both watchdog branches,
+  node-transport, fleet-isolation, and adversarial with clean witnesses. The
+  tunnel release command then failed before provider setup because the new
+  registry supplied a relative evidence path to a harness that requires an
+  absolute path below its exact artifact root.
+- Parent failure handling stopped Node and Gateway and sealed the failed
+  session; both exact fixtures were independently confirmed `Stopped`. No
+  foreign Lima instance, deployed host, credential, webhook, route, firewall,
+  listener, or external provider was changed. The failed attempt and all prior
+  witnesses remain immutable.
+- Registry contract version 3 now renders a shell-quoted absolute repository
+  placeholder for tunnel and ingress evidence. Fake provider harnesses reject
+  relative paths, preventing the orchestration-only mismatch from recurring.
+  Rollback is the corrective source commit; the old evidence remains retained
+  and becomes intentionally non-resumable after the commit changes.
+
 ## 2026-09-06 — fast-stage timing-environment isolation
 
 ### Retained failure and reversible correction

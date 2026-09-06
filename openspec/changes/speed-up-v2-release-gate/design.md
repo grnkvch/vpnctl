@@ -81,6 +81,8 @@ The top-level VM order runs `tunnel-release` and `ingress-release` exactly once.
 
 The existing standalone `v2failure-e2e.sh verify` remains self-contained and still invokes both provider release gates. Thus developer use does not silently lose coverage, while the top-level gate avoids roughly nine minutes of duplicate execution.
 
+Canonical provider commands receive a shell-quoted absolute evidence path rendered from the validated repository root. The registry stores an explicit `{repository}` placeholder, so the path requirement is part of its versioned command contract rather than an implicit current-working-directory assumption.
+
 If either selected dependency changes or becomes non-reusable, `failure` becomes non-reusable. Final aggregation validates the full dependency graph in addition to all selected attempt hashes.
 
 Alternatives considered:

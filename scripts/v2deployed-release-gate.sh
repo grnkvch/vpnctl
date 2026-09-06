@@ -242,7 +242,7 @@ validate_stage_registry() {
   jq -e '
     . as $registry |
     (keys == ["contract_version", "schema_version", "stages"]) and
-    .schema_version == 1 and .contract_version == 2 and (.stages | length == 19) and
+    .schema_version == 1 and .contract_version == 3 and (.stages | length == 19) and
     ([.stages[].name] | length == (unique | length)) and
     ([.stages[].order] | length == (unique | length)) and
     ([.stages[].order] == ([.stages[].order] | sort)) and
@@ -368,8 +368,10 @@ stage_artifact_summary() {
 }
 
 render_stage_command() {
-  local stage=$1 attempt=$2 command dependencies value quoted
+  local stage=$1 attempt=$2 command dependencies value quoted repository_quoted
   command=$(stage_command_contract "$stage")
+  repository_quoted=$(jq -nr --arg value "$repository_root" '$value | @sh')
+  command=${command//\{repository\}/$repository_quoted}
   command=${command//\{candidate\}/$current_short_commit}
   command=${command//\{evidence\}/$current_run_id}
   command=${command//\{attempt\}/$attempt}

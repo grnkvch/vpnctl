@@ -122,7 +122,7 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 	if err := json.Unmarshal([]byte(readContractFile(t, path)), &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || registry.ContractVersion != 2 || len(registry.Stages) != 19 {
+	if registry.SchemaVersion != 1 || registry.ContractVersion != 3 || len(registry.Stages) != 19 {
 		t.Fatalf("registry header = %+v", registry)
 	}
 	wantFast := []string{"traceability", "openspec", "go-test", "go-race", "go-vet", "credential-lifecycle", "update-restore"}
@@ -150,6 +150,11 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 	}
 	if registry.Stages[len(registry.Stages)-1].Name != "capacity" || registry.Stages[len(registry.Stages)-1].Command != "scripts/v2capacity-e2e.sh verify" {
 		t.Fatalf("capacity is not the unchanged final command: %+v", registry.Stages[len(registry.Stages)-1])
+	}
+	for _, stage := range registry.Stages {
+		if (stage.Name == "tunnel-release" || stage.Name == "ingress-release") && !strings.Contains(stage.Command, "{repository}/artifacts/") {
+			t.Fatalf("provider release path is not repository-absolute: %+v", stage)
+		}
 	}
 }
 
