@@ -32,14 +32,15 @@ operation и node `N -> N+2` intent, атомарно меняет gateway activ
 считается зарезервированным: после любой промежуточной fleet mutation старый
 finalize fail-closed конфликтует, а новый запрос использует свежий gateway CAS
 и тот же operation ID. Благодаря этому deferred switch одного node не
-блокирует мутации остальных. Current-node executor пока не подключён, поэтому
-`apply` честно остаётся unavailable и сам finalize ещё не вызывается из
-публичной команды. Host transport provider для
-test/immediate switch также пока закрыт typed
-`system transport runtime adapter is unavailable`. Следующий slice —
-current-node executor: staged local activation, свежая authenticated gateway
-generation, вызов finalize и единый terminal node/convergence commit с
-manual-only selection.
+блокирует мутации остальных. Current-node executor подключён к публичному
+`apply`: сначала reconcile потерянного finalize, затем fresh gateway generation,
+staged make-before-break activation, gateway finalize, единый terminal node
+state `N+2` и promotion convergence Desired в Applied. Доказанный reject
+откатывает runtime, а неопределённый gateway commit не вызывает blind rollback;
+повтор сначала reconciles stable operation. Сбой convergence после terminal
+node commit восстанавливается без повторного переключения. Concrete host
+transport provider для apply/test/immediate switch пока закрыт typed
+`system transport runtime adapter is unavailable`; это следующий slice.
 
 Public `vpnctl doctor [dns|transport|tunnel|ingress]` теперь маршрутизируется
 через v2 registry и подключён к production state/network runtime. Closed runner
@@ -61,13 +62,14 @@ Public `vpnctl apply` теперь однозначно маршрутизиру
 plan; node дополнительно делает свежий authenticated gateway probe даже для
 no-op. TTY требуется только после полного availability/destructive preview.
 Transport-switch deferred writer уже публикует operation-bound Desired и
-exact staged material; operation-specific current-node executor ещё не
-подключён. Public `vpnctl apply` теперь строит из этого Desired точный
+exact staged material; operation-specific current-node executor подключён.
+Public `vpnctl apply` строит из этого Desired точный
 availability-impact preview, связывает operation только с текущим node и после
-consent повторно проверяет authoritative state, plan и доступность gateway.
-Вместо ложного success выполнение останавливается typed
-`apply_executor_unavailable`. Следующий implementation slice — подключить
-transport-switch apply executor и его cross-host finalize.
+consent повторно проверяет authoritative state, plan и доступность gateway,
+после чего выполняет описанную cross-host финализацию. Пока concrete runtime
+adapter не подключён, команда fail-closed возвращает
+`transport_runtime_unavailable` до provider mutation. Следующий implementation
+slice — production standard/restricted host adapter.
 
 Immutable applied-material foundation теперь подключён ко всем production
 publisher-ам role generation. Exact bytes и полный unit runtime сохраняются в

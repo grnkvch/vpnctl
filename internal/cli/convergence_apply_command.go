@@ -10,6 +10,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
+	"github.com/vgrinkevich/vpnctl/internal/transport"
 )
 
 var (
@@ -140,16 +141,20 @@ func classifyConvergenceApplyError(err error) (output.ExitCategory, string, stri
 		errors.Is(err, store.ErrStateNotFound):
 		return output.CategoryValidation, "apply_request_invalid", "apply requires valid registered pending state on this host"
 	case errors.Is(err, operations.ErrApplyConflict), errors.Is(err, store.ErrStateConflict),
-		errors.Is(err, operations.ErrConvergenceSnapshotConflict):
+		errors.Is(err, operations.ErrConvergenceSnapshotConflict), errors.Is(err, transport.ErrTransportSwitchStale):
 		return output.CategoryConflict, "apply_plan_stale", "the pending plan or an overlapping owned resource changed; review plan and repair conflicting drift"
 	case errors.Is(err, operations.ErrApplyNodeAgentUnavailable):
 		return output.CategoryUnavailable, "apply_requires_node", "one or more pending operations must be applied from their private node"
-	case errors.Is(err, operations.ErrApplyGatewayUnavailable):
+	case errors.Is(err, operations.ErrApplyGatewayUnavailable), errors.Is(err, operations.ErrTransportSwitchGatewayUnavailable):
 		return output.CategoryUnavailable, "gateway_unavailable", "node apply requires the authoritative gateway"
 	case errors.Is(err, operations.ErrConvergenceSnapshotUnavailable), errors.Is(err, ErrSystemConvergenceApplyUnavailable):
 		return output.CategoryUnavailable, "apply_convergence_unavailable", "registered pending convergence material is not available for safe apply"
 	case errors.Is(err, ErrSystemConvergenceApplyExecutorUnavailable):
 		return output.CategoryUnavailable, "apply_executor_unavailable", "the registered pending operation has no connected production executor yet"
+	case errors.Is(err, ErrSystemTransportRuntimeUnavailable):
+		return output.CategoryUnavailable, "transport_runtime_unavailable", "the selected transport runtime adapter is unavailable; no gateway selection was changed"
+	case errors.Is(err, operations.ErrTransportSwitchApplyUncertain):
+		return output.CategoryUnavailable, "transport_switch_uncertain", "the transport switch outcome is uncertain; retry apply to reconcile the retained operation"
 	case errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrPromptInput), errors.Is(err, ErrConsentDeclined):
 		return output.CategoryValidation, "apply_consent_required", "availability-impacting apply requires explicit confirmation or --yes"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -171,6 +176,10 @@ func emitConvergenceApplyFailure(emitter *ResultEmitter, category output.ExitCat
 		result.RequiresAction = append(result.RequiresAction, output.Action{Code: "review_apply_state", Message: "Review pending intent and repair overlapping owned drift before retrying.", Command: "vpnctl plan"})
 	case "apply_requires_node":
 		result.RequiresAction = append(result.RequiresAction, output.Action{Code: "apply_on_private_node", Message: "Run apply on the private node that owns the pending operation.", Command: "vpnctl apply"})
+	case "transport_runtime_unavailable":
+		result.RequiresAction = append(result.RequiresAction, output.Action{Code: "verify_transport_runtime", Message: "Verify the selected transport runtime, then retry the retained apply operation.", Command: "vpnctl doctor transport"})
+	case "transport_switch_uncertain":
+		result.RequiresAction = append(result.RequiresAction, output.Action{Code: "reconcile_transport_switch", Message: "Retry apply; vpnctl will reconcile the retained gateway operation before any new switch attempt.", Command: "vpnctl apply"})
 	}
 	exit, err := emitter.Emit(result)
 	if err != nil {

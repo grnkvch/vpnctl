@@ -30,16 +30,21 @@ type convergenceApplyGatewayProbe interface {
 	RequireGateway(context.Context, string) error
 }
 
+type convergenceApplyCurrentNodeExecutor interface {
+	ApplyCurrentNode(context.Context, operations.ApplyExecutionBatch) (operations.ApplyExecutionResult, error)
+}
+
 // systemConvergenceApply is the fail-closed production command boundary while
 // operation-specific pending executors are connected. It fully supports a
 // verified no-op, including the mandatory node-to-gateway freshness probe,
 // but never reports pending authoritative intent as already applied.
 type systemConvergenceApply struct {
-	role    model.Role
-	nodeID  string
-	state   convergenceApplyStateReader
-	planner convergenceApplyPlanner
-	probe   convergenceApplyGatewayProbe
+	role     model.Role
+	nodeID   string
+	state    convergenceApplyStateReader
+	planner  convergenceApplyPlanner
+	probe    convergenceApplyGatewayProbe
+	executor convergenceApplyCurrentNodeExecutor
 
 	mu           sync.Mutex
 	plannedState model.State
@@ -76,10 +81,45 @@ func buildSystemConvergenceApply(paths store.Paths, role HostRole) (ConvergenceA
 		return nil, err
 	}
 	operator := &systemConvergenceApply{role: modelRole, nodeID: nodeID, state: stateState, planner: planner, probe: probe}
-	if _, _, err := operator.readAuthority(); err != nil {
+	if modelRole == model.RoleNode {
+		operator.executor, err = buildSystemNodeTransportSwitchApplyExecutor(paths, stateState)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, err := operator.readAuthority(); err != nil {
 		return nil, err
 	}
 	return operator, nil
+}
+
+func buildSystemNodeTransportSwitchApplyExecutor(
+	paths store.Paths,
+	state *store.StateStore,
+) (*operations.NodeTransportSwitchApplyExecutor, error) {
+	registry, err := buildSystemTransportRegistry()
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := transport.NewDeferredNodeRuntime(registry, transport.SwitchLimits{})
+	if err != nil {
+		return nil, err
+	}
+	gateway, err := operations.NewSystemRemoteTransportSwitchGateway(paths, nil)
+	if err != nil {
+		return nil, err
+	}
+	generation, err := operations.NewSystemRemoteRepairGatewayProbe(paths, nil)
+	if err != nil {
+		return nil, err
+	}
+	convergence, err := operations.NewFileConvergenceSnapshotStore(paths.ConvergenceFile)
+	if err != nil {
+		return nil, err
+	}
+	return operations.NewNodeTransportSwitchApplyExecutor(
+		state, runtime, gateway, generation, convergence, nil,
+	)
 }
 
 func (operator *systemConvergenceApply) Plan(ctx context.Context) (operations.ApplyPlan, error) {
@@ -99,7 +139,7 @@ func (operator *systemConvergenceApply) Plan(ctx context.Context) (operations.Ap
 }
 
 func (operator *systemConvergenceApply) planCurrent(ctx context.Context) (operations.ApplyPlan, model.State, error) {
-	before, pendingBefore, err := operator.readAuthority()
+	before, err := operator.readAuthority()
 	if err != nil {
 		return operations.ApplyPlan{}, model.State{}, err
 	}
@@ -107,12 +147,16 @@ func (operator *systemConvergenceApply) planCurrent(ctx context.Context) (operat
 	if err != nil {
 		return operations.ApplyPlan{}, model.State{}, err
 	}
-	after, pendingAfter, err := operator.readAuthority()
-	if err != nil || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(pendingBefore, pendingAfter) {
+	after, err := operator.readAuthority()
+	if err != nil || !reflect.DeepEqual(before, after) {
 		return operations.ApplyPlan{}, model.State{}, errors.Join(operations.ErrApplyConflict, err)
 	}
 	var plan operations.ApplyPlan
-	if len(pendingAfter) == 0 && len(convergence.Changes) == 0 {
+	pendingAfter := pendingStateOperations(after)
+	if len(convergence.Changes) == 0 {
+		if len(pendingAfter) != 0 {
+			return operations.ApplyPlan{}, model.State{}, ErrSystemConvergenceApplyUnavailable
+		}
 		if convergence.DesiredGeneration != convergence.AppliedGeneration {
 			return operations.ApplyPlan{}, model.State{}, operations.ErrApplyInvalid
 		}
@@ -123,7 +167,7 @@ func (operator *systemConvergenceApply) planCurrent(ctx context.Context) (operat
 			RemainingDrift: append([]operations.OwnedDrift{}, convergence.Drift...), Convergence: convergence,
 		}
 	} else {
-		if operator.role != model.RoleNode || len(pendingAfter) != 1 || pendingAfter[0].Type != model.OperationTransportSwitch {
+		if operator.role != model.RoleNode {
 			return operations.ApplyPlan{}, model.State{}, ErrSystemConvergenceApplyUnavailable
 		}
 		resolver := currentNodeTransportApplyScopeResolver{nodeID: operator.nodeID}
@@ -131,7 +175,7 @@ func (operator *systemConvergenceApply) planCurrent(ctx context.Context) (operat
 		if err != nil {
 			return operations.ApplyPlan{}, model.State{}, err
 		}
-		if err := validateCurrentNodeTransportApplyAuthority(plan, pendingAfter[0]); err != nil {
+		if err := validateCurrentNodeTransportApplyAuthority(plan, after); err != nil {
 			return operations.ApplyPlan{}, model.State{}, err
 		}
 	}
@@ -171,7 +215,30 @@ func (operator *systemConvergenceApply) Apply(ctx context.Context, approved oper
 		return operations.ApplyResult{}, errors.Join(operations.ErrApplyConflict, err)
 	}
 	if len(final.Operations) != 0 {
-		return operations.ApplyResult{}, ErrSystemConvergenceApplyExecutorUnavailable
+		if operator.executor == nil {
+			return operations.ApplyResult{}, ErrSystemConvergenceApplyExecutorUnavailable
+		}
+		batch := operations.ApplyExecutionBatch{
+			Role: final.Role, CurrentNodeID: final.CurrentNodeID,
+			AppliedGeneration: final.AppliedGeneration, DesiredGeneration: final.DesiredGeneration,
+			Operations: append([]operations.ApplyOperation(nil), final.Operations...),
+		}
+		executed, err := operator.executor.ApplyCurrentNode(ctx, batch)
+		if err != nil {
+			return operations.ApplyResult{}, err
+		}
+		wantIDs := make([]string, len(final.Operations))
+		for index := range final.Operations {
+			wantIDs[index] = final.Operations[index].ID
+		}
+		if executed.AppliedGeneration != final.DesiredGeneration || !reflect.DeepEqual(executed.OperationIDs, wantIDs) {
+			return operations.ApplyResult{}, operations.ErrApplyInvalid
+		}
+		return operations.ApplyResult{
+			Changed: executed.Changed, Generation: executed.AppliedGeneration,
+			OperationIDs:   append([]string(nil), executed.OperationIDs...),
+			RemainingDrift: append([]operations.OwnedDrift{}, final.RemainingDrift...),
+		}, nil
 	}
 	return operations.ApplyResult{
 		Changed: false, Generation: fresh.AppliedGeneration,
@@ -193,30 +260,44 @@ func (resolver currentNodeTransportApplyScopeResolver) ResolveApplyScope(operati
 	return operations.ApplyScope{Role: model.RoleNode, NodeID: resolver.nodeID}, nil
 }
 
-func validateCurrentNodeTransportApplyAuthority(plan operations.ApplyPlan, operation model.Operation) error {
-	if len(plan.Operations) != 1 || plan.Operations[0].ID != operation.ID ||
-		plan.Operations[0].Type != string(operation.Type) || plan.Operations[0].TargetKind != operation.TargetKind ||
-		plan.Operations[0].TargetID != operation.TargetID || operation.State != model.OperationPending {
-		return fmt.Errorf("%w: convergence operation differs from retained node request", operations.ErrApplyConflict)
+func validateCurrentNodeTransportApplyAuthority(plan operations.ApplyPlan, state model.State) error {
+	if len(plan.Operations) != 1 {
+		return fmt.Errorf("%w: convergence plan does not contain one transport operation", operations.ErrApplyConflict)
 	}
-	return nil
+	wanted := plan.Operations[0]
+	for _, operation := range state.Operations {
+		if operation.ID != wanted.ID {
+			continue
+		}
+		if wanted.Type != string(operation.Type) || wanted.TargetKind != operation.TargetKind ||
+			wanted.TargetID != operation.TargetID ||
+			(operation.State != model.OperationPending && operation.State != model.OperationCompleted) {
+			return fmt.Errorf("%w: convergence operation differs from retained node request", operations.ErrApplyConflict)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: convergence operation has no retained node request", operations.ErrApplyConflict)
 }
 
-func (operator *systemConvergenceApply) readAuthority() (model.State, []model.Operation, error) {
+func (operator *systemConvergenceApply) readAuthority() (model.State, error) {
 	state, err := operator.state.Load()
 	if err != nil {
-		return model.State{}, nil, err
+		return model.State{}, err
 	}
 	if err := validateRepairAuthority(state, operator.role, operator.nodeID); err != nil {
-		return model.State{}, nil, errors.Join(operations.ErrApplyInvalid, err)
+		return model.State{}, errors.Join(operations.ErrApplyInvalid, err)
 	}
+	return state, nil
+}
+
+func pendingStateOperations(state model.State) []model.Operation {
 	pending := make([]model.Operation, 0)
 	for _, operation := range state.Operations {
 		if operation.State == model.OperationPending {
 			pending = append(pending, operation)
 		}
 	}
-	return state, pending, nil
+	return pending
 }
 
 var _ ConvergenceApplyOperator = (*systemConvergenceApply)(nil)

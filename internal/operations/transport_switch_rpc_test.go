@@ -64,7 +64,7 @@ func TestRemoteTransportSwitchGatewayFinalizesWithFreshGenerationAndReplays(t *t
 			gateway, err := NewRemoteTransportSwitchGateway(
 				caller, control.RPCProtocolVersion{Major: 1}, remoteTransportSwitchNodeID, 2, 13,
 				func() time.Time { return time.Date(2035, 1, 2, 3, 4, 5, 0, time.UTC) },
-				bytes.NewReader(bytes.Repeat([]byte{0x43}, control.RPCNonceBytes*2)),
+				bytes.NewReader(bytes.Repeat([]byte{0x43}, control.RPCNonceBytes*3)),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -93,7 +93,31 @@ func TestRemoteTransportSwitchGatewayFinalizesWithFreshGenerationAndReplays(t *t
 			if caller.request.RequestID != firstID {
 				t.Fatalf("retry request ID=%q, want %q", caller.request.RequestID, firstID)
 			}
+			caller.replay = false
+			reconciled, complete, err := gateway.ReconcileDeferred(context.Background(), operation, model.TransportStandard)
+			if err != nil || !complete || reconciled.OperationID != operation.ID ||
+				reconciled.ExpectedGatewayGeneration != operation.ExpectedGeneration {
+				t.Fatalf("reconciled=%+v complete=%t err=%v", reconciled, complete, err)
+			}
 		})
+	}
+}
+
+func TestRemoteTransportSwitchGatewayReconcileDoesNotExecutePendingIntent(t *testing.T) {
+	caller := &transportSwitchRPCCallerFixture{category: "conflict", status: http.StatusConflict}
+	gateway, err := NewRemoteTransportSwitchGateway(
+		caller, control.RPCProtocolVersion{Major: 1}, remoteTransportSwitchNodeID, 2, 13,
+		func() time.Time { return time.Date(2035, 1, 2, 3, 4, 5, 0, time.UTC) },
+		bytes.NewReader(bytes.Repeat([]byte{0x44}, control.RPCNonceBytes)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, complete, err := gateway.ReconcileDeferred(
+		context.Background(), remotePendingTransportSwitchOperation(t), model.TransportStandard,
+	)
+	if err != nil || complete || receipt != (transport.FinalizedSwitchReceipt{}) {
+		t.Fatalf("receipt=%+v complete=%t err=%v", receipt, complete, err)
 	}
 }
 

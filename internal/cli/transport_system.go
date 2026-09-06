@@ -57,14 +57,18 @@ func buildSystemTransportPlanningRuntime(paths store.Paths) (*store.StateStore, 
 	if err != nil {
 		return nil, nil, err
 	}
-	registry, err := transport.NewRegistry(
-		systemUnavailableTransportProvider{kind: model.TransportStandard},
-		systemUnavailableTransportProvider{kind: model.TransportRestricted},
-	)
+	registry, err := buildSystemTransportRegistry()
 	if err != nil {
 		return nil, nil, err
 	}
 	return state, registry, nil
+}
+
+func buildSystemTransportRegistry() (*transport.Registry, error) {
+	return transport.NewRegistry(
+		systemUnavailableTransportProvider{kind: model.TransportStandard},
+		systemUnavailableTransportProvider{kind: model.TransportRestricted},
+	)
 }
 
 func buildSystemTransportDeferredWriter(paths store.Paths) (AuthoritativeDeferredWriter, error) {

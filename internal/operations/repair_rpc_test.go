@@ -41,8 +41,9 @@ func TestRemoteRepairGatewayProbeRequiresAuthenticatedActiveGatewayNode(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := probe.RequireGateway(context.Background(), exposeSagaNodeID); err != nil {
-		t.Fatal(err)
+	generation, err := probe.GatewayGeneration(context.Background(), exposeSagaNodeID)
+	if err != nil || generation != state.Generation {
+		t.Fatalf("gateway generation=%d err=%v", generation, err)
 	}
 	if caller.last.Operation != RepairProbeRPCOperation || caller.last.ExpectedStateGeneration != 0 || caller.last.NodeID != exposeSagaNodeID {
 		t.Fatalf("repair probe request = %+v", caller.last)

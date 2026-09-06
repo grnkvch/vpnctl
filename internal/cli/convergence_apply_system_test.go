@@ -87,6 +87,71 @@ func TestSystemConvergenceApplyPreviewsPublishedTransportSwitchButDoesNotFakeExe
 	}
 }
 
+func TestSystemConvergenceApplyExecutesExactPublishedTransportBatch(t *testing.T) {
+	t.Parallel()
+
+	state, convergence := systemTransportApplyPendingFixture(t)
+	probe := &countingSystemApplyGatewayProbe{}
+	executor := &recordingSystemApplyExecutor{}
+	operator := &systemConvergenceApply{
+		role: model.RoleNode, nodeID: state.Nodes[0].ID,
+		state: &mutableSystemApplyState{state: state}, planner: &staticSystemApplyPlanner{plan: convergence},
+		probe: probe, executor: executor,
+	}
+	plan, err := operator.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := operator.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Generation != plan.DesiredGeneration ||
+		!reflect.DeepEqual(result.OperationIDs, []string{plan.Operations[0].ID}) || executor.calls != 1 ||
+		executor.batch.AppliedGeneration != plan.AppliedGeneration || executor.batch.DesiredGeneration != plan.DesiredGeneration ||
+		probe.calls != 1 {
+		t.Fatalf("result=%+v executor=%+v probe=%+v", result, executor, probe)
+	}
+}
+
+func TestSystemConvergenceApplyRetainsPromotionRecoveryAfterNodeStateCommit(t *testing.T) {
+	t.Parallel()
+
+	pending, convergence := systemTransportApplyPendingFixture(t)
+	operation := pending.Operations[len(pending.Operations)-1]
+	intent, err := transport.ParseSwitchIntentTarget(operation.TargetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalizationID, err := transport.SwitchFinalizeRequestID(operation.ID, intent.DesiredNodeGeneration, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := transport.FinalizedSwitchReceipt{
+		OperationID: operation.ID, RequestID: finalizationID, NodeID: pending.Nodes[0].ID,
+		Previous: pending.Nodes[0].ActiveTransport, Active: intent.Target,
+		ExpectedGatewayGeneration: 30, GatewayGeneration: 31,
+		ExpectedNodeGeneration: intent.ExpectedNodeGeneration, DesiredNodeGeneration: intent.DesiredNodeGeneration,
+	}
+	final, _, err := transport.FinalizeDeferredSwitchNodeState(pending, operation, receipt, operation.CreatedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingSystemApplyExecutor{}
+	operator := &systemConvergenceApply{
+		role: model.RoleNode, nodeID: final.Nodes[0].ID,
+		state: &mutableSystemApplyState{state: final}, planner: &staticSystemApplyPlanner{plan: convergence},
+		probe: &countingSystemApplyGatewayProbe{}, executor: executor,
+	}
+	plan, err := operator.Plan(context.Background())
+	if err != nil || len(plan.Operations) != 1 {
+		t.Fatalf("recovery plan=%+v err=%v", plan, err)
+	}
+	if _, err := operator.Apply(context.Background(), plan); err != nil || executor.calls != 1 {
+		t.Fatalf("recovery apply err=%v executor=%+v", err, executor)
+	}
+}
+
 func TestSystemConvergenceApplyRejectsAuthorityChangeAfterPreview(t *testing.T) {
 	t.Parallel()
 
@@ -119,6 +184,27 @@ type countingSystemApplyGatewayProbe struct {
 	calls  int
 	nodeID string
 	err    error
+}
+
+type recordingSystemApplyExecutor struct {
+	calls int
+	batch operations.ApplyExecutionBatch
+	err   error
+}
+
+func (executor *recordingSystemApplyExecutor) ApplyCurrentNode(_ context.Context, batch operations.ApplyExecutionBatch) (operations.ApplyExecutionResult, error) {
+	executor.calls++
+	executor.batch = batch
+	if executor.err != nil {
+		return operations.ApplyExecutionResult{}, executor.err
+	}
+	ids := make([]string, len(batch.Operations))
+	for index := range batch.Operations {
+		ids[index] = batch.Operations[index].ID
+	}
+	return operations.ApplyExecutionResult{
+		Changed: true, AppliedGeneration: batch.DesiredGeneration, OperationIDs: ids,
+	}, nil
 }
 
 func (probe *countingSystemApplyGatewayProbe) RequireGateway(_ context.Context, nodeID string) error {

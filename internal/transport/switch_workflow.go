@@ -472,3 +472,71 @@ func DeferredSwitchDesiredState(
 	}
 	return candidate, intent, nil
 }
+
+// FinalizeDeferredSwitchNodeState combines the already reviewed selection
+// change with the terminal operation/trust update in the exact N+2 node
+// generation. It is called only after an authenticated gateway receipt proves
+// that the matching authoritative operation is complete. No intermediate
+// node state is required, so the published Desired generation remains stable.
+func FinalizeDeferredSwitchNodeState(
+	current model.State,
+	operation model.Operation,
+	receipt FinalizedSwitchReceipt,
+	at time.Time,
+) (model.State, model.Operation, error) {
+	if err := receipt.Validate(); err != nil {
+		return model.State{}, model.Operation{}, fmt.Errorf("validate transport switch finalization receipt: %w", err)
+	}
+	desired, intent, err := DeferredSwitchDesiredState(current, operation)
+	if err != nil {
+		return model.State{}, model.Operation{}, err
+	}
+	node := current.Nodes[0]
+	if receipt.OperationID != operation.ID || receipt.NodeID != node.ID || receipt.Previous != node.ActiveTransport ||
+		receipt.Active != intent.Target || receipt.ExpectedNodeGeneration != intent.ExpectedNodeGeneration ||
+		receipt.DesiredNodeGeneration != intent.DesiredNodeGeneration || node.Gateway == nil ||
+		receipt.GatewayGeneration < node.Gateway.LastKnownGatewayGeneration {
+		return model.State{}, model.Operation{}, fmt.Errorf("%w: gateway finalization receipt differs from retained node intent", ErrTransportSwitchStale)
+	}
+	completed, err := completeDeferredSwitchOperation(operation, at.UTC())
+	if err != nil {
+		return model.State{}, model.Operation{}, err
+	}
+	operationIndex := -1
+	for index := range desired.Operations {
+		if desired.Operations[index].ID == operation.ID {
+			operationIndex = index
+			break
+		}
+	}
+	if operationIndex < 0 {
+		return model.State{}, model.Operation{}, fmt.Errorf("%w: deferred transport switch operation disappeared", ErrTransportSwitchStale)
+	}
+	desired.Operations = append([]model.Operation(nil), desired.Operations...)
+	desired.Operations[operationIndex] = completed
+	desired.Nodes = append([]model.Node(nil), desired.Nodes...)
+	trust := *node.Gateway
+	trust.LastKnownGatewayGeneration = receipt.GatewayGeneration
+	trust.PendingRequestID = ""
+	desired.Nodes[0].Gateway = &trust
+	if err := model.ValidateTransition(current, desired); err != nil {
+		return model.State{}, model.Operation{}, fmt.Errorf("finalize deferred node transport switch: %w", err)
+	}
+	return desired, completed, nil
+}
+
+func completeDeferredSwitchOperation(operation model.Operation, at time.Time) (model.Operation, error) {
+	completed := operation
+	var err error
+	for _, step := range operation.Steps {
+		completed, err = completed.TransitionStep(step.Name, model.OperationCompleted, at)
+		if err != nil {
+			return model.Operation{}, fmt.Errorf("complete deferred transport switch step %s: %w", step.Name, err)
+		}
+	}
+	completed, err = completed.Transition(model.OperationCompleted, at, "")
+	if err != nil {
+		return model.Operation{}, fmt.Errorf("complete deferred transport switch operation: %w", err)
+	}
+	return completed, nil
+}

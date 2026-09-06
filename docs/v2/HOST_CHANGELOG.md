@@ -2,6 +2,41 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Deferred transport current-node apply executor
+
+### Implementation and non-mutation boundary
+
+- Connect the published operation-bound transport plan to a current-node
+  executor. It first reconciles a possibly lost gateway-finalize response,
+  otherwise obtains a fresh authenticated gateway generation, activates the
+  exact `N+2` target through the existing make-before-break provider workflow,
+  finalizes gateway selection, commits selection plus terminal operation and
+  cleared pending trust in one node transition, then promotes convergence
+  Desired to Applied.
+- Keep provider activation state outside the authoritative node store until
+  the gateway result is known. A gateway-proven rejection reverses the runtime
+  through the same bounded workflow. An uncertain gateway result intentionally
+  does not trigger blind rollback; retry first reconciles the stable operation.
+  If node state commits but the final convergence CAS fails, retry performs
+  only the metadata promotion and never repeats runtime or gateway mutation.
+- Production command wiring now reaches this executor. The concrete host
+  provider remains fail-closed unavailable, so no real service can yet be
+  changed through this path. Tests use only in-memory runtime/gateway doubles,
+  temporary state/convergence stores, disposable Go caches, and existing local
+  test listeners. No host/VM config, unit, process, route, firewall, transport,
+  public endpoint, webhook, or client is changed; no host rollback is needed.
+
+### Acceptance
+
+- Focused tests cover terminal `N+2` construction, unchanged input state,
+  reversible ephemeral activation, fresh-generation finalize, previously
+  completed gateway reconciliation, definitive rejection rollback, uncertain
+  response no-blind-rollback, terminal-state/convergence recovery, public
+  exact-batch dispatch, and completed-state promotion planning.
+- Full Go, changed-package race, vet, documentation regression, strict
+  OpenSpec, formatting, and diff checks are recorded before commit. The next
+  slice is the concrete node host provider for standard/restricted runtime.
+
 ## 2026-09-06 — Gateway transport-switch finalization protocol
 
 ### Implementation and non-mutation boundary

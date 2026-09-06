@@ -81,16 +81,25 @@ func NewSystemRemoteRepairGatewayProbe(paths store.Paths, now func() time.Time) 
 }
 
 func (probe *RemoteRepairGatewayProbe) RequireGateway(ctx context.Context, nodeID string) error {
+	_, err := probe.GatewayGeneration(ctx, nodeID)
+	return err
+}
+
+// GatewayGeneration returns the authoritative generation observed by the
+// same authenticated, read-only probe used by apply/repair. Callers that need
+// a subsequent mutation must still supply it as an explicit CAS expectation;
+// the gateway will reject any intervening change.
+func (probe *RemoteRepairGatewayProbe) GatewayGeneration(ctx context.Context, nodeID string) (uint64, error) {
 	if ctx == nil || probe == nil || probe.caller == nil || probe.now == nil || probe.newUUID == nil || probe.entropy == nil || nodeID != probe.nodeID {
-		return ErrRepairGatewayUnavailable
+		return 0, ErrRepairGatewayUnavailable
 	}
 	requestID, err := probe.newUUID()
 	if err != nil || model.ValidateResourceID(requestID) != nil {
-		return fmt.Errorf("%w: allocate repair probe identity", ErrRepairGatewayUnavailable)
+		return 0, fmt.Errorf("%w: allocate repair probe identity", ErrRepairGatewayUnavailable)
 	}
 	nonce := make([]byte, control.RPCNonceBytes)
 	if _, err := io.ReadFull(probe.entropy, nonce); err != nil {
-		return fmt.Errorf("%w: generate repair probe nonce", ErrRepairGatewayUnavailable)
+		return 0, fmt.Errorf("%w: generate repair probe nonce", ErrRepairGatewayUnavailable)
 	}
 	defer clearRepairProbeSecret(nonce)
 	payload, _ := json.Marshal(repairProbePayload{})
@@ -101,13 +110,13 @@ func (probe *RemoteRepairGatewayProbe) RequireGateway(ctx context.Context, nodeI
 		Operation: RepairProbeRPCOperation, Payload: payload,
 	})
 	if err != nil || call.StatusCode != http.StatusOK || call.Response.Category != "success" || call.Response.AuthoritativeGeneration == 0 {
-		return errors.Join(ErrRepairGatewayUnavailable, err)
+		return 0, errors.Join(ErrRepairGatewayUnavailable, err)
 	}
 	var data repairProbeData
 	if err := control.DecodeRPCPayload(call.Response.Data, &data); err != nil || !data.Reachable || data.NodeID != probe.nodeID {
-		return errors.Join(ErrRepairGatewayUnavailable, err)
+		return 0, errors.Join(ErrRepairGatewayUnavailable, err)
 	}
-	return nil
+	return call.Response.AuthoritativeGeneration, nil
 }
 
 type RepairProbeGatewayState interface {

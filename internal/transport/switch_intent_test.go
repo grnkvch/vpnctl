@@ -161,3 +161,73 @@ func TestDeferredSwitchDesiredStateRejectsStaleMirror(t *testing.T) {
 		t.Fatalf("missing retained operation error=%v", err)
 	}
 }
+
+func TestFinalizeDeferredSwitchNodeStateCommitsSelectionOperationAndTrustAtDesiredGeneration(t *testing.T) {
+	t.Parallel()
+	state := nodeTransportTestState(t)
+	state.Generation = 10
+	intent, err := NewSwitchIntentTarget(state.Nodes[0].ID, model.TransportRestricted, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationID, err := SwitchRequestID(intent, model.TransportStandard, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, err := SwitchOperationID(registrationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
+	steps := make([]model.OperationStep, len(SwitchOperationStepNames()))
+	for index, name := range SwitchOperationStepNames() {
+		steps[index] = model.OperationStep{Name: name, State: model.OperationPending, UpdatedAt: createdAt}
+	}
+	operation := model.Operation{
+		SchemaVersion: model.ResourceSchemaVersion, ID: operationID, Type: model.OperationTransportSwitch,
+		State: model.OperationPending, TargetKind: "transport", TargetID: intent.String(), RequestID: registrationID,
+		ExpectedGeneration: 20, DesiredGeneration: 22, Steps: steps, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	state.Operations = append(state.Operations, operation)
+	state.Nodes[0].Gateway.PendingRequestID = registrationID
+	state.Nodes[0].Gateway.LastKnownGatewayGeneration = 21
+	finalizationID, err := SwitchFinalizeRequestID(operationID, intent.DesiredNodeGeneration, 27)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := FinalizedSwitchReceipt{
+		OperationID: operationID, RequestID: finalizationID, NodeID: state.Nodes[0].ID,
+		Previous: model.TransportStandard, Active: model.TransportRestricted,
+		ExpectedGatewayGeneration: 27, GatewayGeneration: 28,
+		ExpectedNodeGeneration: intent.ExpectedNodeGeneration, DesiredNodeGeneration: intent.DesiredNodeGeneration,
+	}
+	before := state
+	final, completed, err := FinalizeDeferredSwitchNodeState(state, operation, receipt, createdAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Generation != 11 || final.Nodes[0].ActiveTransport != model.TransportRestricted ||
+		final.Nodes[0].Gateway.PendingRequestID != "" || final.Nodes[0].Gateway.LastKnownGatewayGeneration != 28 ||
+		completed.State != model.OperationCompleted || !reflect.DeepEqual(final.Operations[len(final.Operations)-1], completed) {
+		t.Fatalf("final=%+v completed=%+v", final, completed)
+	}
+	for _, step := range completed.Steps {
+		if step.State != model.OperationCompleted {
+			t.Fatalf("step %s state=%s", step.Name, step.State)
+		}
+	}
+	if !reflect.DeepEqual(state, before) {
+		t.Fatal("node finalization mutated the retained pending state")
+	}
+	if err := model.ValidateTransition(state, final); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFinalizeDeferredSwitchNodeStateRejectsDifferentReceipt(t *testing.T) {
+	t.Parallel()
+	state := nodeTransportTestState(t)
+	if _, _, err := FinalizeDeferredSwitchNodeState(state, model.Operation{}, FinalizedSwitchReceipt{}, time.Now()); err == nil {
+		t.Fatal("invalid finalization receipt was accepted")
+	}
+}

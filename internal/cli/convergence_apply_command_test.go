@@ -98,6 +98,14 @@ func TestApplyCommandClassifiesConflictingDriftAndForeignNodeScope(t *testing.T)
 	if category != "unavailable" || code != "apply_requires_node" {
 		t.Fatalf("node scope classification=%s/%s", category, code)
 	}
+	category, code, _ = classifyConvergenceApplyError(ErrSystemTransportRuntimeUnavailable)
+	if category != "unavailable" || code != "transport_runtime_unavailable" {
+		t.Fatalf("runtime classification=%s/%s", category, code)
+	}
+	category, code, _ = classifyConvergenceApplyError(operations.ErrTransportSwitchApplyUncertain)
+	if category != "unavailable" || code != "transport_switch_uncertain" {
+		t.Fatalf("uncertain switch classification=%s/%s", category, code)
+	}
 }
 
 func stubApplyCommand(t *testing.T, role HostRole, operator ConvergenceApplyOperator) func() {

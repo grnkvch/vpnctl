@@ -258,6 +258,29 @@ func (gateway *RemoteTransportSwitchGateway) FinalizeDeferred(
 	return receipt, nil
 }
 
+// ReconcileDeferred asks the gateway to prove that the retained operation is
+// already complete by deliberately using its pre-registration generation.
+// The mutation handler therefore takes its read-only reconciliation path. A
+// pending operation is reported as determined=false and is never executed by
+// this method.
+func (gateway *RemoteTransportSwitchGateway) ReconcileDeferred(
+	ctx context.Context,
+	operation model.Operation,
+	current model.TransportKind,
+) (transport.FinalizedSwitchReceipt, bool, error) {
+	if operation.ExpectedGeneration == 0 {
+		return transport.FinalizedSwitchReceipt{}, false, transport.ErrTransportSwitchStale
+	}
+	receipt, err := gateway.FinalizeDeferred(ctx, operation, current, operation.ExpectedGeneration)
+	if errors.Is(err, transport.ErrTransportSwitchStale) {
+		return transport.FinalizedSwitchReceipt{}, false, nil
+	}
+	if err != nil {
+		return transport.FinalizedSwitchReceipt{}, false, err
+	}
+	return receipt, true, nil
+}
+
 func clearTransportSwitchRPCSecret(value []byte) {
 	for index := range value {
 		value[index] = 0
