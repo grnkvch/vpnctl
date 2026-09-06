@@ -161,7 +161,16 @@ The disposable Linux gate uses only the owner-marked `vpnctl-v2-restricted` netw
 ./scripts/v2restricted-test.sh status
 ```
 
-`verify` checks the cached archive checksum, cross-compiles the transport tests, validates both rendered artifacts with the pinned binary, starts the real listener, proves an IPv4 TCP connection, proves zero UDP sockets and a free UDP bind, stops the process, and checks that the TCP socket disappeared. Its trap removes only its namespace and owner-verified runtime. Manual recovery is:
+`verify` checks the cached archive checksum and cross-compiles both transport
+and CLI process tests. It validates both rendered artifacts with the pinned
+binary, starts the real listener, proves an IPv4 TCP connection, proves zero
+UDP sockets and a free UDP bind, stops the process, and checks that the TCP
+socket disappeared. A separate child-parent test opens an ephemeral
+loopback-only Mihomo listener, verifies exact PID ownership through `ss`, exits
+the parent without normal cleanup, and requires Linux parent-death `SIGKILL` to
+remove both process and listener. A failure cleanup kills only that exact
+pinned executable PID. The outer trap removes only its namespace and
+owner-verified runtime. Manual recovery is:
 
 ```bash
 ./scripts/v2restricted-test.sh cleanup

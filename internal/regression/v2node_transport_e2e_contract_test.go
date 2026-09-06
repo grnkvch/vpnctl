@@ -123,4 +123,15 @@ func TestV2NodeTransportE2EContract(t *testing.T) {
 			t.Errorf("node-transport E2E contains unsafe or network-fetch surface %q", forbidden)
 		}
 	}
+
+	restrictedHarness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2restricted-test.sh"))
+	for _, required := range []string{
+		"local_transport_test_binary", "local_cli_test_binary", "./internal/cli",
+		"TestNodeTransportCandidateProcessDiesWithParent", "VPNCTL_PINNED_MIHOMO",
+		"assert_owned_runtime", "vpnctl-v2-restricted-test-v1",
+	} {
+		if !strings.Contains(restrictedHarness, required) {
+			t.Errorf("restricted parent-death harness is missing %q", required)
+		}
+	}
 }

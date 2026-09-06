@@ -11,7 +11,8 @@ owner_path="$runtime_root/.owner"
 cache_archive="$repository_root/artifacts/v2lab/cache/mihomo-linux-amd64-v1.19.30.gz"
 pinned_sha256=cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
-local_test_binary=
+local_transport_test_binary=
+local_cli_test_binary=
 local_mihomo_binary=
 
 usage() {
@@ -83,10 +84,13 @@ create_runtime() {
   fi
 }
 
-build_test_binary() {
-  local_test_binary=$(mktemp -t vpnctl-v2-restricted-test)
+build_test_binaries() {
+  local_transport_test_binary=$(mktemp -t vpnctl-v2-restricted-transport-test)
+  local_cli_test_binary=$(mktemp -t vpnctl-v2-restricted-cli-test)
   env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOCACHE=/private/tmp/vpnctl-go-cache \
-    go test -c -o "$local_test_binary" ./internal/transport
+    go test -c -o "$local_transport_test_binary" ./internal/transport
+  env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOCACHE=/private/tmp/vpnctl-go-cache \
+    go test -c -o "$local_cli_test_binary" ./internal/cli
 }
 
 build_mihomo_binary() {
@@ -101,12 +105,14 @@ copy_input() {
 }
 
 install_inputs() {
-  copy_input "$local_test_binary" transport.test
+  copy_input "$local_transport_test_binary" transport.test
+  copy_input "$local_cli_test_binary" cli.test
   copy_input "$local_mihomo_binary" mihomo
-  guest sudo chown root:root "$runtime_root" "$owner_path" "$runtime_root/transport.test" "$runtime_root/mihomo"
+  guest sudo chown root:root "$runtime_root" "$owner_path" \
+    "$runtime_root/transport.test" "$runtime_root/cli.test" "$runtime_root/mihomo"
   guest sudo chmod 0700 "$runtime_root"
   guest sudo chmod 0600 "$owner_path"
-  guest sudo chmod 0755 "$runtime_root/transport.test" "$runtime_root/mihomo"
+  guest sudo chmod 0755 "$runtime_root/transport.test" "$runtime_root/cli.test" "$runtime_root/mihomo"
   local local_sha256 guest_sha256
   local_sha256=$(shasum -a 256 "$local_mihomo_binary" | awk '{print $1}')
   guest_sha256=$(guest sudo sha256sum "$runtime_root/mihomo" | awk '{print $1}')
@@ -117,13 +123,17 @@ install_inputs() {
 }
 
 cleanup_local() {
-  if [ -n "$local_test_binary" ] && [ -f "$local_test_binary" ]; then
-    rm -f -- "$local_test_binary"
+  if [ -n "$local_transport_test_binary" ] && [ -f "$local_transport_test_binary" ]; then
+    rm -f -- "$local_transport_test_binary"
+  fi
+  if [ -n "$local_cli_test_binary" ] && [ -f "$local_cli_test_binary" ]; then
+    rm -f -- "$local_cli_test_binary"
   fi
   if [ -n "$local_mihomo_binary" ] && [ -f "$local_mihomo_binary" ]; then
     rm -f -- "$local_mihomo_binary"
   fi
-  local_test_binary=
+  local_transport_test_binary=
+  local_cli_test_binary=
   local_mihomo_binary=
 }
 
@@ -160,13 +170,16 @@ verify() {
   assert_cached_archive
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./internal/transport ./internal/platform/linux ./internal/cli -count=1
   trap cleanup_local EXIT INT TERM
-  build_test_binary
+  build_test_binaries
   build_mihomo_binary
   create_runtime
   trap cleanup_all EXIT INT TERM
   install_inputs
   guest sudo ip netns add "$namespace"
   guest sudo ip netns exec "$namespace" ip link set lo up
+  guest sudo ip netns exec "$namespace" env \
+    VPNCTL_PINNED_MIHOMO="$runtime_root/mihomo" \
+    "$runtime_root/cli.test" -test.v -test.run '^TestNodeTransportCandidateProcessDiesWithParent$'
   guest sudo ip netns exec "$namespace" env \
     VPNCTL_PINNED_MIHOMO="$runtime_root/mihomo" \
     VPNCTL_RESTRICTED_SOCKET_TEST=1 \

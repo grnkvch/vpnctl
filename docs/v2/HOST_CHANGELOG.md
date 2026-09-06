@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Transient Mihomo parent-death gate
+
+### Reversible validation
+
+- Extended the existing owner-scoped restricted Linux harness with a
+  cross-compiled CLI process test. A helper parent starts the checksum-pinned
+  Mihomo with the production `Pdeathsig` configuration, proves the exact
+  loopback listener belongs to that PID, and exits without calling normal
+  cleanup. The test then requires both process and listener to disappear.
+- If the child survives, cleanup resolves `/proc/<pid>/exe` and sends SIGKILL
+  only when it still identifies the exact test-copied Mihomo binary. The outer
+  harness remains limited to namespace `vpnctl-v2-restricted` and the
+  owner-verified `/tmp/vpnctl-v2-restricted-test`, with its existing automatic
+  trap and explicit `scripts/v2restricted-test.sh cleanup` rollback.
+- The exact Ubuntu 24.04 1-vCPU/512-MiB/10-GiB `vpnctl-v2-node` fixture was
+  temporarily moved from `Stopped` to `Running`. The harness created only
+  namespace `vpnctl-v2-restricted`, owner-verified
+  `/tmp/vpnctl-v2-restricted-test`, two test binaries, and the checksum-pinned
+  Mihomo copy plus their bounded child processes. Its trap removed the
+  namespace/runtime, `status` confirmed both absent, and the VM was returned to
+  `Stopped`. No real service, route, firewall, endpoint, webhook, client, or
+  persistent VM configuration was changed.
+
+### Acceptance
+
+- The process gate passed: the exact listener/PID was observed, helper-parent
+  exit removed both within one second, and the failure cleanup was not needed.
+  The existing pinned listener test also passed with TCP/8443 present only
+  during execution, UDP/8443 absent, and cleanup complete. Linux
+  cross-compilation, shell syntax, regression, full Go, vet, and strict
+  OpenSpec checks are recorded before commit.
+
 ## 2026-09-06 — Standard candidate mark packet harness
 
 ### Reversible validation
