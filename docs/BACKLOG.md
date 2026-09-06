@@ -242,6 +242,36 @@ Requires:
 - version injection
 - release notes
 
+### Separate Release Integrity from Authenticity
+
+Architecturally separate two independent release-verification layers so that
+adding or removing publisher authentication does not require cross-cutting
+changes to bundle parsing, installation, update snapshots, rollback, or
+migration orchestration:
+
+- **integrity (required baseline):** canonical checksum metadata, exact asset
+  sizes and SHA-256 values, canonical bundle manifest, strict framing and
+  ordering, internal artifact verification, platform/component constraints,
+  and exact EOF;
+- **authenticity (optional policy layer):** an Ed25519 signature over the exact
+  canonical checksum metadata, verified against an explicitly configured or
+  pinned publisher trust root before the integrity-verified artifacts may be
+  used.
+
+Define one shared release-verification abstraction composed by install, local
+init, update/rollback, and one-time migration. The integrity verifier must not
+depend on signing keys or signature assets. The authenticity verifier must add
+publisher identity without duplicating or weakening integrity checks, and its
+absence must remain an explicit checksum-only policy rather than an implicit
+verification bypass.
+
+Future authenticity work includes Ed25519 key generation and protected
+storage, rotation, revocation and compromise recovery, trust-root migration,
+CI/release integration, optional signature publication, and consistent policy
+enforcement in install, update, rollback, and migration. This is an
+architectural backlog item only and is not implemented in the current
+iteration.
+
 ### Cryptographically Signed Release Delivery
 
 Replace the v2.0 checksum-only publisher trust boundary with authenticated
