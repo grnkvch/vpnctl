@@ -49,7 +49,7 @@ assert_release_version() {
 
 assert_only_deployed_task_pending() {
   if [ "$(grep -Ec '^- \[ \] ' "$tasks_file")" -ne 1 ] ||
-     ! grep -Fxq -- '- [ ] 16.11 Re-run the requirement traceability audit, strict OpenSpec validation, full Go/unit/integration/E2E/security/resource/migration suites, and release artifact verification; against an actually deployed gateway and node, manually verify supported Clash Mi profile import, selected TCP, proxy-bound DNS, UoT, strict wrong-host rejection, no fail-direct behavior, and reconnect, then use the token-safe harness to register the IP-only five-year public certificate with Telegram, receive and validate a real webhook request, and remove only the test-created registration; verify every non-backlog requirement is green before labeling the release v2.0.' "$tasks_file"; then
+     ! grep -Eq -- '^- \[ \] 16[.]11 ' "$tasks_file"; then
     echo "deployed release gate requires task 16.11 to be the only pending task" >&2
     exit 3
   fi

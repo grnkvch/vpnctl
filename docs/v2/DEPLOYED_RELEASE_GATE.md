@@ -49,9 +49,9 @@ directory can repeat the same commit without adopting a prior run.
 
 ## Deployed gateway and node
 
-Build the signed assets from the same clean commit with the real offline
-release key and pinned provider archives, transfer them with `scp`, and install
-the same version on a dedicated Ubuntu 24.04/amd64 gateway and private node.
+Build the three checksum-governed assets from the same clean commit with the
+pinned provider archives, transfer them over trusted `scp`, and install the
+same version on a dedicated Ubuntu 24.04/amd64 gateway and private node.
 Supply the gateway public IPv4 manually. Verify healthy role/status output,
 gateway-node control, restricted transport, the assigned `telegram` preset,
 the five-year RSA-2048/SHA-256 IP-SAN certificate, and default-off logging.

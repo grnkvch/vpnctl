@@ -24,6 +24,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"prepare <vMAJOR.MINOR.PATCH>", "run-automated <evidence-directory>",
 		"status <evidence-directory>", "finalize <evidence-directory>",
 		"deployed release gate requires a clean source tree", "task 16.11 to be the only pending task",
+		"grep -Eq -- '^- \\[ \\] 16[.]11 '",
 		"source_commit_matches_clean_tree", "production_ready: true", "release_labeled: false",
 		"TestV2RequirementTraceabilityIsComplete", "openspec validate vpnctl-v2 --strict --no-interactive",
 		"go test ./... -count=1", "go test -race ./... -count=1", "go vet ./...",
@@ -63,7 +64,8 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 	for _, required := range []string{
 		"same clean Git commit", "private node", "Clash Mi", "proxy-bound DNS", "selected UoT",
 		"strict wrong-host rejection", "no observed fail-direct", "X-Telegram-Bot-Api-Secret-Token",
-		"provider cleanup", "production_ready=true", "release_labeled=false",
+		"provider cleanup", "three checksum-governed assets", "trusted `scp`",
+		"production_ready=true", "release_labeled=false",
 	} {
 		if !strings.Contains(documentation, required) {
 			t.Errorf("deployed release gate documentation is missing %q", required)
