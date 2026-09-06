@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
@@ -64,11 +65,20 @@ func runReleaseVerification(arguments []string, publicKey ed25519.PublicKey) (re
 }
 
 func verifyReleaseAssets(directory, expectedVersion string, publicKey ed25519.PublicKey) (releaseVerificationResult, error) {
+	return verifyReleaseAssetsWithContract(directory, expectedVersion, publicKey, verifyProductionReleaseManifest)
+}
+
+func verifyReleaseAssetsWithContract(
+	directory, expectedVersion string,
+	publicKey ed25519.PublicKey,
+	manifestContract func(lifecycle.ReleaseManifest, lifecycle.ReleaseChecksums) error,
+) (releaseVerificationResult, error) {
 	canonicalVersion, err := lifecycle.CanonicalStableReleaseVersion(expectedVersion)
 	if err != nil || canonicalVersion != expectedVersion {
 		return releaseVerificationResult{}, errors.New("expected version must be canonical")
 	}
-	if len(publicKey) != ed25519.PublicKeySize || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+	if len(publicKey) != ed25519.PublicKeySize || manifestContract == nil ||
+		!filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
 		return releaseVerificationResult{}, errors.New("release verification input is invalid")
 	}
 	directoryInfo, err := os.Lstat(directory)
@@ -107,6 +117,9 @@ func verifyReleaseAssets(directory, expectedVersion string, publicKey ed25519.Pu
 	if err != nil || manifest.ComponentManifest.VPNCTLVersion != expectedVersion || !manifest.ComponentManifest.MigrationReversible {
 		return releaseVerificationResult{}, errors.New("release bundle manifest is invalid")
 	}
+	if err := manifestContract(manifest, checksums); err != nil {
+		return releaseVerificationResult{}, errors.New("release bundle differs from the production manifest")
+	}
 	var binaryMatched bool
 	for _, artifact := range manifest.Artifacts {
 		if artifact.Component == "vpnctl" && artifact.Path == "bin/vpnctl" &&
@@ -124,6 +137,16 @@ func verifyReleaseAssets(directory, expectedVersion string, publicKey ed25519.Pu
 		Platform: "ubuntu-24.04-amd64", Signature: "ed25519-verified",
 		Bundle: "manifest-and-artifacts-verified", Migration: "backward-reversible",
 	}, nil
+}
+
+func verifyProductionReleaseManifest(manifest lifecycle.ReleaseManifest, checksums lifecycle.ReleaseChecksums) error {
+	expected, err := lifecycle.NewV2ReleaseManifest(
+		checksums.Version, checksums.Binary.SHA256, checksums.Binary.SizeBytes, true,
+	)
+	if err != nil || !reflect.DeepEqual(manifest, expected) {
+		return errors.New("production release manifest mismatch")
+	}
+	return nil
 }
 
 func readBoundedReleaseAsset(path string, maximum int64, mode fs.FileMode) ([]byte, error) {

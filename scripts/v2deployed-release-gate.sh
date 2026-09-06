@@ -56,7 +56,7 @@ assert_only_deployed_task_pending() {
 }
 
 assert_evidence_path() {
-  local path=$1
+  local path=$1 name
   case "$path" in
     "$artifact_root"/*) ;;
     *) echo "evidence directory must be below $artifact_root" >&2; exit 2 ;;
@@ -64,6 +64,11 @@ assert_evidence_path() {
   if [ "$(dirname -- "$path")" != "$artifact_root" ] || [ "$(basename -- "$path")" = . ] ||
      [ "$(basename -- "$path")" = .. ]; then
     echo "evidence directory must be a direct named child of $artifact_root" >&2
+    exit 2
+  fi
+  name=$(basename -- "$path")
+  if ! [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    echo "evidence directory name must be a bounded safe identifier" >&2
     exit 2
   fi
 }
@@ -206,7 +211,7 @@ run_logged() {
 }
 
 run_automated_gate() {
-  local source_commit release_version short
+  local source_commit release_version short run_id
   assert_clean_source
   assert_only_deployed_task_pending
   assert_evidence_directory "$evidence_dir"
@@ -215,6 +220,7 @@ run_automated_gate() {
   source_commit=$(candidate_value '.source_commit')
   release_version=$(candidate_value '.release_version')
   short=${source_commit:0:7}
+  run_id=$(basename -- "$evidence_dir")
   if [ -e "$evidence_dir/automated.json" ] || [ -e "$evidence_dir/automated-logs" ]; then
     echo "deployed release gate refuses to replace automated evidence" >&2
     exit 3
@@ -250,13 +256,13 @@ run_automated_gate() {
   run_logged transport-supervision "$repository_root/scripts/v2transport-supervision-test.sh" verify
   run_logged restricted-process "$repository_root/scripts/v2restricted-test.sh" verify
   run_logged watchdog-timeout "$repository_root/scripts/v2watchdog-test.sh" verify \
-    "$repository_root/artifacts/v2lab/watchdog-test/task-16.11-$short"
+    "$repository_root/artifacts/v2lab/watchdog-test/task-16.11-$short-$run_id"
   run_logged watchdog-confirm "$repository_root/scripts/v2watchdog-test.sh" verify-confirm \
-    "$repository_root/artifacts/v2lab/watchdog-confirm-test/task-16.11-$short"
+    "$repository_root/artifacts/v2lab/watchdog-confirm-test/task-16.11-$short-$run_id"
   run_logged tunnel-release "$repository_root/scripts/v2tunnel-release-gate.sh" run \
-    "$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.11-$short"
+    "$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.11-$short-$run_id"
   run_logged ingress-release "$repository_root/scripts/v2ingress-release-gate.sh" run \
-    "$repository_root/artifacts/v2lab/ingress-release-gate/task-16.11-$short"
+    "$repository_root/artifacts/v2lab/ingress-release-gate/task-16.11-$short-$run_id"
   limactl stop "$node_instance" > "$evidence_dir/automated-logs/node-stop.log" 2>&1
   node_started=false
   limactl stop "$gateway_instance" > "$evidence_dir/automated-logs/gateway-stop.log" 2>&1

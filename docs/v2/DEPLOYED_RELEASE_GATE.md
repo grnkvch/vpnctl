@@ -43,7 +43,9 @@ candidate commit.
 It writes a final `automated.json` only after every command passes and both
 fixtures are back in `Stopped`. Logs remain private inside the ignored evidence
 directory. A failed or interrupted run keeps its partial directory for audit
-and cannot be mistaken for success or silently overwritten.
+and cannot be mistaken for success or silently overwritten. The evidence
+directory name also scopes nested watchdog/tunnel/ingress evidence, so a fresh
+directory can repeat the same commit without adopting a prior run.
 
 ## Deployed gateway and node
 

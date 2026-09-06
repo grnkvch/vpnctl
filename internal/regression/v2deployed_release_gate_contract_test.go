@@ -77,7 +77,8 @@ func TestV2ReleaseVerifierContract(t *testing.T) {
 	verifier := readContractFile(t, filepath.Join(repositoryRoot, "cmd", "vpnctl-release-verify", "main.go"))
 	for _, required := range []string{
 		"releasetrust.PublicKey", "VerifyReleaseChecksums", "VerifyReleaseChecksumRecord",
-		"NewReleaseBundleInstaller", "installer.Inspect", "MigrationReversible",
+		"NewReleaseBundleInstaller", "installer.Inspect", "MigrationReversible", "NewV2ReleaseManifest",
+		"release bundle differs from the production manifest",
 		"standalone binary differs from signed bundle", "ubuntu-24.04-amd64", "ed25519-verified",
 	} {
 		if !strings.Contains(verifier, required) {

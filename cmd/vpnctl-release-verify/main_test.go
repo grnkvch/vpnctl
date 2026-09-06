@@ -17,7 +17,7 @@ import (
 func TestReleaseVerifierAuthenticatesAllAssetsAndBundle(t *testing.T) {
 	t.Parallel()
 	directory, publicKey := buildVerificationFixture(t)
-	result, err := verifyReleaseAssets(directory, "v2.0.0", publicKey)
+	result, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,13 +36,13 @@ func TestReleaseVerifierRejectsTamperingVersionModesAndSymlinks(t *testing.T) {
 		if err := os.WriteFile(path, []byte("tampered"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := verifyReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
 			t.Fatal("tampered binary passed")
 		}
 	})
 	t.Run("wrong version", func(t *testing.T) {
 		directory, publicKey := buildVerificationFixture(t)
-		if _, err := verifyReleaseAssets(directory, "v2.0.1", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.1", publicKey); err == nil {
 			t.Fatal("wrong release version passed")
 		}
 	})
@@ -51,7 +51,7 @@ func TestReleaseVerifierRejectsTamperingVersionModesAndSymlinks(t *testing.T) {
 		if err := os.Chmod(filepath.Join(directory, lifecycle.ReleaseChecksumsAsset), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := verifyReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
 			t.Fatal("unexpected checksum metadata mode passed")
 		}
 	})
@@ -63,10 +63,31 @@ func TestReleaseVerifierRejectsTamperingVersionModesAndSymlinks(t *testing.T) {
 		if err != nil || os.WriteFile(target, content, 0o644) != nil || os.Remove(path) != nil || os.Symlink(target, path) != nil {
 			t.Fatal("prepare symlink fixture")
 		}
-		if _, err := verifyReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
 			t.Fatal("symlinked signature passed")
 		}
 	})
+}
+
+func TestProductionReleaseManifestContractRequiresEveryPinnedComponent(t *testing.T) {
+	t.Parallel()
+	binary := []byte("vpnctl")
+	checksums := lifecycle.ReleaseChecksums{
+		Version: "v2.0.0",
+		Binary: lifecycle.ReleaseChecksumRecord{
+			Name: lifecycle.ReleaseBinaryAsset, SHA256: digest(binary), SizeBytes: int64(len(binary)),
+		},
+	}
+	manifest, err := lifecycle.NewV2ReleaseManifest(
+		checksums.Version, checksums.Binary.SHA256, checksums.Binary.SizeBytes, true,
+	)
+	if err != nil || verifyProductionReleaseManifest(manifest, checksums) != nil {
+		t.Fatalf("exact production manifest rejected: %v", err)
+	}
+	manifest.ComponentManifest.Components[0].Version = "unexpected"
+	if err := verifyProductionReleaseManifest(manifest, checksums); err == nil {
+		t.Fatal("changed production component pin passed")
+	}
 }
 
 func TestReleaseVerifierRejectsIncompleteArguments(t *testing.T) {
@@ -137,6 +158,20 @@ func buildVerificationFixture(t *testing.T) (string, ed25519.PublicKey) {
 	writeFixtureAsset(t, directory, lifecycle.ReleaseChecksumsAsset, checksumsEncoded, 0o644)
 	writeFixtureAsset(t, directory, lifecycle.ReleaseChecksumsSignatureAsset, signature, 0o644)
 	return directory, publicKey
+}
+
+func verifyFixtureReleaseAssets(directory, version string, publicKey ed25519.PublicKey) (releaseVerificationResult, error) {
+	return verifyReleaseAssetsWithContract(
+		directory,
+		version,
+		publicKey,
+		func(manifest lifecycle.ReleaseManifest, checksums lifecycle.ReleaseChecksums) error {
+			if manifest.ComponentManifest.VPNCTLVersion != checksums.Version {
+				return os.ErrInvalid
+			}
+			return nil
+		},
+	)
 }
 
 func writeFixtureAsset(t *testing.T, directory, name string, content []byte, mode os.FileMode) {
