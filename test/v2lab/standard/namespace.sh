@@ -201,6 +201,20 @@ blocked() {
     --protocol tcp --host "$host" --port "$port" --timeout 0.35 >/dev/null
 }
 
+marked_request() {
+  local namespace=$1 protocol=$2 host=$3 port=$4 expected=$5
+  ip netns exec "$namespace" "$probe_path" request \
+    --protocol "$protocol" --host "$host" --port "$port" --expect "$expected" \
+    --mark 0x05000000 --timeout 1 >/dev/null
+}
+
+marked_blocked() {
+  local namespace=$1 protocol=$2 host=$3 port=$4
+  ip netns exec "$namespace" "$probe_path" blocked \
+    --protocol "$protocol" --host "$host" --port "$port" \
+    --mark 0x05000000 --timeout 0.35 >/dev/null
+}
+
 verify_reachability() {
   local namespace
   for namespace in "${client_names[@]}" "${node_names[@]}"; do
@@ -247,6 +261,28 @@ verify_wireguard_state() {
   done
 }
 
+verify_standard_probe_boundary() {
+  local namespace=${node_names[0]}
+  ip -n "$namespace" route add unreachable default metric 42760 table 20003 proto static
+  ip -n "$namespace" route add 10.67.0.1/32 dev vpnctl-wg table 20003 proto static
+  ip -n "$namespace" rule add priority 10030 fwmark 0x05000000/0xff000000 table 20003
+
+  marked_request "$namespace" tcp 10.67.0.1 9443 gateway-control
+  marked_request "$namespace" udp 10.67.0.1 53 gateway-dns-udp
+  marked_blocked "$namespace" tcp 198.51.100.254 18080
+  marked_blocked "$namespace" udp 198.51.100.254 18080
+
+  ip -n "$namespace" route del 10.67.0.1/32 dev vpnctl-wg table 20003 proto static
+  marked_blocked "$namespace" tcp 10.67.0.1 9443
+  marked_blocked "$namespace" udp 10.67.0.1 53
+  request "$namespace" tcp 10.67.0.1 9443 gateway-control
+  request "$namespace" udp 10.67.0.1 53 gateway-dns-udp
+
+  ip -n "$namespace" route add 10.67.0.1/32 dev vpnctl-wg table 20003 proto static
+  marked_request "$namespace" tcp 10.67.0.1 9443 gateway-control
+  marked_request "$namespace" udp 10.67.0.1 53 gateway-dns-udp
+}
+
 verify() {
   local required
   for required in "$firewall_path" "$backend_path" "$probe_path"; do
@@ -263,7 +299,8 @@ verify() {
   start_backends
   verify_reachability
   verify_wireguard_state
-  printf '{"schema_version":1,"status":"passed","checks":{"wireguard_udp_51820":true,"unique_peer_credentials":true,"five_clients":true,"two_nodes":true,"gateway_service_scope":true,"internet_tcp_udp":true,"lateral_isolation":true,"handshakes":true}}\n'
+  verify_standard_probe_boundary
+  printf '{"schema_version":1,"status":"passed","checks":{"wireguard_udp_51820":true,"unique_peer_credentials":true,"five_clients":true,"two_nodes":true,"gateway_service_scope":true,"internet_tcp_udp":true,"lateral_isolation":true,"handshakes":true,"standard_probe_gateway_only":true,"standard_probe_missing_route_blocked":true}}\n'
 }
 
 status() {

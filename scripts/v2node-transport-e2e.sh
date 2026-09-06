@@ -191,7 +191,12 @@ write_summary() {
         automatic_fallback: false,
         one_active_transport: true
       },
-      standard: {wireguard_udp_51820: true, selected_tcp_udp_gateway: true},
+      standard: {
+        wireguard_udp_51820: true,
+        selected_tcp_udp_gateway: true,
+        probe_gateway_only: true,
+        probe_missing_route_blocked: true
+      },
       restricted: {shadowtls_tcp_8443: true, selected_tcp: true, selected_udp_over_tcp: true, native_udp: false},
       routing: {
         selected_tcp_fail_closed: $routing[0].outages.transport.selected_tcp_blocked,
@@ -250,6 +255,7 @@ verify() {
     .source_flows.deferred_without_local_apply and
     (.source_flows.automatic_fallback | not) and
     .source_flows.one_active_transport and
+    .standard.probe_gateway_only and .standard.probe_missing_route_blocked and
     .routing.selected_tcp_fail_closed and .routing.selected_udp_fail_closed and
     .routing.unrelated_tcp_direct and .routing.unrelated_udp_direct and
     .routing.active_transport_preserved and (.routing.automatic_fallback | not) and

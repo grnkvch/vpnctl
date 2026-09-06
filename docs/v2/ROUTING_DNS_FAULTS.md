@@ -33,6 +33,14 @@ intentionally claim overlapping node data-plane resources:
 ./scripts/v2dns-spike.sh verify artifacts/v2lab/dns-spike/task-10.11-fault-matrix
 ```
 
+The owner-scoped standard WireGuard namespace harness also installs the
+candidate-test mark/rule/table on one disposable node. Marked TCP/UDP reaches
+only the gateway `/32`; a marked internet target is blocked despite a working
+main-table route, and removing the `/32` blocks both marked protocols while
+the same unmarked gateway paths remain reachable. This packet-level gate is
+run by `scripts/v2standard-test.sh verify`; actual deployed-service and Clash
+Mi behavior remain task 16.11.
+
 Both `verify` commands arm cleanup before applying host integration. They
 accept only the pinned, exact-name 1-vCPU/512-MiB/10-GiB Lima fixtures and
 owner-marked paths. Their final phase performs full uninstall, compares the

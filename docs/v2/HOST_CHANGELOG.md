@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Standard candidate mark packet harness
+
+### Reversible validation
+
+- Extended the existing owner-scoped standard WireGuard namespace harness with
+  the production candidate mark `0x05000000`, priority `10030`, and table
+  `20003`. The disposable node proves marked TCP/UDP can reach only the
+  gateway overlay `/32`, cannot fall through to its working main-table
+  internet route, and blocks both protocols if the exact `/32` is removed.
+- The harness remains confined to the exact
+  `vpnctl-v2-wg-{gateway,network,wan,c1..c5,n1..n2}` namespaces and the existing
+  owner-verified `/tmp/vpnctl-v2-standard-test` runtime. Its armed cleanup
+  deletes those namespaces and exact runtime only.
+- The exact `vpnctl-v2-node` fixture was temporarily moved from `Stopped` to
+  `Running`. The harness created the named namespaces, veth/WireGuard links,
+  keys, backend processes, table/rule/routes, and runtime only inside that
+  owner boundary. Its armed cleanup removed every resource; `status` confirmed
+  all ten namespaces and `/tmp/vpnctl-v2-standard-test` absent. The VM was then
+  returned to its original `Stopped` state. No real service, host route,
+  webhook, client, or persistent VM configuration was changed.
+
+### Acceptance
+
+- The Ubuntu 24.04 1-vCPU/512-MiB/10-GiB packet run passed. Marked TCP/UDP
+  reached the gateway, marked internet traffic was blocked despite a working
+  main route, removing the `/32` blocked both protocols, and restoring it
+  restored both marked probes. The manifest now records both standard-probe
+  results and exact cleanup.
+- Regression checks require the exact mark, rule, table, `/32`, unreachable
+  default, positive gateway probes, negative internet probes, and missing-route
+  probes in the harness. Deployed Clash Mi remains task 16.11.
+
 ## 2026-09-06 — Restricted candidate local endpoint binding
 
 ### Implementation and non-mutation boundary

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "status": "accepted",
-  "accepted_at": "2026-09-05",
+  "accepted_at": "2026-09-06",
   "scope": "automated-linux-node",
   "actual_gateway_node": "deferred-to-task-16.11",
   "manual_flow": {
@@ -14,7 +14,9 @@
   },
   "standard": {
     "wireguard_udp_51820": true,
-    "selected_tcp_udp_gateway": true
+    "selected_tcp_udp_gateway": true,
+    "probe_gateway_only": true,
+    "probe_missing_route_blocked": true
   },
   "restricted": {
     "shadowtls_tcp_8443": true,

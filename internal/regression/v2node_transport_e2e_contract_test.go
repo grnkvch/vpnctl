@@ -25,8 +25,10 @@ func TestV2NodeTransportE2EContract(t *testing.T) {
 			OneActive      bool `json:"one_active_transport"`
 		} `json:"manual_flow"`
 		Standard struct {
-			WireGuard bool `json:"wireguard_udp_51820"`
-			Selected  bool `json:"selected_tcp_udp_gateway"`
+			WireGuard         bool `json:"wireguard_udp_51820"`
+			Selected          bool `json:"selected_tcp_udp_gateway"`
+			ProbeGatewayOnly  bool `json:"probe_gateway_only"`
+			ProbeMissingRoute bool `json:"probe_missing_route_blocked"`
 		} `json:"standard"`
 		Restricted struct {
 			ShadowTLS bool `json:"shadowtls_tcp_8443"`
@@ -64,7 +66,8 @@ func TestV2NodeTransportE2EContract(t *testing.T) {
 		!manifest.ManualFlow.FailedPreserve || manifest.ManualFlow.AutoFallback || !manifest.ManualFlow.OneActive {
 		t.Fatalf("manual transport flow evidence = %+v", manifest.ManualFlow)
 	}
-	if !manifest.Standard.WireGuard || !manifest.Standard.Selected || !manifest.Restricted.ShadowTLS ||
+	if !manifest.Standard.WireGuard || !manifest.Standard.Selected || !manifest.Standard.ProbeGatewayOnly ||
+		!manifest.Standard.ProbeMissingRoute || !manifest.Restricted.ShadowTLS ||
 		!manifest.Restricted.TCP || !manifest.Restricted.UoT || manifest.Restricted.NativeUDP {
 		t.Fatalf("transport data-path evidence = standard=%+v restricted=%+v", manifest.Standard, manifest.Restricted)
 	}
@@ -95,10 +98,22 @@ func TestV2NodeTransportE2EContract(t *testing.T) {
 		"vpnctl-v2-restricted-spike-v1", "vpnctl-v2-tunnel-spike-v1", "vpnctl-v2-routing-spike-v1",
 		"v2standard-test.sh", "v2restricted-uot-test.sh", "v2routing-spike.sh", "v2tunnel-spike.sh",
 		"TestV2ManualTransportRoundTrip|TestTransportSwitchWorkflowDefer", "selected_tcp_fail_closed",
-		"selected_udp_fail_closed", "automatic_fallback", "temporary_resources_absent",
+		"selected_udp_fail_closed", "probe_gateway_only", "probe_missing_route_blocked",
+		"automatic_fallback", "temporary_resources_absent",
 	} {
 		if !strings.Contains(orchestrator, required) {
 			t.Errorf("node-transport E2E orchestrator is missing %q", required)
+		}
+	}
+
+	standardHarness := readContractFile(t, filepath.Join(repositoryRoot, "test", "v2lab", "standard", "namespace.sh"))
+	for _, required := range []string{
+		"fwmark 0x05000000/0xff000000 table 20003", "unreachable default metric 42760 table 20003",
+		"10.67.0.1/32 dev vpnctl-wg table 20003", "marked_request", "marked_blocked",
+		"standard_probe_gateway_only", "standard_probe_missing_route_blocked",
+	} {
+		if !strings.Contains(standardHarness, required) {
+			t.Errorf("standard probe packet harness is missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{
