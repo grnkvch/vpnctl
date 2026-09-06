@@ -345,6 +345,25 @@ func TestRPCCodecsAndPayloadRejectAmbiguousShapes(t *testing.T) {
 	}
 }
 
+func TestRPCClientUsesExplicitCandidatePathDialer(t *testing.T) {
+	material, node := rpcTestIdentities(t)
+	server := newTestRPCServer(t, material, defaultRPCLimits(), successRPCHandler())
+	var gotNetwork, gotAddress string
+	dialer := &net.Dialer{}
+	fixture := startRPCTestFixtureWithDial(t, server, material, node, func(ctx context.Context, network, address string) (net.Conn, error) {
+		gotNetwork, gotAddress = network, address
+		return dialer.DialContext(ctx, "tcp4", address)
+	})
+	request := validRPCRequest(time.Now().UTC())
+	result, err := fixture.client.Call(context.Background(), request)
+	if err != nil || result.StatusCode != http.StatusOK {
+		t.Fatalf("candidate-path RPC = %+v, %v", result, err)
+	}
+	if gotNetwork != "tcp" || gotAddress != fixture.listener.Addr().String() {
+		t.Fatalf("candidate-path dial = %s %s", gotNetwork, gotAddress)
+	}
+}
+
 type rpcTestFixture struct {
 	client   *RPCClient
 	listener *rpcCountingListener
@@ -377,6 +396,16 @@ func newTestRPCServer(t *testing.T, material GatewayControlMaterial, limits rpcL
 }
 
 func startRPCTestFixture(t *testing.T, server *RPCServer, material GatewayControlMaterial, node NodeCSRMaterial) *rpcTestFixture {
+	return startRPCTestFixtureWithDial(t, server, material, node, nil)
+}
+
+func startRPCTestFixtureWithDial(
+	t *testing.T,
+	server *RPCServer,
+	material GatewayControlMaterial,
+	node NodeCSRMaterial,
+	dial func(context.Context, string, string) (net.Conn, error),
+) *rpcTestFixture {
 	t.Helper()
 	base, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -386,6 +415,7 @@ func startRPCTestFixture(t *testing.T, server *RPCServer, material GatewayContro
 	client, err := NewRPCClient(RPCClientConfig{
 		Address: listener.Addr().String(), GatewayID: testGatewayID, NodeID: testNodeID,
 		CACertificatePEM: material.ControlCACertificatePEM, CertificatePEM: nodeCertificatePEM(t, material, node), PrivateKeyPEM: node.PrivateKeyPEM,
+		DialContext: dial,
 	})
 	if err != nil {
 		t.Fatal(err)

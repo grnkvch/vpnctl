@@ -2,6 +2,32 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Candidate-bound control RPC dial path
+
+### Implementation and non-mutation boundary
+
+- Allow the short-lived node mTLS RPC client to receive one explicit dial
+  function. The default constructor still uses the ordinary network path;
+  only the transport-test constructor will supply a candidate path. TLS 1.3,
+  gateway IP and URI identity verification, node client authentication,
+  HTTP/1.1, request validation, deadlines, no redirects, and connection-close
+  behavior remain unchanged.
+- Expose the same option through the system node-client loader without adding
+  an RPC operation or public management endpoint. This lets the existing
+  authenticated, read-only `repair.probe` prove control reachability over an
+  exact transport candidate instead of accepting raw TCP reachability.
+- Validation uses generated short-lived test PKI, temporary loopback/Unix
+  listeners, disposable Go caches, and repository files only. No real host/VM
+  config, unit, process, route, firewall, transport, endpoint, webhook, or
+  client was changed; no rollback is required.
+
+### Acceptance
+
+- Tests prove the exact RPC destination is delegated to the supplied dialer
+  and that the complete existing mTLS/HTTP validation still succeeds. Focused
+  and full Go suites, control/operations/CLI race tests, vet, strict OpenSpec,
+  formatting, and diff checks pass.
+
 ## 2026-09-06 — Private restricted transport test candidate
 
 ### Implementation and non-mutation boundary

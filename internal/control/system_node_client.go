@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -22,6 +23,17 @@ type SystemNodeClient struct {
 }
 
 func NewSystemNodeClient(paths store.Paths, now func() time.Time) (SystemNodeClient, error) {
+	return NewSystemNodeClientWithDialContext(paths, now, nil)
+}
+
+// NewSystemNodeClientWithDialContext loads the same persisted mTLS identity as
+// NewSystemNodeClient but sends its short-lived RPC through an explicitly
+// selected candidate path. A nil dialer preserves the ordinary system path.
+func NewSystemNodeClientWithDialContext(
+	paths store.Paths,
+	now func() time.Time,
+	dial func(context.Context, string, string) (net.Conn, error),
+) (SystemNodeClient, error) {
 	stateStore, err := store.NewStateStore(paths)
 	if err != nil {
 		return SystemNodeClient{}, err
@@ -70,7 +82,7 @@ func NewSystemNodeClient(paths store.Paths, now func() time.Time) (SystemNodeCli
 	client, err := NewRPCClient(RPCClientConfig{
 		Address:   net.JoinHostPort(node.Gateway.GatewayOverlayIPv4, strconv.Itoa(RPCControlTCPPort)),
 		GatewayID: node.Gateway.GatewayID, NodeID: node.ID, CACertificatePEM: caBundle,
-		CertificatePEM: certificatePEM, PrivateKeyPEM: privateKeyPEM, Now: now,
+		CertificatePEM: certificatePEM, PrivateKeyPEM: privateKeyPEM, Now: now, DialContext: dial,
 	})
 	if err != nil {
 		return SystemNodeClient{}, err

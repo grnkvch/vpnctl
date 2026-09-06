@@ -24,6 +24,7 @@ type RPCClientConfig struct {
 	PrivateKeyPEM    []byte
 	Timeout          time.Duration
 	Now              func() time.Time
+	DialContext      func(context.Context, string, string) (net.Conn, error)
 }
 
 type RPCCallResult struct {
@@ -36,6 +37,7 @@ type RPCClient struct {
 	nodeID    string
 	tlsConfig *tls.Config
 	timeout   time.Duration
+	dial      func(context.Context, string, string) (net.Conn, error)
 }
 
 // CallManagement preserves local request validation errors, but turns an
@@ -112,6 +114,10 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 	if timeout <= 0 || timeout > time.Minute {
 		return nil, fmt.Errorf("control RPC client timeout must be positive and no more than one minute")
 	}
+	dial := config.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
 	roots := newCertificatePool(controlCAs...)
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
@@ -128,7 +134,7 @@ func NewRPCClient(config RPCClientConfig) (*RPCClient, error) {
 			return nil
 		},
 	}
-	return &RPCClient{address: config.Address, nodeID: config.NodeID, tlsConfig: tlsConfig, timeout: timeout}, nil
+	return &RPCClient{address: config.Address, nodeID: config.NodeID, tlsConfig: tlsConfig, timeout: timeout, dial: dial}, nil
 }
 
 func parseControlCACertificateBundle(certificatePEM []byte) ([]*x509.Certificate, error) {
@@ -171,7 +177,7 @@ func (client *RPCClient) Call(ctx context.Context, request RPCRequest) (RPCCallR
 	if ctx == nil {
 		return RPCCallResult{}, fmt.Errorf("context is required")
 	}
-	if client == nil || client.tlsConfig == nil {
+	if client == nil || client.tlsConfig == nil || client.dial == nil {
 		return RPCCallResult{}, fmt.Errorf("control RPC client is incomplete")
 	}
 	if err := request.Validate(); err != nil {
@@ -199,6 +205,7 @@ func (client *RPCClient) Call(ctx context.Context, request RPCRequest) (RPCCallR
 	transport := &http.Transport{
 		TLSClientConfig: client.tlsConfig.Clone(), ForceAttemptHTTP2: false, DisableKeepAlives: true, DisableCompression: true,
 		TLSHandshakeTimeout: RPCReadBodyTimeout, ResponseHeaderTimeout: RPCWriteTimeout, MaxResponseHeaderBytes: RPCMaximumHeaderBytes,
+		DialContext: client.dial,
 	}
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{

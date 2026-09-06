@@ -136,6 +136,13 @@ or convergence material. Its sole purpose is to let the isolated tester launch
 a loopback-only target process without modifying the live routing configuration
 or production selector.
 
+The node mTLS RPC client accepts an internal dial-path override for that tester.
+Its default remains the ordinary system dialer. The override changes only how
+the already validated overlay address is reached; all TLS identity, protocol,
+deadline, response, and one-request/one-connection checks remain mandatory.
+Consequently the control result can reuse the authenticated read-only
+`repair.probe` without introducing a weaker test-only gateway API.
+
 The concrete standard renderer, service, credential ownership, passive health
 semantics, and packet-level acceptance contract are documented in
 [`STANDARD_TRANSPORT.md`](./STANDARD_TRANSPORT.md).
