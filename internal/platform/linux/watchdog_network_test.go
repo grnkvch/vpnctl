@@ -26,10 +26,14 @@ func TestNetworkManagerSnapshotsOnlyOwnedResources(t *testing.T) {
 		watchdogCommandKey("ip", "-json", "-4", "route", "show", "table", "20002"): {
 			Stdout: []byte(`[{"dst":"default","gateway":"10.67.0.1","dev":"vpnctl-wg","table":20002,"protocol":"static"}]`),
 		},
+		watchdogCommandKey("ip", "-json", "-4", "route", "show", "table", "20003"): {
+			Stdout: []byte(`[{"dst":"default","table":20003,"protocol":"static","type":"unreachable","metric":42760},{"dst":"10.67.0.1/32","dev":"vpnctl-wg","table":20003,"protocol":"static"}]`),
+		},
 		watchdogCommandKey("ip", "-json", "-6", "route", "show", "table", "20001"): {Stdout: []byte(`[]`)},
 		watchdogCommandKey("ip", "-json", "-6", "route", "show", "table", "20002"): {Stdout: []byte(`[]`)},
+		watchdogCommandKey("ip", "-json", "-6", "route", "show", "table", "20003"): {Stdout: []byte(`[]`)},
 		watchdogCommandKey("ip", "-json", "-4", "rule", "show"): {
-			Stdout: []byte(`[{"priority":0,"from":"all","table":"local"},{"priority":10000,"from":"all","table":20002,"fwmark":"0x03000000","fwmask":"0xff000000"},{"priority":12000,"from":"all","table":"main","fwmark":"0x1234","fwmask":"0xffff"},{"priority":32766,"from":"all","table":"main"}]`),
+			Stdout: []byte(`[{"priority":0,"from":"all","table":"local"},{"priority":10000,"from":"all","table":20002,"fwmark":"0x03000000","fwmask":"0xff000000"},{"priority":10030,"from":"all","table":20003,"fwmark":"0x05000000","fwmask":"0xff000000"},{"priority":12000,"from":"all","table":"main","fwmark":"0x1234","fwmask":"0xffff"},{"priority":32766,"from":"all","table":"main"}]`),
 		},
 		watchdogCommandKey("ip", "-json", "-6", "rule", "show"):                {Stdout: []byte(`[{"priority":0,"from":"all","table":"local"}]`)},
 		watchdogCommandKey("sysctl", "-n", "net.ipv4.conf.all.src_valid_mark"): {Stdout: []byte("0\n")},
@@ -48,11 +52,12 @@ func TestNetworkManagerSnapshotsOnlyOwnedResources(t *testing.T) {
 	if !snapshot.NFTables.Present || strings.Contains(snapshot.NFTables.Definition, "foreign") {
 		t.Fatalf("unexpected nftables snapshot: %+v", snapshot.NFTables)
 	}
-	if len(snapshot.Routes) != 2 || len(snapshot.PolicyRules) != 1 || len(snapshot.Sysctls) != 2 {
+	if len(snapshot.Routes) != 4 || len(snapshot.PolicyRules) != 2 || len(snapshot.Sysctls) != 2 {
 		t.Fatalf("unexpected owned snapshot: %+v", snapshot)
 	}
-	if snapshot.PolicyRules[0].Priority != 10000 || snapshot.PolicyRules[0].FWMark != "0x03000000" {
-		t.Fatalf("unexpected normalized policy rule: %+v", snapshot.PolicyRules[0])
+	if snapshot.PolicyRules[0].Priority != 10000 || snapshot.PolicyRules[0].FWMark != "0x03000000" ||
+		snapshot.PolicyRules[1].Priority != 10030 || snapshot.PolicyRules[1].FWMark != "0x05000000" {
+		t.Fatalf("unexpected normalized policy rules: %+v", snapshot.PolicyRules)
 	}
 	if got := []string{snapshot.Sysctls[0].Name, snapshot.Sysctls[1].Name}; !reflect.DeepEqual(got, []string{
 		"net.ipv4.conf.all.src_valid_mark", "net.ipv4.ip_forward",
@@ -121,8 +126,10 @@ func TestNetworkManagerRestoreTouchesOnlyFixedOwnership(t *testing.T) {
 		Routes: []Route{
 			{Family: "ipv4", Destination: "default", Table: "20001", Protocol: "static", Type: "unreachable", Metric: 42760},
 			{Family: "ipv4", Destination: "default", Gateway: "10.67.0.1", Device: "vpnctl-wg", Table: "20002", Protocol: "static"},
+			{Family: "ipv4", Destination: "10.67.0.1/32", Device: "vpnctl-wg", Table: "20003", Protocol: "static"},
+			{Family: "ipv4", Destination: "default", Table: "20003", Protocol: "static", Type: "unreachable", Metric: 42760},
 		},
-		PolicyRules: []PolicyRule{ownedPolicyRules[10020]},
+		PolicyRules: []PolicyRule{ownedPolicyRules[10020], ownedPolicyRules[10030]},
 		Sysctls:     []SysctlSnapshot{{Name: "net.ipv4.ip_forward", Value: "0"}},
 	}
 	runner := newWatchdogRunner(map[string]ProbeResult{
@@ -131,7 +138,7 @@ func TestNetworkManagerRestoreTouchesOnlyFixedOwnership(t *testing.T) {
 			Stdout: []byte("table inet vpnctl {\n\tchain candidate { }\n}\n"),
 		},
 		watchdogCommandKey("ip", "-json", "-4", "rule", "show"): {
-			Stdout: []byte(`[{"priority":10000,"from":"all","table":20002,"fwmark":"0x03000000","fwmask":"0xff000000"},{"priority":10010,"from":"all","table":20002,"fwmark":"0x04000000","fwmask":"0xff000000"},{"priority":10020,"from":"all","table":20001,"fwmark":"0x02000000","fwmask":"0xff000000"},{"priority":12000,"from":"all","table":"main","fwmark":"0x1234","fwmask":"0xffff"}]`),
+			Stdout: []byte(`[{"priority":10000,"from":"all","table":20002,"fwmark":"0x03000000","fwmask":"0xff000000"},{"priority":10010,"from":"all","table":20002,"fwmark":"0x04000000","fwmask":"0xff000000"},{"priority":10020,"from":"all","table":20001,"fwmark":"0x02000000","fwmask":"0xff000000"},{"priority":10030,"from":"all","table":20003,"fwmark":"0x05000000","fwmask":"0xff000000"},{"priority":12000,"from":"all","table":"main","fwmark":"0x1234","fwmask":"0xffff"}]`),
 		},
 	})
 	manager, _ := NewNetworkManager(runner)
@@ -143,8 +150,10 @@ func TestNetworkManagerRestoreTouchesOnlyFixedOwnership(t *testing.T) {
 	for _, required := range []string{
 		"nft --check --file -", "nft --file -",
 		"ip -4 route flush table 20001", "ip -6 route flush table 20002",
+		"ip -4 route flush table 20003",
 		"ip -4 rule del priority 10000 fwmark 0x03000000/0xff000000 table 20002",
 		"ip -4 rule add priority 10020 fwmark 0x02000000/0xff000000 table 20001",
+		"ip -4 rule add priority 10030 fwmark 0x05000000/0xff000000 table 20003",
 		"sysctl -q -w net.ipv4.ip_forward=0",
 	} {
 		if !strings.Contains(joined, required) {
@@ -350,6 +359,11 @@ func (runner *watchdogRunner) Run(_ context.Context, command ProbeCommand) (Prob
 	runner.calls = append(runner.calls, ProbeCommand{Name: command.Name, Args: append([]string(nil), command.Args...), Stdin: append([]byte(nil), command.Stdin...)})
 	if result, found := runner.results[watchdogCommandKey(command.Name, command.Args...)]; found {
 		return result, nil
+	}
+	if command.Name == "ip" && len(command.Args) == 6 && command.Args[0] == "-json" &&
+		(command.Args[1] == "-4" || command.Args[1] == "-6") && command.Args[2] == "route" &&
+		command.Args[3] == "show" && command.Args[4] == "table" && command.Args[5] == "20003" {
+		return ProbeResult{Stdout: []byte(`[]`)}, nil
 	}
 	return ProbeResult{}, nil
 }

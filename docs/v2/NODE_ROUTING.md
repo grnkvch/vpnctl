@@ -101,8 +101,9 @@ acceptance matrix is recorded in
 
 ## Kernel fail-closed guard
 
-The node guard owns only `table inet vpnctl`, route tables `20001`/`20002`,
-RPDB priorities `10000`/`10010`/`10020`, and the explicitly snapshotted
+The node guard owns only `table inet vpnctl`, route tables
+`20001`/`20002`/`20003`, RPDB priorities
+`10000`/`10010`/`10020`/`10030`, and the explicitly snapshotted
 `src_valid_mark`/`rp_filter` sysctls. It rejects a pre-existing table without
 the `vpnctl:v2:node-routing-guard` ownership marker and never flushes the global
 ruleset or another table.
@@ -110,10 +111,11 @@ ruleset or another table.
 Only the high byte of packet and conntrack marks belongs to vpnctl. The fixed
 mask is `0xff000000`; `0x01000000` means retained direct,
 `0x02000000` selected, `0x03000000` recovery/active outbound, and
-`0x04000000` ingress response. Every assignment preserves `0x00ffffff`, and
-only those four exact high-byte values are restored from conntrack. Both the
-prerouting and route-output hooks use priority `-150`, after conntrack
-association.
+`0x04000000` ingress response. `0x05000000` is reserved for root-created,
+explicit standard-transport test sockets. Every assignment preserves
+`0x00ffffff`, and only those five exact high-byte values are restored from
+conntrack. Both the prerouting and route-output hooks use priority `-150`,
+after conntrack association.
 
 The recovery allowlist consists only of the configured gateway IPv4 plus exact
 TCP/UDP ports. There is no CIDR, hostname, arbitrary destination, or raw nft
@@ -127,9 +129,19 @@ active binding, the gateway table always contains one exact public-gateway
 `/32` recovery route over the ordinary underlay. Standard adds a default via
 `vpnctl-wg`; restricted adds an unreachable default because its only valid
 recovery-marked outer destination is that exact public gateway. The three
-high-byte marks select these tables at fixed RPDB priorities. This means a
-selected route has a kernel block if the TUN or active provider disappears,
-and a marked provider packet cannot silently use an arbitrary direct target.
+high-byte production marks select these tables at fixed RPDB priorities. The
+dedicated standard-test table always contains an unreachable default and one
+more specific gateway-overlay `/32` through `vpnctl-wg`. Its socket mark can
+therefore reach only the managed gateway over the standard candidate and
+cannot fall through to the main/direct table. This means a selected route has
+a kernel block if the TUN or active provider disappears, and a marked provider
+or diagnostic packet cannot silently use an arbitrary direct target.
+
+Ordinary traffic never receives the standard-test mark. It is set with
+root-only `SO_MARK` only on sockets opened by the explicit manual transport
+test. The test layer additionally restricts destinations to the authoritative
+gateway overlay address and the exact managed control, tunnel, and DNS ports.
+Failure to set the mark aborts the probe; there is no unmarked fallback.
 
 ## Boot, readiness, and crash order
 

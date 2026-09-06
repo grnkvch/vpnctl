@@ -40,18 +40,21 @@ type spikeBaseline struct {
 			RestrictedUDPOpen bool `json:"restricted_udp_open"`
 		} `json:"public_network"`
 		Routing struct {
-			MarkMask             string `json:"mark_mask"`
-			DirectMark           string `json:"direct_mark"`
-			SelectedMark         string `json:"selected_mark"`
-			RecoveryMark         string `json:"recovery_mark"`
-			IngressResponseMark  string `json:"ingress_response_mark"`
-			PreservedMarkMask    string `json:"preserved_mark_mask"`
-			RecoveryRulePriority int    `json:"recovery_rule_priority"`
-			IngressRulePriority  int    `json:"ingress_rule_priority"`
-			SelectedRulePriority int    `json:"selected_rule_priority"`
-			SelectedTable        int    `json:"selected_table"`
-			GatewayTable         int    `json:"gateway_table"`
-			WatchdogSeconds      int    `json:"watchdog_seconds"`
+			MarkMask              string `json:"mark_mask"`
+			DirectMark            string `json:"direct_mark"`
+			SelectedMark          string `json:"selected_mark"`
+			RecoveryMark          string `json:"recovery_mark"`
+			IngressResponseMark   string `json:"ingress_response_mark"`
+			StandardProbeMark     string `json:"standard_probe_mark"`
+			PreservedMarkMask     string `json:"preserved_mark_mask"`
+			RecoveryRulePriority  int    `json:"recovery_rule_priority"`
+			IngressRulePriority   int    `json:"ingress_rule_priority"`
+			SelectedRulePriority  int    `json:"selected_rule_priority"`
+			StandardProbePriority int    `json:"standard_probe_rule_priority"`
+			SelectedTable         int    `json:"selected_table"`
+			GatewayTable          int    `json:"gateway_table"`
+			StandardProbeTable    int    `json:"standard_probe_table"`
+			WatchdogSeconds       int    `json:"watchdog_seconds"`
 		} `json:"routing"`
 		DNS struct {
 			PolicyMode              string   `json:"policy_mode"`
@@ -223,10 +226,10 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 	if limits.PublicNetwork.HTTPSTCP != 443 || limits.PublicNetwork.RestrictedTCP != 8443 || limits.PublicNetwork.WireGuardUDP != 51820 || limits.PublicNetwork.HTTPSUDPOpen || limits.PublicNetwork.RestrictedUDPOpen {
 		t.Errorf("unexpected public network contract: %#v", limits.PublicNetwork)
 	}
-	if limits.Routing.MarkMask != "0xff000000" || limits.Routing.DirectMark != "0x01000000" || limits.Routing.SelectedMark != "0x02000000" || limits.Routing.RecoveryMark != "0x03000000" || limits.Routing.IngressResponseMark != "0x04000000" || limits.Routing.PreservedMarkMask != "0x00ffffff" {
+	if limits.Routing.MarkMask != "0xff000000" || limits.Routing.DirectMark != "0x01000000" || limits.Routing.SelectedMark != "0x02000000" || limits.Routing.RecoveryMark != "0x03000000" || limits.Routing.IngressResponseMark != "0x04000000" || limits.Routing.StandardProbeMark != "0x05000000" || limits.Routing.PreservedMarkMask != "0x00ffffff" {
 		t.Errorf("unexpected routing mark allocation: %#v", limits.Routing)
 	}
-	if limits.Routing.RecoveryRulePriority != 10000 || limits.Routing.IngressRulePriority != 10010 || limits.Routing.SelectedRulePriority != 10020 || limits.Routing.SelectedTable != 20001 || limits.Routing.GatewayTable != 20002 || limits.Routing.WatchdogSeconds != 120 {
+	if limits.Routing.RecoveryRulePriority != 10000 || limits.Routing.IngressRulePriority != 10010 || limits.Routing.SelectedRulePriority != 10020 || limits.Routing.StandardProbePriority != 10030 || limits.Routing.SelectedTable != 20001 || limits.Routing.GatewayTable != 20002 || limits.Routing.StandardProbeTable != 20003 || limits.Routing.WatchdogSeconds != 120 {
 		t.Errorf("unexpected routing/RPDB/watchdog limits: %#v", limits.Routing)
 	}
 	if limits.DNS.PolicyMode != "policy-redir-host" || limits.DNS.CompatibilityMode != "direct-redir-host" || limits.DNS.SelectedDirectFallback || limits.DNS.FakeIPModeSelected {

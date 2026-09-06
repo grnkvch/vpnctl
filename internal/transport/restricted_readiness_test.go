@@ -134,6 +134,34 @@ func TestRestrictedNetworkReadinessProberRejectsUnsafeEndpointsAndBounds(t *test
 	}
 }
 
+func TestRestrictedSOCKSPathHasNoNonLoopbackProxyOrNonIPv4Fallback(t *testing.T) {
+	t.Parallel()
+	if _, err := NewRestrictedSOCKSPath("203.0.113.1:17890"); err == nil {
+		t.Fatal("public restricted SOCKS proxy was accepted")
+	}
+	path, err := NewRestrictedSOCKSPath("127.0.0.1:17890")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		network string
+		address string
+	}{
+		{network: "udp", address: "10.67.0.1:53"},
+		{network: "tcp", address: "gateway.example:9443"},
+		{network: "tcp", address: "[2001:db8::1]:9443"},
+		{network: "tcp", address: "0.0.0.0:9443"},
+	} {
+		if connection, err := path.DialContext(context.Background(), test.network, test.address); err == nil {
+			_ = connection.Close()
+			t.Fatalf("unsafe restricted SOCKS dial accepted %s %s", test.network, test.address)
+		}
+	}
+	if _, err := path.ExchangeUDP(context.Background(), "10.67.0.1:53", nil); err == nil {
+		t.Fatal("empty restricted SOCKS UDP payload was accepted")
+	}
+}
+
 func TestRestrictedRetryProbeUsesSameBoundedPath(t *testing.T) {
 	t.Parallel()
 	calls := 0

@@ -264,6 +264,7 @@ func renderNodeRoutingGuardNFTables(config NodeRoutingGuardConfig, matchers NFTa
 	selected := nftMark(linuxplatform.VPNCTLSelectedMark)
 	recovery := nftMark(linuxplatform.VPNCTLRecoveryMark)
 	ingress := nftMark(linuxplatform.VPNCTLIngressResponseMark)
+	standardProbe := nftMark(linuxplatform.VPNCTLStandardProbeMark)
 	var rules strings.Builder
 	fmt.Fprintf(&rules, "table %s %s {\n", linuxplatform.VPNCTLNFTablesFamily, linuxplatform.VPNCTLNFTablesTable)
 	fmt.Fprintf(&rules, "  comment %s\n\n", strconv.Quote(NodeRoutingGuardOwnerComment))
@@ -282,6 +283,9 @@ func renderNodeRoutingGuardNFTables(config NodeRoutingGuardConfig, matchers NFTa
 	fmt.Fprintf(&rules, "    type route hook output priority %d; policy accept;\n\n", linuxplatform.VPNCTLNFTablesManglePriority)
 	rules.WriteString("    oifname \"lo\" return\n")
 	fmt.Fprintf(&rules, "    meta mark & %s == %s ct mark set meta mark return\n\n", mask, recovery)
+	if config.ActiveTransport != "" {
+		fmt.Fprintf(&rules, "    meta mark & %s == %s ct mark set meta mark return\n\n", mask, standardProbe)
+	}
 	writeNodeRoutingConntrackRestore(&rules, mask)
 	fmt.Fprintf(&rules, "    meta mark & %s == %s return\n", mask, ingress)
 	fmt.Fprintf(&rules, "    meta mark & %s == %s return\n", mask, recovery)
@@ -324,6 +328,7 @@ func writeNodeRoutingConntrackRestore(rules *strings.Builder, mask string) {
 		linuxplatform.VPNCTLSelectedMark,
 		linuxplatform.VPNCTLRecoveryMark,
 		linuxplatform.VPNCTLIngressResponseMark,
+		linuxplatform.VPNCTLStandardProbeMark,
 	} {
 		fmt.Fprintf(rules, "    ct mark & %s == %s meta mark set ct mark\n", mask, nftMark(mark))
 	}

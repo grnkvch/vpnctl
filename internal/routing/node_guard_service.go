@@ -146,7 +146,7 @@ func (manager *NodeRoutingGuardManager) Install(ctx context.Context, candidate N
 			return fmt.Errorf("install gateway recovery route: %w", err)
 		}
 	}
-	for _, rule := range nodeRoutingPolicyRules() {
+	for _, rule := range nodeRoutingPolicyRules(config) {
 		if priorHasPolicyRule(prior, rule.priority) {
 			continue
 		}
@@ -300,7 +300,11 @@ func nodeRoutingGatewayRoutes(config NodeRoutingGuardConfig) [][]string {
 		fallback = append(append([]string(nil), base...), "unreachable", "default", "metric",
 			strconv.Itoa(linuxplatform.VPNCTLUnreachableRouteMetric), "table", linuxplatform.VPNCTLGatewayRouteTable, "proto", "static")
 	}
-	return [][]string{recovery, fallback}
+	standardProbeFallback := append(append([]string(nil), base...), "unreachable", "default", "metric",
+		strconv.Itoa(linuxplatform.VPNCTLUnreachableRouteMetric), "table", linuxplatform.VPNCTLStandardProbeRouteTable, "proto", "static")
+	standardProbe := append(append([]string(nil), base...), config.GatewayOverlayIPv4+"/32", "dev", NodeRoutingStandardInterface,
+		"table", linuxplatform.VPNCTLStandardProbeRouteTable, "proto", "static")
+	return [][]string{recovery, fallback, standardProbeFallback, standardProbe}
 }
 
 // NotReady closes the classifier first and only then removes the low-metric
@@ -493,12 +497,19 @@ type nodeRoutingPolicyRule struct {
 	table    string
 }
 
-func nodeRoutingPolicyRules() []nodeRoutingPolicyRule {
-	return []nodeRoutingPolicyRule{
+func nodeRoutingPolicyRules(config NodeRoutingGuardConfig) []nodeRoutingPolicyRule {
+	rules := []nodeRoutingPolicyRule{
 		{priority: linuxplatform.VPNCTLRecoveryRulePriority, mark: nftMark(linuxplatform.VPNCTLRecoveryMark), table: linuxplatform.VPNCTLGatewayRouteTable},
 		{priority: linuxplatform.VPNCTLIngressRulePriority, mark: nftMark(linuxplatform.VPNCTLIngressResponseMark), table: linuxplatform.VPNCTLGatewayRouteTable},
 		{priority: linuxplatform.VPNCTLSelectedRulePriority, mark: nftMark(linuxplatform.VPNCTLSelectedMark), table: linuxplatform.VPNCTLSelectedRouteTable},
 	}
+	if config.ActiveTransport != "" {
+		rules = append(rules, nodeRoutingPolicyRule{
+			priority: linuxplatform.VPNCTLStandardProbeRulePriority,
+			mark:     nftMark(linuxplatform.VPNCTLStandardProbeMark), table: linuxplatform.VPNCTLStandardProbeRouteTable,
+		})
+	}
+	return rules
 }
 
 func priorHasPolicyRule(snapshot linuxplatform.NetworkSnapshot, priority int) bool {

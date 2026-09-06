@@ -125,9 +125,9 @@ move control, frpc, selected TCP, and selected UDP independently. Immediate
 planning remains lazy and state-only. A deferred operation reconstructs the
 last Applied `N` configuration separately from its retained `N+1` intent mirror
 and compiles the already published Desired `N+2` target, preserving an exact
-rollback generation. Until the isolated production candidate tester is wired,
-`StartTest` fails before `Activate`; host replacement is therefore not yet
-reachable from the public test/switch commands.
+rollback generation. `StartTest` now uses the isolated production candidate
+tester, so a confirmed switch can reach host replacement only after every
+mandatory candidate probe passes.
 
 Each compiled generation also retains one opaque standalone restricted
 candidate derived from the same trust and credential generation. It is
@@ -142,6 +142,44 @@ the already validated overlay address is reached; all TLS identity, protocol,
 deadline, response, and one-request/one-connection checks remain mandatory.
 Consequently the control result can reuse the authenticated read-only
 `repair.probe` without introducing a weaker test-only gateway API.
+
+The production candidate tester opens exactly one path per command and allows
+only the authoritative gateway overlay IPv4 with managed TCP ports `9443`,
+`17000`, and `53`, or UDP port `53`. It runs four individually five-second
+bounded checks in order:
+
+1. authenticated node mTLS `repair.probe` over candidate-bound control;
+2. TLS 1.3 handshake to the pinned managed frps identity on `17000/TCP`;
+3. a bounded DNS query over `53/TCP`;
+4. the same bounded DNS query over `53/UDP`.
+
+The reserved `.invalid` query proves selected gateway egress without invoking
+an application, webhook, or arbitrary remote endpoint. A structurally valid
+response to the exact random transaction and question is sufficient; an
+NXDOMAIN or SERVFAIL is therefore still proof of transport reachability. A
+failed probe returns a completed negative diagnostic and never activates or
+falls back to another transport.
+
+For `standard`, every test socket receives the root-only diagnostic mark
+`0x05000000`. RPDB priority `10030` selects table `20003`, which contains only
+the gateway-overlay `/32` through `vpnctl-wg` and an unreachable default. A
+marking error or absent standard path fails closed instead of using the active
+selector or ordinary uplink.
+
+For `restricted`, the tester renders the retained standalone candidate into a
+unique owner-only `/run/vpnctl/.transport-test-*` directory, validates it with
+the pinned Mihomo binary, and starts one loopback-only SOCKS process. TCP uses
+SOCKS5 CONNECT; UDP uses SOCKS5 UDP ASSOCIATE over the configured UoT path.
+The production config, service, TUN, routing selector, and published files are
+unchanged. The child receives Linux parent-death `SIGKILL`, and normal cleanup
+stops it before removing its directory.
+
+A root-only nonblocking `/run/vpnctl/transport-test.lock` serializes manual
+tests. The lock file stays in the runtime directory, but the kernel releases
+the lock after either normal exit or a crash. The next lock holder removes only
+exact `.transport-test-*` stale children before creating a candidate. This
+prevents concurrent cleanup races without adopting or deleting unrelated
+runtime entries.
 
 The concrete standard renderer, service, credential ownership, passive health
 semantics, and packet-level acceptance contract are documented in

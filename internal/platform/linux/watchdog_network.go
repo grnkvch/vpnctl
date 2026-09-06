@@ -24,12 +24,16 @@ var (
 	routeTokenPattern         = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 )
 
-var ownedRouteTables = []string{VPNCTLSelectedRouteTable, VPNCTLGatewayRouteTable}
+var ownedRouteTables = []string{VPNCTLSelectedRouteTable, VPNCTLGatewayRouteTable, VPNCTLStandardProbeRouteTable}
 
 var ownedPolicyRules = map[int]PolicyRule{
 	VPNCTLRecoveryRulePriority: {Family: "ipv4", Priority: VPNCTLRecoveryRulePriority, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x03000000", FWMask: "0xff000000"},
 	VPNCTLIngressRulePriority:  {Family: "ipv4", Priority: VPNCTLIngressRulePriority, From: "all", Table: VPNCTLGatewayRouteTable, FWMark: "0x04000000", FWMask: "0xff000000"},
 	VPNCTLSelectedRulePriority: {Family: "ipv4", Priority: VPNCTLSelectedRulePriority, From: "all", Table: VPNCTLSelectedRouteTable, FWMark: "0x02000000", FWMask: "0xff000000"},
+	VPNCTLStandardProbeRulePriority: {
+		Family: "ipv4", Priority: VPNCTLStandardProbeRulePriority, From: "all",
+		Table: VPNCTLStandardProbeRouteTable, FWMark: "0x05000000", FWMask: "0xff000000",
+	},
 }
 
 // OwnedNetworkScope lists the sysctls a lockout-risk operation intends to
@@ -559,7 +563,7 @@ func validateOwnedRoute(route Route) error {
 	if route.Family != "ipv4" && route.Family != "ipv6" {
 		return fmt.Errorf("unsupported family %q", route.Family)
 	}
-	if route.Table != VPNCTLSelectedRouteTable && route.Table != VPNCTLGatewayRouteTable {
+	if route.Table != VPNCTLSelectedRouteTable && route.Table != VPNCTLGatewayRouteTable && route.Table != VPNCTLStandardProbeRouteTable {
 		return fmt.Errorf("table %q is outside vpnctl ownership", route.Table)
 	}
 	bits := 32
@@ -663,6 +667,8 @@ func normalizeRouteTable(value string) string {
 		return VPNCTLSelectedRouteTable
 	case "20002":
 		return VPNCTLGatewayRouteTable
+	case "20003":
+		return VPNCTLStandardProbeRouteTable
 	default:
 		return value
 	}

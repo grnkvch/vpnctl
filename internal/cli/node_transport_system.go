@@ -31,8 +31,6 @@ type systemNodeTransportProvider struct {
 	runtime *systemNodeTransportRuntime
 }
 
-type systemUnavailableNodeTransportTester struct{}
-
 func buildSystemTransportRegistry(paths store.Paths, state *store.StateStore) (*transport.Registry, error) {
 	if state == nil {
 		return nil, fmt.Errorf("system node transport state store is required")
@@ -221,11 +219,22 @@ func (runtime *systemNodeTransportRuntime) compile(ctx context.Context, current 
 	if err != nil {
 		return nil, err
 	}
+	pathFactory, err := newSystemNodeTransportCandidatePathFactory(runtime.paths, runner)
+	if err != nil {
+		return nil, err
+	}
+	tester, err := enrollment.NewBoundedNodeTransportCandidateTester(
+		pathFactory,
+		systemNodeTransportControlProbe{paths: runtime.paths},
+	)
+	if err != nil {
+		return nil, err
+	}
 	return enrollment.NewNodeTransportRegistry(
 		current.Nodes[0].ActiveTransport,
 		transports[model.TransportStandard], configurations[model.TransportStandard],
 		transports[model.TransportRestricted], configurations[model.TransportRestricted],
-		replacer, readiness, systemUnavailableNodeTransportTester{},
+		replacer, readiness, tester,
 	)
 }
 
@@ -315,13 +324,4 @@ func nodeTransportPair(state model.State) (map[model.TransportKind]model.Transpo
 	return result, nil
 }
 
-func (systemUnavailableNodeTransportTester) Test(
-	context.Context,
-	model.TransportKind,
-	enrollment.NodeConfiguration,
-) (transport.TestResult, error) {
-	return transport.TestResult{}, ErrSystemTransportRuntimeUnavailable
-}
-
 var _ transport.Provider = (*systemNodeTransportProvider)(nil)
-var _ enrollment.NodeTransportCandidateTester = systemUnavailableNodeTransportTester{}

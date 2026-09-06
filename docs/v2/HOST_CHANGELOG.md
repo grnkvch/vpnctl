@@ -2,6 +2,48 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — Isolated production node transport probes
+
+### Implementation and reversible host boundary
+
+- Connect `transport test` and the pre-activation switch gate to one bounded
+  candidate tester. It proves authenticated mTLS control, pinned TLS 1.3 frps,
+  selected TCP DNS, and selected UDP DNS through the explicitly requested
+  transport. Probe targets are restricted to the authoritative gateway overlay
+  IPv4 and managed ports; failures never activate standby or retry direct.
+- Reserve mark `0x05000000`, RPDB priority `10030`, and table `20003` for
+  standard candidate sockets. The table contains the exact gateway-overlay
+  `/32` through `vpnctl-wg` plus an unreachable default. The existing routing
+  guard transaction, watchdog restore, preflight conflict detection, and
+  uninstall restoration own these additions together with the earlier vpnctl
+  tables and rules.
+- A restricted test temporarily creates owner-only
+  `/run/vpnctl/.transport-test-*` config/state, validates and starts the pinned
+  Mihomo as one loopback SOCKS process, then stops it and removes that exact
+  directory. Linux parent-death `SIGKILL` prevents an orphan after CLI death.
+  `/run/vpnctl/transport-test.lock` is an owner-only persistent runtime lock;
+  crash releases its kernel lock, and the next exclusive holder removes only
+  exact stale `.transport-test-*` children. Uninstall may remove the lock file
+  with the role runtime directory. Standard tests create only short-lived
+  marked sockets.
+- These host mutations occur only when the resulting command is run on an
+  initialized node. Development validation used temporary stores, private
+  runtime directories, disposable Go caches, in-memory host doubles, and
+  temporary loopback/Unix listeners. It did not alter this development host or
+  a real VM: no system route, rule, firewall, unit, process, endpoint, webhook,
+  or client was changed, so no development-host rollback is required.
+
+### Acceptance
+
+- Tests cover the exact gateway/port allowlist, mark/table/rule fail-closed
+  shape, single-path four-probe order and deadlines, mTLS control binding,
+  pinned TLS 1.3, TCP/UDP DNS response binding, cleanup errors, private files,
+  lock serialization, exact stale cleanup, and early child exit. Full Go,
+  changed-package race, vet, Linux cross-build, regression, strict OpenSpec,
+  formatting, and diff checks are recorded before commit. Deployed Clash Mi
+  and Telegram webhook acceptance remains the explicit task-16.11 service
+  gate.
+
 ## 2026-09-06 — Candidate-bound control RPC dial path
 
 ### Implementation and non-mutation boundary

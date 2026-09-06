@@ -10,20 +10,23 @@ import (
 )
 
 const (
-	VPNCTLSelectedRouteTable     = "20001"
-	VPNCTLGatewayRouteTable      = "20002"
-	VPNCTLMarkMask               = uint64(0xff000000)
-	VPNCTLPreservedMarkMask      = uint64(0x00ffffff)
-	VPNCTLDirectMark             = uint64(0x01000000)
-	VPNCTLSelectedMark           = uint64(0x02000000)
-	VPNCTLRecoveryMark           = uint64(0x03000000)
-	VPNCTLIngressResponseMark    = uint64(0x04000000)
-	VPNCTLRecoveryRulePriority   = 10000
-	VPNCTLIngressRulePriority    = 10010
-	VPNCTLSelectedRulePriority   = 10020
-	VPNCTLUnreachableRouteMetric = 42760
-	VPNCTLReadyTUNRouteMetric    = 10
-	VPNCTLNFTablesManglePriority = -150
+	VPNCTLSelectedRouteTable        = "20001"
+	VPNCTLGatewayRouteTable         = "20002"
+	VPNCTLStandardProbeRouteTable   = "20003"
+	VPNCTLMarkMask                  = uint64(0xff000000)
+	VPNCTLPreservedMarkMask         = uint64(0x00ffffff)
+	VPNCTLDirectMark                = uint64(0x01000000)
+	VPNCTLSelectedMark              = uint64(0x02000000)
+	VPNCTLRecoveryMark              = uint64(0x03000000)
+	VPNCTLIngressResponseMark       = uint64(0x04000000)
+	VPNCTLStandardProbeMark         = uint64(0x05000000)
+	VPNCTLRecoveryRulePriority      = 10000
+	VPNCTLIngressRulePriority       = 10010
+	VPNCTLSelectedRulePriority      = 10020
+	VPNCTLStandardProbeRulePriority = 10030
+	VPNCTLUnreachableRouteMetric    = 42760
+	VPNCTLReadyTUNRouteMetric       = 10
+	VPNCTLNFTablesManglePriority    = -150
 )
 
 var (
@@ -251,7 +254,7 @@ func isTunnelInterface(networkInterface NetworkInterface) bool {
 func analyzeRoutes(routes []Route, externalInterface string, tunnelInterfaces map[string]struct{}, add func(GatewayConflict)) {
 	for _, route := range routes {
 		reasons := make([]string, 0)
-		if route.Table == VPNCTLSelectedRouteTable || route.Table == VPNCTLGatewayRouteTable {
+		if route.Table == VPNCTLSelectedRouteTable || route.Table == VPNCTLGatewayRouteTable || route.Table == VPNCTLStandardProbeRouteTable {
 			reasons = append(reasons, "uses reserved vpnctl route table "+route.Table)
 		}
 		if route.Destination == "default" {
@@ -277,13 +280,16 @@ func analyzeRoutes(routes []Route, externalInterface string, tunnelInterfaces ma
 }
 
 func analyzePolicyRules(rules []PolicyRule, add func(GatewayConflict), preserve func(string)) {
-	reservedPriorities := map[int]struct{}{10000: {}, 10010: {}, 10020: {}}
+	reservedPriorities := map[int]struct{}{
+		VPNCTLRecoveryRulePriority: {}, VPNCTLIngressRulePriority: {},
+		VPNCTLSelectedRulePriority: {}, VPNCTLStandardProbeRulePriority: {},
+	}
 	for _, rule := range rules {
 		reasons := make([]string, 0)
 		if _, reserved := reservedPriorities[rule.Priority]; reserved {
 			reasons = append(reasons, fmt.Sprintf("uses reserved priority %d", rule.Priority))
 		}
-		if rule.Table == VPNCTLSelectedRouteTable || rule.Table == VPNCTLGatewayRouteTable {
+		if rule.Table == VPNCTLSelectedRouteTable || rule.Table == VPNCTLGatewayRouteTable || rule.Table == VPNCTLStandardProbeRouteTable {
 			reasons = append(reasons, "uses reserved route table "+rule.Table)
 		}
 		if rule.FWMark != "" {

@@ -168,6 +168,91 @@ type RestrictedNetworkReadinessProber struct {
 	timeout      time.Duration
 }
 
+// RestrictedSOCKSPath exposes the transient readiness process as an exact
+// candidate-bound TCP/UoT dial surface. It accepts only an IPv4 loopback proxy
+// and canonical IPv4 targets and has no direct fallback path.
+type RestrictedSOCKSPath struct {
+	proxy netip.AddrPort
+}
+
+func NewRestrictedSOCKSPath(proxy string) (*RestrictedSOCKSPath, error) {
+	endpoint, err := restrictedLoopbackEndpoint("proxy", proxy)
+	if err != nil {
+		return nil, err
+	}
+	return &RestrictedSOCKSPath{proxy: endpoint}, nil
+}
+
+func (path *RestrictedSOCKSPath) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || path == nil || !path.proxy.IsValid() {
+		return nil, fmt.Errorf("restricted SOCKS path is incomplete")
+	}
+	if network != "tcp" && network != "tcp4" {
+		return nil, fmt.Errorf("restricted SOCKS path supports only TCP dialing")
+	}
+	target, err := restrictedIPv4Target("TCP target", address)
+	if err != nil {
+		return nil, err
+	}
+	connection, _, err := restrictedSOCKSRequest(ctx, path.proxy, restrictedSOCKSConnect, target)
+	return connection, err
+}
+
+func (path *RestrictedSOCKSPath) ExchangeUDP(ctx context.Context, address string, payload []byte) ([]byte, error) {
+	if ctx == nil || path == nil || !path.proxy.IsValid() {
+		return nil, fmt.Errorf("restricted SOCKS path is incomplete")
+	}
+	if len(payload) == 0 || len(payload) > maximumRestrictedProbeBytes {
+		return nil, fmt.Errorf("restricted SOCKS UDP payload must contain 1..%d bytes", maximumRestrictedProbeBytes)
+	}
+	target, err := restrictedIPv4Target("UDP target", address)
+	if err != nil {
+		return nil, err
+	}
+	control, relay, err := restrictedSOCKSRequest(ctx, path.proxy, restrictedSOCKSUDPAssociate, netip.AddrPortFrom(netip.IPv4Unspecified(), 0))
+	if err != nil {
+		return nil, err
+	}
+	defer control.Close()
+	if relay.Addr().IsUnspecified() {
+		relay = netip.AddrPortFrom(path.proxy.Addr(), relay.Port())
+	}
+	if !relay.Addr().Is4() || !relay.Addr().IsLoopback() || relay.Port() == 0 {
+		return nil, fmt.Errorf("restricted SOCKS UDP relay is not loopback")
+	}
+	client, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(path.proxy.Addr(), 0)))
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := client.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+	}
+	packet := make([]byte, 0, 10+len(payload))
+	packet = append(packet, 0, 0, 0, restrictedSOCKSIPv4)
+	packet = append(packet, target.Addr().AsSlice()...)
+	packet = binary.BigEndian.AppendUint16(packet, target.Port())
+	packet = append(packet, payload...)
+	if _, err := client.WriteToUDPAddrPort(packet, relay); err != nil {
+		return nil, err
+	}
+	response := make([]byte, 10+maximumRestrictedProbeBytes)
+	count, _, err := client.ReadFromUDPAddrPort(response)
+	if err != nil {
+		return nil, err
+	}
+	responseTarget, responsePayload, err := restrictedSOCKSUDPResponse(response[:count])
+	if err != nil {
+		return nil, err
+	}
+	if responseTarget != target {
+		return nil, fmt.Errorf("restricted SOCKS UDP response target mismatch")
+	}
+	return append([]byte(nil), responsePayload...), nil
+}
+
 var _ RestrictedReadinessProber = (*RestrictedNetworkReadinessProber)(nil)
 
 func NewRestrictedNetworkReadinessProber(proxy, target string, tcpChallenge, udpChallenge []byte, timeout time.Duration) (*RestrictedNetworkReadinessProber, error) {
@@ -304,7 +389,8 @@ func validateRestrictedProbeChallenge(name string, challenge []byte) error {
 }
 
 func restrictedSOCKSTCPRoundTrip(ctx context.Context, proxy, target netip.AddrPort, challenge []byte) error {
-	connection, _, err := restrictedSOCKSRequest(ctx, proxy, restrictedSOCKSConnect, target)
+	path := &RestrictedSOCKSPath{proxy: proxy}
+	connection, err := path.DialContext(ctx, "tcp4", target.String())
 	if err != nil {
 		return err
 	}
@@ -323,41 +409,8 @@ func restrictedSOCKSTCPRoundTrip(ctx context.Context, proxy, target netip.AddrPo
 }
 
 func restrictedSOCKSUDPRoundTrip(ctx context.Context, proxy, target netip.AddrPort, challenge []byte) error {
-	control, relay, err := restrictedSOCKSRequest(ctx, proxy, restrictedSOCKSUDPAssociate, netip.AddrPortFrom(netip.IPv4Unspecified(), 0))
-	if err != nil {
-		return err
-	}
-	defer control.Close()
-	if relay.Addr().IsUnspecified() {
-		relay = netip.AddrPortFrom(proxy.Addr(), relay.Port())
-	}
-	if !relay.Addr().Is4() || !relay.Addr().IsLoopback() || relay.Port() == 0 {
-		return fmt.Errorf("restricted SOCKS UDP relay is not loopback")
-	}
-	client, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(proxy.Addr(), 0)))
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := client.SetDeadline(deadline); err != nil {
-			return err
-		}
-	}
-	packet := make([]byte, 0, 10+len(challenge))
-	packet = append(packet, 0, 0, 0, restrictedSOCKSIPv4)
-	packet = append(packet, target.Addr().AsSlice()...)
-	packet = binary.BigEndian.AppendUint16(packet, target.Port())
-	packet = append(packet, challenge...)
-	if _, err := client.WriteToUDPAddrPort(packet, relay); err != nil {
-		return err
-	}
-	response := make([]byte, 10+maximumRestrictedProbeBytes)
-	count, _, err := client.ReadFromUDPAddrPort(response)
-	if err != nil {
-		return err
-	}
-	payload, err := restrictedSOCKSUDPPayload(response[:count])
+	path := &RestrictedSOCKSPath{proxy: proxy}
+	payload, err := path.ExchangeUDP(ctx, target.String(), challenge)
 	if err != nil {
 		return err
 	}
@@ -439,11 +492,23 @@ func restrictedReadSOCKSReply(reader io.Reader) (netip.AddrPort, error) {
 	return netip.AddrPortFrom(address, binary.BigEndian.Uint16(encodedPort)), nil
 }
 
-func restrictedSOCKSUDPPayload(packet []byte) ([]byte, error) {
+func restrictedSOCKSUDPResponse(packet []byte) (netip.AddrPort, []byte, error) {
 	if len(packet) < 10 || packet[0] != 0 || packet[1] != 0 || packet[2] != 0 || packet[3] != restrictedSOCKSIPv4 {
-		return nil, fmt.Errorf("restricted SOCKS UDP response is invalid")
+		return netip.AddrPort{}, nil, fmt.Errorf("restricted SOCKS UDP response is invalid")
 	}
-	return packet[10:], nil
+	target := netip.AddrPortFrom(netip.AddrFrom4([4]byte(packet[4:8])), binary.BigEndian.Uint16(packet[8:10]))
+	if target.Port() == 0 {
+		return netip.AddrPort{}, nil, fmt.Errorf("restricted SOCKS UDP response target is invalid")
+	}
+	return target, packet[10:], nil
+}
+
+func restrictedIPv4Target(name, value string) (netip.AddrPort, error) {
+	endpoint, err := netip.ParseAddrPort(value)
+	if err != nil || endpoint.String() != value || !endpoint.Addr().Is4() || endpoint.Addr().IsUnspecified() || endpoint.Port() == 0 {
+		return netip.AddrPort{}, fmt.Errorf("restricted SOCKS %s must be a canonical IPv4 endpoint", name)
+	}
+	return endpoint, nil
 }
 
 func restrictedWriteAll(writer io.Writer, content []byte) error {

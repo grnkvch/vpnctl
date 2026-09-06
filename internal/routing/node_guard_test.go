@@ -32,6 +32,7 @@ func TestRenderNodeRoutingGuardUsesAcceptedMarksAndFailClosedChains(t *testing.T
 		"ct mark & 0xff000000 == 0x02000000 meta mark set ct mark",
 		"ct mark & 0xff000000 == 0x03000000 meta mark set ct mark",
 		"ct mark & 0xff000000 == 0x04000000 meta mark set ct mark",
+		"ct mark & 0xff000000 == 0x05000000 meta mark set ct mark",
 		"ip daddr 203.0.113.44 tcp dport 443 meta mark set (meta mark & 0x00ffffff) | 0x03000000 ct mark set meta mark return",
 		"ip daddr 203.0.113.44 tcp dport 8443 meta mark set (meta mark & 0x00ffffff) | 0x03000000 ct mark set meta mark return",
 		"ip daddr 203.0.113.44 udp dport 51820 meta mark set (meta mark & 0x00ffffff) | 0x03000000 ct mark set meta mark return",
@@ -169,6 +170,10 @@ func TestNodeRoutingGuardBindsRecoveryAndInternalGatewayToStandardOrRestricted(t
 			if !strings.Contains(nft, gatewayRule) {
 				t.Fatalf("active guard lacks internal-gateway selection:\n%s", nft)
 			}
+			standardProbeRule := "meta mark & 0xff000000 == 0x05000000 ct mark set meta mark return"
+			if !strings.Contains(nft, standardProbeRule) {
+				t.Fatalf("active guard lacks privileged standard-probe bypass:\n%s", nft)
+			}
 			runner := newNodeRoutingGuardRunner()
 			manager, _ := NewNodeRoutingGuardManager(runner)
 			if err := manager.Install(context.Background(), candidate); err != nil {
@@ -178,6 +183,15 @@ func TestNodeRoutingGuardBindsRecoveryAndInternalGatewayToStandardOrRestricted(t
 			for _, required := range test.wantRoutes {
 				if !strings.Contains(calls, required) {
 					t.Errorf("%s guard lacks %q:\n%s", test.name, required, calls)
+				}
+			}
+			for _, required := range []string{
+				"ip -4 route replace unreachable default metric 42760 table 20003 proto static",
+				"ip -4 route replace 10.67.0.1/32 dev vpnctl-wg table 20003 proto static",
+				"ip -4 rule add priority 10030 fwmark 0x05000000/0xff000000 table 20003",
+			} {
+				if !strings.Contains(calls, required) {
+					t.Errorf("%s guard lacks standard probe boundary %q:\n%s", test.name, required, calls)
 				}
 			}
 			if strings.Contains(calls, test.forbidden) {
@@ -474,13 +488,16 @@ func TestNodeRoutingGuardConstantsMatchAcceptedManifest(t *testing.T) {
 				SelectedMark           string `json:"selected_mark"`
 				RecoveryMark           string `json:"recovery_mark"`
 				IngressResponseMark    string `json:"ingress_response_mark"`
+				StandardProbeMark      string `json:"standard_probe_mark"`
 				NFTOutputPriority      int    `json:"nft_output_priority"`
 				NFTPreroutingPriority  int    `json:"nft_prerouting_priority"`
 				RecoveryRulePriority   int    `json:"recovery_rule_priority"`
 				IngressRulePriority    int    `json:"ingress_rule_priority"`
 				SelectedRulePriority   int    `json:"selected_rule_priority"`
+				StandardProbePriority  int    `json:"standard_probe_rule_priority"`
 				SelectedTable          int    `json:"selected_table"`
 				GatewayTable           int    `json:"gateway_table"`
+				StandardProbeTable     int    `json:"standard_probe_table"`
 				UnreachableRouteMetric int    `json:"unreachable_metric"`
 				ReadyTUNRouteMetric    int    `json:"tun_metric"`
 			} `json:"routing"`
@@ -491,13 +508,14 @@ func TestNodeRoutingGuardConstantsMatchAcceptedManifest(t *testing.T) {
 	}
 	routing := manifest.Limits.Routing
 	want := []any{
-		"0xff000000", "0x00ffffff", "0x01000000", "0x02000000", "0x03000000", "0x04000000",
-		-150, -150, 10000, 10010, 10020, 20001, 20002, 42760, 10,
+		"0xff000000", "0x00ffffff", "0x01000000", "0x02000000", "0x03000000", "0x04000000", "0x05000000",
+		-150, -150, 10000, 10010, 10020, 10030, 20001, 20002, 20003, 42760, 10,
 	}
 	got := []any{
-		routing.MarkMask, routing.PreservedMarkMask, routing.DirectMark, routing.SelectedMark, routing.RecoveryMark, routing.IngressResponseMark,
+		routing.MarkMask, routing.PreservedMarkMask, routing.DirectMark, routing.SelectedMark, routing.RecoveryMark, routing.IngressResponseMark, routing.StandardProbeMark,
 		routing.NFTOutputPriority, routing.NFTPreroutingPriority, routing.RecoveryRulePriority, routing.IngressRulePriority,
-		routing.SelectedRulePriority, routing.SelectedTable, routing.GatewayTable, routing.UnreachableRouteMetric, routing.ReadyTUNRouteMetric,
+		routing.SelectedRulePriority, routing.StandardProbePriority, routing.SelectedTable, routing.GatewayTable, routing.StandardProbeTable,
+		routing.UnreachableRouteMetric, routing.ReadyTUNRouteMetric,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("accepted routing manifest values = %v, want %v", got, want)
@@ -505,9 +523,11 @@ func TestNodeRoutingGuardConstantsMatchAcceptedManifest(t *testing.T) {
 	production := []any{
 		nftMark(linuxplatform.VPNCTLMarkMask), nftMark(linuxplatform.VPNCTLPreservedMarkMask), nftMark(linuxplatform.VPNCTLDirectMark),
 		nftMark(linuxplatform.VPNCTLSelectedMark), nftMark(linuxplatform.VPNCTLRecoveryMark), nftMark(linuxplatform.VPNCTLIngressResponseMark),
+		nftMark(linuxplatform.VPNCTLStandardProbeMark),
 		linuxplatform.VPNCTLNFTablesManglePriority, linuxplatform.VPNCTLNFTablesManglePriority,
 		linuxplatform.VPNCTLRecoveryRulePriority, linuxplatform.VPNCTLIngressRulePriority, linuxplatform.VPNCTLSelectedRulePriority,
-		mustAtoi(t, linuxplatform.VPNCTLSelectedRouteTable), mustAtoi(t, linuxplatform.VPNCTLGatewayRouteTable),
+		linuxplatform.VPNCTLStandardProbeRulePriority, mustAtoi(t, linuxplatform.VPNCTLSelectedRouteTable),
+		mustAtoi(t, linuxplatform.VPNCTLGatewayRouteTable), mustAtoi(t, linuxplatform.VPNCTLStandardProbeRouteTable),
 		linuxplatform.VPNCTLUnreachableRouteMetric, linuxplatform.VPNCTLReadyTUNRouteMetric,
 	}
 	if !reflect.DeepEqual(production, want) {
