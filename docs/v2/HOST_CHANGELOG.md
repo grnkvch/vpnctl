@@ -2,6 +2,40 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-06 — v2.0 checksum-only release delivery
+
+### Implementation and trust boundary
+
+- Replaced the not-yet-released Ed25519 release-envelope design with three
+  release assets: `vpnctl-linux-amd64`, the self-contained
+  `vpnctl-v2-linux-amd64.bundle`, and canonical `release-checksums.txt`.
+  Builder, curl/local installer, init, update/rollback snapshots, release gate,
+  uninstall inspection, and the standalone v1 migration no longer consume a
+  release signing key or `.sig` file. Exact sizes/SHA-256, canonical manifest,
+  target platform, bundle framing, internal artifacts, and exact EOF remain
+  fail-closed checks before mutation.
+- The checksum-only limitation is explicit: replacing both an asset and its
+  checksum metadata is not detected. v2.0 trusts the HTTPS publisher channel or
+  trusted SSH/`scp`; authenticated release publishing and key lifecycle are in
+  the backlog. Enrollment/control/backup/ingress/tunnel cryptography and the
+  independently signed handshake-host document were not changed.
+- Release/update snapshot schema changes are safe before v2.0 because no
+  production v2 installation or supported v2 snapshot exists. The previously
+  prepared task-16.11 evidence for commit
+  `51c03a6f14bceab692bfceb20b62d67e64f84789` is stale after this source change
+  and must not be finalized or reused.
+
+### Development-host mutation and rollback
+
+- Changed repository sources, tests, schemas, OpenSpec artifacts, and
+  documentation only. Go compilation/tests use the disposable
+  `/tmp/vpnctl-go-cache`; no gateway/node, system service, firewall, route,
+  listener, credential, GitHub release, tag, webhook, or Clash Mi state was
+  changed.
+- Rollback is repository-local: revert the eventual implementation commit. The
+  removed signed-envelope schema and code can be recovered from Git history;
+  deleting `/tmp/vpnctl-go-cache` is optional and has no product effect.
+
 ## 2026-09-06 — Unified deployed-service release gate
 
 ### Implementation and non-mutation boundary

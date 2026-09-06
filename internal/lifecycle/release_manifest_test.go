@@ -2,12 +2,8 @@ package lifecycle
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
@@ -17,18 +13,14 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 )
 
-func TestSignedReleaseManifestBindsCompleteReleaseContract(t *testing.T) {
+func TestCanonicalReleaseManifestBindsCompleteReleaseContract(t *testing.T) {
 	t.Parallel()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, artifacts := releaseManifestFixture()
-	signed, err := EncodeSignedReleaseManifest(manifest, privateKey)
+	encoded, err := EncodeReleaseManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, err := DecodeAndVerifyReleaseManifest(signed, publicKey)
+	verified, err := DecodeReleaseManifest(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +31,7 @@ func TestSignedReleaseManifestBindsCompleteReleaseContract(t *testing.T) {
 	if component.VPNCTLVersion != "v2.0.0" || !reflect.DeepEqual(component.ControlProtocols, []string{"2.3", "1.9"}) ||
 		component.StateSchemaMinimum != 1 || component.StateSchemaMaximum != 2 || component.TargetOS != "ubuntu 24.04" ||
 		component.TargetArchitecture != "amd64" || component.HandshakeHostListVersion != 7 || !component.MigrationReversible {
-		t.Fatalf("signed compatibility contract = %+v", component)
+		t.Fatalf("compatibility contract = %+v", component)
 	}
 	if len(verified.Artifacts) != 3 || len(verified.APTPackages) != 3 {
 		t.Fatalf("delivery contract artifacts=%d apt=%d", len(verified.Artifacts), len(verified.APTPackages))
@@ -57,9 +49,9 @@ func TestSignedReleaseManifestBindsCompleteReleaseContract(t *testing.T) {
 
 	verified.Artifacts[0].Roles[0] = model.RoleNode
 	verified.ComponentManifest.Components[0].Capabilities[0] = "mutated"
-	again, err := DecodeAndVerifyReleaseManifest(signed, publicKey)
+	again, err := DecodeReleaseManifest(encoded)
 	if err != nil || again.Artifacts[0].Roles[0] != model.RoleGateway || again.ComponentManifest.Components[0].Capabilities[0] == "mutated" {
-		t.Fatalf("caller mutation changed verified envelope: %+v, %v", again, err)
+		t.Fatalf("caller mutation changed decoded manifest: %+v, %v", again, err)
 	}
 }
 
@@ -91,88 +83,26 @@ func TestV2ReleaseManifestUsesRuntimeProviderPinsAndAptRanges(t *testing.T) {
 	}
 }
 
-func TestSignedReleaseManifestRejectsSignatureAndPayloadTampering(t *testing.T) {
+func TestReleaseManifestRejectsAmbiguousOrNonCanonicalJSON(t *testing.T) {
 	t.Parallel()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, _ := releaseManifestFixture()
-	signed, err := EncodeSignedReleaseManifest(manifest, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var envelope SignedReleaseManifest
-	if err := json.Unmarshal(signed, &envelope); err != nil {
-		t.Fatal(err)
-	}
-
-	tamperedPayload := envelope
-	tamperedPayload.Payload = mutateReleaseBase64(tamperedPayload.Payload)
-	tamperedSignature := envelope
-	tamperedSignature.Signature = mutateReleaseBase64(tamperedSignature.Signature)
-	tamperedKeyID := envelope
-	tamperedKeyID.KeyID = "sha256:" + strings.Repeat("0", 64)
-	tamperedAlgorithm := envelope
-	tamperedAlgorithm.Algorithm = "none"
-	for name, candidate := range map[string]SignedReleaseManifest{
-		"payload": tamperedPayload, "signature": tamperedSignature, "key-id": tamperedKeyID, "algorithm": tamperedAlgorithm,
-	} {
-		name, candidate := name, candidate
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			encoded, _ := json.Marshal(candidate)
-			if _, err := DecodeAndVerifyReleaseManifest(encoded, publicKey); !errors.Is(err, ErrInvalidReleaseManifest) {
-				t.Fatalf("tampered envelope error = %v", err)
-			}
-		})
-	}
-
-	wrongPublic, _, _ := ed25519.GenerateKey(rand.Reader)
-	if _, err := DecodeAndVerifyReleaseManifest(signed, wrongPublic); !errors.Is(err, ErrInvalidReleaseManifest) {
-		t.Fatalf("wrong release key error = %v", err)
-	}
-	if _, err := DecodeAndVerifyReleaseManifest(signed, ed25519.PublicKey{1}); !errors.Is(err, ErrInvalidReleaseManifest) {
-		t.Fatalf("invalid release key error = %v", err)
-	}
-	if _, err := EncodeSignedReleaseManifest(manifest, ed25519.PrivateKey{1}); !errors.Is(err, ErrInvalidReleaseManifest) {
-		t.Fatalf("invalid signing key error = %v", err)
-	}
-}
-
-func TestSignedReleaseManifestRejectsAmbiguousOrNonCanonicalJSON(t *testing.T) {
-	t.Parallel()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	manifest, _ := releaseManifestFixture()
-	signed, _ := EncodeSignedReleaseManifest(manifest, privateKey)
-
-	unknownEnvelope := append(signed[:len(signed)-1], []byte(`,"unknown":true}`)...)
-	duplicateEnvelope := append([]byte(`{"schema_version":1,`), signed[1:]...)
+	encoded, _ := EncodeReleaseManifest(manifest)
+	unknownField := append(encoded[:len(encoded)-1], []byte(`,"unknown":true}`)...)
+	duplicateField := append([]byte(`{"schema_version":1,`), encoded[1:]...)
 	for name, candidate := range map[string][]byte{
-		"unknown-envelope-field":   unknownEnvelope,
-		"duplicate-envelope-field": duplicateEnvelope,
-		"multiple-envelopes":       append(append([]byte(nil), signed...), signed...),
+		"unknown-field":   unknownField,
+		"duplicate-field": duplicateField,
+		"multiple-values": append(append([]byte(nil), encoded...), encoded...),
+		"leading-space":   append([]byte(" "), encoded...),
 	} {
-		if _, err := DecodeAndVerifyReleaseManifest(candidate, publicKey); !errors.Is(err, ErrInvalidReleaseManifest) {
+		if _, err := DecodeReleaseManifest(candidate); !errors.Is(err, ErrInvalidReleaseManifest) {
 			t.Fatalf("%s error = %v", name, err)
 		}
 	}
 
-	payload, _ := json.Marshal(manifest)
-	unknownPayload := append(payload[:len(payload)-1], []byte(`,"unknown":true}`)...)
-	duplicatePayload := append([]byte(`{"schema_version":1,`), payload[1:]...)
-	nonCanonicalPayload := append([]byte(" "), payload...)
-	for name, candidate := range map[string][]byte{
-		"unknown-payload-field":   unknownPayload,
-		"duplicate-payload-field": duplicatePayload,
-		"non-canonical-payload":   nonCanonicalPayload,
-	} {
-		encoded := signRawReleasePayload(t, candidate, privateKey)
-		if _, err := DecodeAndVerifyReleaseManifest(encoded, publicKey); !errors.Is(err, ErrInvalidReleaseManifest) {
-			t.Fatalf("%s error = %v", name, err)
-		}
-	}
-
-	oversized := bytes.Repeat([]byte{'x'}, MaximumSignedReleaseManifestBytes+1)
-	if _, err := DecodeAndVerifyReleaseManifest(oversized, publicKey); !errors.Is(err, ErrInvalidReleaseManifest) {
-		t.Fatalf("oversized envelope error = %v", err)
+	oversized := bytes.Repeat([]byte{'x'}, MaximumReleaseManifestBytes+1)
+	if _, err := DecodeReleaseManifest(oversized); !errors.Is(err, ErrInvalidReleaseManifest) {
+		t.Fatalf("oversized manifest error = %v", err)
 	}
 }
 
@@ -228,16 +158,12 @@ func TestReleaseManifestRejectsIncompleteOrAmbiguousDeliveryMetadata(t *testing.
 
 	irreversible := cloneReleaseManifest(base)
 	irreversible.ComponentManifest.MigrationReversible = false
-	_, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	signed, err := EncodeSignedReleaseManifest(irreversible, privateKey)
+	encoded, err := EncodeReleaseManifest(irreversible)
 	if err != nil {
 		t.Fatalf("explicit irreversible migration rejected: %v", err)
 	}
-	var envelope SignedReleaseManifest
-	_ = json.Unmarshal(signed, &envelope)
-	payload, _ := base64.RawURLEncoding.DecodeString(envelope.Payload)
-	if !bytes.Contains(payload, []byte(`"migration_reversible":false`)) {
-		t.Fatalf("migration reversibility is absent from signed payload: %s", payload)
+	if !bytes.Contains(encoded, []byte(`"migration_reversible":false`)) {
+		t.Fatalf("migration reversibility is absent from manifest: %s", encoded)
 	}
 }
 
@@ -311,29 +237,6 @@ func releaseManifestFixture() (ReleaseManifest, map[string][]byte) {
 func releaseDigest(value []byte) string {
 	digest := sha256.Sum256(value)
 	return hex.EncodeToString(digest[:])
-}
-
-func mutateReleaseBase64(value string) string {
-	replacement := byte('A')
-	if value[len(value)-1] == replacement {
-		replacement = 'B'
-	}
-	return value[:len(value)-1] + string(replacement)
-}
-
-func signRawReleasePayload(t *testing.T, payload []byte, privateKey ed25519.PrivateKey) []byte {
-	t.Helper()
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-	envelope := SignedReleaseManifest{
-		SchemaVersion: ReleaseSignatureEnvelopeSchemaVersion, Algorithm: ReleaseSignatureAlgorithm,
-		KeyID: releaseManifestKeyID(publicKey), Payload: base64.RawURLEncoding.EncodeToString(payload),
-		Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, releaseManifestSignedMessage(payload))),
-	}
-	encoded, err := json.Marshal(envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
 }
 
 type errorReleaseReader struct{}

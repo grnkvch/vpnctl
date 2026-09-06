@@ -43,7 +43,6 @@ type PreparedReleaseBundleUpdate struct {
 
 	currentBundleBackup    string
 	currentChecksumsBackup string
-	currentSignatureBackup string
 }
 
 func (installer *ReleaseBundleInstaller) PrepareUpdate(ctx context.Context, currentBundlePath string, targetRelease *StagedUpdateRelease, role model.Role) (*PreparedReleaseBundleUpdate, error) {
@@ -144,7 +143,6 @@ func (prepared *PreparedReleaseBundleUpdate) CurrentSnapshotFiles() (UpdateSnaps
 	}
 	return UpdateSnapshotReleaseFiles{
 		BundlePath: prepared.currentBundleBackup, ChecksumsPath: prepared.currentChecksumsBackup,
-		SignaturePath: prepared.currentSignatureBackup,
 	}, nil
 }
 
@@ -251,7 +249,7 @@ func (prepared *PreparedReleaseBundleUpdate) PublishMetadata(ctx context.Context
 		return err
 	}
 	targets := prepared.installedMetadataPaths()
-	sources := []string{prepared.targetRelease.BundlePath, prepared.targetRelease.ChecksumsPath, prepared.targetRelease.SignaturePath}
+	sources := []string{prepared.targetRelease.BundlePath, prepared.targetRelease.ChecksumsPath}
 	for index := range targets {
 		if err := replaceReleaseFile(targets[index], sources[index], 0o600); err != nil {
 			for rollbackIndex := index - 1; rollbackIndex >= 0; rollbackIndex-- {
@@ -339,14 +337,13 @@ func (prepared *PreparedReleaseBundleUpdate) backupInstalledMetadata(currentBund
 	backups := []string{
 		filepath.Join(prepared.current.root, "installed.bundle"),
 		filepath.Join(prepared.current.root, "installed.checksums"),
-		filepath.Join(prepared.current.root, "installed.signature"),
 	}
 	for index, source := range paths {
 		if err := copyRegularReleaseFile(source, backups[index], 0o600); err != nil {
 			return fmt.Errorf("%w: installed release metadata %s: %v", ErrReleaseUpdateConflict, filepath.Base(source), err)
 		}
 	}
-	prepared.currentBundleBackup, prepared.currentChecksumsBackup, prepared.currentSignatureBackup = backups[0], backups[1], backups[2]
+	prepared.currentBundleBackup, prepared.currentChecksumsBackup = backups[0], backups[1]
 	return nil
 }
 
@@ -354,12 +351,11 @@ func (prepared *PreparedReleaseBundleUpdate) installedMetadataPaths() []string {
 	return []string{
 		filepath.Join(prepared.installer.root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/")),
 		filepath.Join(prepared.installer.root, strings.TrimPrefix(ReleaseInstalledChecksumsPath, "/")),
-		filepath.Join(prepared.installer.root, strings.TrimPrefix(ReleaseInstalledSignaturePath, "/")),
 	}
 }
 
 func (prepared *PreparedReleaseBundleUpdate) metadataBackups() []string {
-	return []string{prepared.currentBundleBackup, prepared.currentChecksumsBackup, prepared.currentSignatureBackup}
+	return []string{prepared.currentBundleBackup, prepared.currentChecksumsBackup}
 }
 
 func (prepared *PreparedReleaseBundleUpdate) usableLocked() error {
@@ -386,7 +382,7 @@ func releaseCandidatesByComponent(manifest ReleaseManifest, candidates []release
 		}
 	}
 	if len(components) != len(candidates) {
-		return nil, fmt.Errorf("%w: role candidate count differs from signed artifacts", ErrReleaseUpdateConflict)
+		return nil, fmt.Errorf("%w: role candidate count differs from manifest artifacts", ErrReleaseUpdateConflict)
 	}
 	result := make(map[string]releaseInstallCandidate, len(candidates))
 	for index, component := range components {
@@ -413,7 +409,7 @@ func preflightInstalledReleaseCandidates(current, target map[string]releaseInsta
 		}
 		equal, err := equalReleaseFiles(installed.target, installed.source)
 		if err != nil || !equal {
-			return fmt.Errorf("%w: installed component %s differs from the installed signed bundle", ErrReleaseUpdateConflict, name)
+			return fmt.Errorf("%w: installed component %s differs from the installed bundle", ErrReleaseUpdateConflict, name)
 		}
 	}
 	return nil

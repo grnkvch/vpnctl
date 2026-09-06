@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -21,13 +19,12 @@ import (
 
 func TestReleaseBundleBuildIsReproducibleAndRejectsArtifactDrift(t *testing.T) {
 	t.Parallel()
-	_, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	var first, second bytes.Buffer
-	if err := BuildReleaseBundle(&first, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(&first, manifest, artifacts); err != nil {
 		t.Fatal(err)
 	}
-	if err := BuildReleaseBundle(&second, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(&second, manifest, artifacts); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) || len(first.Bytes()) == 0 {
@@ -42,28 +39,24 @@ func TestReleaseBundleBuildIsReproducibleAndRejectsArtifactDrift(t *testing.T) {
 	tampered[manifest.Artifacts[0].Path] = append(tampered[manifest.Artifacts[0].Path], 'x')
 	for name, candidate := range map[string]map[string][]byte{"missing": missing, "extra": extra, "tampered": tampered} {
 		var output bytes.Buffer
-		if err := BuildReleaseBundle(&output, manifest, privateKey, candidate); !errors.Is(err, ErrInvalidReleaseBundle) || output.Len() != 0 {
+		if err := BuildReleaseBundle(&output, manifest, candidate); !errors.Is(err, ErrInvalidReleaseBundle) || output.Len() != 0 {
 			t.Fatalf("%s artifacts error=%v bytes=%d", name, err, output.Len())
 		}
 	}
-	if err := BuildReleaseBundle(io.Discard, manifest, ed25519.PrivateKey{1}, artifacts); !errors.Is(err, ErrInvalidReleaseBundle) {
-		t.Fatalf("invalid signing key error = %v", err)
-	}
-	if err := BuildReleaseBundle(nil, manifest, privateKey, artifacts); !errors.Is(err, ErrInvalidReleaseBundle) {
+	if err := BuildReleaseBundle(nil, manifest, artifacts); !errors.Is(err, ErrInvalidReleaseBundle) {
 		t.Fatalf("nil writer error = %v", err)
 	}
-	if err := BuildReleaseBundle(errorReleaseWriter{}, manifest, privateKey, artifacts); !errors.Is(err, ErrInvalidReleaseBundle) {
+	if err := BuildReleaseBundle(errorReleaseWriter{}, manifest, artifacts); !errors.Is(err, ErrInvalidReleaseBundle) {
 		t.Fatalf("failed writer error = %v", err)
 	}
 }
 
 func TestSCPTransferredBundleInstallsOnlySelectedRoleFromLocalBytes(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, installed := releaseBundleFixture(t)
 	transferRoot := t.TempDir()
 	localPath := filepath.Join(transferRoot, "vpnctl-v2-local.bundle")
 	remotePath := filepath.Join(transferRoot, "vpnctl-v2-scp.bundle")
-	writeReleaseBundleFile(t, localPath, manifest, privateKey, artifacts)
+	writeReleaseBundleFile(t, localPath, manifest, artifacts)
 	copyReleaseBundleLikeSCP(t, localPath, remotePath)
 	localBytes, _ := os.ReadFile(localPath)
 	remoteBytes, _ := os.ReadFile(remotePath)
@@ -78,7 +71,7 @@ func TestSCPTransferredBundleInstallsOnlySelectedRoleFromLocalBytes(t *testing.T
 		role := role
 		t.Run(string(role), func(t *testing.T) {
 			root := t.TempDir()
-			installer, err := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{
+			installer, err := NewReleaseBundleInstaller(root, ReleasePlatform{
 				OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64",
 			})
 			if err != nil {
@@ -118,10 +111,9 @@ func TestSCPTransferredBundleInstallsOnlySelectedRoleFromLocalBytes(t *testing.T
 
 func TestReleaseBundleVerificationFailsBeforeInstallMutation(t *testing.T) {
 	t.Parallel()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	var valid bytes.Buffer
-	if err := BuildReleaseBundle(&valid, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(&valid, manifest, artifacts); err != nil {
 		t.Fatal(err)
 	}
 	validBytes := valid.Bytes()
@@ -154,7 +146,7 @@ func TestReleaseBundleVerificationFailsBeforeInstallMutation(t *testing.T) {
 			if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+			installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 			if _, err := installer.Install(context.Background(), bundlePath, model.RoleGateway); !errors.Is(err, ErrInvalidReleaseBundle) {
 				t.Fatalf("Install() error = %v", err)
 			}
@@ -167,12 +159,12 @@ func TestReleaseBundleVerificationFailsBeforeInstallMutation(t *testing.T) {
 	if err := os.WriteFile(bundlePath, validBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "22.04", Architecture: "amd64"})
+	installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "22.04", Architecture: "amd64"})
 	if _, err := installer.Install(context.Background(), bundlePath, model.RoleGateway); !errors.Is(err, ErrUnsupportedReleasePlatform) {
 		t.Fatalf("unsupported platform error = %v", err)
 	}
 	assertReleaseInstallRootUnchanged(t, root)
-	installer, _ = NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	installer, _ = NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if _, err := installer.Install(context.Background(), bundlePath, model.Role("client")); !errors.Is(err, ErrInvalidReleaseBundle) {
 		t.Fatalf("unsupported role error = %v", err)
 	}
@@ -207,10 +199,9 @@ func TestReleaseBundleVerificationFailsBeforeInstallMutation(t *testing.T) {
 
 func TestReleaseBundleExistingConflictPreservesEveryTarget(t *testing.T) {
 	t.Parallel()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	bundlePath := filepath.Join(t.TempDir(), "candidate.bundle")
-	writeReleaseBundleFile(t, bundlePath, manifest, privateKey, artifacts)
+	writeReleaseBundleFile(t, bundlePath, manifest, artifacts)
 	root := t.TempDir()
 	vpnctlPath := filepath.Join(root, "usr/local/bin/vpnctl")
 	if err := os.MkdirAll(filepath.Dir(vpnctlPath), 0o755); err != nil {
@@ -220,7 +211,7 @@ func TestReleaseBundleExistingConflictPreservesEveryTarget(t *testing.T) {
 	if err := os.WriteFile(vpnctlPath, foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if _, err := installer.Install(context.Background(), bundlePath, model.RoleGateway); !errors.Is(err, ErrReleaseInstallConflict) {
 		t.Fatalf("conflicting install error = %v", err)
 	}
@@ -237,7 +228,6 @@ func TestReleaseBundleExistingConflictPreservesEveryTarget(t *testing.T) {
 
 func TestReleaseBundleRejectsInvalidProviderArchiveBeforeInstall(t *testing.T) {
 	t.Parallel()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	frpPath := manifest.Artifacts[1].Path
 	artifacts[frpPath] = testReleaseGzip(t, []byte("not-a-tar"))
@@ -245,9 +235,9 @@ func TestReleaseBundleRejectsInvalidProviderArchiveBeforeInstall(t *testing.T) {
 	manifest.Artifacts[1].SizeBytes = int64(len(artifacts[frpPath]))
 	manifest.ComponentManifest.Components[0].SHA256 = manifest.Artifacts[1].SHA256
 	bundlePath := filepath.Join(t.TempDir(), "candidate.bundle")
-	writeReleaseBundleFile(t, bundlePath, manifest, privateKey, artifacts)
+	writeReleaseBundleFile(t, bundlePath, manifest, artifacts)
 	root := t.TempDir()
-	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if _, err := installer.Install(context.Background(), bundlePath, model.RoleGateway); !errors.Is(err, ErrInvalidReleaseBundle) {
 		t.Fatalf("invalid provider archive error = %v", err)
 	}
@@ -333,13 +323,13 @@ func testReleaseGzip(t *testing.T, content []byte) []byte {
 	return compressed.Bytes()
 }
 
-func writeReleaseBundleFile(t *testing.T, path string, manifest ReleaseManifest, privateKey ed25519.PrivateKey, artifacts map[string][]byte) {
+func writeReleaseBundleFile(t *testing.T, path string, manifest ReleaseManifest, artifacts map[string][]byte) {
 	t.Helper()
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := BuildReleaseBundle(file, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(file, manifest, artifacts); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
 	}

@@ -213,7 +213,7 @@ func TestV2OperatorGuideCommandsExecuteAndStayInsideReleaseScope(t *testing.T) {
 		}
 	}
 	for _, requiredText := range []string{
-		"## Install the signed release",
+		"## Install the checksum-verified release",
 		"## Happy path A: gateway and personal devices",
 		"## Happy path B: private VPS and webhook ingress",
 		"## Presets, policy, and the classification boundary",

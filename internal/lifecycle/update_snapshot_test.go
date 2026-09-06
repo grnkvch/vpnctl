@@ -29,13 +29,13 @@ func TestUpdateSnapshotRejectsTamperedStateAndSymlinkedRelease(t *testing.T) {
 			},
 		},
 		{
-			name: "symlinked signature",
+			name: "symlinked checksums",
 			tamper: func(t *testing.T, root string) {
-				path := filepath.Join(root, updateSnapshotSignatureFile)
+				path := filepath.Join(root, updateSnapshotChecksumsFile)
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(filepath.Join(root, updateSnapshotChecksumsFile), path); err != nil {
+				if err := os.Symlink(filepath.Join(root, updateSnapshotBundleFile), path); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -71,7 +71,6 @@ func TestUpdateSnapshotPendingBlocksRollbackAndAbortPreservesPrevious(t *testing
 		Release: UpdateSnapshotReleaseFiles{
 			BundlePath:    standardReleaseBundleInRoot(fixture.root),
 			ChecksumsPath: filepath.Join(fixture.root, "usr/local/lib/vpnctl/release/checksums.txt"),
-			SignaturePath: filepath.Join(fixture.root, "usr/local/lib/vpnctl/release/checksums.txt.sig"),
 		},
 	})
 	if err != nil {

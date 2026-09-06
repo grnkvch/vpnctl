@@ -241,3 +241,29 @@ Requires:
 - checksums
 - version injection
 - release notes
+
+### Cryptographically Signed Release Delivery
+
+Replace the v2.0 checksum-only publisher trust boundary with authenticated
+release artifacts. The current SHA-256 metadata detects corruption only when
+the metadata is obtained through trusted HTTPS or SSH/`scp`; it cannot detect
+replacement of both an artifact and its checksum file.
+
+The future design must cover:
+
+- a canonical, domain-separated signature over release checksum metadata and
+  the self-contained bundle manifest;
+- offline verification after `scp` without contacting an external key server;
+- release signing-key generation, protected storage, rotation, revocation, and
+  recovery after suspected compromise;
+- an embedded or otherwise pinned trust-root update strategy;
+- CI/release tooling that publishes and verifies the exact signed asset set;
+- enforcement by curl installation, local init, update/rollback, and the
+  one-time migration workflow;
+- downgrade, replay, mirror, and simultaneous artifact-plus-metadata
+  substitution threat tests;
+- a migration path from existing checksum-only v2.0 installations.
+
+This backlog item applies only to release publishing. The existing enrollment,
+control PKI, backup authentication, public ingress TLS, tunnel credentials, and
+signed handshake-host document remain in scope and must not be weakened.

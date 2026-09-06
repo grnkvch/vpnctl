@@ -1,5 +1,5 @@
-// Package releasetrust owns the public trust anchor shared by release
-// manifests, the curl bootstrap, and the signed handshake-host list.
+// Package releasetrust owns the public trust anchor for the independently
+// signed handshake-host document carried inside the release bundle.
 package releasetrust
 
 import (

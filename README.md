@@ -27,23 +27,25 @@ it through an external service. The fixed public listeners are `443/TCP` for
 managed HTTPS, `8443/TCP` for the restricted transport, and `51820/UDP` for
 standard WireGuard. `443/UDP` and `8443/UDP` remain closed.
 
-## Signed installation
+## Checksum-verified installation
 
-After a v2 release is published, install its signed binary and retained bundle
+After a v2 release is published, install its binary and retained bundle
 on each server:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo sh
 ```
 
-Install an explicit signed version:
+Install an explicit version:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo VPNCTL_VERSION=v2.0.0 sh
 ```
 
-The bootstrap verifies Ed25519-signed version, size, and SHA-256 metadata before
-changing the standard installation. An offline `scp` workflow is documented in
+The bootstrap verifies canonical version, size, and SHA-256 metadata before
+changing the standard installation. v2.0 relies on trusted HTTPS or SSH/`scp`
+delivery and does not authenticate release publisher identity with a signature.
+The exact limitation and offline flow are documented in
 [`docs/v2/INSTALLATION.md`](docs/v2/INSTALLATION.md). Copying an unverified
 binary by itself is not a v2 installation.
 
@@ -96,8 +98,8 @@ Build the Linux binary from source for development only:
 GOOS=linux GOARCH=amd64 go build -o vpnctl ./cmd/vpnctl
 ```
 
-The signed release builder, provider pins, reproducibility contract, and
-maintainer-only signing-key flow are documented in
+The checksum-governed release builder, provider pins, reproducibility contract,
+and three-asset flow are documented in
 [`docs/v2/RELEASE_BUNDLE.md`](docs/v2/RELEASE_BUNDLE.md) and
 [`docs/v2/RELEASE_MANIFEST.md`](docs/v2/RELEASE_MANIFEST.md). The mandatory
 actual-service/Clash Mi/Telegram release procedure is

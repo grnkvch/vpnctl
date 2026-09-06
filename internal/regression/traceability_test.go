@@ -116,6 +116,7 @@ func readV2TraceabilityTable(t *testing.T) map[traceabilityKey]struct{} {
 		"integration":          {},
 		"e2e":                  {},
 		"spike":                {},
+		"documentation":        {},
 		"manual-compatibility": {},
 	}
 	result := make(map[traceabilityKey]struct{})

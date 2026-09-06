@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -96,7 +95,7 @@ type SystemV1MigrationDriver struct {
 	recoveryHook func(V1MigrationRecoveryPhase) error
 }
 
-func NewSystemV1MigrationDriver(root string, publicKey ed25519.PublicKey, platform ReleasePlatform, binaryPath string, watchdog V1MigrationNetworkWatchdog) (*SystemV1MigrationDriver, error) {
+func NewSystemV1MigrationDriver(root string, platform ReleasePlatform, binaryPath string, watchdog V1MigrationNetworkWatchdog) (*SystemV1MigrationDriver, error) {
 	if watchdog == nil {
 		return nil, fmt.Errorf("migration network watchdog is required")
 	}
@@ -107,7 +106,7 @@ func NewSystemV1MigrationDriver(root string, publicKey ed25519.PublicKey, platfo
 	if err != nil {
 		return nil, err
 	}
-	bundles, err := NewReleaseBundleInstaller(root, publicKey, platform)
+	bundles, err := NewReleaseBundleInstaller(root, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +138,10 @@ func (driver *SystemV1MigrationDriver) VerifyBundle(ctx context.Context, bundleP
 // InstallV1Migration is deliberately narrower than the normal release
 // installer: after a verified maintenance snapshot exists it may atomically
 // replace only the captured v1 vpnctl binary. New role components and the
-// retained signed bundle still use the ordinary no-overwrite ownership rules,
+// retained checksum-governed bundle still uses the ordinary no-overwrite ownership rules,
 // and the binary is replaced last.
 func (installer *ReleaseBundleInstaller) InstallV1Migration(ctx context.Context, bundlePath string, role model.Role, snapshotRoot, binaryPath string) (ReleaseBundleInstallResult, error) {
-	if ctx == nil || installer == nil || len(installer.publicKey) != ed25519.PublicKeySize {
+	if ctx == nil || installer == nil {
 		return ReleaseBundleInstallResult{}, fmt.Errorf("v1 migration release installer is incomplete")
 	}
 	if role != model.RoleGateway {
@@ -233,7 +232,7 @@ func (installer *ReleaseBundleInstaller) InstallV1Migration(ctx context.Context,
 	if !bundlePresent {
 		if err := copyRegularReleaseFile(bundlePath, retainedBundle, 0o600); err != nil {
 			rollbackNew()
-			return ReleaseBundleInstallResult{}, fmt.Errorf("retain signed migration bundle: %w", err)
+			return ReleaseBundleInstallResult{}, fmt.Errorf("retain verified migration bundle: %w", err)
 		}
 		changed = append(changed, retainedBundle)
 	}

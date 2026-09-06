@@ -3,8 +3,6 @@ package lifecycle
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,8 +13,7 @@ import (
 )
 
 func TestUpdateReleaseSourceContactsOnlyRequestedLatestOrExactReleaseAndStagesWholeBundle(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	assets := updateReleaseAssets(t, privateKey, "v2.1.0")
+	assets := updateReleaseAssets(t, "v2.1.0")
 	var mu sync.Mutex
 	requests := []string{}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -33,11 +30,11 @@ func TestUpdateReleaseSourceContactsOnlyRequestedLatestOrExactReleaseAndStagesWh
 		_, _ = writer.Write(content)
 	}))
 	defer server.Close()
-	inspector, err := NewReleaseBundleInstaller(t.TempDir(), publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	inspector, err := NewReleaseBundleInstaller(t.TempDir(), ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := NewUpdateReleaseSource(server.URL+"/releases", server.Client(), publicKey, inspector)
+	source, err := NewUpdateReleaseSource(server.URL+"/releases", server.Client(), inspector)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +50,7 @@ func TestUpdateReleaseSourceContactsOnlyRequestedLatestOrExactReleaseAndStagesWh
 	}
 	for name, path := range map[string]string{
 		ReleaseBinaryAsset: latest.BinaryPath, ReleaseBundleAsset: latest.BundlePath,
-		ReleaseChecksumsAsset: latest.ChecksumsPath, ReleaseChecksumsSignatureAsset: latest.SignaturePath,
+		ReleaseChecksumsAsset: latest.ChecksumsPath,
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(content, assets[name]) {
@@ -75,7 +72,7 @@ func TestUpdateReleaseSourceContactsOnlyRequestedLatestOrExactReleaseAndStagesWh
 	defer exact.Close()
 	want := []string{}
 	for _, prefix := range []string{"/releases/latest/download/", "/releases/download/v2.1.0/"} {
-		for _, name := range []string{ReleaseChecksumsAsset, ReleaseChecksumsSignatureAsset, ReleaseBinaryAsset, ReleaseBundleAsset} {
+		for _, name := range []string{ReleaseChecksumsAsset, ReleaseBinaryAsset, ReleaseBundleAsset} {
 			want = append(want, prefix+name)
 		}
 	}
@@ -91,7 +88,7 @@ func TestUpdateReleaseSourceRejectsCorruptionAndVersionMismatchWithoutRetainedSt
 		mutate    func(map[string][]byte)
 		requested string
 	}{
-		"checksum signature": {mutate: func(assets map[string][]byte) { assets[ReleaseChecksumsSignatureAsset][0] ^= 1 }},
+		"checksum metadata":  {mutate: func(assets map[string][]byte) { assets[ReleaseChecksumsAsset][0] ^= 1 }},
 		"binary":             {mutate: func(assets map[string][]byte) { assets[ReleaseBinaryAsset] = append(assets[ReleaseBinaryAsset], 'x') }},
 		"bundle":             {mutate: func(assets map[string][]byte) { assets[ReleaseBundleAsset][len(assets[ReleaseBundleAsset])-1] ^= 1 }},
 		"version mismatch":   {mutate: func(map[string][]byte) {}, requested: "v2.2.0"},
@@ -99,8 +96,7 @@ func TestUpdateReleaseSourceRejectsCorruptionAndVersionMismatchWithoutRetainedSt
 	} {
 		name, test := name, test
 		t.Run(name, func(t *testing.T) {
-			publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-			assets := updateReleaseAssets(t, privateKey, "v2.1.0")
+			assets := updateReleaseAssets(t, "v2.1.0")
 			test.mutate(assets)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				content, found := assets[filepath.Base(request.URL.Path)]
@@ -111,8 +107,8 @@ func TestUpdateReleaseSourceRejectsCorruptionAndVersionMismatchWithoutRetainedSt
 				_, _ = writer.Write(content)
 			}))
 			defer server.Close()
-			inspector, _ := NewReleaseBundleInstaller(t.TempDir(), publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
-			source, _ := NewUpdateReleaseSource(server.URL, server.Client(), publicKey, inspector)
+			inspector, _ := NewReleaseBundleInstaller(t.TempDir(), ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+			source, _ := NewUpdateReleaseSource(server.URL, server.Client(), inspector)
 			if staged, err := source.Stage(context.Background(), test.requested); err == nil || staged != nil {
 				t.Fatalf("corrupt release staged: %+v, %v", staged, err)
 			}
@@ -120,7 +116,7 @@ func TestUpdateReleaseSourceRejectsCorruptionAndVersionMismatchWithoutRetainedSt
 	}
 }
 
-func updateReleaseAssets(t *testing.T, privateKey ed25519.PrivateKey, version string) map[string][]byte {
+func updateReleaseAssets(t *testing.T, version string) map[string][]byte {
 	t.Helper()
 	manifest, artifacts, installed := releaseBundleFixture(t)
 	manifest.ComponentManifest.VPNCTLVersion = version
@@ -130,7 +126,7 @@ func updateReleaseAssets(t *testing.T, privateKey ed25519.PrivateKey, version st
 		}
 	}
 	var bundle bytes.Buffer
-	if err := BuildReleaseBundle(&bundle, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(&bundle, manifest, artifacts); err != nil {
 		t.Fatal(err)
 	}
 	checksums, err := NewReleaseChecksums(version, releaseDigest(installed["vpnctl"]), int64(len(installed["vpnctl"])), releaseDigest(bundle.Bytes()), int64(bundle.Len()))
@@ -141,12 +137,8 @@ func updateReleaseAssets(t *testing.T, privateKey ed25519.PrivateKey, version st
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature, err := SignReleaseChecksums(encoded, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return map[string][]byte{
 		ReleaseBinaryAsset: append([]byte(nil), installed["vpnctl"]...), ReleaseBundleAsset: append([]byte(nil), bundle.Bytes()...),
-		ReleaseChecksumsAsset: append([]byte(nil), encoded...), ReleaseChecksumsSignatureAsset: append([]byte(nil), signature...),
+		ReleaseChecksumsAsset: append([]byte(nil), encoded...),
 	}
 }

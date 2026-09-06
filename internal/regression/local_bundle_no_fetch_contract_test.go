@@ -35,7 +35,7 @@ func TestBundledComponentsHaveNoInitApplyRepairUpstreamFetchPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"BuildReleaseBundle", "NewReleaseBundleInstaller", "os.Lstat(bundlePath)", "DecodeAndVerifyReleaseManifest", "VerifyReleasePlatform"} {
+	for _, required := range []string{"BuildReleaseBundle", "NewReleaseBundleInstaller", "os.Lstat(bundlePath)", "DecodeReleaseManifest", "VerifyReleasePlatform"} {
 		if !strings.Contains(string(bundleSource), required) {
 			t.Errorf("local bundle boundary omits %q", required)
 		}

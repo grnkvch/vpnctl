@@ -17,7 +17,6 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
@@ -327,11 +326,7 @@ func buildSystemGatewayInitializer(ctx context.Context, paths store.Paths) (gate
 }
 
 func buildSystemInitRelease(paths store.Paths, snapshot linuxplatform.HostSnapshot) (lifecycle.InitReleaseSource, error) {
-	publicKey, err := releasetrust.PublicKey()
-	if err != nil {
-		return nil, err
-	}
-	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, publicKey, lifecycle.ReleasePlatform{
+	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, lifecycle.ReleasePlatform{
 		OperatingSystem: snapshot.OS.ID, Version: snapshot.OS.VersionID, Architecture: snapshot.Architecture,
 	})
 	if err != nil {

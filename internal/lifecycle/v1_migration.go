@@ -36,7 +36,7 @@ var (
 type V1MigrationPhase string
 
 const (
-	V1MigrationBundleVerified   V1MigrationPhase = "signed_bundle_verified"
+	V1MigrationBundleVerified   V1MigrationPhase = "checksum_bundle_verified"
 	V1MigrationSnapshotCreated  V1MigrationPhase = "maintenance_snapshot_created"
 	V1MigrationConversionStaged V1MigrationPhase = "converted_state_staged"
 	V1MigrationRoleSetup        V1MigrationPhase = "gateway_role_setup"
@@ -186,7 +186,7 @@ type preparedV1Migration struct {
 	journal     *v1MigrationJournal
 }
 
-// Plan performs the same compatibility, bundle-signature, and target checks
+// Plan performs the same compatibility, checksum-governed bundle, and target checks
 // as Run while remaining read-only. In particular it never creates the
 // maintenance root or a conversion stage.
 func (migrator *V1Migrator) Plan(ctx context.Context, input V1MigrationInput) (V1MigrationPlan, error) {
@@ -239,10 +239,10 @@ func (migrator *V1Migrator) prepare(ctx context.Context, input V1MigrationInput)
 	}
 	manifest, err := migrator.driver.VerifyBundle(ctx, input.BundlePath)
 	if err != nil {
-		return fail(fmt.Errorf("verify signed v2 release bundle: %w", err))
+		return fail(fmt.Errorf("verify checksum-governed v2 release bundle: %w", err))
 	}
 	if err := manifest.Validate(); err != nil {
-		return fail(fmt.Errorf("validate signed v2 release bundle: %w", err))
+		return fail(fmt.Errorf("validate checksum-governed v2 release bundle: %w", err))
 	}
 	fingerprint, err := v1MigrationFingerprint(&inspection, input, manifest)
 	if err != nil {

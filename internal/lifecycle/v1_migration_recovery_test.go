@@ -2,8 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -393,14 +391,10 @@ func newV1MigrationRecoveryFixtureWithState(t *testing.T, ufwEnabled, wgEnabled,
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	recoveryBundle := filepath.Join(maintenanceRoot, v1MigrationRecoveryBundleName)
-	writeReleaseBundleFile(t, recoveryBundle, manifest, privateKey, artifacts)
-	installer, err := NewReleaseBundleInstaller(systemRoot, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	writeReleaseBundleFile(t, recoveryBundle, manifest, artifacts)
+	installer, err := NewReleaseBundleInstaller(systemRoot, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}

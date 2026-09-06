@@ -2,8 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -44,17 +42,13 @@ func TestSystemGatewayUninstallRestoresOriginalNetworkAndPreservesRecoveryState(
 		}
 	}
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	bundle := filepath.Join(root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/"))
 	if err := os.MkdirAll(filepath.Dir(bundle), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeReleaseBundleFile(t, bundle, manifest, privateKey, artifacts)
-	releaseInstaller, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	writeReleaseBundleFile(t, bundle, manifest, artifacts)
+	releaseInstaller, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if _, err := releaseInstaller.Install(context.Background(), bundle, model.RoleGateway); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +86,7 @@ func TestSystemGatewayUninstallRestoresOriginalNetworkAndPreservesRecoveryState(
 	runtime := &SystemUninstallRuntime{
 		paths: paths, state: stateStore, runner: runner, roles: roles, watchdog: watchdog,
 		watchdogDB: &uninstallWatchdogStoreFixture{ids: []string{"fw-ABC123"}, snapshot: snapshot},
-		network:    network, binaryPath: linuxplatform.DefaultVPNCTLBinaryPath, releaseKey: publicKey,
+		network:    network, binaryPath: linuxplatform.DefaultVPNCTLBinaryPath,
 	}
 	uninstaller, _ := NewUninstaller(stateStore, runtime)
 	plan, err := uninstaller.Plan(context.Background(), UninstallOptions{Force: true})
@@ -161,17 +155,13 @@ func TestSystemNodeUninstallRemovesVerifiedRuntimeAndPreservesRecoveryState(t *t
 		}
 	}
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	bundle := filepath.Join(root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/"))
 	if err := os.MkdirAll(filepath.Dir(bundle), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeReleaseBundleFile(t, bundle, manifest, privateKey, artifacts)
-	releaseInstaller, err := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	writeReleaseBundleFile(t, bundle, manifest, artifacts)
+	releaseInstaller, err := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +188,7 @@ func TestSystemNodeUninstallRemovesVerifiedRuntimeAndPreservesRecoveryState(t *t
 	guard, _ := routing.NewPersistentNodeRoutingGuardManager(paths, runner)
 	runtime := &SystemUninstallRuntime{
 		paths: paths, state: stateStore, runner: runner, roles: roles, dns: dns, guard: guard,
-		binaryPath: linuxplatform.DefaultVPNCTLBinaryPath, releaseKey: publicKey,
+		binaryPath: linuxplatform.DefaultVPNCTLBinaryPath,
 	}
 	uninstaller, _ := NewUninstaller(stateStore, runtime)
 	plan, err := uninstaller.Plan(context.Background(), UninstallOptions{})

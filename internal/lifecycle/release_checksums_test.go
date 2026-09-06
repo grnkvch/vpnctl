@@ -2,14 +2,12 @@ package lifecycle
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
 )
 
-func TestSignedReleaseChecksumsBindBothBootstrapAssets(t *testing.T) {
+func TestReleaseChecksumsBindBothBootstrapAssets(t *testing.T) {
 	t.Parallel()
 	binary := []byte("standalone-vpnctl")
 	bundle := []byte("complete-release-bundle")
@@ -21,14 +19,9 @@ func TestSignedReleaseChecksumsBindBothBootstrapAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	signature, err := SignReleaseChecksums(encoded, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verified, err := VerifyReleaseChecksums(encoded, signature, publicKey)
+	verified, err := DecodeReleaseChecksums(encoded)
 	if err != nil || verified != checksums {
-		t.Fatalf("VerifyReleaseChecksums() = %+v, %v", verified, err)
+		t.Fatalf("DecodeReleaseChecksums() = %+v, %v", verified, err)
 	}
 	if err := VerifyReleaseChecksumRecord(verified.Binary, int64(len(binary)), bytes.NewReader(binary)); err != nil {
 		t.Fatal(err)
@@ -39,20 +32,8 @@ func TestSignedReleaseChecksumsBindBothBootstrapAssets(t *testing.T) {
 
 	tamperedMetadata := append([]byte(nil), encoded...)
 	tamperedMetadata[len(ReleaseChecksumsHeader)+2] ^= 1
-	if _, err := VerifyReleaseChecksums(tamperedMetadata, signature, publicKey); !errors.Is(err, ErrInvalidReleaseChecksums) {
+	if _, err := DecodeReleaseChecksums(tamperedMetadata); !errors.Is(err, ErrInvalidReleaseChecksums) {
 		t.Fatalf("tampered metadata error = %v", err)
-	}
-	tamperedSignature := append([]byte(nil), signature...)
-	tamperedSignature[0] ^= 1
-	if _, err := VerifyReleaseChecksums(encoded, tamperedSignature, publicKey); !errors.Is(err, ErrInvalidReleaseChecksums) {
-		t.Fatalf("tampered signature error = %v", err)
-	}
-	wrongPublic, _, _ := ed25519.GenerateKey(rand.Reader)
-	if _, err := VerifyReleaseChecksums(encoded, signature, wrongPublic); !errors.Is(err, ErrInvalidReleaseChecksums) {
-		t.Fatalf("wrong key error = %v", err)
-	}
-	if _, err := SignReleaseChecksums(encoded, ed25519.PrivateKey{1}); !errors.Is(err, ErrInvalidReleaseChecksums) {
-		t.Fatalf("invalid private key error = %v", err)
 	}
 }
 

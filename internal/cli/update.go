@@ -14,7 +14,6 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -505,21 +504,17 @@ func buildSystemUpdater(_ context.Context, paths store.Paths, role HostRole) (up
 	if !ok || state.Host.Role != modelRole {
 		return nil, fmt.Errorf("update host role conflicts with authoritative state")
 	}
-	publicKey, err := releasetrust.PublicKey()
-	if err != nil {
-		return nil, err
-	}
-	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, publicKey, lifecycle.ReleasePlatform{
+	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, lifecycle.ReleasePlatform{
 		OperatingSystem: state.Host.OS, Version: state.Host.OSVersion, Architecture: state.Host.Architecture,
 	})
 	if err != nil {
 		return nil, err
 	}
-	snapshots, err := lifecycle.NewFilesystemUpdateSnapshotStore(paths.SnapshotsDir, publicKey, installer)
+	snapshots, err := lifecycle.NewFilesystemUpdateSnapshotStore(paths.SnapshotsDir, installer)
 	if err != nil {
 		return nil, err
 	}
-	source, err := lifecycle.NewUpdateReleaseSource(lifecycle.DefaultReleaseRepositoryURL, http.DefaultClient, publicKey, installer)
+	source, err := lifecycle.NewUpdateReleaseSource(lifecycle.DefaultReleaseRepositoryURL, http.DefaultClient, installer)
 	if err != nil {
 		return nil, err
 	}

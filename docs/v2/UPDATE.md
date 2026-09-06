@@ -19,13 +19,13 @@ release URLs are rejected. `--dry-run` still downloads and verifies a private
 temporary stage so its plan is evidence-based, but discards that stage without
 changing state, installed files, or services. `--defer` is unsupported.
 
-The release source provides four assets: the standalone vpnctl binary, the
-complete bundle for both roles, signed checksum metadata, and its detached
-Ed25519 signature. Before showing an actionable plan, vpnctl verifies the
-metadata signature, exact sizes and SHA-256 values, bundle signature and
-platform, every bundled artifact, and equality of the standalone binary with
-the bundle's vpnctl artifact. The complete target is staged before role-local
-selection begins.
+The release source provides three assets: the standalone vpnctl binary, the
+complete bundle for both roles, and canonical checksum metadata. Before showing
+an actionable plan, vpnctl verifies exact sizes and SHA-256 values, bundle
+framing and platform, every bundled artifact, and equality of the standalone
+binary with the bundle's vpnctl artifact. The complete target is staged before
+role-local selection begins. Publisher identity relies on the HTTPS release
+channel in v2.0; checksum metadata is not a cryptographic publisher signature.
 
 ## Gateway-first order
 
@@ -65,8 +65,8 @@ Apply stops only gateway management while it is the authoritative state writer,
 records a pending operation, and replaces changed bundled components one at a
 time. Each replacement is atomic and followed by its local service health
 check. Providers are activated before the vpnctl binary. Unchanged healthy
-data-plane components are not restarted. The verified bundle/checksum/signature
-metadata and component manifest become current only after component health
+data-plane components are not restarted. The verified bundle/checksum metadata
+and component manifest become current only after component health
 passes, then gateway management resumes and the operation is completed.
 
 A proven failure in the active attempt restores already changed component
@@ -77,7 +77,7 @@ and resumes prior management.
 ## Persistent snapshot and rollback
 
 Before the first component replacement, a changed update copies the verified
-prior bundle, signed checksum metadata, signature, and canonical prior state
+prior bundle, canonical checksum metadata, and canonical prior state
 into a mode-`0700` versioned directory under
 `/var/lib/vpnctl/snapshots`. Every file is mode `0600` and bound by snapshot
 SHA-256 metadata. An atomic pending pointer makes an interrupted update visible
@@ -92,7 +92,7 @@ sudo vpnctl update rollback
 ```
 
 Rollback is local and makes no release-network request. It re-verifies the
-snapshot hashes, signed release metadata, whole bundle, platform, role,
+snapshot hashes, canonical checksum metadata, whole bundle, platform, role,
 component manifest, current-state binding, installed files, apt package
 ranges, and fleet protocol compatibility before showing its plan. The plan
 lists the version/state restoration, changed components, affected services,

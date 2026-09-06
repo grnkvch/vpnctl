@@ -14,7 +14,6 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
 func main() {
@@ -121,17 +120,12 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "migration preflight failed: %v\n", err)
 		return 2
 	}
-	publicKey, err := releasetrust.PublicKey()
-	if err != nil {
-		fmt.Fprintf(stderr, "migration setup failed: %v\n", err)
-		return 5
-	}
 	watchdog, err := newSystemV1MigrationWatchdog(systemRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "migration setup failed: %v\n", err)
 		return 5
 	}
-	driver, err := lifecycle.NewSystemV1MigrationDriver(systemRoot, publicKey, lifecycle.ReleasePlatform{
+	driver, err := lifecycle.NewSystemV1MigrationDriver(systemRoot, lifecycle.ReleasePlatform{
 		OperatingSystem: snapshot.OS.ID, Version: snapshot.OS.VersionID, Architecture: snapshot.Architecture,
 	}, linuxplatform.DefaultVPNCTLBinaryPath, watchdog)
 	if err != nil {
@@ -204,7 +198,7 @@ func parseOptions(arguments []string) (migrationOptions, optionalPort, bool, err
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&options.workspace, "workspace", options.workspace, "v1 workspace containing .vpnctl")
 	flags.StringVar(&options.systemRoot, "system-root", options.systemRoot, "system root (test fixtures only unless /)")
-	flags.StringVar(&options.bundle, "bundle", "", "signed local v2 release bundle")
+	flags.StringVar(&options.bundle, "bundle", "", "checksum-governed local v2 release bundle")
 	flags.StringVar(&options.maintenanceRoot, "maintenance-root", "", "root-only resumable migration directory")
 	flags.StringVar(&options.publicIPv4, "public-ip", "", "explicit public gateway IPv4")
 	flags.StringVar(&options.nodeCIDR, "node-cidr", "", "v2 private-node pool")

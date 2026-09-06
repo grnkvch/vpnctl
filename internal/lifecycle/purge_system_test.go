@@ -2,8 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -37,14 +35,13 @@ func TestSystemNodePurgeDeletesStateBeforeVerifiedBinaryLast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	manifest, artifacts, _ := releaseBundleFixture(t)
 	bundle := filepath.Join(root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/"))
 	if err := os.MkdirAll(filepath.Dir(bundle), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeReleaseBundleFile(t, bundle, manifest, privateKey, artifacts)
-	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	writeReleaseBundleFile(t, bundle, manifest, artifacts)
+	installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if _, err := installer.Install(context.Background(), bundle, model.RoleNode); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +60,7 @@ func TestSystemNodePurgeDeletesStateBeforeVerifiedBinaryLast(t *testing.T) {
 	guard, _ := routing.NewPersistentNodeRoutingGuardManager(paths, runner)
 	runtime := &SystemUninstallRuntime{
 		paths: paths, state: stateStore, runner: runner, roles: roles, dns: dns, guard: guard,
-		binaryPath: linuxplatform.DefaultVPNCTLBinaryPath, releaseKey: publicKey,
+		binaryPath: linuxplatform.DefaultVPNCTLBinaryPath,
 	}
 	purger, _ := NewPurger(stateStore, runtime)
 	plan, err := purger.Plan(context.Background(), PurgeOptions{})
@@ -93,7 +90,7 @@ func TestSystemNodePurgeDeletesStateBeforeVerifiedBinaryLast(t *testing.T) {
 		t.Fatalf("purge retained hidden managed data: %v, %v", entries, err)
 	}
 	if _, err := os.Lstat(bundle); err != nil {
-		t.Fatalf("purge removed non-state signed release archive: %v", err)
+		t.Fatalf("purge removed non-state release archive: %v", err)
 	}
 }
 

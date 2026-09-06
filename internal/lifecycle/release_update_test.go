@@ -3,8 +3,6 @@ package lifecycle
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,14 +12,13 @@ import (
 )
 
 func TestPreparedReleaseBundleUpdateStagesEverythingAndRollsBackExactFiles(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	root := t.TempDir()
-	installer, err := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	installer, err := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentAssets, _, currentInstalled := updateReleaseAssetsWithInstalled(t, privateKey, "v2.0.0", "old")
-	targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, privateKey, "v2.1.0", "new")
+	currentAssets, _, currentInstalled := updateReleaseAssetsWithInstalled(t, "v2.0.0", "old")
+	targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, "v2.1.0", "new")
 	current := writeStagedUpdateRelease(t, currentAssets, currentAssetsManifest(t, installer, currentAssets))
 	defer current.Close()
 	target := writeStagedUpdateRelease(t, targetAssets, targetManifest)
@@ -71,7 +68,6 @@ func TestPreparedReleaseBundleUpdateStagesEverythingAndRollsBackExactFiles(t *te
 }
 
 func TestPreparedReleaseBundleUpdateCommitAndConflictBehavior(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	for _, test := range []struct {
 		name   string
 		tamper bool
@@ -81,9 +77,9 @@ func TestPreparedReleaseBundleUpdateCommitAndConflictBehavior(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
-			currentAssets, currentManifest, _ := updateReleaseAssetsWithInstalled(t, privateKey, "v2.0.0", "old")
-			targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, privateKey, "v2.1.0", "new")
+			installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+			currentAssets, currentManifest, _ := updateReleaseAssetsWithInstalled(t, "v2.0.0", "old")
+			targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, "v2.1.0", "new")
 			current := writeStagedUpdateRelease(t, currentAssets, currentManifest)
 			defer current.Close()
 			target := writeStagedUpdateRelease(t, targetAssets, targetManifest)
@@ -128,19 +124,19 @@ func TestPreparedReleaseBundleUpdateCommitAndConflictBehavior(t *testing.T) {
 	}
 }
 
-func updateReleaseAssetsWithInstalled(t *testing.T, privateKey ed25519.PrivateKey, version, marker string) (map[string][]byte, ReleaseManifest, map[string][]byte) {
+func updateReleaseAssetsWithInstalled(t *testing.T, version, marker string) (map[string][]byte, ReleaseManifest, map[string][]byte) {
 	t.Helper()
 	installed := map[string][]byte{
 		"vpnctl": []byte("vpnctl-" + marker), "frpc": []byte("frpc-" + marker),
 		"frps": []byte("frps-" + marker), "mihomo": []byte("mihomo-" + marker),
 	}
-	assets, manifest := updateReleaseAssetsForInstalled(t, privateKey, version, installed, map[string]string{
+	assets, manifest := updateReleaseAssetsForInstalled(t, version, installed, map[string]string{
 		"frp": "0.69.0-" + marker, "mihomo": "v1.19.30-" + marker,
 	})
 	return assets, manifest, installed
 }
 
-func updateReleaseAssetsForInstalled(t *testing.T, privateKey ed25519.PrivateKey, version string, installed map[string][]byte, componentVersions map[string]string) (map[string][]byte, ReleaseManifest) {
+func updateReleaseAssetsForInstalled(t *testing.T, version string, installed map[string][]byte, componentVersions map[string]string) (map[string][]byte, ReleaseManifest) {
 	t.Helper()
 	frpArchive := testReleaseFRPArchive(t, installed["frpc"], installed["frps"])
 	mihomoArchive := testReleaseGzip(t, installed["mihomo"])
@@ -171,15 +167,14 @@ func updateReleaseAssetsForInstalled(t *testing.T, privateKey ed25519.PrivateKey
 		t.Fatal(err)
 	}
 	var bundle bytes.Buffer
-	if err := BuildReleaseBundle(&bundle, manifest, privateKey, artifacts); err != nil {
+	if err := BuildReleaseBundle(&bundle, manifest, artifacts); err != nil {
 		t.Fatal(err)
 	}
 	checksums, _ := NewReleaseChecksums(version, releaseDigest(installed["vpnctl"]), int64(len(installed["vpnctl"])), releaseDigest(bundle.Bytes()), int64(bundle.Len()))
 	encoded, _ := EncodeReleaseChecksums(checksums)
-	signature, _ := SignReleaseChecksums(encoded, privateKey)
 	assets := map[string][]byte{
 		ReleaseBinaryAsset: installed["vpnctl"], ReleaseBundleAsset: bundle.Bytes(),
-		ReleaseChecksumsAsset: encoded, ReleaseChecksumsSignatureAsset: signature,
+		ReleaseChecksumsAsset: encoded,
 	}
 	return assets, manifest
 }
@@ -199,7 +194,7 @@ func writeStagedUpdateRelease(t *testing.T, assets map[string][]byte, manifest R
 	return &StagedUpdateRelease{
 		Version: checksums.Version, Checksums: checksums, Manifest: manifest, root: root,
 		BinaryPath: filepath.Join(root, ReleaseBinaryAsset), BundlePath: filepath.Join(root, ReleaseBundleAsset),
-		ChecksumsPath: filepath.Join(root, ReleaseChecksumsAsset), SignaturePath: filepath.Join(root, ReleaseChecksumsSignatureAsset),
+		ChecksumsPath: filepath.Join(root, ReleaseChecksumsAsset),
 	}
 }
 
@@ -222,7 +217,6 @@ func installStandardReleaseMetadata(t *testing.T, root string, staged *StagedUpd
 	}
 	for source, target := range map[string]string{
 		staged.BundlePath: filepath.Join(root, ReleaseInstalledBundlePath[1:]), staged.ChecksumsPath: filepath.Join(root, ReleaseInstalledChecksumsPath[1:]),
-		staged.SignaturePath: filepath.Join(root, ReleaseInstalledSignaturePath[1:]),
 	} {
 		content, err := os.ReadFile(source)
 		if err != nil {
@@ -268,9 +262,8 @@ func assertUpdateInstalledFiles(t *testing.T, root string, installed, assets map
 	t.Helper()
 	for relative, want := range map[string][]byte{
 		"usr/local/bin/vpnctl": installed["vpnctl"], "usr/local/libexec/vpnctl/mihomo": installed["mihomo"],
-		"usr/local/lib/vpnctl/release/vpnctl.bundle":     assets[ReleaseBundleAsset],
-		"usr/local/lib/vpnctl/release/checksums.txt":     assets[ReleaseChecksumsAsset],
-		"usr/local/lib/vpnctl/release/checksums.txt.sig": assets[ReleaseChecksumsSignatureAsset],
+		"usr/local/lib/vpnctl/release/vpnctl.bundle": assets[ReleaseBundleAsset],
+		"usr/local/lib/vpnctl/release/checksums.txt": assets[ReleaseChecksumsAsset],
 	} {
 		content, err := os.ReadFile(filepath.Join(root, relative))
 		if err != nil || !bytes.Equal(content, want) {

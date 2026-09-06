@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -19,7 +18,6 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 	"github.com/vgrinkevich/vpnctl/internal/transport"
@@ -47,7 +45,6 @@ type SystemUninstallRuntime struct {
 	swap       *ManagedSwapLifecycle
 	gateway    UninstallNodeGateway
 	binaryPath string
-	releaseKey ed25519.PublicKey
 }
 
 func NewSystemUninstallRuntime(paths store.Paths, gateway UninstallNodeGateway, watchdogDB UninstallWatchdogStore) (*SystemUninstallRuntime, error) {
@@ -339,15 +336,7 @@ func (runtime *SystemUninstallRuntime) installedReleaseFiles(ctx context.Context
 	if !hasBundled {
 		return []string{}, "", "", nil
 	}
-	publicKey := append(ed25519.PublicKey(nil), runtime.releaseKey...)
-	if len(publicKey) == 0 {
-		var err error
-		publicKey, err = releasetrust.PublicKey()
-		if err != nil {
-			return nil, "", "", err
-		}
-	}
-	installer, err := NewReleaseBundleInstaller(runtime.paths.Root, publicKey, ReleasePlatform{
+	installer, err := NewReleaseBundleInstaller(runtime.paths.Root, ReleasePlatform{
 		OperatingSystem: state.Host.OS, Version: state.Host.OSVersion, Architecture: state.Host.Architecture,
 	})
 	if err != nil {

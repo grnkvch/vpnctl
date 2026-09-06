@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,7 +26,6 @@ const (
 	updateSnapshotStateFile     = "state.json"
 	updateSnapshotBundleFile    = "vpnctl.bundle"
 	updateSnapshotChecksumsFile = "checksums.txt"
-	updateSnapshotSignatureFile = "checksums.txt.sig"
 	updateSnapshotPendingFile   = "update.pending.json"
 	updateSnapshotPreviousFile  = "update.previous.json"
 	maximumUpdateSnapshotMeta   = 16 << 10
@@ -43,7 +41,6 @@ var (
 type UpdateSnapshotReleaseFiles struct {
 	BundlePath    string
 	ChecksumsPath string
-	SignaturePath string
 }
 
 type UpdateSnapshotMetadata struct {
@@ -61,7 +58,6 @@ type UpdateSnapshotMetadata struct {
 	AppliedStateSHA256  string     `json:"applied_state_sha256,omitempty"`
 	BundleSHA256        string     `json:"bundle_sha256"`
 	ChecksumsSHA256     string     `json:"checksums_sha256"`
-	SignatureSHA256     string     `json:"signature_sha256"`
 }
 
 type UpdateSnapshotInput struct {
@@ -90,7 +86,6 @@ func (snapshot *LoadedUpdateSnapshot) Close() error {
 
 type FilesystemUpdateSnapshotStore struct {
 	root      string
-	publicKey ed25519.PublicKey
 	inspector *ReleaseBundleInstaller
 }
 
@@ -108,21 +103,21 @@ type updateSnapshotPointer struct {
 	SnapshotID    string `json:"snapshot_id"`
 }
 
-func NewFilesystemUpdateSnapshotStore(root string, publicKey ed25519.PublicKey, inspector *ReleaseBundleInstaller) (*FilesystemUpdateSnapshotStore, error) {
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root || len(publicKey) != ed25519.PublicKeySize || inspector == nil {
+func NewFilesystemUpdateSnapshotStore(root string, inspector *ReleaseBundleInstaller) (*FilesystemUpdateSnapshotStore, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || inspector == nil {
 		return nil, fmt.Errorf("update snapshot store dependencies are incomplete")
 	}
 	if err := validateUpdateSnapshotDirectory(root); err != nil {
 		return nil, err
 	}
-	return &FilesystemUpdateSnapshotStore{root: root, publicKey: append(ed25519.PublicKey(nil), publicKey...), inspector: inspector}, nil
+	return &FilesystemUpdateSnapshotStore{root: root, inspector: inspector}, nil
 }
 
 func (snapshotStore *FilesystemUpdateSnapshotStore) Prepare(ctx context.Context, input UpdateSnapshotInput) (*PreparedUpdateSnapshot, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("context is required")
 	}
-	if snapshotStore == nil || snapshotStore.inspector == nil || len(snapshotStore.publicKey) != ed25519.PublicKeySize {
+	if snapshotStore == nil || snapshotStore.inspector == nil {
 		return nil, fmt.Errorf("update snapshot store is incomplete")
 	}
 	if err := validateUpdateSnapshotDirectory(snapshotStore.root); err != nil {
@@ -180,7 +175,6 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) Prepare(ctx context.Context,
 	}{
 		{input.Release.BundlePath, updateSnapshotBundleFile, &metadata.BundleSHA256},
 		{input.Release.ChecksumsPath, updateSnapshotChecksumsFile, &metadata.ChecksumsSHA256},
-		{input.Release.SignaturePath, updateSnapshotSignatureFile, &metadata.SignatureSHA256},
 	}
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
@@ -198,7 +192,6 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) Prepare(ctx context.Context,
 	}
 	if err := snapshotStore.verifyRelease(ctx, metadata, UpdateSnapshotReleaseFiles{
 		BundlePath: filepath.Join(temporary, updateSnapshotBundleFile), ChecksumsPath: filepath.Join(temporary, updateSnapshotChecksumsFile),
-		SignaturePath: filepath.Join(temporary, updateSnapshotSignatureFile),
 	}); err != nil {
 		return nil, fmt.Errorf("verify previous snapshot release: %w", err)
 	}
@@ -384,7 +377,6 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) LoadPrevious(ctx context.Con
 	}
 	paths := UpdateSnapshotReleaseFiles{
 		BundlePath: filepath.Join(root, updateSnapshotBundleFile), ChecksumsPath: filepath.Join(root, updateSnapshotChecksumsFile),
-		SignaturePath: filepath.Join(root, updateSnapshotSignatureFile),
 	}
 	if err := snapshotStore.verifyRelease(ctx, metadata, paths); err != nil {
 		return nil, err
@@ -399,16 +391,16 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) LoadPrevious(ctx context.Con
 	}
 	stage := &StagedUpdateRelease{
 		Version: metadata.PreviousVersion, BundlePath: filepath.Join(stageRoot, ReleaseBundleAsset),
-		ChecksumsPath: filepath.Join(stageRoot, ReleaseChecksumsAsset), SignaturePath: filepath.Join(stageRoot, ReleaseChecksumsSignatureAsset), root: stageRoot,
+		ChecksumsPath: filepath.Join(stageRoot, ReleaseChecksumsAsset), root: stageRoot,
 	}
-	for source, target := range map[string]string{paths.BundlePath: stage.BundlePath, paths.ChecksumsPath: stage.ChecksumsPath, paths.SignaturePath: stage.SignaturePath} {
+	for source, target := range map[string]string{paths.BundlePath: stage.BundlePath, paths.ChecksumsPath: stage.ChecksumsPath} {
 		if err := copyRegularReleaseFile(source, target, 0o600); err != nil {
 			_ = stage.Close()
 			return nil, err
 		}
 	}
 	if err := snapshotStore.verifyRelease(ctx, metadata, UpdateSnapshotReleaseFiles{
-		BundlePath: stage.BundlePath, ChecksumsPath: stage.ChecksumsPath, SignaturePath: stage.SignaturePath,
+		BundlePath: stage.BundlePath, ChecksumsPath: stage.ChecksumsPath,
 	}); err != nil {
 		_ = stage.Close()
 		return nil, err
@@ -418,12 +410,7 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) LoadPrevious(ctx context.Con
 		_ = stage.Close()
 		return nil, err
 	}
-	signature, err := readUpdateSnapshotFile(stage.SignaturePath, ed25519.SignatureSize)
-	if err != nil {
-		_ = stage.Close()
-		return nil, err
-	}
-	checksums, err := VerifyReleaseChecksums(checksumsBytes, signature, snapshotStore.publicKey)
+	checksums, err := DecodeReleaseChecksums(checksumsBytes)
 	if err != nil {
 		_ = stage.Close()
 		return nil, err
@@ -459,7 +446,7 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) ConsumePrevious(snapshotID s
 
 func (snapshotStore *FilesystemUpdateSnapshotStore) verifyRelease(ctx context.Context, metadata UpdateSnapshotMetadata, paths UpdateSnapshotReleaseFiles) error {
 	for path, expected := range map[string]string{
-		paths.BundlePath: metadata.BundleSHA256, paths.ChecksumsPath: metadata.ChecksumsSHA256, paths.SignaturePath: metadata.SignatureSHA256,
+		paths.BundlePath: metadata.BundleSHA256, paths.ChecksumsPath: metadata.ChecksumsSHA256,
 	} {
 		actual, err := updateSnapshotFileSHA256(path, MaximumReleaseBundleBytes)
 		if err != nil || actual != expected {
@@ -470,13 +457,9 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) verifyRelease(ctx context.Co
 	if err != nil {
 		return err
 	}
-	signature, err := readUpdateSnapshotFile(paths.SignaturePath, ed25519.SignatureSize)
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return fmt.Errorf("%w: release signature is invalid", ErrUpdateSnapshotInvalid)
-	}
-	checksums, err := VerifyReleaseChecksums(checksumsBytes, signature, snapshotStore.publicKey)
+	checksums, err := DecodeReleaseChecksums(checksumsBytes)
 	if err != nil || checksums.Version != metadata.PreviousVersion {
-		return fmt.Errorf("%w: signed release metadata is invalid", ErrUpdateSnapshotInvalid)
+		return fmt.Errorf("%w: release checksum metadata is invalid", ErrUpdateSnapshotInvalid)
 	}
 	if err := verifyStagedReleaseFile(paths.BundlePath, checksums.Bundle); err != nil {
 		return fmt.Errorf("%w: %v", ErrUpdateSnapshotInvalid, err)
@@ -487,7 +470,7 @@ func (snapshotStore *FilesystemUpdateSnapshotStore) verifyRelease(ctx context.Co
 	}
 	vpnctl, found := releaseArtifactForComponent(manifest, "vpnctl")
 	if !found || vpnctl.SHA256 != checksums.Binary.SHA256 || vpnctl.SizeBytes != checksums.Binary.SizeBytes {
-		return fmt.Errorf("%w: bundled vpnctl differs from signed metadata", ErrUpdateSnapshotInvalid)
+		return fmt.Errorf("%w: bundled vpnctl differs from checksum metadata", ErrUpdateSnapshotInvalid)
 	}
 	return nil
 }
@@ -500,7 +483,7 @@ func (metadata UpdateSnapshotMetadata) validate(final bool) error {
 		previousErr != nil || previous != metadata.PreviousVersion || updatedErr != nil || updated != metadata.UpdatedToVersion ||
 		metadata.PreviousStateSchema < 1 || metadata.UpdatedStateSchema < 1 || metadata.CreatedAt.IsZero() ||
 		!metadata.CreatedAt.Equal(metadata.CreatedAt.UTC().Truncate(time.Second)) || !validReleaseSHA256(metadata.PreviousStateSHA256) ||
-		!validReleaseSHA256(metadata.BundleSHA256) || !validReleaseSHA256(metadata.ChecksumsSHA256) || !validReleaseSHA256(metadata.SignatureSHA256) {
+		!validReleaseSHA256(metadata.BundleSHA256) || !validReleaseSHA256(metadata.ChecksumsSHA256) {
 		return fmt.Errorf("%w: metadata fields are invalid", ErrUpdateSnapshotInvalid)
 	}
 	if final && !validReleaseSHA256(metadata.AppliedStateSHA256) || !final && metadata.AppliedStateSHA256 != "" {

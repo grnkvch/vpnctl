@@ -2,9 +2,7 @@ package lifecycle
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,15 +19,11 @@ import (
 )
 
 const (
-	ReleaseManifestSchemaVersion          = 1
-	ReleaseSignatureEnvelopeSchemaVersion = 1
-	ReleaseSignatureAlgorithm             = "Ed25519"
-	MaximumSignedReleaseManifestBytes     = 1 << 20
-	MaximumReleaseManifestPayloadBytes    = 512 << 10
-	releaseManifestSignatureDomain        = "vpnctl-release-manifest-v1\x00"
-	maximumReleaseEntries                 = 64
-	maximumReleaseArtifactBytes           = int64(256 << 20)
-	maximumReleaseArtifactTotalBytes      = int64(512 << 20)
+	ReleaseManifestSchemaVersion     = 1
+	MaximumReleaseManifestBytes      = 512 << 10
+	maximumReleaseEntries            = 64
+	maximumReleaseArtifactBytes      = int64(256 << 20)
+	maximumReleaseArtifactTotalBytes = int64(512 << 20)
 )
 
 var (
@@ -40,7 +34,7 @@ var (
 	releasePackagePattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,127}$`)
 )
 
-// ReleaseManifest is the signed release source of truth. ComponentManifest is
+// ReleaseManifest is the canonical bundle source of truth. ComponentManifest is
 // also persisted after installation; artifacts and apt ranges are delivery-
 // only metadata used before any host mutation.
 type ReleaseManifest struct {
@@ -66,14 +60,6 @@ type APTPackageCompatibility struct {
 	MaximumVersionExclusive string       `json:"maximum_version_exclusive"`
 	Roles                   []model.Role `json:"roles"`
 	Capabilities            []string     `json:"capabilities"`
-}
-
-type SignedReleaseManifest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Algorithm     string `json:"algorithm"`
-	KeyID         string `json:"key_id"`
-	Payload       string `json:"payload"`
-	Signature     string `json:"signature"`
 }
 
 type ReleasePlatform struct {
@@ -255,74 +241,31 @@ func (manifest ReleaseManifest) Validate() error {
 	return nil
 }
 
-func EncodeSignedReleaseManifest(manifest ReleaseManifest, privateKey ed25519.PrivateKey) ([]byte, error) {
-	if len(privateKey) != ed25519.PrivateKeySize {
-		return nil, releaseManifestInvalid("signing key must be Ed25519")
-	}
+func EncodeReleaseManifest(manifest ReleaseManifest) ([]byte, error) {
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(manifest)
+	encoded, err := json.Marshal(manifest)
 	if err != nil {
-		return nil, releaseManifestInvalid("encode payload: %v", err)
+		return nil, releaseManifestInvalid("encode manifest: %v", err)
 	}
-	if len(payload) > MaximumReleaseManifestPayloadBytes {
-		return nil, releaseManifestInvalid("payload exceeds %d bytes", MaximumReleaseManifestPayloadBytes)
-	}
-	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, releaseManifestInvalid("derive Ed25519 public key")
-	}
-	signature := ed25519.Sign(privateKey, releaseManifestSignedMessage(payload))
-	envelope := SignedReleaseManifest{
-		SchemaVersion: ReleaseSignatureEnvelopeSchemaVersion,
-		Algorithm:     ReleaseSignatureAlgorithm,
-		KeyID:         releaseManifestKeyID(publicKey),
-		Payload:       base64.RawURLEncoding.EncodeToString(payload),
-		Signature:     base64.RawURLEncoding.EncodeToString(signature),
-	}
-	encoded, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, releaseManifestInvalid("encode signature envelope: %v", err)
+	if len(encoded) > MaximumReleaseManifestBytes {
+		return nil, releaseManifestInvalid("manifest exceeds %d bytes", MaximumReleaseManifestBytes)
 	}
 	return encoded, nil
 }
 
-func DecodeAndVerifyReleaseManifest(data []byte, publicKey ed25519.PublicKey) (ReleaseManifest, error) {
-	if len(publicKey) != ed25519.PublicKeySize {
-		return ReleaseManifest{}, releaseManifestInvalid("verification key must be Ed25519")
-	}
-	if len(data) == 0 || len(data) > MaximumSignedReleaseManifestBytes {
-		return ReleaseManifest{}, releaseManifestInvalid("signature envelope size is invalid")
-	}
-	var envelope SignedReleaseManifest
-	if err := decodeStrictReleaseJSON(data, &envelope); err != nil {
-		return ReleaseManifest{}, releaseManifestInvalid("decode signature envelope: %v", err)
-	}
-	if envelope.SchemaVersion != ReleaseSignatureEnvelopeSchemaVersion || envelope.Algorithm != ReleaseSignatureAlgorithm {
-		return ReleaseManifest{}, releaseManifestInvalid("unsupported signature envelope")
-	}
-	if envelope.KeyID != releaseManifestKeyID(publicKey) {
-		return ReleaseManifest{}, releaseManifestInvalid("release key ID mismatch")
-	}
-	payload, err := decodeCanonicalReleaseBase64(envelope.Payload)
-	if err != nil || len(payload) == 0 || len(payload) > MaximumReleaseManifestPayloadBytes {
-		return ReleaseManifest{}, releaseManifestInvalid("payload is invalid")
-	}
-	signature, err := decodeCanonicalReleaseBase64(envelope.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return ReleaseManifest{}, releaseManifestInvalid("signature is invalid")
-	}
-	if !ed25519.Verify(publicKey, releaseManifestSignedMessage(payload), signature) {
-		return ReleaseManifest{}, releaseManifestInvalid("signature verification failed")
+func DecodeReleaseManifest(data []byte) (ReleaseManifest, error) {
+	if len(data) == 0 || len(data) > MaximumReleaseManifestBytes {
+		return ReleaseManifest{}, releaseManifestInvalid("manifest size is invalid")
 	}
 	var manifest ReleaseManifest
-	if err := decodeStrictReleaseJSON(payload, &manifest); err != nil {
-		return ReleaseManifest{}, releaseManifestInvalid("decode signed payload: %v", err)
+	if err := decodeStrictReleaseJSON(data, &manifest); err != nil {
+		return ReleaseManifest{}, releaseManifestInvalid("decode manifest: %v", err)
 	}
 	canonical, err := json.Marshal(manifest)
-	if err != nil || !bytes.Equal(canonical, payload) {
-		return ReleaseManifest{}, releaseManifestInvalid("payload is not canonical JSON")
+	if err != nil || !bytes.Equal(canonical, data) {
+		return ReleaseManifest{}, releaseManifestInvalid("manifest is not canonical JSON")
 	}
 	if err := manifest.Validate(); err != nil {
 		return ReleaseManifest{}, err
@@ -358,27 +301,16 @@ func VerifyReleaseArtifact(manifest ReleaseManifest, relativePath string, conten
 		}
 	}
 	if expected == "" {
-		return fmt.Errorf("%w: artifact path is not signed", ErrReleaseArtifactMismatch)
+		return fmt.Errorf("%w: artifact path is not present in the manifest", ErrReleaseArtifactMismatch)
 	}
 	digest := sha256.New()
 	if _, err := io.Copy(digest, content); err != nil {
 		return fmt.Errorf("%w: read artifact", ErrReleaseArtifactMismatch)
 	}
 	if hex.EncodeToString(digest.Sum(nil)) != expected {
-		return fmt.Errorf("%w: checksum does not match signed manifest", ErrReleaseArtifactMismatch)
+		return fmt.Errorf("%w: checksum does not match manifest", ErrReleaseArtifactMismatch)
 	}
 	return nil
-}
-
-func releaseManifestSignedMessage(payload []byte) []byte {
-	message := make([]byte, 0, len(releaseManifestSignatureDomain)+len(payload))
-	message = append(message, releaseManifestSignatureDomain...)
-	return append(message, payload...)
-}
-
-func releaseManifestKeyID(publicKey ed25519.PublicKey) string {
-	digest := sha256.Sum256(publicKey)
-	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func releaseManifestInvalid(format string, arguments ...any) error {
@@ -453,14 +385,6 @@ func sortedUniqueIdentifiers(values []string) bool {
 		}
 	}
 	return true
-}
-
-func decodeCanonicalReleaseBase64(value string) ([]byte, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
-		return nil, fmt.Errorf("non-canonical base64url")
-	}
-	return decoded, nil
 }
 
 func equalReleaseStrings(left, right []string) bool {

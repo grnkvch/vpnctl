@@ -4,19 +4,23 @@ Defines reproducible software delivery, manual compatible upgrades, portable gat
 
 ## ADDED Requirements
 
-### Requirement: Signed self-contained release bundle
-Each release SHALL provide one signed, checksummed bundle containing the vpnctl binary, a manifest, and pinned third-party data-plane binaries needed by both roles. Initialization SHALL install only the selected role's components from the local bundle. Normal apply and repair MUST NOT download replacement binaries from upstream projects. Ubuntu packages such as nftables, WireGuard tools, and the selected reverse proxy SHALL come from configured Ubuntu repositories and be version/compatibility reported.
+### Requirement: Checksummed self-contained release bundle
+Each release SHALL publish a standalone vpnctl bootstrap binary, one self-contained bundle containing the vpnctl binary, a canonical manifest, and pinned third-party data-plane binaries needed by both roles, plus canonical checksum metadata binding the release version and exact size/SHA-256 of both assets. Initialization SHALL install only the selected role's components from the local bundle. Normal apply and repair MUST NOT download replacement binaries from upstream projects. Ubuntu packages such as nftables, WireGuard tools, and the selected reverse proxy SHALL come from configured Ubuntu repositories and be version/compatibility reported.
 
 #### Scenario: Offline-transferred bundle
 - **WHEN** an operator downloads a bundle elsewhere, copies it to the VPS with `scp`, and initializes a role
 - **THEN** vpnctl verifies the bundle and installs its pinned role components without fetching those binaries from their upstream repositories
 
 ### Requirement: Installer verification boundary
-The official curl installer SHALL verify release metadata and checksums before installing the vpnctl binary. Offline bundle transfer SHALL be supported, but v2.0 SHALL not claim a fully air-gapped OS setup because required Ubuntu packages can still need configured apt repositories.
+The official curl installer and every local bundle consumer SHALL verify canonical release metadata, exact asset sizes, SHA-256 checksums, bundle framing, the internal manifest, and every bundled artifact before mutation. v2.0 SHALL NOT require or claim a cryptographic publisher signature for release artifacts: SHA-256 detects corruption only when checksum metadata arrives through a trusted channel and cannot detect an attacker replacing both an asset and its checksum metadata. HTTPS release download and trusted SSH/`scp` transfer are the accepted delivery trust boundaries for v2.0. Offline bundle transfer SHALL be supported, but v2.0 SHALL not claim a fully air-gapped OS setup because required Ubuntu packages can still need configured apt repositories.
 
 #### Scenario: Bundle checksum mismatch
-- **WHEN** the downloaded or copied release bundle does not match its signed manifest
+- **WHEN** the downloaded or copied release bundle does not match the size or SHA-256 recorded in canonical release metadata, or an internal artifact does not match the bundle manifest
 - **THEN** installation or update stops before replacing any installed component
+
+#### Scenario: Artifact and checksum metadata share an untrusted channel
+- **WHEN** an operator obtains both a release artifact and its checksum metadata from a channel whose publisher identity is not trusted
+- **THEN** vpnctl documents that checksum verification alone does not authenticate the publisher and does not claim that the artifact is authentic
 
 ### Requirement: Manual gateway-first updates
 `vpnctl update`, `vpnctl update <version>`, and `vpnctl update rollback` SHALL be manual operations; no background update check, beta/nightly channel, or automatic remote-node update SHALL exist. An update SHALL verify all artifacts, show version and state-migration diff, fleet compatibility, affected services, expected interruption, and rollback capability before confirmed mutation. Updates SHALL proceed gateway before nodes.

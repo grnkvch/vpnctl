@@ -11,7 +11,7 @@ vpnctl v1 решает только одноузловой personal WireGuard VP
 - Добавить два подготовленных транспорта — WireGuard `standard` и DPI-resistant `restricted` — с только ручным выбором, test/switch flows и отсутствием fail-direct.
 - Добавить managed IP-only HTTPS ingress на `443/TCP` и multiplexed reverse tunnel от gateway к явно опубликованным HTTP applications private nodes.
 - Добавить transactional desired-state operations, passive status, active doctor, drift repair, lockout watchdog, temporary opt-in logging, encrypted gateway backup/restore и explicit uninstall/purge semantics.
-- Добавить signed pinned release bundle, gateway-first manual updates with rollback, one-time migration from v1 и acceptance/resource gates для Ubuntu 24.04 amd64 на 1 vCPU/512 MB/10 GB.
+- Добавить checksummed pinned self-contained release bundle, gateway-first manual updates with rollback, one-time migration from v1 и acceptance/resource gates для Ubuntu 24.04 amd64 на 1 vCPU/512 MB/10 GB.
 - Явно не включать mesh/failover, node-to-node networking, automatic transport switching, process/container-scoped policy, public management API/Web UI, generic ingress, full IPv6, domain/ACME, URL/subscription/QR delivery и node cloning/portable backup.
 
 ## Capabilities
@@ -27,7 +27,7 @@ vpnctl v1 решает только одноузловой personal WireGuard VP
 - `managed-https-ingress`: IP-only TLS endpoint, path-based expose resources, certificate lifecycle, bounded HTTP proxying and observable failure semantics.
 - `reverse-tunnel`: per-node multiplexed outbound tunnels, authorization, reconnect, stable internal endpoints and expose mapping lifecycle.
 - `desired-state-and-operations`: transactional plan/apply/repair, pending/drift semantics, status/doctor, temporary logging and state durability.
-- `release-delivery-and-migration`: signed bundles, pinned dependencies, manual update/rollback, encrypted gateway backup/restore, v1 migration and release acceptance gates.
+- `release-delivery-and-migration`: checksum-verified self-contained bundles, pinned dependencies, manual update/rollback, encrypted gateway backup/restore, v1 migration and release acceptance gates.
 
 ### Modified Capabilities
 
@@ -39,4 +39,4 @@ None. The repository has no existing OpenSpec capability specifications; v1 beha
 - New gateway services and integrations include a vpnctl controller, nftables, WireGuard, Mihomo/Shadowsocks/ShadowTLS, nginx, a reverse-tunnel implementation, systemd-resolved integration and independent systemd data-plane units.
 - Public network contract reserves `443/TCP` for HTTPS/enrollment/recovery, `8443/TCP` for restricted transport and `51820/UDP` for WireGuard; `8443/UDP` and `443/UDP` remain closed.
 - System state moves to `/etc/vpnctl`, `/var/lib/vpnctl` and `/run/vpnctl`; gateway becomes vpnctl-dedicated while private nodes remain application hosts with narrowly scoped vpnctl ownership.
-- Delivery and operations require signed release artifacts, pinned component manifests, a one-time v1 migration tool, compatibility windows and end-to-end/security/resource testing on the minimum target VPS.
+- Delivery and operations require canonical checksum metadata for release artifacts, pinned component manifests, a one-time v1 migration tool, compatibility windows and end-to-end/security/resource testing on the minimum target VPS. v2.0 does not authenticate release publisher identity cryptographically; signed release delivery remains a backlog hardening item.

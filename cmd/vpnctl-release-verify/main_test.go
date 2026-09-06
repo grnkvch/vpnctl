@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -14,15 +12,15 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/model"
 )
 
-func TestReleaseVerifierAuthenticatesAllAssetsAndBundle(t *testing.T) {
+func TestReleaseVerifierChecksAllAssetsAndBundle(t *testing.T) {
 	t.Parallel()
-	directory, publicKey := buildVerificationFixture(t)
-	result, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey)
+	directory := buildVerificationFixture(t)
+	result, err := verifyFixtureReleaseAssets(directory, "v2.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != "passed" || result.Version != "v2.0.0" || result.Platform != "ubuntu-24.04-amd64" ||
-		result.Signature != "ed25519-verified" || result.Bundle != "manifest-and-artifacts-verified" ||
+		result.Integrity != "sha256-and-bundle-verified" || result.Bundle != "manifest-and-artifacts-verified" ||
 		result.Migration != "backward-reversible" {
 		t.Fatalf("release verification result = %+v", result)
 	}
@@ -31,40 +29,49 @@ func TestReleaseVerifierAuthenticatesAllAssetsAndBundle(t *testing.T) {
 func TestReleaseVerifierRejectsTamperingVersionModesAndSymlinks(t *testing.T) {
 	t.Parallel()
 	t.Run("binary tampering", func(t *testing.T) {
-		directory, publicKey := buildVerificationFixture(t)
+		directory := buildVerificationFixture(t)
 		path := filepath.Join(directory, lifecycle.ReleaseBinaryAsset)
 		if err := os.WriteFile(path, []byte("tampered"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0"); err == nil {
 			t.Fatal("tampered binary passed")
 		}
 	})
 	t.Run("wrong version", func(t *testing.T) {
-		directory, publicKey := buildVerificationFixture(t)
-		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.1", publicKey); err == nil {
+		directory := buildVerificationFixture(t)
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.1"); err == nil {
 			t.Fatal("wrong release version passed")
 		}
 	})
 	t.Run("unsafe mode", func(t *testing.T) {
-		directory, publicKey := buildVerificationFixture(t)
+		directory := buildVerificationFixture(t)
 		if err := os.Chmod(filepath.Join(directory, lifecycle.ReleaseChecksumsAsset), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0"); err == nil {
 			t.Fatal("unexpected checksum metadata mode passed")
 		}
 	})
 	t.Run("symlink", func(t *testing.T) {
-		directory, publicKey := buildVerificationFixture(t)
-		path := filepath.Join(directory, lifecycle.ReleaseChecksumsSignatureAsset)
-		target := filepath.Join(directory, "signature-copy")
+		directory := buildVerificationFixture(t)
+		path := filepath.Join(directory, lifecycle.ReleaseChecksumsAsset)
+		target := filepath.Join(t.TempDir(), "checksums-copy")
 		content, err := os.ReadFile(path)
 		if err != nil || os.WriteFile(target, content, 0o644) != nil || os.Remove(path) != nil || os.Symlink(target, path) != nil {
 			t.Fatal("prepare symlink fixture")
 		}
-		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0", publicKey); err == nil {
-			t.Fatal("symlinked signature passed")
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0"); err == nil {
+			t.Fatal("symlinked checksum metadata passed")
+		}
+	})
+	t.Run("unexpected signature asset", func(t *testing.T) {
+		directory := buildVerificationFixture(t)
+		if err := os.WriteFile(filepath.Join(directory, "release-checksums.txt.sig"), []byte("obsolete"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0"); err == nil {
+			t.Fatal("release with detached signature was not rejected as a non-three-asset release")
 		}
 	})
 }
@@ -92,21 +99,16 @@ func TestProductionReleaseManifestContractRequiresEveryPinnedComponent(t *testin
 
 func TestReleaseVerifierRejectsIncompleteArguments(t *testing.T) {
 	t.Parallel()
-	publicKey, _, _ := ed25519.GenerateKey(rand.Reader)
-	if _, err := runReleaseVerification(nil, publicKey); err == nil {
+	if _, err := runReleaseVerification(nil); err == nil {
 		t.Fatal("missing verifier arguments passed")
 	}
-	if _, err := runReleaseVerification([]string{"unexpected"}, publicKey); err == nil {
+	if _, err := runReleaseVerification([]string{"unexpected"}); err == nil {
 		t.Fatal("positional verifier argument passed")
 	}
 }
 
-func buildVerificationFixture(t *testing.T) (string, ed25519.PublicKey) {
+func buildVerificationFixture(t *testing.T) string {
 	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	binary := []byte("vpnctl release verifier fixture")
 	binarySHA256 := digest(binary)
 	manifest := lifecycle.ReleaseManifest{
@@ -135,7 +137,7 @@ func buildVerificationFixture(t *testing.T) (string, ed25519.PublicKey) {
 		t.Fatal(err)
 	}
 	var bundle bytes.Buffer
-	if err := lifecycle.BuildReleaseBundle(&bundle, manifest, privateKey, map[string][]byte{"bin/vpnctl": binary}); err != nil {
+	if err := lifecycle.BuildReleaseBundle(&bundle, manifest, map[string][]byte{"bin/vpnctl": binary}); err != nil {
 		t.Fatal(err)
 	}
 	checksums, err := lifecycle.NewReleaseChecksums(
@@ -148,23 +150,17 @@ func buildVerificationFixture(t *testing.T) (string, ed25519.PublicKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature, err := lifecycle.SignReleaseChecksums(checksumsEncoded, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
 	directory := t.TempDir()
 	writeFixtureAsset(t, directory, lifecycle.ReleaseBinaryAsset, binary, 0o755)
 	writeFixtureAsset(t, directory, lifecycle.ReleaseBundleAsset, bundle.Bytes(), 0o644)
 	writeFixtureAsset(t, directory, lifecycle.ReleaseChecksumsAsset, checksumsEncoded, 0o644)
-	writeFixtureAsset(t, directory, lifecycle.ReleaseChecksumsSignatureAsset, signature, 0o644)
-	return directory, publicKey
+	return directory
 }
 
-func verifyFixtureReleaseAssets(directory, version string, publicKey ed25519.PublicKey) (releaseVerificationResult, error) {
+func verifyFixtureReleaseAssets(directory, version string) (releaseVerificationResult, error) {
 	return verifyReleaseAssetsWithContract(
 		directory,
 		version,
-		publicKey,
 		func(manifest lifecycle.ReleaseManifest, checksums lifecycle.ReleaseChecksums) error {
 			if manifest.ComponentManifest.VPNCTLVersion != checksums.Version {
 				return os.ErrInvalid

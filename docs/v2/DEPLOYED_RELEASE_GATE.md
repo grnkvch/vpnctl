@@ -116,24 +116,28 @@ proven, copy `telegram.json` into the evidence directory, remove only
 The helper does not make Telegram integration a vpnctl product responsibility;
 it is a test-only release witness.
 
-## Signed assets and finalization
+## Checksum-governed assets and finalization
 
-The release asset directory must contain the four outputs of `scripts/release.sh`:
+The release asset directory must contain exactly the three outputs of `scripts/release.sh`:
 
 - `vpnctl-linux-amd64`;
 - `vpnctl-v2-linux-amd64.bundle`;
-- `release-checksums.txt`;
-- `release-checksums.txt.sig`.
+- `release-checksums.txt`.
 
-`finalize` uses the maintainer-only `vpnctl-release-verify` command and the
-embedded production Ed25519 public key. It verifies the checksum signature,
-binary and bundle sizes/digests, the complete signed manifest and every bundled
-artifact, Ubuntu 24.04/amd64, backward-reversible migration, the requested
-version, and that the standalone vpnctl binary matches the bundle record. It
+`finalize` uses the maintainer-only `vpnctl-release-verify` command. It verifies
+the canonical checksum metadata, binary and bundle sizes/digests, the complete
+manifest and every bundled artifact, Ubuntu 24.04/amd64,
+backward-reversible migration, the requested version, and that the standalone
+vpnctl binary matches the bundle record. It rejects a detached signature or any
+other fourth asset. It
 also requires the Telegram certificate digest to equal the deployed certificate
 digest and every automated/manual boolean to be true.
+
+This gate detects corruption and inconsistent artifacts but does not
+cryptographically authenticate the publisher. The evidence operator must obtain
+the three files over a trusted HTTPS or SSH/`scp` channel.
 
 Only then is `final-summary.json` written with `production_ready=true`. It
 deliberately retains `release_labeled=false`: reviewing the private evidence,
 checking the host journal, completing task 16.11, creating the Git tag, and
-publishing the four assets remain separate explicit maintainer actions.
+publishing the three assets remain separate explicit maintainer actions.

@@ -30,6 +30,9 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "__service" {
 		return executeInternalService(args[1:], stderr)
 	}
+	if len(args) > 0 && args[0] == "__release-verify-bundle" {
+		return executeInternalReleaseBundleVerification(args[1:], stderr)
+	}
 	if isGatewayInitInvocation(args) {
 		return executeGatewayInit(args, stdout, stderr)
 	}

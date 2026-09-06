@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,7 +25,7 @@ import (
 
 const (
 	releaseBundleMagic             = "VPNCTLBUNDLE\x00\x01"
-	MaximumReleaseBundleBytes      = int64(MaximumSignedReleaseManifestBytes) + maximumReleaseArtifactTotalBytes + 64<<10
+	MaximumReleaseBundleBytes      = int64(MaximumReleaseManifestBytes) + maximumReleaseArtifactTotalBytes + 64<<10
 	maximumInstalledComponentBytes = int64(128 << 20)
 )
 
@@ -42,9 +41,8 @@ type ReleaseBundleInstallResult struct {
 }
 
 type ReleaseBundleInstaller struct {
-	root      string
-	publicKey ed25519.PublicKey
-	platform  ReleasePlatform
+	root     string
+	platform ReleasePlatform
 }
 
 type InitReleaseSource interface {
@@ -69,9 +67,9 @@ type releaseInstallCandidate struct {
 }
 
 // BuildReleaseBundle writes a timestamp-free, owner-free binary stream. The
-// signed manifest and its canonical artifact order make equal inputs produce
+// canonical manifest and its artifact order make equal inputs produce
 // equal output without depending on tar metadata or the current filesystem.
-func BuildReleaseBundle(writer io.Writer, manifest ReleaseManifest, privateKey ed25519.PrivateKey, artifacts map[string][]byte) error {
+func BuildReleaseBundle(writer io.Writer, manifest ReleaseManifest, artifacts map[string][]byte) error {
 	if writer == nil {
 		return releaseBundleInvalid("writer is required")
 	}
@@ -79,7 +77,7 @@ func BuildReleaseBundle(writer io.Writer, manifest ReleaseManifest, privateKey e
 		return releaseBundleInvalid("manifest: %v", err)
 	}
 	if len(artifacts) != len(manifest.Artifacts) {
-		return releaseBundleInvalid("artifact set does not match signed manifest")
+		return releaseBundleInvalid("artifact set does not match manifest")
 	}
 	for _, artifact := range manifest.Artifacts {
 		content, found := artifacts[artifact.Path]
@@ -90,17 +88,17 @@ func BuildReleaseBundle(writer io.Writer, manifest ReleaseManifest, privateKey e
 			return releaseBundleInvalid("artifact %s: %v", artifact.Path, err)
 		}
 	}
-	signed, err := EncodeSignedReleaseManifest(manifest, privateKey)
+	encodedManifest, err := EncodeReleaseManifest(manifest)
 	if err != nil {
-		return releaseBundleInvalid("sign manifest: %v", err)
+		return releaseBundleInvalid("encode manifest: %v", err)
 	}
 	if err := writeReleaseBundleBytes(writer, []byte(releaseBundleMagic)); err != nil {
 		return err
 	}
-	if err := writeReleaseBundleUint32(writer, uint32(len(signed))); err != nil {
+	if err := writeReleaseBundleUint32(writer, uint32(len(encodedManifest))); err != nil {
 		return err
 	}
-	if err := writeReleaseBundleBytes(writer, signed); err != nil {
+	if err := writeReleaseBundleBytes(writer, encodedManifest); err != nil {
 		return err
 	}
 	for _, artifact := range manifest.Artifacts {
@@ -120,20 +118,15 @@ func BuildReleaseBundle(writer io.Writer, manifest ReleaseManifest, privateKey e
 	return nil
 }
 
-func NewReleaseBundleInstaller(root string, publicKey ed25519.PublicKey, platform ReleasePlatform) (*ReleaseBundleInstaller, error) {
+func NewReleaseBundleInstaller(root string, platform ReleasePlatform) (*ReleaseBundleInstaller, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, fmt.Errorf("release install root must be clean and absolute")
-	}
-	if len(publicKey) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("release verification key must be Ed25519")
 	}
 	info, err := os.Lstat(root)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("release install root must be a real directory")
 	}
-	return &ReleaseBundleInstaller{
-		root: root, publicKey: append(ed25519.PublicKey(nil), publicKey...), platform: platform,
-	}, nil
+	return &ReleaseBundleInstaller{root: root, platform: platform}, nil
 }
 
 func NewLocalInitReleaseSource(installer *ReleaseBundleInstaller, bundlePath string) (*LocalInitReleaseSource, error) {
@@ -161,7 +154,7 @@ func (installer *ReleaseBundleInstaller) Install(ctx context.Context, bundlePath
 	if ctx == nil {
 		return ReleaseBundleInstallResult{}, fmt.Errorf("context is required")
 	}
-	if installer == nil || len(installer.publicKey) != ed25519.PublicKeySize {
+	if installer == nil {
 		return ReleaseBundleInstallResult{}, fmt.Errorf("release bundle installer is incomplete")
 	}
 	if role != model.RoleGateway && role != model.RoleNode {
@@ -220,7 +213,7 @@ func (installer *ReleaseBundleInstaller) Inspect(ctx context.Context, bundlePath
 	if ctx == nil {
 		return ReleaseManifest{}, fmt.Errorf("context is required")
 	}
-	if installer == nil || len(installer.publicKey) != ed25519.PublicKeySize {
+	if installer == nil {
 		return ReleaseManifest{}, fmt.Errorf("release bundle installer is incomplete")
 	}
 	input, manifest, err := installer.open(bundlePath)
@@ -252,19 +245,19 @@ func (installer *ReleaseBundleInstaller) open(bundlePath string) (*os.File, Rele
 		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle magic is invalid")
 	}
 	manifestLength, err := readReleaseBundleUint32(input)
-	if err != nil || manifestLength == 0 || manifestLength > MaximumSignedReleaseManifestBytes {
+	if err != nil || manifestLength == 0 || manifestLength > MaximumReleaseManifestBytes {
 		_ = input.Close()
-		return nil, ReleaseManifest{}, releaseBundleInvalid("signed manifest length is invalid")
+		return nil, ReleaseManifest{}, releaseBundleInvalid("manifest length is invalid")
 	}
-	signed := make([]byte, manifestLength)
-	if _, err := io.ReadFull(input, signed); err != nil {
+	encodedManifest := make([]byte, manifestLength)
+	if _, err := io.ReadFull(input, encodedManifest); err != nil {
 		_ = input.Close()
-		return nil, ReleaseManifest{}, releaseBundleInvalid("signed manifest is truncated")
+		return nil, ReleaseManifest{}, releaseBundleInvalid("manifest is truncated")
 	}
-	manifest, err := DecodeAndVerifyReleaseManifest(signed, installer.publicKey)
+	manifest, err := DecodeReleaseManifest(encodedManifest)
 	if err != nil {
 		_ = input.Close()
-		return nil, ReleaseManifest{}, releaseBundleInvalid("verify signed manifest: %v", err)
+		return nil, ReleaseManifest{}, releaseBundleInvalid("verify manifest: %v", err)
 	}
 	if err := VerifyReleasePlatform(manifest, installer.platform); err != nil {
 		_ = input.Close()
@@ -313,11 +306,11 @@ func consumeReleaseBundleArtifacts(ctx context.Context, input io.Reader, manifes
 		}
 		pathBytes := make([]byte, pathLength)
 		if _, err := io.ReadFull(input, pathBytes); err != nil || string(pathBytes) != artifact.Path {
-			return nil, releaseBundleInvalid("artifact %d path differs from signed order", index)
+			return nil, releaseBundleInvalid("artifact %d path differs from manifest order", index)
 		}
 		size, err := readReleaseBundleUint64(input)
 		if err != nil || size != uint64(artifact.SizeBytes) {
-			return nil, releaseBundleInvalid("artifact %s size differs from signed manifest", artifact.Path)
+			return nil, releaseBundleInvalid("artifact %s size differs from manifest", artifact.Path)
 		}
 		digest := sha256.New()
 		var stagedPath string
@@ -341,7 +334,7 @@ func consumeReleaseBundleArtifacts(ctx context.Context, input io.Reader, manifes
 			return nil, releaseBundleInvalid("artifact %s is truncated", artifact.Path)
 		}
 		if hex.EncodeToString(digest.Sum(nil)) != artifact.SHA256 {
-			return nil, releaseBundleInvalid("artifact %s checksum differs from signed manifest", artifact.Path)
+			return nil, releaseBundleInvalid("artifact %s checksum differs from manifest", artifact.Path)
 		}
 		if stageRoot != "" {
 			artifacts[artifact.Component] = stagedPath
@@ -349,7 +342,7 @@ func consumeReleaseBundleArtifacts(ctx context.Context, input io.Reader, manifes
 	}
 	var trailing [1]byte
 	if count, err := input.Read(trailing[:]); count != 0 || !errors.Is(err, io.EOF) {
-		return nil, releaseBundleInvalid("bundle contains unsigned trailing bytes")
+		return nil, releaseBundleInvalid("bundle contains trailing bytes")
 	}
 	return artifacts, nil
 }

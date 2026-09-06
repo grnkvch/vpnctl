@@ -431,13 +431,13 @@ finalize_gate() {
   if ! env GOCACHE=/private/tmp/vpnctl-go-cache go run ./cmd/vpnctl-release-verify \
     -assets "$release_directory" -version "$release_version" > "$release_output"; then
     rm -f "$release_output"
-    echo "signed release asset verification failed" >&2
+    echo "checksum-governed release asset verification failed" >&2
     exit 3
   fi
   chmod 0600 "$release_output"
   jq -e --arg release_version "$release_version" '
     .schema_version == 1 and .status == "passed" and .version == $release_version and
-    .platform == "ubuntu-24.04-amd64" and .signature == "ed25519-verified" and
+    .platform == "ubuntu-24.04-amd64" and .integrity == "sha256-and-bundle-verified" and
     .bundle == "manifest-and-artifacts-verified" and .migration == "backward-reversible"
   ' "$release_output" >/dev/null || { rm -f "$release_output"; echo "release verification result is invalid" >&2; exit 3; }
   mv "$release_output" "$evidence_dir/release.json"
@@ -457,7 +457,7 @@ finalize_gate() {
         telegram_provider: true,
         telegram_registration_cleaned: true,
         temporary_expose_removed: true,
-        signed_release_assets: true
+        checksummed_release_assets: true
       },
       fingerprints: {
         public_certificate_sha256: $certificate_sha,

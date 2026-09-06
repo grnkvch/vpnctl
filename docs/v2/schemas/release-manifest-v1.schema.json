@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vpnctl.dev/schemas/v2/release-manifest-v1.schema.json",
-  "title": "vpnctl signed release payload v1",
+  "title": "vpnctl canonical release manifest v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "component_manifest", "artifacts", "apt_packages"],

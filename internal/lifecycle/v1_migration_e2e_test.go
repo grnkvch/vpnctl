@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"os"
@@ -35,44 +34,40 @@ func TestV1MigrationE2EPreservesEveryClientGoldenAndProducesV2Exports(t *testing
 		t.Fatal(err)
 	}
 
-	// Exercise the real signed bundle decoder and verifier in the read-only
+	// Exercise the real checksum-governed bundle decoder and verifier in the read-only
 	// migration path. Provider-exact binary bytes are intentionally left to the
 	// release bundle suite; the convergence half below uses its pinned manifest
 	// through the same SystemV1MigrationDriver boundary.
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signedManifest, signedArtifacts, _ := releaseBundleFixture(t)
-	signedBundle := filepath.Join(v1MigrationRealTempDir(t), "signed-v2.bundle")
-	writeReleaseBundleFile(t, signedBundle, signedManifest, privateKey, signedArtifacts)
-	signedInstaller, err := NewReleaseBundleInstaller(systemRoot, publicKey, ReleasePlatform{
+	verifiedManifest, verifiedArtifacts, _ := releaseBundleFixture(t)
+	verifiedBundle := filepath.Join(v1MigrationRealTempDir(t), "verified-v2.bundle")
+	writeReleaseBundleFile(t, verifiedBundle, verifiedManifest, verifiedArtifacts)
+	verifiedInstaller, err := NewReleaseBundleInstaller(systemRoot, ReleasePlatform{
 		OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	signedDriver := &SystemV1MigrationDriver{
-		bundles:   signedInstaller,
+		bundles:   verifiedInstaller,
 		handshake: &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
 	}
 	signedMigrator, err := NewV1Migrator(inspector, signedDriver)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dryRunRoot := filepath.Join(v1MigrationRealTempDir(t), "signed-dry-run")
+	dryRunRoot := filepath.Join(v1MigrationRealTempDir(t), "verified-dry-run")
 	plan, err := signedMigrator.Plan(context.Background(), V1MigrationInput{
-		BundlePath: signedBundle, MaintenanceRoot: dryRunRoot, PublicIPv4: "198.211.99.116",
+		BundlePath: verifiedBundle, MaintenanceRoot: dryRunRoot, PublicIPv4: "198.211.99.116",
 		NodeCIDR: model.DefaultNodeCIDR, SSHPort: 22,
 	})
-	if err != nil || plan.Status != "ready" || plan.ReleaseVersion != signedManifest.ComponentManifest.VPNCTLVersion {
-		t.Fatalf("signed migration dry-run = %+v, err=%v", plan, err)
+	if err != nil || plan.Status != "ready" || plan.ReleaseVersion != verifiedManifest.ComponentManifest.VPNCTLVersion {
+		t.Fatalf("verified migration dry-run = %+v, err=%v", plan, err)
 	}
 	if _, err := os.Lstat(dryRunRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("signed dry-run created maintenance state: %v", err)
+		t.Fatalf("verified dry-run created maintenance state: %v", err)
 	}
 	if after := snapshotV1InspectionTrees(t, workspace, systemRoot); !reflect.DeepEqual(beforeDryRun, after) {
-		t.Fatal("signed migration dry-run changed the v1 installation")
+		t.Fatal("verified migration dry-run changed the v1 installation")
 	}
 
 	paths, err := store.NewPaths(systemRoot)

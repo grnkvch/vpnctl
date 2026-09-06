@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"os"
@@ -76,7 +75,7 @@ func TestSystemV1MigrationSnapshotRetainsVerifiedBundleAtRollbackBoundary(t *tes
 	maintenanceRoot := v1MigrationRealTempDir(t)
 	snapshotRoot := filepath.Join(maintenanceRoot, v1MigrationSnapshotName)
 	bundlePath := filepath.Join(v1MigrationRealTempDir(t), "vpnctl-v2.bundle")
-	bundle := []byte("previously verified signed bundle fixture\n")
+	bundle := []byte("previously verified checksum-governed bundle fixture\n")
 	writeV1FixtureFile(t, bundlePath, bundle, 0o600)
 	driver := &SystemV1MigrationDriver{
 		runner: v1MigrationSnapshotRunner{}, bundles: &v1MigrationBundleInstallerStub{manifest: v1MigrationGatewayManifest()},
@@ -277,14 +276,10 @@ func TestReleaseBundleInstallerReplacesOnlyCapturedV1BinaryAndRetainsBundle(t *t
 	if _, err := (&SystemV1MigrationDriver{runner: v1MigrationSnapshotRunner{}, binaryPath: linuxplatform.DefaultVPNCTLBinaryPath}).CreateMaintenanceSnapshot(context.Background(), snapshotRoot, &inspection); err != nil {
 		t.Fatal(err)
 	}
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, artifacts, installed := releaseBundleFixture(t)
 	bundlePath := filepath.Join(v1MigrationRealTempDir(t), "vpnctl-v2.bundle")
-	writeReleaseBundleFile(t, bundlePath, manifest, privateKey, artifacts)
-	installer, err := NewReleaseBundleInstaller(systemRoot, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	writeReleaseBundleFile(t, bundlePath, manifest, artifacts)
+	installer, err := NewReleaseBundleInstaller(systemRoot, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}

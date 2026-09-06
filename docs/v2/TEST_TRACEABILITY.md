@@ -88,8 +88,9 @@ The regression test fails when a spec scenario is added, removed, or renamed wit
 | `personal-client-management` | Client revocation and deletion | Lost device revocation | unit, integration, e2e, manual-compatibility | 1.1, 7.7-7.12, 16.1, 16.4-16.5, 16.11 |
 | `personal-client-management` | Client credential rotation | Rotated Clash client | unit, integration, e2e, manual-compatibility | 1.1, 7.7-7.12, 16.1, 16.4-16.5, 16.11 |
 | `personal-client-management` | Export delivery boundary | Successful export output | unit, integration, e2e, manual-compatibility | 1.1, 7.7-7.12, 16.1, 16.4-16.5, 16.11 |
-| `release-delivery-and-migration` | Signed self-contained release bundle | Offline-transferred bundle | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
+| `release-delivery-and-migration` | Checksummed self-contained release bundle | Offline-transferred bundle | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Installer verification boundary | Bundle checksum mismatch | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
+| `release-delivery-and-migration` | Installer verification boundary | Artifact and checksum metadata share an untrusted channel | unit, integration, documentation, manual-compatibility | 14.1, 14.3, 15.4, 16.10-16.11 |
 | `release-delivery-and-migration` | Manual gateway-first updates | Latest stable update | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Update isolation and rollback | Updated component fails health check | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Update availability expectations | Controller-only compatible update | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |

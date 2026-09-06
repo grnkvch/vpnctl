@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,7 +15,6 @@ import (
 	"reflect"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
 const maximumReleaseMetadataBytes = int64(4096)
@@ -30,21 +28,17 @@ type releaseVerificationResult struct {
 	BundleSHA256  string `json:"bundle_sha256"`
 	BundleBytes   int64  `json:"bundle_bytes"`
 	Platform      string `json:"platform"`
-	Signature     string `json:"signature"`
+	Integrity     string `json:"integrity"`
 	Bundle        string `json:"bundle"`
 	Migration     string `json:"migration"`
 }
 
 func main() {
-	publicKey, err := releasetrust.PublicKey()
+	result, err := runReleaseVerification(os.Args[1:])
 	if err == nil {
-		var result releaseVerificationResult
-		result, err = runReleaseVerification(os.Args[1:], publicKey)
-		if err == nil {
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetEscapeHTML(false)
-			err = encoder.Encode(result)
-		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetEscapeHTML(false)
+		err = encoder.Encode(result)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "vpnctl release verification failed")
@@ -52,51 +46,57 @@ func main() {
 	}
 }
 
-func runReleaseVerification(arguments []string, publicKey ed25519.PublicKey) (releaseVerificationResult, error) {
+func runReleaseVerification(arguments []string) (releaseVerificationResult, error) {
 	flags := flag.NewFlagSet("vpnctl-release-verify", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var assetsDirectory, expectedVersion string
-	flags.StringVar(&assetsDirectory, "assets", "", "absolute directory containing signed release assets")
+	flags.StringVar(&assetsDirectory, "assets", "", "absolute directory containing checksum-governed release assets")
 	flags.StringVar(&expectedVersion, "version", "", "expected canonical stable release version")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return releaseVerificationResult{}, errors.New("invalid arguments")
 	}
-	return verifyReleaseAssets(assetsDirectory, expectedVersion, publicKey)
+	return verifyReleaseAssets(assetsDirectory, expectedVersion)
 }
 
-func verifyReleaseAssets(directory, expectedVersion string, publicKey ed25519.PublicKey) (releaseVerificationResult, error) {
-	return verifyReleaseAssetsWithContract(directory, expectedVersion, publicKey, verifyProductionReleaseManifest)
+func verifyReleaseAssets(directory, expectedVersion string) (releaseVerificationResult, error) {
+	return verifyReleaseAssetsWithContract(directory, expectedVersion, verifyProductionReleaseManifest)
 }
 
 func verifyReleaseAssetsWithContract(
 	directory, expectedVersion string,
-	publicKey ed25519.PublicKey,
 	manifestContract func(lifecycle.ReleaseManifest, lifecycle.ReleaseChecksums) error,
 ) (releaseVerificationResult, error) {
 	canonicalVersion, err := lifecycle.CanonicalStableReleaseVersion(expectedVersion)
 	if err != nil || canonicalVersion != expectedVersion {
 		return releaseVerificationResult{}, errors.New("expected version must be canonical")
 	}
-	if len(publicKey) != ed25519.PublicKeySize || manifestContract == nil ||
-		!filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+	if manifestContract == nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
 		return releaseVerificationResult{}, errors.New("release verification input is invalid")
 	}
 	directoryInfo, err := os.Lstat(directory)
 	if err != nil || directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
 		return releaseVerificationResult{}, errors.New("release asset directory is invalid")
 	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 3 {
+		return releaseVerificationResult{}, errors.New("release directory must contain exactly three assets")
+	}
+	expectedAssets := map[string]bool{
+		lifecycle.ReleaseBinaryAsset: false, lifecycle.ReleaseBundleAsset: false, lifecycle.ReleaseChecksumsAsset: false,
+	}
+	for _, entry := range entries {
+		if _, found := expectedAssets[entry.Name()]; !found {
+			return releaseVerificationResult{}, errors.New("release directory contains an unexpected asset")
+		}
+		expectedAssets[entry.Name()] = true
+	}
 
 	checksumsPath := filepath.Join(directory, lifecycle.ReleaseChecksumsAsset)
-	signaturePath := filepath.Join(directory, lifecycle.ReleaseChecksumsSignatureAsset)
 	checksumsEncoded, err := readBoundedReleaseAsset(checksumsPath, maximumReleaseMetadataBytes, 0o644)
 	if err != nil {
 		return releaseVerificationResult{}, err
 	}
-	signature, err := readBoundedReleaseAsset(signaturePath, ed25519.SignatureSize, 0o644)
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return releaseVerificationResult{}, errors.New("release checksum signature is invalid")
-	}
-	checksums, err := lifecycle.VerifyReleaseChecksums(checksumsEncoded, signature, publicKey)
+	checksums, err := lifecycle.DecodeReleaseChecksums(checksumsEncoded)
 	if err != nil || checksums.Version != expectedVersion {
 		return releaseVerificationResult{}, errors.New("release checksums are invalid")
 	}
@@ -107,7 +107,7 @@ func verifyReleaseAssetsWithContract(
 		return releaseVerificationResult{}, err
 	}
 
-	installer, err := lifecycle.NewReleaseBundleInstaller(directory, publicKey, lifecycle.ReleasePlatform{
+	installer, err := lifecycle.NewReleaseBundleInstaller(directory, lifecycle.ReleasePlatform{
 		OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64",
 	})
 	if err != nil {
@@ -128,13 +128,13 @@ func verifyReleaseAssetsWithContract(
 		}
 	}
 	if !binaryMatched {
-		return releaseVerificationResult{}, errors.New("standalone binary differs from signed bundle")
+		return releaseVerificationResult{}, errors.New("standalone binary differs from bundle")
 	}
 	return releaseVerificationResult{
 		SchemaVersion: 1, Status: "passed", Version: expectedVersion,
 		BinarySHA256: checksums.Binary.SHA256, BinaryBytes: checksums.Binary.SizeBytes,
 		BundleSHA256: checksums.Bundle.SHA256, BundleBytes: checksums.Bundle.SizeBytes,
-		Platform: "ubuntu-24.04-amd64", Signature: "ed25519-verified",
+		Platform: "ubuntu-24.04-amd64", Integrity: "sha256-and-bundle-verified",
 		Bundle: "manifest-and-artifacts-verified", Migration: "backward-reversible",
 	}, nil
 }
@@ -167,16 +167,16 @@ func verifyReleaseRecord(directory string, record lifecycle.ReleaseChecksumRecor
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
 		info.Size() != record.SizeBytes || info.Mode().Perm() != mode {
-		return errors.New("signed release artifact is invalid")
+		return errors.New("release artifact is invalid")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return errors.New("signed release artifact could not be opened")
+		return errors.New("release artifact could not be opened")
 	}
 	verifyErr := lifecycle.VerifyReleaseChecksumRecord(record, info.Size(), file)
 	closeErr := file.Close()
 	if verifyErr != nil || closeErr != nil {
-		return errors.New("signed release artifact checksum is invalid")
+		return errors.New("release artifact checksum is invalid")
 	}
 	return nil
 }

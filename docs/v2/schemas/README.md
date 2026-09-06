@@ -11,10 +11,10 @@ documents rather than a CLI result schema. `preset-v1.example.yaml` is its
 canonical example; parser-level checks additionally enforce canonical DNS/IP
 values, one YAML document, and the absence of aliases or anchors.
 
-`release-manifest-v1.schema.json` defines the canonical payload signed for a
-release, while `signed-release-manifest-v1.schema.json` defines its Ed25519
-envelope. The checked-in `release-manifest-v1.example.json` is deliberately
-non-installable: its vpnctl checksum is illustrative. Runtime verification
-also enforces cross-field component/artifact/apt references, deterministic
-ordering, canonical JSON/base64url, signature authenticity, exact artifact
-SHA-256, and the observed Ubuntu/architecture boundary.
+`release-manifest-v1.schema.json` defines the canonical manifest embedded in a
+release bundle. The checked-in `release-manifest-v1.example.json` is
+deliberately non-installable: its vpnctl checksum is illustrative. Runtime
+verification also enforces cross-field component/artifact/apt references,
+deterministic ordering, canonical JSON, exact artifact SHA-256, and the
+observed Ubuntu/architecture boundary. Publisher authenticity is outside this
+schema and is not claimed by the checksum-only v2.0 release flow.

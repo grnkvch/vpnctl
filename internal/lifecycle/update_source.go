@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ const DefaultReleaseRepositoryURL = "https://github.com/grnkvch/vpnctl/releases"
 type UpdateReleaseSource struct {
 	baseURL   *url.URL
 	client    *http.Client
-	publicKey ed25519.PublicKey
 	inspector *ReleaseBundleInstaller
 }
 
@@ -30,25 +28,24 @@ type StagedUpdateRelease struct {
 	BinaryPath    string
 	BundlePath    string
 	ChecksumsPath string
-	SignaturePath string
 
 	root      string
 	closeOnce sync.Once
 	closeErr  error
 }
 
-func NewUpdateReleaseSource(baseURL string, client *http.Client, publicKey ed25519.PublicKey, inspector *ReleaseBundleInstaller) (*UpdateReleaseSource, error) {
+func NewUpdateReleaseSource(baseURL string, client *http.Client, inspector *ReleaseBundleInstaller) (*UpdateReleaseSource, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, fmt.Errorf("release repository URL must be an absolute HTTPS URL without credentials, query, or fragment")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	parsed.RawPath = ""
-	if client == nil || len(publicKey) != ed25519.PublicKeySize || inspector == nil {
+	if client == nil || inspector == nil {
 		return nil, fmt.Errorf("update release source dependencies are incomplete")
 	}
 	return &UpdateReleaseSource{
-		baseURL: parsed, client: client, publicKey: append(ed25519.PublicKey(nil), publicKey...), inspector: inspector,
+		baseURL: parsed, client: client, inspector: inspector,
 	}, nil
 }
 
@@ -60,7 +57,7 @@ func (source *UpdateReleaseSource) Stage(ctx context.Context, requestedVersion s
 	if ctx == nil {
 		return nil, fmt.Errorf("context is required")
 	}
-	if source == nil || source.client == nil || source.baseURL == nil || source.inspector == nil || len(source.publicKey) != ed25519.PublicKeySize {
+	if source == nil || source.client == nil || source.baseURL == nil || source.inspector == nil {
 		return nil, fmt.Errorf("update release source is incomplete")
 	}
 	if requestedVersion != "" {
@@ -81,7 +78,7 @@ func (source *UpdateReleaseSource) Stage(ctx context.Context, requestedVersion s
 	staged := &StagedUpdateRelease{
 		root:       root,
 		BinaryPath: filepath.Join(root, ReleaseBinaryAsset), BundlePath: filepath.Join(root, ReleaseBundleAsset),
-		ChecksumsPath: filepath.Join(root, ReleaseChecksumsAsset), SignaturePath: filepath.Join(root, ReleaseChecksumsSignatureAsset),
+		ChecksumsPath: filepath.Join(root, ReleaseChecksumsAsset),
 	}
 	keep := false
 	defer func() {
@@ -97,23 +94,16 @@ func (source *UpdateReleaseSource) Stage(ctx context.Context, requestedVersion s
 	if err := source.download(ctx, releasePath, ReleaseChecksumsAsset, staged.ChecksumsPath, 4096, false); err != nil {
 		return nil, err
 	}
-	if err := source.download(ctx, releasePath, ReleaseChecksumsSignatureAsset, staged.SignaturePath, ed25519.SignatureSize, true); err != nil {
-		return nil, err
-	}
 	encodedChecksums, err := readBoundedReleaseFile(staged.ChecksumsPath, 4096)
 	if err != nil {
 		return nil, fmt.Errorf("read staged release checksums: %w", err)
 	}
-	signature, err := readExactReleaseFile(staged.SignaturePath, ed25519.SignatureSize)
-	if err != nil {
-		return nil, fmt.Errorf("read staged release signature: %w", err)
-	}
-	checksums, err := VerifyReleaseChecksums(encodedChecksums, signature, source.publicKey)
+	checksums, err := DecodeReleaseChecksums(encodedChecksums)
 	if err != nil {
 		return nil, fmt.Errorf("verify staged release checksums: %w", err)
 	}
 	if requestedVersion != "" && checksums.Version != requestedVersion {
-		return nil, fmt.Errorf("signed release version %s differs from requested %s", checksums.Version, requestedVersion)
+		return nil, fmt.Errorf("release version %s differs from requested %s", checksums.Version, requestedVersion)
 	}
 	if canonical, stableErr := CanonicalStableReleaseVersion(checksums.Version); stableErr != nil || canonical != checksums.Version {
 		return nil, fmt.Errorf("release metadata does not identify a canonical stable release")
@@ -135,7 +125,7 @@ func (source *UpdateReleaseSource) Stage(ctx context.Context, requestedVersion s
 		return nil, fmt.Errorf("verify staged release bundle: %w", err)
 	}
 	if manifest.ComponentManifest.VPNCTLVersion != checksums.Version {
-		return nil, fmt.Errorf("bundle version differs from signed release metadata")
+		return nil, fmt.Errorf("bundle version differs from release metadata")
 	}
 	vpnctlArtifact, found := releaseArtifactForComponent(manifest, "vpnctl")
 	if !found || vpnctlArtifact.SHA256 != checksums.Binary.SHA256 || vpnctlArtifact.SizeBytes != checksums.Binary.SizeBytes {
@@ -202,7 +192,7 @@ func (staged *StagedUpdateRelease) Close() error {
 }
 
 func (staged *StagedUpdateRelease) valid() bool {
-	return staged != nil && staged.root != "" && staged.Version != "" && staged.BundlePath != "" && staged.ChecksumsPath != "" && staged.SignaturePath != ""
+	return staged != nil && staged.root != "" && staged.Version != "" && staged.BundlePath != "" && staged.ChecksumsPath != ""
 }
 
 func readBoundedReleaseFile(path string, maximum int64) ([]byte, error) {
@@ -211,14 +201,6 @@ func readBoundedReleaseFile(path string, maximum int64) ([]byte, error) {
 		return nil, fmt.Errorf("release asset must be a bounded regular file")
 	}
 	return os.ReadFile(path)
-}
-
-func readExactReleaseFile(path string, size int64) ([]byte, error) {
-	content, err := readBoundedReleaseFile(path, size)
-	if err != nil || int64(len(content)) != size {
-		return nil, fmt.Errorf("release asset size differs from expected: %w", err)
-	}
-	return content, nil
 }
 
 func verifyStagedReleaseFile(path string, record ReleaseChecksumRecord) error {

@@ -2,11 +2,7 @@ package regression
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,10 +14,9 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
-	"github.com/vgrinkevich/vpnctl/internal/releasetrust"
 )
 
-func TestV2CurlInstallerVerifiesGoSignedAssetsAndWritesStandardLayout(t *testing.T) {
+func TestV2CurlInstallerVerifiesChecksummedAssetsAndWritesStandardLayout(t *testing.T) {
 	t.Parallel()
 	requireInstallerCommands(t)
 	fixture := newInstallerFixture(t)
@@ -38,7 +33,6 @@ func TestV2CurlInstallerVerifiesGoSignedAssetsAndWritesStandardLayout(t *testing
 	assertInstalledAsset(t, root, "usr/local/bin/vpnctl", fixture.binary, 0o755)
 	assertInstalledAsset(t, root, "usr/local/lib/vpnctl/release/vpnctl.bundle", fixture.bundle, 0o600)
 	assertInstalledAsset(t, root, "usr/local/lib/vpnctl/release/checksums.txt", fixture.checksums, 0o600)
-	assertInstalledAsset(t, root, "usr/local/lib/vpnctl/release/checksums.txt.sig", fixture.signature, 0o600)
 	info, err := os.Stat(filepath.Join(root, "usr/local/lib/vpnctl/release"))
 	if err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("release directory mode=%v err=%v", info.Mode(), err)
@@ -73,17 +67,26 @@ func TestV2CurlInstallerRejectsCorruptDownloadsBeforeExistingInstallMutation(t *
 		"bundle-checksum": func(t *testing.T, fixture *installerFixture) {
 			appendInstallerAsset(t, fixture.assetDir, lifecycle.ReleaseBundleAsset)
 		},
-		"metadata-signature": func(t *testing.T, fixture *installerFixture) {
+		"metadata": func(t *testing.T, fixture *installerFixture) {
 			appendInstallerAsset(t, fixture.assetDir, lifecycle.ReleaseChecksumsAsset)
 		},
-		"signature": func(t *testing.T, fixture *installerFixture) {
-			path := filepath.Join(fixture.assetDir, lifecycle.ReleaseChecksumsSignatureAsset)
-			value, err := os.ReadFile(path)
+		"bundle-structure": func(t *testing.T, fixture *installerFixture) {
+			appendInstallerAsset(t, fixture.assetDir, lifecycle.ReleaseBundleAsset)
+			bundle, err := os.ReadFile(filepath.Join(fixture.assetDir, lifecycle.ReleaseBundleAsset))
 			if err != nil {
 				t.Fatal(err)
 			}
-			value[0] ^= 1
-			if err := os.WriteFile(path, value, 0o600); err != nil {
+			checksums, err := lifecycle.NewReleaseChecksums(
+				"v2.0.0", installerDigest(fixture.binary), int64(len(fixture.binary)), installerDigest(bundle), int64(len(bundle)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := lifecycle.EncodeReleaseChecksums(checksums)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(fixture.assetDir, lifecycle.ReleaseChecksumsAsset), encoded, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -187,27 +190,29 @@ func TestV2CurlInstallerRollsBackPublishedFilesAndRejectsSymlinks(t *testing.T) 
 	})
 }
 
-func TestV2InstallerEmbedsTheSharedReleaseTrustAnchor(t *testing.T) {
+func TestV2InstallerUsesHTTPSAndChecksumsWithoutReleaseSigning(t *testing.T) {
 	t.Parallel()
 	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "install.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(releasetrust.PublicKeyPEM, "\n")
-	if len(lines) < 3 || !strings.Contains(string(script), lines[1]) {
-		t.Fatal("curl installer does not embed the shared release public key")
-	}
+	source := string(script)
 	for _, required := range []string{
-		"--proto '=https' --tlsv1.2", "openssl pkeyutl -verify", "vpnctl-release-checksums-v1\\000",
-		"/usr/local/bin", "/usr/local/lib/vpnctl/release", "mutation_started=1", "VPNCTL_RELEASE_ASSET_DIR",
+		"--proto '=https' --tlsv1.2", "vpnctl-release-checksums-v1", "file_checksum",
+		"__release-verify-bundle", "/usr/local/bin", "/usr/local/lib/vpnctl/release", "mutation_started=1", "VPNCTL_RELEASE_ASSET_DIR",
 	} {
-		if !strings.Contains(string(script), required) {
+		if !strings.Contains(source, required) {
 			t.Errorf("curl installer omits %q", required)
+		}
+	}
+	for _, forbidden := range []string{"release-checksums.txt.sig", "VPNCTL_RELEASE_PUBLIC_KEY_FILE", "openssl", "pkeyutl"} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("checksum-only installer retains release-signing token %q", forbidden)
 		}
 	}
 }
 
-func TestV2ReleaseScriptBuildsOnlyTheSignedStandardAssets(t *testing.T) {
+func TestV2ReleaseScriptBuildsOnlyTheThreeChecksumGovernedAssets(t *testing.T) {
 	t.Parallel()
 	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "release.sh"))
 	if err != nil {
@@ -215,15 +220,15 @@ func TestV2ReleaseScriptBuildsOnlyTheSignedStandardAssets(t *testing.T) {
 	}
 	source := string(script)
 	for _, required := range []string{
-		"VPNCTL_RELEASE_SIGNING_KEY", "VPNCTL_MIHOMO_ARCHIVE", "VPNCTL_FRP_ARCHIVE",
+		"VPNCTL_MIHOMO_ARCHIVE", "VPNCTL_FRP_ARCHIVE",
 		"-buildvcs=false", "go run ./cmd/vpnctl-release", lifecycle.ReleaseBinaryAsset,
-		lifecycle.ReleaseBundleAsset, lifecycle.ReleaseChecksumsAsset, lifecycle.ReleaseChecksumsSignatureAsset,
+		lifecycle.ReleaseBundleAsset, lifecycle.ReleaseChecksumsAsset,
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("v2 release script omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"curl ", "wget ", "go install "} {
+	for _, forbidden := range []string{"curl ", "wget ", "go install ", "VPNCTL_RELEASE_SIGNING_KEY", "release-checksums.txt.sig", "-signing-key"} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("v2 release script unexpectedly fetches with %q", forbidden)
 		}
@@ -233,11 +238,9 @@ func TestV2ReleaseScriptBuildsOnlyTheSignedStandardAssets(t *testing.T) {
 type installerFixture struct {
 	assetDir  string
 	shimDir   string
-	keyPath   string
 	binary    []byte
 	bundle    []byte
 	checksums []byte
-	signature []byte
 }
 
 type installerRun struct {
@@ -248,12 +251,8 @@ type installerRun struct {
 
 func newInstallerFixture(t *testing.T) *installerFixture {
 	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	binary := []byte("signed standalone vpnctl linux amd64\n")
-	bundle := []byte("signed complete vpnctl v2 release bundle\n")
+	binary := []byte("#!/bin/sh\n[ \"$#\" -eq 5 ] || exit 64\n[ \"$1\" = \"__release-verify-bundle\" ] || exit 64\n[ \"$3\" = \"v2.0.0\" ] || exit 64\n[ \"$(sed -n '1,$p' \"$2\")\" = 'checksummed complete vpnctl v2 release bundle' ]\n")
+	bundle := []byte("checksummed complete vpnctl v2 release bundle\n")
 	checksums, err := lifecycle.NewReleaseChecksums("v2.0.0", installerDigest(binary), int64(len(binary)), installerDigest(bundle), int64(len(bundle)))
 	if err != nil {
 		t.Fatal(err)
@@ -262,26 +261,14 @@ func newInstallerFixture(t *testing.T) *installerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature, err := lifecycle.SignReleaseChecksums(encoded, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
 	assetDir := t.TempDir()
 	for name, value := range map[string][]byte{
 		lifecycle.ReleaseBinaryAsset: binary, lifecycle.ReleaseBundleAsset: bundle,
-		lifecycle.ReleaseChecksumsAsset: encoded, lifecycle.ReleaseChecksumsSignatureAsset: signature,
+		lifecycle.ReleaseChecksumsAsset: encoded,
 	} {
 		if err := os.WriteFile(filepath.Join(assetDir, name), value, 0o600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	publicDER, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyPath := filepath.Join(t.TempDir(), "release-public-key.pem")
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER}), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	shimDir := t.TempDir()
 	writeExecutableFixture(t, filepath.Join(shimDir, "curl"), `#!/bin/sh
@@ -305,8 +292,8 @@ case "${1:-}" in
 esac
 `)
 	return &installerFixture{
-		assetDir: assetDir, shimDir: shimDir, keyPath: keyPath,
-		binary: binary, bundle: bundle, checksums: encoded, signature: signature,
+		assetDir: assetDir, shimDir: shimDir,
+		binary: binary, bundle: bundle, checksums: encoded,
 	}
 }
 
@@ -322,7 +309,6 @@ func runInstallerFixture(t *testing.T, fixture *installerFixture, root string, e
 		"PATH="+fixture.shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"VPNCTL_TEST_ASSET_DIR="+fixture.assetDir,
 		"VPNCTL_RELEASE_BASE_URL=https://fixtures.invalid/release",
-		"VPNCTL_RELEASE_PUBLIC_KEY_FILE="+fixture.keyPath,
 		"VPNCTL_INSTALL_ROOT="+root,
 	)
 	for name, value := range extra {
@@ -341,10 +327,9 @@ func seedExistingInstallerLayout(t *testing.T, root string) {
 		content []byte
 		mode    fs.FileMode
 	}{
-		"usr/local/bin/vpnctl":                           {content: []byte("previous binary"), mode: 0o755},
-		"usr/local/lib/vpnctl/release/vpnctl.bundle":     {content: []byte("previous bundle"), mode: 0o600},
-		"usr/local/lib/vpnctl/release/checksums.txt":     {content: []byte("previous checksums"), mode: 0o600},
-		"usr/local/lib/vpnctl/release/checksums.txt.sig": {content: []byte("previous signature"), mode: 0o600},
+		"usr/local/bin/vpnctl":                       {content: []byte("previous binary"), mode: 0o755},
+		"usr/local/lib/vpnctl/release/vpnctl.bundle": {content: []byte("previous bundle"), mode: 0o600},
+		"usr/local/lib/vpnctl/release/checksums.txt": {content: []byte("previous checksums"), mode: 0o600},
 	}
 	for relative, value := range values {
 		path := filepath.Join(root, relative)
@@ -454,7 +439,7 @@ func requireInstallerCommands(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX installer test")
 	}
-	for _, command := range []string{"sh", "openssl"} {
+	for _, command := range []string{"sh", "cmp"} {
 		if _, err := exec.LookPath(command); err != nil {
 			t.Skipf("%s unavailable: %v", command, err)
 		}

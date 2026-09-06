@@ -39,11 +39,11 @@ low-memory clean host, initialization can offer one vpnctl-managed 1 GiB swap
 file. Accepting or declining that explicit offer does not change the public
 command. Existing suitable swap is reused and never claimed as vpnctl-owned.
 
-## Install the signed release
+## Install the checksum-verified release
 
-Install the complete signed v2 release on every gateway and node before role
-initialization. The online bootstrap and offline `scp` flow, exact four release
-assets, trust anchor, and atomic rollback behavior are specified in
+Install the complete v2 release on every gateway and node before role
+initialization. The online bootstrap and offline `scp` flow, exact three
+release assets, checksum-only trust boundary, and atomic rollback behavior are specified in
 [INSTALLATION.md](INSTALLATION.md). The bootstrap retains the verified complete
 bundle locally; ordinary init/apply/repair does not download Mihomo, frp, or
 other bundled components from upstream.
@@ -115,7 +115,7 @@ after 15 minutes, and is stored only as a hash. A dry run never creates a token.
 sudo vpnctl invite bot-server
 ```
 
-Install the signed release on the private-region VPS and initialize its local
+Install the checksum-verified release on the private-region VPS and initialize its local
 role:
 
 ```console vpnctl-doc-test id=init.node role=uninitialized
@@ -386,7 +386,7 @@ sudo vpnctl purge --force
 ## One-time v1 migration
 
 Migration is a separate maintenance executable, not a permanent vpnctl
-command. Copy the signed v2 bundle and `vpnctl-v1-migrate` to the existing v1
+command. Copy the checksum-verified v2 bundle and `vpnctl-v1-migrate` to the existing v1
 gateway, run the read-only plan, accept the maintenance window, and retain the
 rollback package until migrated clients have been checked. The exact resumable
 dry-run/apply/confirm/accept/rollback procedure is in

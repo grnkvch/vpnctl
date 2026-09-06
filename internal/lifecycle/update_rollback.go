@@ -108,7 +108,7 @@ func (updater *Updater) PlanRollback(ctx context.Context) (UpdateRollbackPlan, e
 		expectedReversible = prepared.CurrentManifest().ComponentManifest.MigrationReversible
 	}
 	if snapshot.Metadata.MigrationReversible != expectedReversible {
-		return UpdateRollbackPlan{}, fmt.Errorf("%w: migration reversibility differs from the installed signed release", ErrUpdateSnapshotInvalid)
+		return UpdateRollbackPlan{}, fmt.Errorf("%w: migration reversibility differs from the installed release", ErrUpdateSnapshotInvalid)
 	}
 	targetManifest := prepared.TargetManifest()
 	if !reflect.DeepEqual(targetManifest.ComponentManifest, snapshot.State.Components) {

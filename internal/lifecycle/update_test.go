@@ -2,8 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -342,7 +340,7 @@ func configureControllerOnlyUpdate(t *testing.T, fixture *updaterFixture) {
 		"vpnctl": []byte("vpnctl-controller-only"), "frpc": []byte("frpc-old"),
 		"frps": []byte("frps-old"), "mihomo": []byte("mihomo-old"),
 	}
-	assets, manifest := updateReleaseAssetsForInstalled(t, fixture.signingKey, "v2.1.0", installed, map[string]string{
+	assets, manifest := updateReleaseAssetsForInstalled(t, "v2.1.0", installed, map[string]string{
 		"frp": "0.69.0-old", "mihomo": "v1.19.30-old",
 	})
 	fixture.source.stage = writeStagedUpdateRelease(t, assets, manifest)
@@ -430,28 +428,26 @@ type updaterFixture struct {
 	targetAssets    map[string][]byte
 	targetInstalled map[string][]byte
 	snapshots       *FilesystemUpdateSnapshotStore
-	signingKey      ed25519.PrivateKey
 }
 
 func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updaterFixture {
 	t.Helper()
-	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	root := t.TempDir()
-	installer, _ := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+	installer, _ := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 	snapshotRoot := filepath.Join(root, "var/lib/vpnctl/snapshots")
 	if err := os.MkdirAll(snapshotRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	snapshots, err := NewFilesystemUpdateSnapshotStore(snapshotRoot, publicKey, installer)
+	snapshots, err := NewFilesystemUpdateSnapshotStore(snapshotRoot, installer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentAssets, currentManifest, _ := updateReleaseAssetsWithInstalled(t, privateKey, "v2.0.0", "old")
+	currentAssets, currentManifest, _ := updateReleaseAssetsWithInstalled(t, "v2.0.0", "old")
 	targetVersion := "v2.1.0"
 	if targetMarker == "old" {
 		targetVersion = "v2.0.0"
 	}
-	targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, privateKey, targetVersion, targetMarker)
+	targetAssets, targetManifest, targetInstalled := updateReleaseAssetsWithInstalled(t, targetVersion, targetMarker)
 	current := writeStagedUpdateRelease(t, currentAssets, currentManifest)
 	t.Cleanup(func() { _ = current.Close() })
 	target := writeStagedUpdateRelease(t, targetAssets, targetManifest)
@@ -488,7 +484,7 @@ func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updat
 	}
 	return updaterFixture{
 		root: root, updater: updater, state: stateStore, source: source, fleet: fleet, host: host,
-		targetAssets: targetAssets, targetInstalled: targetInstalled, snapshots: snapshots, signingKey: privateKey,
+		targetAssets: targetAssets, targetInstalled: targetInstalled, snapshots: snapshots,
 	}
 }
 

@@ -1,8 +1,6 @@
 package regression
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,7 +9,7 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 )
 
-func TestReleaseManifestSchemasMatchStrictSignedImplementation(t *testing.T) {
+func TestReleaseManifestSchemaMatchesCanonicalImplementation(t *testing.T) {
 	t.Parallel()
 	payloadPath := filepath.Join(v2SchemaRoot(), "release-manifest-v1.example.json")
 	payloadBytes, err := os.ReadFile(payloadPath)
@@ -33,22 +31,11 @@ func TestReleaseManifestSchemasMatchStrictSignedImplementation(t *testing.T) {
 		t.Fatalf("release payload example does not match implementation: %v", err)
 	}
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	canonicalBytes, err := lifecycle.EncodeReleaseManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelopeBytes, err := lifecycle.EncodeSignedReleaseManifest(manifest, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var envelopeDocument any
-	if err := json.Unmarshal(envelopeBytes, &envelopeDocument); err != nil {
-		t.Fatal(err)
-	}
-	if err := resolveV2SchemaFile(t, filepath.Join(v2SchemaRoot(), "signed-release-manifest-v1.schema.json")).Validate(envelopeDocument); err != nil {
-		t.Fatalf("signed release envelope does not match schema: %v", err)
-	}
-	if _, err := lifecycle.DecodeAndVerifyReleaseManifest(envelopeBytes, publicKey); err != nil {
-		t.Fatalf("schema-valid signed release envelope does not verify: %v", err)
+	if _, err := lifecycle.DecodeReleaseManifest(canonicalBytes); err != nil {
+		t.Fatalf("schema-valid canonical release manifest does not decode: %v", err)
 	}
 }

@@ -2,8 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -104,14 +102,13 @@ func TestInitConsumesTheStandardLocalBundleAndInstallsOnlySelectedBinaries(t *te
 				}
 			}
 
-			publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 			manifest, artifacts, installed := releaseBundleFixture(t)
 			bundlePath := filepath.Join(root, strings.TrimPrefix(ReleaseInstalledBundlePath, "/"))
 			if err := os.MkdirAll(filepath.Dir(bundlePath), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			writeReleaseBundleFile(t, bundlePath, manifest, privateKey, artifacts)
-			installer, err := NewReleaseBundleInstaller(root, publicKey, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
+			writeReleaseBundleFile(t, bundlePath, manifest, artifacts)
+			installer, err := NewReleaseBundleInstaller(root, ReleasePlatform{OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +138,7 @@ func TestInitReleaseFailurePrecedesPersistentLayoutAndState(t *testing.T) {
 	t.Parallel()
 	manifest, _ := releaseManifestFixture()
 	t.Run("inspect", func(t *testing.T) {
-		release := &recordingInitReleaseSource{manifest: manifest, inspectErr: errors.New("invalid signed bundle")}
+		release := &recordingInitReleaseSource{manifest: manifest, inspectErr: errors.New("invalid checksum-governed bundle")}
 		harness := newNodeInitHarnessWithRelease(t, release)
 		if _, err := harness.initializer.Plan(context.Background()); err == nil || release.installCalls != 0 {
 			t.Fatalf("inspect failure error=%v installCalls=%d", err, release.installCalls)

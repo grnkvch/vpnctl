@@ -5,7 +5,7 @@ command. It intentionally permits gateway downtime and operates only on a
 gateway host. Keep the original v1 workspace in place until v2 is explicitly
 accepted.
 
-The examples assume that the signed local v2 bundle and the standalone
+The examples assume that the checksum-verified local v2 bundle and the standalone
 `vpnctl-v1-migrate` binary were copied to the gateway with `scp`. URL delivery,
 subscriptions, and QR delivery are outside v2.0.
 
@@ -23,7 +23,7 @@ sudo vpnctl-v1-migrate \
 
 `--public-ip` is always explicit. Use `--ssh-port` only when automatic
 resolution cannot prove the active SSH listener. A blocking compatibility,
-ownership, signature, platform, or SSH check fails before the maintenance
+ownership, checksum/bundle-structure, platform, or SSH check fails before the maintenance
 directory or host state is changed.
 
 ## Apply and resume

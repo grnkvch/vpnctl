@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -38,17 +37,14 @@ func CanonicalStableReleaseVersion(value string) (string, error) {
 }
 
 const (
-	ReleaseBinaryAsset              = "vpnctl-linux-amd64"
-	ReleaseBundleAsset              = "vpnctl-v2-linux-amd64.bundle"
-	ReleaseChecksumsAsset           = "release-checksums.txt"
-	ReleaseChecksumsSignatureAsset  = "release-checksums.txt.sig"
-	ReleaseChecksumsHeader          = "vpnctl-release-checksums-v1"
-	ReleaseChecksumsSignatureDomain = "vpnctl-release-checksums-v1\x00"
+	ReleaseBinaryAsset     = "vpnctl-linux-amd64"
+	ReleaseBundleAsset     = "vpnctl-v2-linux-amd64.bundle"
+	ReleaseChecksumsAsset  = "release-checksums.txt"
+	ReleaseChecksumsHeader = "vpnctl-release-checksums-v1"
 
 	ReleaseInstallDirectory       = "/usr/local/lib/vpnctl/release"
 	ReleaseInstalledBundlePath    = ReleaseInstallDirectory + "/vpnctl.bundle"
 	ReleaseInstalledChecksumsPath = ReleaseInstallDirectory + "/checksums.txt"
-	ReleaseInstalledSignaturePath = ReleaseInstallDirectory + "/checksums.txt.sig"
 
 	MaximumStandaloneVPNCTLBytes = int64(128 << 20)
 )
@@ -140,32 +136,14 @@ func DecodeReleaseChecksums(encoded []byte) (ReleaseChecksums, error) {
 	return value, nil
 }
 
-func SignReleaseChecksums(encoded []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
-	if _, err := DecodeReleaseChecksums(encoded); err != nil {
-		return nil, err
-	}
-	if len(privateKey) != ed25519.PrivateKeySize {
-		return nil, releaseChecksumsInvalid("signing key must be Ed25519")
-	}
-	return ed25519.Sign(privateKey, releaseChecksumsMessage(encoded)), nil
-}
-
-func VerifyReleaseChecksums(encoded, signature []byte, publicKey ed25519.PublicKey) (ReleaseChecksums, error) {
-	if len(publicKey) != ed25519.PublicKeySize || len(signature) != ed25519.SignatureSize ||
-		!ed25519.Verify(publicKey, releaseChecksumsMessage(encoded), signature) {
-		return ReleaseChecksums{}, releaseChecksumsInvalid("signature verification failed")
-	}
-	return DecodeReleaseChecksums(encoded)
-}
-
 func VerifyReleaseChecksumRecord(record ReleaseChecksumRecord, size int64, content io.Reader) error {
 	if content == nil || size != record.SizeBytes {
-		return releaseChecksumsInvalid("%s byte size differs from signed metadata", record.Name)
+		return releaseChecksumsInvalid("%s byte size differs from checksum metadata", record.Name)
 	}
 	digest := sha256.New()
 	read, err := io.Copy(digest, io.LimitReader(content, record.SizeBytes+1))
 	if err != nil || read != record.SizeBytes || hex.EncodeToString(digest.Sum(nil)) != record.SHA256 {
-		return releaseChecksumsInvalid("%s checksum differs from signed metadata", record.Name)
+		return releaseChecksumsInvalid("%s checksum differs from checksum metadata", record.Name)
 	}
 	return nil
 }
@@ -180,12 +158,6 @@ func decodeReleaseChecksumRecord(line, name string) (ReleaseChecksumRecord, erro
 		return ReleaseChecksumRecord{}, releaseChecksumsInvalid("%s size is invalid", name)
 	}
 	return ReleaseChecksumRecord{Name: name, SHA256: parts[0], SizeBytes: size}, nil
-}
-
-func releaseChecksumsMessage(encoded []byte) []byte {
-	result := make([]byte, 0, len(ReleaseChecksumsSignatureDomain)+len(encoded))
-	result = append(result, ReleaseChecksumsSignatureDomain...)
-	return append(result, encoded...)
 }
 
 func releaseChecksumsInvalid(format string, arguments ...any) error {
