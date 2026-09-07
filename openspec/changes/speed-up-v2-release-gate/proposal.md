@@ -12,6 +12,7 @@ The clean deployed v2 release gate spends roughly 90% of its wall time in Lima s
 - Retain the fixed 2,890-success budget, qualify the load generator independently, and preserve complete sanitized request/failure diagnostics even when reconnect fails before final aggregation.
 - Make the 1-vCPU/512-MiB capacity boundary explicitly Gateway-only and give the shared functional Node/load-generator fixture a versioned 4-vCPU/2-GiB profile, with both role profiles, exact stored readiness probes, and topology bound into reusable evidence and checked before VM mutation.
 - Seal fixture-start failures as immutable sessions with real startup/shutdown timings, zero witnesses when boot never completed, and an actionable explicit resume command.
+- Make a freshly created role-specific fixture self-contained by atomically installing and SHA-256-verifying the exact versioned lab report/fault helpers during parent startup before the first witness; bind the helpers into the topology fingerprint and fail closed before any VM stage.
 - Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal.
 - Keep parallel VM boot, background-service quiescence, lean images, deeper standard/tunnel/routing deduplication, and APT caching outside this change until separate measurements justify them.
 

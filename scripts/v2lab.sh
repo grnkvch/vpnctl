@@ -184,8 +184,12 @@ case "$command" in
   up)
     output_dir=${2:-$(default_report_dir)}
     jq -e '
-      .schema_version == 1 and .contract_version == 2 and
+      .schema_version == 1 and .contract_version == 3 and
       .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
+      .session_helpers == [
+        {source:"test/v2lab/guest/report.sh",destination:"/usr/local/libexec/vpnctl-v2-lab-report",mode:"0755"},
+        {source:"test/v2lab/guest/fault.sh",destination:"/usr/local/libexec/vpnctl-v2-lab-fault",mode:"0755"}
+      ] and
       .roles.gateway == {
         instance:"vpnctl-v2-gateway", template:"test/v2lab/lima.yaml", cpus:1,
         memory_bytes:536870912, disk_bytes:10737418240, managed_swap_bytes:1073741824,

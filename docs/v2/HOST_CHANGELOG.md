@@ -2,6 +2,15 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 14:12–15:05 +03 — fresh-Node release-gate prerequisite failure
+
+### Immutable failed Node transport attempt; exact fixtures restored stopped
+
+- Prepared `artifacts/v2lab/deployed-release-gate/evidence-2026-09-07T111243Z` for pushed source `cbd8f3f6c30b061cb5b9e32a2603ce60f9d46a33` and `v2.0.0`, then ran one full automated attempt. All seven fast stages passed. In one shared VM session, `personal-client`, `restricted-process`, `transport-supervision`, `watchdog-confirm`, and `watchdog-timeout` passed with clean witnesses; `node-transport/attempt-0001` failed and remains immutable. `automated.json` was not created.
+- Gateway started once for the parent plus its one allowed `transport-supervision` boot-recovery restart. The freshly recreated Node started once and passed its new 4-vCPU readiness probe. The transport assertion itself passed, then the stage failed when the new Node disk lacked `/usr/local/libexec/vpnctl-v2-lab-report`.
+- Root cause is a deterministic hidden fixture prerequisite: `v2lab.sh up` historically copied the report/fault helpers, while a direct template creation did not. The source correction makes shared-session startup install and verify those exact topology-owned helpers before the first witness; retrying this commit/evidence without external helper preparation would repeat the same failure.
+- Parent owner-scoped cleanup and post-witness succeeded, then stopped Node and Gateway. Both exact fixtures were independently observed `Stopped` at their required 4-vCPU/2-GiB and 1-vCPU/512-MiB profiles. No foreign VM, deployed host, provider, or credential was touched. Rollback is the corrective source commit; the failed evidence is retained unchanged and intentionally cannot be resumed after that source change.
+
 ## 2026-09-07 14:08 +03 — exact test Node replacement from topology v2
 
 ### Disposable stopped Node recreated; Gateway and foreign VMs untouched

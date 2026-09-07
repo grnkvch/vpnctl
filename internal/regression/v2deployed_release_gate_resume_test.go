@@ -150,6 +150,47 @@ func TestV2DeployedReleaseGateSealsStartupFailureAndResumes(t *testing.T) {
 	assertSessionEvidence(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0002"), "passed")
 }
 
+func TestV2DeployedReleaseGateInstallsVersionedHelpersBeforeFirstWitness(t *testing.T) {
+	fixture := newDeployedGateFixture(t)
+	evidence := fixture.prepare(t, "evidence-helper-setup")
+	if output, code := fixture.run(t, "", "run-fast", evidence); code != 0 {
+		t.Fatalf("run-fast code=%d output=%s", code, output)
+	}
+	output, code := fixture.runExtra(t, []string{"VPNCTL_TEST_FAIL_HELPER_INSTANCE=vpnctl-v2-node"}, "", "run-vm", evidence)
+	if code != 4 || !strings.Contains(output, "release fixture helper setup failed") ||
+		!strings.Contains(output, "session-0001/session.log") || !strings.Contains(output, "run-vm --resume "+evidence) {
+		t.Fatalf("helper setup failure code=%d output=%s", code, output)
+	}
+	fixture.assertLimaStopped(t)
+	if countStageRuns(t, fixture.runLog, "personal-client") != 0 {
+		t.Fatal("VM stage began after helper setup failure")
+	}
+	session := filepath.Join(evidence, "automated-fixture-sessions", "session-0001")
+	assertMode(t, session, 0o500)
+	result := readJSONObject(t, filepath.Join(session, "result.json"))
+	if result["status"] != "failed" || len(result["witnesses"].([]any)) != 0 {
+		t.Fatalf("helper setup failure result = %#v", result)
+	}
+	before := snapshotSealedSession(t, session)
+	if output, code = fixture.run(t, "", "run-vm", "--resume", evidence); code != 0 {
+		t.Fatalf("helper setup resume code=%d output=%s", code, output)
+	}
+	if after := snapshotSealedSession(t, session); after != before {
+		t.Fatalf("helper setup failure session changed across resume\nbefore=%s\nafter=%s", before, after)
+	}
+	for _, instance := range []string{"vpnctl-v2-gateway", "vpnctl-v2-node"} {
+		for _, helper := range []string{"vpnctl-v2-lab-report", "vpnctl-v2-lab-fault"} {
+			want := 1
+			if instance == "vpnctl-v2-gateway" && helper == "vpnctl-v2-lab-report" {
+				want = 2
+			}
+			if got := countLogLine(t, fixture.runLog, "helper:install:"+instance+":"+helper); got != want {
+				t.Fatalf("%s/%s successful helper installs = %d, want %d", instance, helper, got, want)
+			}
+		}
+	}
+}
+
 func TestV2DeployedReleaseGateDoesNotLeakPrivateVMEnvironmentIntoFastStages(t *testing.T) {
 	fixture := newDeployedGateFixture(t)
 	evidence := fixture.prepare(t, "evidence-fast-environment")
@@ -578,6 +619,8 @@ func newDeployedGateFixture(t *testing.T) deployedGateFixture {
 		"test/v2lab/lima.yaml",
 		"test/v2lab/lima-node.yaml",
 		"test/v2lab/provision.sh",
+		"test/v2lab/guest/report.sh",
+		"test/v2lab/guest/fault.sh",
 		"test/v2lab/capacity/manifest.json",
 		"test/v2lab/capacity/load.py",
 		"test/v2lab/capacity/client_load.py",
@@ -827,6 +870,33 @@ printf 'lima:%%s\n' "$*" >> "$VPNCTL_TEST_RUN_LOG"
     printf 'Stopped\n' > "$state_dir/$2"
     printf 'fixture:stop:%%s\n' "$2" >> "$VPNCTL_TEST_RUN_LOG"
     ;;
+	  shell)
+	    instance=
+	    for value in "$@"; do
+	      case "$value" in vpnctl-v2-gateway|vpnctl-v2-node) instance=$value; break ;; esac
+	    done
+	    case "$*" in
+	      *vpnctl-v2-release-gate.tmp*)
+	        if [ "${VPNCTL_TEST_FAIL_HELPER_INSTANCE:-}" = "$instance" ]; then sleep 0.03; exit 13; fi
+	        previous=
+	        last=
+	        for value in "$@"; do previous=$last; last=$value; done
+	        case "$previous" in
+	          /usr/local/libexec/vpnctl-v2-lab-report) helper=vpnctl-v2-lab-report ;;
+	          /usr/local/libexec/vpnctl-v2-lab-fault) helper=vpnctl-v2-lab-fault ;;
+	          *) exit 14 ;;
+	        esac
+	        printf 'helper:install:%%s:%%s\n' "$instance" "$helper" >> "$VPNCTL_TEST_RUN_LOG"
+	        ;;
+	      *sha256sum*vpnctl-v2-lab-report*)
+	        shasum -a 256 "$PWD/test/v2lab/guest/report.sh"
+	        ;;
+	      *sha256sum*vpnctl-v2-lab-fault*)
+	        shasum -a 256 "$PWD/test/v2lab/guest/fault.sh"
+	        ;;
+	      *) exit 15 ;;
+	    esac
+	    ;;
   *) exit 2 ;;
 esac
 `, deployedGateTestImageDigest)

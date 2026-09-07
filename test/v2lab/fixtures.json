@@ -1,12 +1,24 @@
 {
   "schema_version": 1,
-  "contract_version": 2,
+  "contract_version": 3,
   "vm_type": "qemu",
   "architecture": "x86_64",
   "image_digest": "sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7",
   "network": "user-v2",
   "capacity_boundary_role": "gateway",
   "load_generator_role": "node",
+  "session_helpers": [
+    {
+      "source": "test/v2lab/guest/report.sh",
+      "destination": "/usr/local/libexec/vpnctl-v2-lab-report",
+      "mode": "0755"
+    },
+    {
+      "source": "test/v2lab/guest/fault.sh",
+      "destination": "/usr/local/libexec/vpnctl-v2-lab-fault",
+      "mode": "0755"
+    }
+  ],
   "roles": {
     "gateway": {
       "instance": "vpnctl-v2-gateway",

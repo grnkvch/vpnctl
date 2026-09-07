@@ -14,6 +14,8 @@ gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
 fixture_contract=$repository_root/test/v2lab/fixtures.json
+lab_report_helper=$repository_root/test/v2lab/guest/report.sh
+lab_fault_helper=$repository_root/test/v2lab/guest/fault.sh
 fixture_contract_sha256=
 owner_value=vpnctl-v2-deployed-release-gate-v1
 attempts_directory_name=automated-attempts
@@ -242,10 +244,14 @@ elapsed_ms() {
 
 validate_stage_registry() {
   jq -e --arg digest "$lab_image_digest" '
-    (keys == ["architecture","capacity_boundary_role","contract_version","image_digest","load_generator_role","network","roles","schema_version","vm_type"]) and
-    .schema_version == 1 and .contract_version == 2 and .vm_type == "qemu" and
+    (keys == ["architecture","capacity_boundary_role","contract_version","image_digest","load_generator_role","network","roles","schema_version","session_helpers","vm_type"]) and
+    .schema_version == 1 and .contract_version == 3 and .vm_type == "qemu" and
     .architecture == "x86_64" and .image_digest == $digest and .network == "user-v2" and
     .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
+    .session_helpers == [
+      {source:"test/v2lab/guest/report.sh",destination:"/usr/local/libexec/vpnctl-v2-lab-report",mode:"0755"},
+      {source:"test/v2lab/guest/fault.sh",destination:"/usr/local/libexec/vpnctl-v2-lab-fault",mode:"0755"}
+    ] and
     .roles.gateway == {
       instance:"vpnctl-v2-gateway",template:"test/v2lab/lima.yaml",cpus:1,
       memory_bytes:536870912,disk_bytes:10737418240,managed_swap_bytes:1073741824,
@@ -299,9 +305,10 @@ validate_stage_registry() {
   "$clean_state_witness" validate-manifest
   fixture_contract_sha256=$(
     {
-      printf '%s\0' vpnctl-v2-fixture-topology-v1
+      printf '%s\0' vpnctl-v2-fixture-topology-v2
       for file in "$fixture_contract" "$repository_root/test/v2lab/lima.yaml" \
         "$repository_root/test/v2lab/lima-node.yaml" "$repository_root/test/v2lab/provision.sh" \
+        "$lab_report_helper" "$lab_fault_helper" \
         "$repository_root/test/v2lab/capacity/manifest.json" "$repository_root/test/v2lab/capacity/load.py" \
         "$repository_root/test/v2lab/capacity/client_load.py" "$repository_root/test/v2lab/capacity/monitor.py" \
         "$repository_root/test/v2lab/capacity/fault.sh" "$repository_root/test/v2lab/capacity/evaluate.py"; do
@@ -1012,6 +1019,49 @@ stop_started_fixtures() {
   return "$status"
 }
 
+install_session_helper() {
+  local instance=$1 source=$2 destination=$3 mode=$4 expected_sha actual_sha
+  expected_sha=$(sha256_file "$source")
+  if ! limactl shell --tty=false "$instance" -- sudo /bin/bash -c '
+    set -euo pipefail
+    destination=$1
+    mode=$2
+    case "$destination" in
+      /usr/local/libexec/vpnctl-v2-lab-report|/usr/local/libexec/vpnctl-v2-lab-fault) ;;
+      *) exit 3 ;;
+    esac
+    [ "$mode" = 0755 ] || exit 3
+    temporary="${destination}.vpnctl-v2-release-gate.tmp"
+    install -d -m 0755 /usr/local/libexec
+    rm -f -- "$temporary"
+    trap '\''rm -f -- "$temporary"'\'' EXIT INT TERM
+    cat > "$temporary"
+    chmod "$mode" "$temporary"
+    mv -f -- "$temporary" "$destination"
+    trap - EXIT INT TERM
+  ' vpnctl-v2-release-gate "$destination" "$mode" < "$source" >> "$fixture_session_log" 2>&1; then
+    printf 'fixture helper installation failed: %s/%s\n' "$instance" "$destination" >> "$fixture_session_log"
+    return 4
+  fi
+  actual_sha=$(limactl shell --tty=false "$instance" -- sudo sha256sum "$destination" 2>> "$fixture_session_log" | awk '{print $1}') || return 4
+  if [ "$actual_sha" != "$expected_sha" ]; then
+    printf 'fixture helper verification failed: %s/%s\n' "$instance" "$destination" >> "$fixture_session_log"
+    return 4
+  fi
+  printf 'fixture helper ready: %s %s sha256=%s\n' "$instance" "$destination" "$actual_sha" >> "$fixture_session_log"
+}
+
+install_session_helpers() {
+  local source destination mode instance
+  while IFS=$'\t' read -r source destination mode; do
+    source="$repository_root/$source"
+    [ -f "$source" ] && [ ! -L "$source" ] || return 4
+    for instance in "$gateway_instance" "$node_instance"; do
+      install_session_helper "$instance" "$source" "$destination" "$mode" || return
+    done
+  done < <(jq -r '.session_helpers[] | [.source,.destination,.mode] | @tsv' "$fixture_contract")
+}
+
 cleanup_started_fixtures() {
   local status=${1:-1} cleanup_status=0
   trap - EXIT INT TERM
@@ -1077,6 +1127,19 @@ run_vm_stages() {
   fixture_session_startup_ms=$(elapsed_ms "$started" "$finished")
   if [ "$stage_status" -ne 0 ]; then
     printf 'release fixture startup failed: node/%s\n' "$node_instance" >&2
+    printf 'inspect: %s\n' "$fixture_session_log" >&2
+    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    return "$stage_status"
+  fi
+  if install_session_helpers; then
+    stage_status=0
+  else
+    stage_status=$?
+  fi
+  finished=$(monotonic_ms)
+  fixture_session_startup_ms=$(elapsed_ms "$started" "$finished")
+  if [ "$stage_status" -ne 0 ]; then
+    printf 'release fixture helper setup failed\n' >&2
     printf 'inspect: %s\n' "$fixture_session_log" >&2
     printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
     return "$stage_status"

@@ -9,7 +9,9 @@
       "/etc/vpnctl-v2-spike/ingress", "/run/vpnctl-v2-spike-ingress", "/var/lib/vpnctl-v2-spike-tunnel-auth",
       "/tmp/vpnctl-v2-tunnel-release-gate.test", "/tmp/vpnctl-v2-tunnel-release-frps", "/tmp/vpnctl-v2-tunnel-release-frpc",
       "/tmp/vpnctl-v2-ingress-production-task-12.11.test", "/tmp/vpnctl-v2-ingress-production-task-12.11.json",
-      "/tmp/vpnctl-v2-telegram-harness-task-12.11", "/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d"
+      "/tmp/vpnctl-v2-telegram-harness-task-12.11", "/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d",
+      "/usr/local/libexec/vpnctl-v2-lab-report.vpnctl-v2-release-gate.tmp",
+      "/usr/local/libexec/vpnctl-v2-lab-fault.vpnctl-v2-release-gate.tmp"
     ],
     "units_inactive": [
       "vpnctl-v2-task86-standard.service", "vpnctl-v2-task86-restricted.service", "vpnctl-v2-capacity-controller.service",
@@ -37,7 +39,9 @@
       "/var/lib/vpnctl", "/usr/local/libexec/vpnctl-v2-watchdog-test", "/tmp/vpnctl-v2-watchdog-test",
       "/etc/systemd/system/vpnctl-watchdog@.service.d",
       "/etc/systemd/system/vpnctl-v2-spike-tunnel-backend.service.d/vpnctl-v2-capacity-backend.conf",
-      "/etc/systemd/system/vpnctl-v2-spike-tunnel-client.service.d/vpnctl-v2-capacity-client.conf"
+      "/etc/systemd/system/vpnctl-v2-spike-tunnel-client.service.d/vpnctl-v2-capacity-client.conf",
+      "/usr/local/libexec/vpnctl-v2-lab-report.vpnctl-v2-release-gate.tmp",
+      "/usr/local/libexec/vpnctl-v2-lab-fault.vpnctl-v2-release-gate.tmp"
     ],
     "units_inactive": [
       "vpnctl-v2-capacity-controller.service", "vpnctl-v2-spike-tunnel-client.service",

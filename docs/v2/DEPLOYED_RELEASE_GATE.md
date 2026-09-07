@@ -95,7 +95,9 @@ from `test/v2lab/fixtures.json`. This catches stale Lima metadata before creatin
 session evidence or starting either VM; changing only CPU/RAM metadata is not a
 valid fixture migration when the probe contract changed. The invocation then creates an
 append-only `automated-fixture-sessions/session-NNNN/`, starts Gateway and Node
-once in the parent, and runs every pending VM attempt sequentially without
+once in the parent, atomically installs and SHA-256-verifies the two exact
+topology-bound lab helpers on both fixtures, captures the initial witness, and
+runs every pending VM attempt sequentially without
 per-stage cold boots. The existing `transport-supervision` boot-recovery check
 is the only exception: it performs and records one additional Gateway restart.
 A checked-in bounded manifest and read-only witness prove the absence of every
@@ -109,7 +111,8 @@ Session `input.json`, `session.log`, any numbered witness JSON files, and
 `result.json` are sealed together. A fixture-start failure can legitimately have
 zero witnesses; it is still an immutable failed session, records the elapsed
 startup and shutdown time, and prints its log plus the exact explicit resume
-command. Attempt and session results contain
+command. The same applies when versioned helper setup or verification fails
+before the first witness. Attempt and session results contain
 non-negative monotonic diagnostic timings for validation, execution, witness,
 cleanup, boot, and shutdown where applicable. These timings never change a
 product latency, reconnect, capacity, or workload acceptance result.

@@ -50,6 +50,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"source_tree_sha256", "lima_image_digest", "stage_attempts",
 		"restore_exact_fixtures_stopped", "(umask 022; execute_stage",
 		"env -u VPNCTL_V2_TIMING_OUTPUT -u VPNCTL_V2_SHARED_LIMA_SESSION",
+		"install_session_helpers", "test/v2lab/guest/report.sh", "test/v2lab/guest/fault.sh",
 	} {
 		if !strings.Contains(contract, required) {
 			t.Errorf("deployed release gate is missing %q", required)
@@ -170,7 +171,12 @@ func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
 		ContractVersion      int    `json:"contract_version"`
 		CapacityBoundaryRole string `json:"capacity_boundary_role"`
 		LoadGeneratorRole    string `json:"load_generator_role"`
-		Roles                map[string]struct {
+		SessionHelpers       []struct {
+			Source      string `json:"source"`
+			Destination string `json:"destination"`
+			Mode        string `json:"mode"`
+		} `json:"session_helpers"`
+		Roles map[string]struct {
 			Template         string `json:"template"`
 			CPUs             int    `json:"cpus"`
 			MemoryBytes      int64  `json:"memory_bytes"`
@@ -190,9 +196,16 @@ func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
 	}
 	gateway := contract.Roles["gateway"]
 	node := contract.Roles["node"]
-	if contract.SchemaVersion != 1 || contract.ContractVersion != 2 ||
+	if contract.SchemaVersion != 1 || contract.ContractVersion != 3 ||
 		contract.CapacityBoundaryRole != "gateway" || contract.LoadGeneratorRole != "node" {
 		t.Fatalf("topology header = %+v", contract)
+	}
+	if len(contract.SessionHelpers) != 2 ||
+		contract.SessionHelpers[0].Source != "test/v2lab/guest/report.sh" ||
+		contract.SessionHelpers[0].Destination != "/usr/local/libexec/vpnctl-v2-lab-report" || contract.SessionHelpers[0].Mode != "0755" ||
+		contract.SessionHelpers[1].Source != "test/v2lab/guest/fault.sh" ||
+		contract.SessionHelpers[1].Destination != "/usr/local/libexec/vpnctl-v2-lab-fault" || contract.SessionHelpers[1].Mode != "0755" {
+		t.Fatalf("session helper topology = %+v", contract.SessionHelpers)
 	}
 	if gateway.Template != "test/v2lab/lima.yaml" || gateway.CPUs != 1 ||
 		gateway.MemoryBytes != 536870912 || gateway.DiskBytes != 10737418240 ||
@@ -261,7 +274,8 @@ func TestV2DeployedReleaseGateCleanStateManifestContract(t *testing.T) {
 		"/etc/vpnctl-v2-capacity", "/var/lib/vpnctl", "vpnctl-v2-task86-standard.service",
 		"vpnctl-v2-watchdog-test", "vpnctl-v2-spike-tunnel-auth.service", "vpnctl_v2_capacity_clients",
 		"v2capwg", "v2capc5", "vpnctl-v2-pc-clash", "vpnctl-v2-rnode", "vpnctl-v2-dns-gateway",
-		"nginx-common",
+		"nginx-common", "vpnctl-v2-lab-report.vpnctl-v2-release-gate.tmp",
+		"vpnctl-v2-lab-fault.vpnctl-v2-release-gate.tmp",
 	} {
 		if !strings.Contains(data, required) {
 			t.Errorf("clean-state manifest is missing %q", required)
