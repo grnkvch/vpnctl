@@ -2,6 +2,15 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 14:08 +03 — exact test Node replacement from topology v2
+
+### Disposable stopped Node recreated; Gateway and foreign VMs untouched
+
+- Preflight observed the exact `vpnctl-v2-node` stopped with the pinned Ubuntu image, QEMU/x86_64, `lima:user-v2`, 4 vCPU, 2 GiB RAM, and 10 GiB disk, but with legacy readiness description `vpnctl v2 lab prerequisites` and script assertion `nproc == 1`. The exact `vpnctl-v2-gateway` was also stopped and matched its 1-vCPU/512-MiB/10-GiB contract.
+- Deleted only the stopped disposable `vpnctl-v2-node` with `limactl delete vpnctl-v2-node`, then recreated it without starting it using `limactl create --tty=false --name=vpnctl-v2-node test/v2lab/lima-node.yaml`. Lima reused its pinned image cache and created a new 10-GiB test disk; Gateway and every other VM were outside both commands.
+- Post-check observed both exact fixtures `Stopped`. Gateway remains QEMU/x86_64 at 1 vCPU/536,870,912 bytes/10,737,418,240 bytes with readiness-script SHA-256 `ce5e71613d3acb6a85308f0ffdf34b26af36c70f01163f61db1cb59871243ae9`. Node is QEMU/x86_64 at 4 vCPU/2,147,483,648 bytes/10,737,418,240 bytes with the role-specific description and readiness-script SHA-256 `778c34b783efc3870044facf66b114cfae2686134fa007e1e44b1b69a8fcc143`. Both retain the pinned image digest and `lima:user-v2` network.
+- The deleted disposable Node disk is not byte-for-byte recoverable. Functional rollback is to delete only this exact Node while stopped and recreate it from the desired earlier checked-in template/commit; no Gateway rollback is required. The replacement intentionally removes prior test-only guest state, which the versioned provisioner recreates on first boot.
+
 ## 2026-09-07 13:16–13:29 +03 — optimized release-gate startup failure
 
 ### Immutable failed session; exact fixtures restored stopped
