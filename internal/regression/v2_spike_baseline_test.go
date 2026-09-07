@@ -98,6 +98,7 @@ type spikeBaseline struct {
 			GatewayMemoryBytes      int64   `json:"gateway_memory_bytes"`
 			GatewayDiskBytes        int64   `json:"gateway_disk_bytes"`
 			GatewayManagedSwapBytes int64   `json:"gateway_managed_swap_bytes"`
+			SwapKernelReservedBytes int64   `json:"managed_swap_kernel_reserved_bytes"`
 			NodeFixtureVCPU         int     `json:"node_fixture_vcpu"`
 			NodeFixtureMemoryBytes  int64   `json:"node_fixture_memory_bytes"`
 			NodeThresholdsNormative bool    `json:"node_resource_thresholds_normative"`
@@ -119,6 +120,11 @@ type spikeBaseline struct {
 			BotAPIGlobalP99         int     `json:"bot_api_success_p99_ms"`
 			DispatchLagP99          int     `json:"load_generator_dispatch_lag_p99_ms"`
 			LoadTailSeconds         int     `json:"load_generator_tail_seconds"`
+			LoadWarmupSeconds       int     `json:"load_generator_warmup_seconds"`
+			LoadRequestTimeout      int     `json:"load_generator_request_timeout_seconds"`
+			LoadWorkerHeadroom      int     `json:"load_generator_worker_headroom_percent"`
+			WebhookLoadWorkers      int     `json:"webhook_load_generator_workers"`
+			BotAPILoadWorkers       int     `json:"bot_api_load_generator_workers"`
 			DisruptionProbes        int     `json:"client_disruption_stable_recovery_probes"`
 			MaximumDisruption       float64 `json:"maximum_client_disruption_seconds"`
 			TunnelReconnect         int     `json:"tunnel_reconnect_seconds"`
@@ -271,7 +277,8 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 	capacity := limits.MinimumGatewayCapacity
 	if capacity.CapacityBoundaryRole != "gateway" || capacity.GatewayVCPU != 1 ||
 		capacity.GatewayMemoryBytes != 536870912 || capacity.GatewayDiskBytes != 10737418240 ||
-		capacity.GatewayManagedSwapBytes != 1073741824 || capacity.NodeFixtureVCPU != 4 ||
+		capacity.GatewayManagedSwapBytes != 1073741824 || capacity.SwapKernelReservedBytes != 4096 ||
+		capacity.NodeFixtureVCPU != 4 ||
 		capacity.NodeFixtureMemoryBytes != 2147483648 || capacity.NodeThresholdsNormative ||
 		capacity.LogicalTelegramUsers != 300 || capacity.DurationSeconds != 300 ||
 		capacity.WebhookRPS != 10 || capacity.BotAPIRPS != 5 || capacity.PersonalClients != 5 ||
@@ -281,7 +288,10 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 		capacity.WebhookSuccessMin != 2890 || capacity.WebhookSteadyP95 != 1000 ||
 		capacity.WebhookSteadyP99 != 2000 || capacity.BotAPIGlobalP95 != 1000 ||
 		capacity.BotAPIGlobalP99 != 2000 || capacity.DispatchLagP99 != 1000 ||
-		capacity.LoadTailSeconds != 30 || capacity.DisruptionProbes != 5 || capacity.MaximumDisruption != 11.5 ||
+		capacity.LoadTailSeconds != 30 || capacity.LoadWarmupSeconds != 10 ||
+		capacity.LoadRequestTimeout != 8 || capacity.LoadWorkerHeadroom != 20 ||
+		capacity.WebhookLoadWorkers != 96 || capacity.BotAPILoadWorkers != 48 ||
+		capacity.DisruptionProbes != 5 || capacity.MaximumDisruption != 11.5 ||
 		capacity.TunnelReconnect != 8 ||
 		capacity.PerExposeConcurrent != 40 || capacity.GatewayConcurrent != 64 ||
 		capacity.AcceptedSourceCommit != "69e46fa00933f714a90207ee20be4a657b4c9b9d" ||

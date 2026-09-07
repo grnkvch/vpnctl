@@ -80,6 +80,17 @@ def fixture_matches(actual: dict[str, Any], expected: dict[str, Any], name: str)
     )
 
 
+def managed_swap_matches(resources: dict[str, Any], expected: dict[str, Any]) -> bool:
+    configured = integer(expected.get("managed_swap_bytes"))
+    kernel_reserved = integer(expected.get("managed_swap_kernel_reserved_bytes"), 0)
+    observed = integer(nested(resources, "memory", "swap_total_bytes"))
+    return configured > 0 and kernel_reserved >= 0 and configured - kernel_reserved <= observed <= configured
+
+
+def monitor_completed(resources: dict[str, Any]) -> bool:
+    return resources.get("status") == "completed" and resources.get("diagnostic_errors") == []
+
+
 def lifecycle_valid(summary: dict[str, Any], expected: int) -> bool:
     results = summary.get("request_results")
     return (
@@ -124,6 +135,14 @@ def tail_valid(summary: dict[str, Any], expected: int, bound: float) -> bool:
     )
 
 
+def warmup_valid(summary: dict[str, Any], expected: int) -> bool:
+    return (
+        lifecycle_valid(summary, expected)
+        and summary.get("successful_requests") == expected
+        and summary.get("failed_requests") == 0
+    )
+
+
 def phase_within(
     phase: object, latency_p95: float, latency_p99: float, dispatch_p99: float
 ) -> bool:
@@ -144,10 +163,13 @@ def build_summary(
     evidence: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     profile = manifest["profile"]
+    generator = manifest["load_generator"]
     bounds = manifest["bounds"]
     fault = manifest["fault"]
     webhook = evidence["webhook"]
     api = evidence["api"]
+    webhook_warmup = evidence["webhook_warmup"]
+    api_warmup = evidence["api_warmup"]
     clients = evidence["clients"]
     gateway_resources = evidence["gateway_resources"]
     node_resources = evidence["node_resources"]
@@ -156,9 +178,13 @@ def build_summary(
     phases = disruption.get("latency_by_client_phase", {})
     if not isinstance(phases, dict):
         phases = {}
+    gateway_monitor_completed = monitor_completed(gateway_resources)
+    node_monitor_completed = monitor_completed(node_resources)
 
     expected_webhook = profile["duration_seconds"] * profile["webhook_requests_per_second"]
     expected_api = profile["duration_seconds"] * profile["bot_api_requests_per_second"]
+    expected_webhook_warmup = generator["warmup_seconds"] * profile["webhook_requests_per_second"]
+    expected_api_warmup = generator["warmup_seconds"] * profile["bot_api_requests_per_second"]
     tail_seconds = bounds["load_generator_tail_seconds"]
     dispatch_bound = bounds["load_generator_dispatch_lag_p99_ms"]
 
@@ -179,6 +205,8 @@ def build_summary(
     api_dispatch = dispatch_within(api, dispatch_bound)
     webhook_dispatch = dispatch_within(webhook, dispatch_bound)
     load_checks = {
+        "webhook_warmup_completed": warmup_valid(webhook_warmup, expected_webhook_warmup),
+        "bot_api_warmup_completed": warmup_valid(api_warmup, expected_api_warmup),
         "webhook_scheduled_and_completed": webhook_lifecycle,
         "bot_api_scheduled_and_completed": api_lifecycle,
         "webhook_global_dispatch_lag_p99_within_bound": webhook_dispatch,
@@ -198,16 +226,16 @@ def build_summary(
             evidence["gateway_fixture"], manifest["gateway_target"], "vpnctl-v2-gateway"
         ),
         "controller_idle_rss": bool(evidence["controller"].get("within_target")),
+        "monitor_completed": gateway_monitor_completed,
         "average_cpu": number(nested(gateway_resources, "cpu_percent", "average"))
         <= bounds["maximum_average_cpu_percent"],
         "minimum_available_memory": number(
             nested(gateway_resources, "memory", "minimum_available_bytes"), -1
         )
         >= bounds["minimum_mem_available_bytes"],
-        "managed_swap_profile": integer(
-            nested(gateway_resources, "memory", "swap_total_bytes")
-        )
-        == manifest["gateway_target"]["managed_swap_bytes"],
+        "managed_swap_profile": managed_swap_matches(
+            gateway_resources, manifest["gateway_target"]
+        ),
         "maximum_swap_used": number(
             nested(gateway_resources, "memory", "maximum_swap_used_bytes")
         )
@@ -234,11 +262,10 @@ def build_summary(
         "fixture_profile": fixture_matches(
             evidence["node_fixture"], manifest["node_fixture"], "vpnctl-v2-node"
         ),
-        "monitor_completed": node_resources.get("status") == "completed",
-        "managed_swap_profile": integer(
-            nested(node_resources, "memory", "swap_total_bytes")
-        )
-        == manifest["node_fixture"]["managed_swap_bytes"],
+        "monitor_completed": node_monitor_completed,
+        "managed_swap_profile": managed_swap_matches(
+            node_resources, manifest["node_fixture"]
+        ),
         "no_oom": service_oom_kills(node_resources) == 0,
         "no_service_crash": service_restarts(node_resources) == 0,
         "services_healthy_after_recovery": evidence["node_health"].get("status") == "passed",
@@ -321,10 +348,39 @@ def build_summary(
     }
     clients_valid = all(client_checks.values())
 
+    measurement_checks = {
+        "gateway_resource_monitor_completed": gateway_monitor_completed,
+        "node_resource_monitor_completed": node_monitor_completed,
+    }
+    measurement_valid = all(measurement_checks.values())
+
     invalid_reasons = [name for name, passed in load_checks.items() if not passed]
-    node_reasons = [name for name, passed in node_health_checks.items() if not passed]
+    node_non_monitor_checks = {
+        "fixture_profile",
+        "services_healthy_after_recovery",
+        "five_client_workload_completed",
+    }
+    node_reasons = [
+        name
+        for name, passed in node_health_checks.items()
+        if not passed
+        and name != "monitor_completed"
+        and (node_monitor_completed or name in node_non_monitor_checks)
+    ]
+    gateway_non_monitor_checks = {
+        "fixture_profile",
+        "controller_idle_rss",
+        "per_expose_limit",
+        "gateway_limit",
+    }
     product_reasons = (
-        [f"gateway_capacity.{name}" for name, passed in gateway_resource_checks.items() if not passed]
+        [
+            f"gateway_capacity.{name}"
+            for name, passed in gateway_resource_checks.items()
+            if not passed
+            and name != "monitor_completed"
+            and (gateway_monitor_completed or name in gateway_non_monitor_checks)
+        ]
         + [f"fault_reconnect.{name}" for name, passed in reconnect_checks.items() if not passed]
         + [f"client_disruption.{name}" for name, passed in disruption_checks.items() if not passed]
         + [f"steady_state_latency.{name}" for name, passed in steady_checks.items() if not passed]
@@ -337,7 +393,10 @@ def build_summary(
         and steady_valid
         and clients_valid
     )
-    if not load_valid:
+    measurement_reasons = [name for name, passed in measurement_checks.items() if not passed]
+    if not measurement_valid:
+        classification = "invalid_measurement_evidence"
+    elif not load_valid:
         classification = "invalid_load_generation"
     elif not node_healthy:
         classification = "invalid_node_fixture"
@@ -365,7 +424,7 @@ def build_summary(
         and number(nested(api, "worker_pool", "worker_queue_lag_ms", "p99"), 0)
         > dispatch_bound
     )
-    gateway_saturation = any(
+    gateway_saturation = gateway_monitor_completed and any(
         not gateway_resource_checks[key]
         for key in (
             "average_cpu",
@@ -377,7 +436,7 @@ def build_summary(
     )
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "passed" if classification == "passed" else "failed",
         "measurement_classification": classification,
         "source_commit": source_commit,
@@ -389,6 +448,11 @@ def build_summary(
             "node": manifest["node_fixture"],
             "gateway_observed": evidence["gateway_fixture"],
             "node_observed": evidence["node_fixture"],
+        },
+        "measurement_validity": {
+            "within_contract": measurement_valid,
+            "checks": measurement_checks,
+            "invalid_reasons": measurement_reasons,
         },
         "gateway_capacity": {
             "within_contract": gateway_capacity_valid,
@@ -418,7 +482,32 @@ def build_summary(
             "within_contract": load_valid,
             "checks": load_checks,
             "dispatch_lag_p99_bound_ms": dispatch_bound,
+            "contract": generator,
             "invalid_reasons": invalid_reasons,
+            "warmup": {
+                "webhook": {
+                    key: webhook_warmup.get(key)
+                    for key in (
+                        "status",
+                        "scheduled_requests",
+                        "submitted_requests",
+                        "completed_requests",
+                        "successful_requests",
+                        "failed_requests",
+                    )
+                },
+                "bot_api": {
+                    key: api_warmup.get(key)
+                    for key in (
+                        "status",
+                        "scheduled_requests",
+                        "submitted_requests",
+                        "completed_requests",
+                        "successful_requests",
+                        "failed_requests",
+                    )
+                },
+            },
             "webhook": {
                 key: webhook.get(key)
                 for key in (
@@ -482,6 +571,7 @@ def build_summary(
             "fault_snapshots": evidence["diagnostics"],
         },
         "failure_reasons": {
+            "measurement": measurement_reasons,
             "load_generator": invalid_reasons,
             "node_fixture": node_reasons,
             "product": product_reasons,
@@ -507,6 +597,8 @@ def main() -> None:
         "controller": "controller-idle.json",
         "webhook": "webhook-load.json",
         "api": "api-load.json",
+        "webhook_warmup": "webhook-warmup.json",
+        "api_warmup": "api-warmup.json",
         "clients": "clients.json",
         "gateway_resources": "gateway-resources.json",
         "node_resources": "node-resources.json",

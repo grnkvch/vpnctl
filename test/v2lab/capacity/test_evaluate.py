@@ -66,8 +66,9 @@ def load_summary(count, tail_count):
 
 def resources(cpu=50.0, logical_cpus=1):
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "completed",
+        "diagnostic_errors": [],
         "cpu_percent": {"average": cpu, "maximum_interval": cpu, "average_iowait": 0, "average_steal": 0},
         "scheduler": {"logical_cpus": logical_cpus, "maximum_load1": 1.0, "maximum_run_queue": logical_cpus},
         "memory": {
@@ -106,6 +107,8 @@ def valid_case():
         "controller": {"within_target": True},
         "webhook": webhook,
         "api": load_summary(10, 3),
+        "webhook_warmup": load_summary(20, 20),
+        "api_warmup": load_summary(10, 10),
         "clients": {
             "status": "passed",
             "clients": [{"packet_loss_percent": 0} for _ in range(5)],
@@ -210,6 +213,22 @@ class CapacityEvaluationTest(unittest.TestCase):
             summary["load_generator_validity"]["checks"]["bot_api_scheduled_and_completed"]
         )
 
+    def test_missing_warmup_invalidates_generation(self):
+        manifest, evidence = valid_case()
+        evidence["webhook_warmup"] = {
+            "status": "invalid_evidence",
+            "evidence_error": "FileNotFoundError",
+        }
+        summary = self.evaluate(manifest, evidence)
+        self.assertEqual(summary["measurement_classification"], "invalid_load_generation")
+        self.assertFalse(
+            summary["load_generator_validity"]["checks"]["webhook_warmup_completed"]
+        )
+        self.assertIn(
+            "webhook_warmup_completed",
+            summary["failure_reasons"]["load_generator"],
+        )
+
     def test_tail_backlog_invalidates_generation(self):
         manifest, evidence = valid_case()
         evidence["webhook"]["tail_30_seconds"]["dispatch_lag_ms"]["max"] = 1001
@@ -236,6 +255,22 @@ class CapacityEvaluationTest(unittest.TestCase):
             "gateway_capacity.managed_swap_profile",
             summary["failure_reasons"]["product"],
         )
+
+    def test_kernel_reserved_swap_page_still_matches_managed_allocation(self):
+        manifest, evidence = valid_case()
+        evidence["gateway_resources"]["memory"]["swap_total_bytes"] = 1_073_737_728
+        evidence["node_resources"]["memory"]["swap_total_bytes"] = 1_073_737_728
+        summary = self.evaluate(manifest, evidence)
+        self.assertEqual(summary["measurement_classification"], "passed")
+        self.assertTrue(summary["gateway_capacity"]["checks"]["managed_swap_profile"])
+        self.assertTrue(summary["node_fixture_health"]["checks"]["managed_swap_profile"])
+
+    def test_swap_larger_than_kernel_reservation_is_rejected(self):
+        manifest, evidence = valid_case()
+        evidence["gateway_resources"]["memory"]["swap_total_bytes"] = 1_073_737_727
+        summary = self.evaluate(manifest, evidence)
+        self.assertEqual(summary["measurement_classification"], "gateway_capacity_not_demonstrated")
+        self.assertFalse(summary["gateway_capacity"]["checks"]["managed_swap_profile"])
 
     def test_node_swap_profile_is_fixture_health_not_gateway_capacity(self):
         manifest, evidence = valid_case()
@@ -294,6 +329,26 @@ class CapacityEvaluationTest(unittest.TestCase):
         summary = self.evaluate(manifest, evidence)
         self.assertEqual(summary["measurement_classification"], "invalid_node_fixture")
         self.assertTrue(summary["gateway_capacity"]["within_contract"])
+
+    def test_degraded_monitor_is_invalid_measurement_not_gateway_saturation(self):
+        manifest, evidence = valid_case()
+        evidence["gateway_resources"]["status"] = "degraded"
+        evidence["gateway_resources"]["memory"] = {}
+        evidence["gateway_resources"]["disk"] = {}
+        evidence["gateway_resources"]["services"] = {}
+        evidence["gateway_resources"]["diagnostic_errors"] = [
+            {
+                "offset_seconds": 145.0,
+                "unit": "service",
+                "operation": "systemctl_show",
+                "error_class": "timeout",
+            }
+        ]
+        summary = self.evaluate(manifest, evidence)
+        self.assertEqual(summary["measurement_classification"], "invalid_measurement_evidence")
+        self.assertFalse(summary["measurement_validity"]["within_contract"])
+        self.assertFalse(summary["diagnostic_signals"]["gateway_saturation_observed"])
+        self.assertEqual(summary["failure_reasons"]["product"], [])
 
 
 if __name__ == "__main__":

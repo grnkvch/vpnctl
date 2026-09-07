@@ -46,7 +46,7 @@
     },
     {
       "path": "test/v2lab/capacity/manifest.json",
-      "sha256": "573b9dd94d8d7ce7d26287134703593ac271014ea7a3e6c7bab74bd71b602fcb"
+      "sha256": "b837722f7f71b3cc42f2ca8195a7dd7578616afad323eecabd537c5847d90619"
     },
     {
       "path": "docs/v2/CLI_CONTRACT.md",
@@ -377,6 +377,7 @@
       "gateway_memory_bytes": 536870912,
       "gateway_disk_bytes": 10737418240,
       "gateway_managed_swap_bytes": 1073741824,
+      "managed_swap_kernel_reserved_bytes": 4096,
       "node_fixture_vcpu": 4,
       "node_fixture_memory_bytes": 2147483648,
       "node_resource_thresholds_normative": false,
@@ -398,6 +399,11 @@
       "bot_api_success_p99_ms": 2000,
       "load_generator_dispatch_lag_p99_ms": 1000,
       "load_generator_tail_seconds": 30,
+      "load_generator_warmup_seconds": 10,
+      "load_generator_request_timeout_seconds": 8,
+      "load_generator_worker_headroom_percent": 20,
+      "webhook_load_generator_workers": 96,
+      "bot_api_load_generator_workers": 48,
       "client_disruption_stable_recovery_probes": 5,
       "maximum_client_disruption_seconds": 11.5,
       "tunnel_reconnect_seconds": 8,

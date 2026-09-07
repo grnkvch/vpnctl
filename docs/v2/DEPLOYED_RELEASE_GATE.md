@@ -103,7 +103,11 @@ is the only exception: it performs and records one additional Gateway restart.
 A checked-in bounded manifest and read-only witness prove the absence of every
 known stage-owned path, unit, process, listener, namespace, nftables object,
 network object, and package mutation before the first attempt and between
-attempts. Witness failure blocks later stages; only the registered harness
+attempts. Within each fixture the witness takes one snapshot per resource
+class, scans `/proc` once, and evaluates every exact manifest entry from those
+snapshots. Gateway and Node are inspected concurrently because their state is
+independent; VM stages themselves remain strictly sequential. Witness failure
+blocks later stages; only the registered harness
 owner-scoped cleanup adapter may run. Success, failure, `INT`, and `TERM` all
 stop Node before Gateway and verify both exact fixtures `Stopped`.
 
@@ -137,6 +141,15 @@ services must remain functional and OOM/crash-free, but Node CPU, memory, swap,
 and disk do not inherit Gateway acceptance thresholds. Neither role is resized
 inside a gate run.
 
+Before the measured interval, the Node must successfully complete an unscored
+ten-second warm-up at the same 10/s webhook and 5/s Bot API rates. This removes
+fixture/TLS cold start from the separately asserted steady-state sample without
+changing the measured 300 seconds or its 3,000/1,500 scheduled requests. The
+unchanged per-request timeout is eight seconds. Generator pools are derived
+from rate multiplied by that timeout plus 20% headroom: 96 webhook workers and
+48 Bot API workers. A missing, incomplete, or unsuccessful warm-up invalidates
+load generation and cannot produce a passing capacity result.
+
 The host enters the Gateway fault command before starting the measured workload
 and waits for its fixed root-only ready marker. The guest process begins its
 local delay only after the host supplies a fixed trigger while the fixture is
@@ -163,7 +176,8 @@ webhook scheduling periods: it permits ordinary scheduler jitter but rejects a
 generator that is a full second behind the declared 10-request/s profile. It is
 fixed before the next real run and must not be tuned from that result.
 
-Capacity evidence is split into `gateway_capacity`, `node_fixture_health`,
+Schema-3 capacity evidence is split into `measurement_validity`,
+`gateway_capacity`, `node_fixture_health`,
 `load_generator_validity`, `fault_reconnect`, `client_disruption`, and
 `steady_state_latency`. Invalid/degraded generation remains a failed attempt
 and is never aggregated into `automated.json`, but is classified separately
@@ -175,6 +189,15 @@ another Lima control session at the fault boundary. Worker occupancy and queue l
 Node CPU starvation, worker exhaustion from hanging requests, FRP reconnect
 failure, and Gateway saturation without claiming that a heuristic is causal
 proof.
+
+Each monitor obtains all declared systemd unit state in one bounded query. A
+timeout or malformed diagnostic sample is retained as a sanitized unit/offset/
+error-class record, collection continues, and the aggregate is classified
+`invalid_measurement_evidence`. Such an attempt fails but is not reported as
+proof of Gateway saturation. The managed swap contract still provisions exactly
+1 GiB; its observed `SwapTotal` may be exactly 4,096 bytes lower because Linux
+reserves the first `mkswap` page for metadata. No swap-use or Gateway resource
+threshold is changed. The top-level release aggregate remains schema v2.
 
 The VM topology digest covers the role contract, both templates, provisioning,
 and capacity load/monitor/evaluation contracts. It is stored in each VM attempt,

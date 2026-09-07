@@ -52,41 +52,73 @@ assert_running_fixture() {
 guest_check() {
   local instance=$1 role=$2 spec
   spec=$(jq -c --arg role "$role" '.[$role]' "$manifest" | base64 | tr -d '\n')
-  limactl shell --tty=false "$instance" -- env VPNCTL_CLEAN_SPEC="$spec" bash -c '
+  limactl shell --tty=false "$instance" -- sudo env VPNCTL_CLEAN_SPEC="$spec" bash -c '
     set -euo pipefail
     spec=$(printf "%s" "$VPNCTL_CLEAN_SPEC" | base64 -d)
     fail() { printf "clean-state residue: %s\n" "$1" >&2; exit 3; }
-    unknown_owner=$(sudo find /etc /run /var/lib /tmp /opt /usr/local/libexec -xdev -type f \( -name .owner -o -name .watchdog-test-owner \) -size -4096c -exec grep -Il "^vpnctl-v2-" {} + 2>/dev/null | head -n 1 || true)
+    unknown_owner=$(find /etc /run /var/lib /tmp /opt /usr/local/libexec -xdev -type f \( -name .owner -o -name .watchdog-test-owner \) -size -4096c -exec grep -Il "^vpnctl-v2-" {} + 2>/dev/null | head -n 1 || true)
     [ -z "$unknown_owner" ] || fail "owner-marker:$unknown_owner"
-    while IFS= read -r value; do sudo test ! -e "$value" || fail "path:$value"; done < <(jq -r ".paths_absent[]" <<<"$spec")
-    while IFS= read -r value; do systemctl is-active --quiet "$value" && fail "unit:$value" || true; done < <(jq -r ".units_inactive[]" <<<"$spec")
-    while IFS= read -r value; do
-      for executable in /proc/[0-9]*/exe; do
-        target=$(sudo readlink "$executable" 2>/dev/null || true)
+    while IFS= read -r value; do test ! -e "$value" || fail "path:$value"; done < <(jq -r ".paths_absent[]" <<<"$spec")
+
+    mapfile -t units < <(jq -r ".units_inactive[]" <<<"$spec")
+    if [ "${#units[@]}" -gt 0 ]; then
+      mapfile -t unit_states < <(systemctl is-active -- "${units[@]}" 2>/dev/null || true)
+      [ "${#unit_states[@]}" -eq "${#units[@]}" ] || fail "unit-status-incomplete"
+      for index in "${!units[@]}"; do
+        [ "${unit_states[$index]}" != active ] || fail "unit:${units[$index]}"
+      done
+    fi
+
+    mapfile -t prefixes < <(jq -r ".process_prefixes_absent[]" <<<"$spec")
+    for executable in /proc/[0-9]*/exe; do
+      target=$(readlink "$executable" 2>/dev/null || true)
+      for value in "${prefixes[@]}"; do
         case "$target" in "$value"*) fail "process:$value" ;; esac
       done
-    done < <(jq -r ".process_prefixes_absent[]" <<<"$spec")
-    while IFS= read -r value; do sudo ss -H -ltn "sport = :$value" | grep -q . && fail "tcp:$value" || true; done < <(jq -r ".tcp_ports_free[]" <<<"$spec")
-    while IFS= read -r value; do sudo ss -H -lun "sport = :$value" | grep -q . && fail "udp:$value" || true; done < <(jq -r ".udp_ports_free[]" <<<"$spec")
-    while IFS= read -r value; do sudo ip netns list | cut -d " " -f 1 | grep -Fxq "$value" && fail "netns:$value" || true; done < <(jq -r ".namespaces_absent[]" <<<"$spec")
-    while IFS=$'"'"'\t'"'"' read -r family table; do sudo nft list table "$family" "$table" >/dev/null 2>&1 && fail "nft:$family/$table" || true; done < <(jq -r ".nftables_absent[] | [.family,.table] | @tsv" <<<"$spec")
-    while IFS= read -r value; do sudo ip link show dev "$value" >/dev/null 2>&1 && fail "interface:$value" || true; done < <(jq -r ".interfaces_absent[]" <<<"$spec")
-    while IFS= read -r value; do sudo ip rule show | grep -Fqx "$value" && fail "rule:$value" || true; done < <(jq -r ".ip_rules_absent[]" <<<"$spec")
-    while IFS= read -r value; do sudo ip route show table all | grep -Fqx "$value" && fail "route:$value" || true; done < <(jq -r ".routes_absent[]" <<<"$spec")
-    while IFS= read -r value; do dpkg-query -W "$value" >/dev/null 2>&1 && fail "package:$value" || true; done < <(jq -r ".packages_absent[]" <<<"$spec")
+    done
+
+    tcp_sockets=$(ss -H -ltn)
+    while IFS= read -r value; do
+      awk -v port="$value" '"'"'$4 ~ (":" port "$") {found=1} END {exit !found}'"'"' <<<"$tcp_sockets" && fail "tcp:$value" || true
+    done < <(jq -r ".tcp_ports_free[]" <<<"$spec")
+    udp_sockets=$(ss -H -lun)
+    while IFS= read -r value; do
+      awk -v port="$value" '"'"'$4 ~ (":" port "$") {found=1} END {exit !found}'"'"' <<<"$udp_sockets" && fail "udp:$value" || true
+    done < <(jq -r ".udp_ports_free[]" <<<"$spec")
+
+    namespaces=$(ip netns list | cut -d " " -f 1)
+    while IFS= read -r value; do grep -Fxq "$value" <<<"$namespaces" && fail "netns:$value" || true; done < <(jq -r ".namespaces_absent[]" <<<"$spec")
+    nftables=$(nft list tables 2>/dev/null || true)
+    while IFS=$'"'"'\t'"'"' read -r family table; do grep -Fqx "table $family $table" <<<"$nftables" && fail "nft:$family/$table" || true; done < <(jq -r ".nftables_absent[] | [.family,.table] | @tsv" <<<"$spec")
+    interfaces=$(ip -o link show | awk -F'"'"': '"'"' '"'"'{sub(/@.*/, "", $2); print $2}'"'"')
+    while IFS= read -r value; do grep -Fxq "$value" <<<"$interfaces" && fail "interface:$value" || true; done < <(jq -r ".interfaces_absent[]" <<<"$spec")
+    rules=$(ip rule show)
+    while IFS= read -r value; do grep -Fqx "$value" <<<"$rules" && fail "rule:$value" || true; done < <(jq -r ".ip_rules_absent[]" <<<"$spec")
+    routes=$(ip route show table all)
+    while IFS= read -r value; do grep -Fqx "$value" <<<"$routes" && fail "route:$value" || true; done < <(jq -r ".routes_absent[]" <<<"$spec")
+    mapfile -t packages < <(jq -r ".packages_absent[]" <<<"$spec")
+    if [ "${#packages[@]}" -gt 0 ]; then
+      installed=$(dpkg-query -W -f='"'"'${Package}\n'"'"' -- "${packages[@]}" 2>/dev/null || true)
+      for value in "${packages[@]}"; do grep -Fxq "$value" <<<"$installed" && fail "package:$value" || true; done
+    fi
   '
 }
 
 capture() {
-  local output=$1 temporary started finished manifest_sha
+  local output=$1 temporary started finished manifest_sha gateway_pid node_pid status=0
   case "$output" in /*) ;; *) echo "clean-state output must be absolute" >&2; exit 2 ;; esac
   [ ! -e "$output" ] && [ ! -L "$output" ] || { echo "clean-state witness refuses to replace output" >&2; exit 3; }
   validate_manifest
   assert_running_fixture "$gateway_instance"
   assert_running_fixture "$node_instance"
   started=$(monotonic_ms)
-  guest_check "$gateway_instance" gateway
-  guest_check "$node_instance" node
+  guest_check "$gateway_instance" gateway &
+  gateway_pid=$!
+  guest_check "$node_instance" node &
+  node_pid=$!
+  wait "$gateway_pid" || status=$?
+  wait "$node_pid" || status=$?
+  [ "$status" -eq 0 ] || return "$status"
   finished=$(monotonic_ms)
   manifest_sha=$(shasum -a 256 "$manifest" | awk '{print $1}')
   temporary=$(mktemp "$(dirname -- "$output")/.clean-state.XXXXXX")

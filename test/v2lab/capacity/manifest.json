@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "development-gate",
   "profile": {
     "logical_telegram_users": 300,
@@ -21,7 +21,8 @@
     "vcpu": 1,
     "memory_bytes": 536870912,
     "disk_bytes": 10737418240,
-    "managed_swap_bytes": 1073741824
+    "managed_swap_bytes": 1073741824,
+    "managed_swap_kernel_reserved_bytes": 4096
   },
   "node_fixture": {
     "os": "Ubuntu 24.04",
@@ -30,7 +31,15 @@
     "memory_bytes": 2147483648,
     "disk_bytes": 10737418240,
     "managed_swap_bytes": 1073741824,
+    "managed_swap_kernel_reserved_bytes": 4096,
     "normative_capacity_target": false
+  },
+  "load_generator": {
+    "warmup_seconds": 10,
+    "request_timeout_seconds": 8,
+    "worker_headroom_percent": 20,
+    "webhook_workers": 96,
+    "bot_api_workers": 48
   },
   "bounds": {
     "controller_idle_rss_bytes": 20971520,

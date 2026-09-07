@@ -12,7 +12,12 @@ below remains the capability-scenario source of truth.
 The role topology contract makes only Gateway the 1-vCPU/512-MiB capacity
 boundary; model tests separately verify Node fixture health, load-generator
 validity, frozen client disruption, and deterministic failed-measurement
-classification.
+classification. The capacity contract also freezes a successful ten-second
+warm-up and rate/timeout-derived worker pools, preserves degraded monitor
+samples as invalid evidence rather than false Gateway saturation, and models
+the one-page `mkswap` metadata reservation. Release orchestration tests require
+the clean-state witness to retain every residue class while batching each
+fixture snapshot and inspecting Gateway and Node concurrently.
 
 | Capability | Requirement | Scenario | Verification | Task coverage |
 | --- | --- | --- | --- | --- |

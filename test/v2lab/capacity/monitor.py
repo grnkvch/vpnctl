@@ -77,32 +77,7 @@ def unit_integer(unit: str, property_name: str) -> int:
     return int(value)
 
 
-def unit_state(unit: str, cgroup_root: str) -> dict[str, object]:
-    process = subprocess.run(
-        [
-            "systemctl",
-            "show",
-            "--no-pager",
-            "-p",
-            "ActiveState",
-            "-p",
-            "SubState",
-            "-p",
-            "MainPID",
-            "-p",
-            "NRestarts",
-            unit,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=1,
-    )
-    properties = {}
-    for line in process.stdout.splitlines():
-        key, separator, value = line.partition("=")
-        if separator:
-            properties[key] = value
+def cgroup_processes(cgroup_root: str) -> list[dict[str, object]]:
     processes = []
     try:
         with open(os.path.join(cgroup_root, "cgroup.procs"), encoding="ascii") as source:
@@ -116,13 +91,113 @@ def unit_state(unit: str, cgroup_root: str) -> dict[str, object]:
         except FileNotFoundError:
             continue
         processes.append({"pid": int(pid), "command": command})
+    return processes
+
+
+def unavailable_unit_state(
+    cgroup_root: str, error_class: str
+) -> dict[str, object]:
     return {
-        "active_state": properties.get("ActiveState", "unknown"),
-        "sub_state": properties.get("SubState", "unknown"),
-        "main_pid": int(properties.get("MainPID", "0") or 0),
-        "restarts": int(properties.get("NRestarts", "0") or 0),
-        "cgroup_processes": processes,
+        "active_state": "unknown",
+        "sub_state": "unknown",
+        "main_pid": 0,
+        "restarts": 0,
+        "cgroup_processes": cgroup_processes(cgroup_root),
+        "diagnostic_error": {
+            "operation": "systemctl_show",
+            "error_class": error_class,
+        },
     }
+
+
+def unit_state_from_properties(
+    properties: dict[str, str], cgroup_root: str
+) -> dict[str, object] | None:
+    try:
+        main_pid = int(properties["MainPID"])
+        restarts = int(properties["NRestarts"])
+        active_state = properties["ActiveState"]
+        sub_state = properties["SubState"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if main_pid < 0 or restarts < 0 or not active_state or not sub_state:
+        return None
+    return {
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "main_pid": main_pid,
+        "restarts": restarts,
+        "cgroup_processes": cgroup_processes(cgroup_root),
+    }
+
+
+def unit_states(
+    units: list[str], groups: dict[str, str]
+) -> tuple[dict[str, dict[str, object]], list[dict[str, str]]]:
+    command = [
+        "systemctl",
+        "show",
+        "--no-pager",
+        "-p",
+        "Id",
+        "-p",
+        "ActiveState",
+        "-p",
+        "SubState",
+        "-p",
+        "MainPID",
+        "-p",
+        "NRestarts",
+        *units,
+    ]
+    try:
+        process = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    except subprocess.TimeoutExpired:
+        error_class = "timeout"
+        return (
+            {
+                unit: unavailable_unit_state(groups[unit], error_class)
+                for unit in units
+            },
+            [{"unit": unit, "error_class": error_class} for unit in units],
+        )
+
+    properties_by_unit: dict[str, dict[str, str]] = {}
+    properties: dict[str, str] = {}
+    for line in [*process.stdout.splitlines(), ""]:
+        if not line:
+            unit = properties.get("Id", "")
+            if unit:
+                properties_by_unit[unit] = properties
+            properties = {}
+            continue
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+
+    states = {}
+    errors = []
+    for unit in units:
+        properties = properties_by_unit.get(unit)
+        if process.returncode != 0 or properties is None:
+            error_class = "nonzero_exit" if process.returncode != 0 else "missing_unit"
+            states[unit] = unavailable_unit_state(groups[unit], error_class)
+            errors.append({"unit": unit, "error_class": error_class})
+            continue
+        state = unit_state_from_properties(properties, groups[unit])
+        if state is None:
+            error_class = "malformed_response"
+            states[unit] = unavailable_unit_state(groups[unit], error_class)
+            errors.append({"unit": unit, "error_class": error_class})
+            continue
+        states[unit] = state
+    return states, errors
 
 
 def tcp_state_counts() -> dict[str, int]:
@@ -192,6 +267,7 @@ def main() -> None:
     cpu_previous = cpu_before
     interval_cpu = []
     timeline = []
+    diagnostic_errors = []
     minimum_available = 1 << 62
     maximum_resident = 0
     maximum_swap_used = 0
@@ -223,10 +299,18 @@ def main() -> None:
             "load": current_load,
         }
         if args.diagnostic_start <= offset <= args.diagnostic_end:
+            states, state_errors = unit_states(args.unit, groups)
+            diagnostic_errors.extend(
+                {
+                    "offset_seconds": round(offset, 3),
+                    "unit": error["unit"],
+                    "operation": "systemctl_show",
+                    "error_class": error["error_class"],
+                }
+                for error in state_errors
+            )
             sample["runtime"] = {
-                "units": {
-                    unit: unit_state(unit, groups[unit]) for unit in args.unit
-                },
+                "units": states,
                 "tcp": tcp_state_counts(),
                 "frpc_status": (
                     frpc_status(args.frpc_url, args.frpc_user, frpc_password)
@@ -254,8 +338,9 @@ def main() -> None:
     host_oom_kills = read_pairs("/proc/vmstat").get("oom_kill", 0) - host_oom_before
     disk_free_after = shutil.disk_usage("/").free
     print(json.dumps({
-        "schema_version": 2,
-        "status": "completed",
+        "schema_version": 3,
+        "status": "completed" if not diagnostic_errors else "degraded",
+        "diagnostic_errors": diagnostic_errors,
         "samples": samples,
         "duration_seconds": round(time.monotonic() - started, 3),
         "cpu_percent": {

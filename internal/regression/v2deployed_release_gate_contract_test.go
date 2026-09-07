@@ -325,8 +325,9 @@ func TestV2CleanStateWitnessIsReadOnlyAndCoversEveryResourceClass(t *testing.T) 
 	for _, required := range []string{
 		"paths_absent", "units_inactive", "process_prefixes_absent", "tcp_ports_free", "udp_ports_free",
 		"namespaces_absent", "nftables_absent", "interfaces_absent", "ip_rules_absent", "routes_absent", "packages_absent",
-		"sudo test ! -e", "systemctl is-active", "/proc/[0-9]*/exe", "ss -H -ltn", "ss -H -lun",
-		"ip netns list", "nft list table", "ip link show", "ip rule show", "ip route show", "dpkg-query -W",
+		"sudo env VPNCTL_CLEAN_SPEC", "test ! -e", "systemctl is-active --", "/proc/[0-9]*/exe", "ss -H -ltn", "ss -H -lun",
+		"ip netns list", "nft list tables", "ip -o link show", "ip rule show", "ip route show", "dpkg-query -W",
+		"mapfile -t units", "mapfile -t prefixes", "gateway_pid=$!", "node_pid=$!",
 		"owner-marker:", "clean-state witness refuses to replace output",
 	} {
 		if !strings.Contains(script, required) {
@@ -336,6 +337,20 @@ func TestV2CleanStateWitnessIsReadOnlyAndCoversEveryResourceClass(t *testing.T) 
 	for _, forbidden := range []string{"rm -", "systemctl stop", "systemctl disable", "ip netns delete", "nft delete", "ip link delete", "apt-get"} {
 		if strings.Contains(script, forbidden) {
 			t.Errorf("clean-state witness contains mutation %q", forbidden)
+		}
+	}
+	for snapshot, want := range map[string]int{
+		"/proc/[0-9]*/exe": 1,
+		"ss -H -ltn":       1,
+		"ss -H -lun":       1,
+		"ip netns list":    1,
+		"nft list tables":  1,
+		"ip -o link show":  1,
+		"ip rule show":     1,
+		"ip route show":    1,
+	} {
+		if got := strings.Count(script, snapshot); got != want {
+			t.Errorf("clean-state witness takes %q snapshot %d times, want %d", snapshot, got, want)
 		}
 	}
 }

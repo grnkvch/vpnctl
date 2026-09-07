@@ -49,6 +49,24 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(manifest["node_fixture"]["vcpu"], 4)
         self.assertEqual(manifest["node_fixture"]["memory_bytes"], 2147483648)
         self.assertFalse(manifest["node_fixture"]["normative_capacity_target"])
+        generator = manifest["load_generator"]
+        self.assertEqual(generator["warmup_seconds"], 10)
+        self.assertEqual(generator["request_timeout_seconds"], 8)
+        self.assertEqual(generator["worker_headroom_percent"], 20)
+        self.assertEqual(
+            generator["webhook_workers"],
+            profile["webhook_requests_per_second"]
+            * generator["request_timeout_seconds"]
+            * 120
+            // 100,
+        )
+        self.assertEqual(
+            generator["bot_api_workers"],
+            profile["bot_api_requests_per_second"]
+            * generator["request_timeout_seconds"]
+            * 120
+            // 100,
+        )
         self.assertLess(manifest["fault"]["accepted_failure_window_start_seconds"], manifest["fault"]["frps_stop_after_seconds"])
         self.assertGreater(manifest["fault"]["accepted_failure_window_end_seconds"], manifest["fault"]["frps_stop_after_seconds"])
 

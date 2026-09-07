@@ -28,18 +28,27 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			Contract             string `json:"contract"`
 		} `json:"topology"`
 		GatewayTarget struct {
-			VCPU             int `json:"vcpu"`
-			MemoryBytes      int `json:"memory_bytes"`
-			DiskBytes        int `json:"disk_bytes"`
-			ManagedSwapBytes int `json:"managed_swap_bytes"`
+			VCPU                           int `json:"vcpu"`
+			MemoryBytes                    int `json:"memory_bytes"`
+			DiskBytes                      int `json:"disk_bytes"`
+			ManagedSwapBytes               int `json:"managed_swap_bytes"`
+			ManagedSwapKernelReservedBytes int `json:"managed_swap_kernel_reserved_bytes"`
 		} `json:"gateway_target"`
 		NodeFixture struct {
-			VCPU                    int  `json:"vcpu"`
-			MemoryBytes             int  `json:"memory_bytes"`
-			DiskBytes               int  `json:"disk_bytes"`
-			ManagedSwapBytes        int  `json:"managed_swap_bytes"`
-			NormativeCapacityTarget bool `json:"normative_capacity_target"`
+			VCPU                           int  `json:"vcpu"`
+			MemoryBytes                    int  `json:"memory_bytes"`
+			DiskBytes                      int  `json:"disk_bytes"`
+			ManagedSwapBytes               int  `json:"managed_swap_bytes"`
+			ManagedSwapKernelReservedBytes int  `json:"managed_swap_kernel_reserved_bytes"`
+			NormativeCapacityTarget        bool `json:"normative_capacity_target"`
 		} `json:"node_fixture"`
+		LoadGenerator struct {
+			WarmupSeconds         int `json:"warmup_seconds"`
+			RequestTimeoutSeconds int `json:"request_timeout_seconds"`
+			WorkerHeadroomPercent int `json:"worker_headroom_percent"`
+			WebhookWorkers        int `json:"webhook_workers"`
+			BotAPIWorkers         int `json:"bot_api_workers"`
+		} `json:"load_generator"`
 		Bounds struct {
 			ControllerRSS            int     `json:"controller_idle_rss_bytes"`
 			MinimumMemoryAvailable   int     `json:"minimum_mem_available_bytes"`
@@ -75,18 +84,27 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		manifest.Profile.WebhookRPS != 10 || manifest.Profile.BotAPIRPS != 5 || manifest.Profile.PersonalClients != 5 {
 		t.Fatalf("unexpected sustained capacity profile: %+v", manifest.Profile)
 	}
-	if manifest.SchemaVersion != 2 || manifest.Topology.CapacityBoundaryRole != "gateway" ||
+	if manifest.SchemaVersion != 3 || manifest.Topology.CapacityBoundaryRole != "gateway" ||
 		manifest.Topology.LoadGeneratorRole != "node" || manifest.Topology.Contract != "test/v2lab/fixtures.json" {
 		t.Fatalf("unexpected capacity topology: %+v", manifest.Topology)
 	}
 	if manifest.GatewayTarget.VCPU != 1 || manifest.GatewayTarget.MemoryBytes != 512*1024*1024 ||
-		manifest.GatewayTarget.DiskBytes != 10*1024*1024*1024 || manifest.GatewayTarget.ManagedSwapBytes != 1024*1024*1024 {
+		manifest.GatewayTarget.DiskBytes != 10*1024*1024*1024 || manifest.GatewayTarget.ManagedSwapBytes != 1024*1024*1024 ||
+		manifest.GatewayTarget.ManagedSwapKernelReservedBytes != 4096 {
 		t.Fatalf("unexpected minimum Gateway target: %+v", manifest.GatewayTarget)
 	}
 	if manifest.NodeFixture.VCPU != 4 || manifest.NodeFixture.MemoryBytes != 2*1024*1024*1024 ||
 		manifest.NodeFixture.DiskBytes != 10*1024*1024*1024 || manifest.NodeFixture.ManagedSwapBytes != 1024*1024*1024 ||
+		manifest.NodeFixture.ManagedSwapKernelReservedBytes != 4096 ||
 		manifest.NodeFixture.NormativeCapacityTarget {
 		t.Fatalf("unexpected functional Node fixture: %+v", manifest.NodeFixture)
+	}
+	if manifest.LoadGenerator.WarmupSeconds != 10 || manifest.LoadGenerator.RequestTimeoutSeconds != 8 ||
+		manifest.LoadGenerator.WorkerHeadroomPercent != 20 || manifest.LoadGenerator.WebhookWorkers != 96 ||
+		manifest.LoadGenerator.BotAPIWorkers != 48 ||
+		manifest.LoadGenerator.WebhookWorkers != manifest.Profile.WebhookRPS*manifest.LoadGenerator.RequestTimeoutSeconds*120/100 ||
+		manifest.LoadGenerator.BotAPIWorkers != manifest.Profile.BotAPIRPS*manifest.LoadGenerator.RequestTimeoutSeconds*120/100 {
+		t.Fatalf("unexpected load-generator contract: %+v", manifest.LoadGenerator)
 	}
 	if manifest.Bounds.ControllerRSS != 20*1024*1024 || manifest.Bounds.WebhookSuccessMinimum != 2890 ||
 		manifest.Bounds.MinimumMemoryAvailable != 64*1024*1024 || manifest.Bounds.MaximumSwapUsed != 512*1024*1024 ||
@@ -218,7 +236,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"--diagnostic-start \"$fault_start\" --diagnostic-end \"$fault_end\"",
 		"VPNCTL_CAPACITY_FRPC_PASSWORD=\"$capacity_admin_password\"", "capture_node_health",
 		"wait_reconnect || reconnect_status=$?", "wait_loads || load_status=$?",
-		"evaluate.py", "fixture_topology_sha256", "measurement_classification",
+		"run_warmup", "webhook-warmup.json", "api-warmup.json", "wait_background_group",
+		"webhook-load-generator", "gateway-resource-monitor",
+		"evaluate.py", "fixture_topology_sha256", "measurement_classification", "measurement_validity",
 		".gateway_capacity.within_contract", ".node_fixture_health.within_contract",
 		".load_generator_validity.within_contract", ".fault_reconnect.within_contract",
 		".client_disruption.within_contract", ".steady_state_latency.within_contract",
@@ -281,7 +301,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		`"fault_reconnect"`, `"client_disruption"`, `"steady_state_latency"`,
 		`"webhook_global_dispatch_lag_p99_within_bound"`, `nested(tail, "dispatch_lag_ms", "max")`,
 		`"managed_swap_profile"`,
-		`classification = "invalid_load_generation"`, `classification = "invalid_node_fixture"`,
+		`classification = "invalid_measurement_evidence"`, `classification = "invalid_load_generation"`, `classification = "invalid_node_fixture"`,
 		`classification = "gateway_capacity_not_demonstrated"`,
 		`"resource_acceptance_thresholds_applied": False`,
 		`"heuristic_signals_not_causal_proof"`,
@@ -293,8 +313,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	monitor := readContractFile(t, filepath.Join(fixtureRoot, "monitor.py"))
 	for _, required := range []string{
 		"iowait", "steal", "load1", "run_queue", "host_oom_kills", "NRestarts",
-		"unit_state", "cgroup_processes", "tcp_state_counts", "frpc_status", `"timeline": timeline`,
-		`"swap_total_bytes": swap_total_bytes`,
+		"unit_states", "cgroup_processes", "tcp_state_counts", "frpc_status", `"timeline": timeline`,
+		`"swap_total_bytes": swap_total_bytes`, `"diagnostic_errors": diagnostic_errors`, `"degraded"`,
 	} {
 		if !strings.Contains(monitor, required) {
 			t.Errorf("capacity monitor is missing %q", required)

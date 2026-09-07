@@ -45,6 +45,7 @@ node_started=false
 temporary_root=
 run_root=
 background_pids=()
+background_labels=()
 reconnect_pid=
 tunnel_service_pid_before=
 tunnel_service_restarts_before=
@@ -342,6 +343,7 @@ stop_background() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   background_pids=()
+  background_labels=()
 }
 
 restore_fixture_states() {
@@ -758,6 +760,7 @@ run_connection_limits() {
   [ "$connection_count" -ge 60 ] || { echo "global limit case did not reach concurrent ingress load" >&2; exit 1; }
   wait "$limit_pid"
   background_pids=()
+  background_labels=()
   guest "$node_instance" curl -fsS http://127.0.0.1:18121/__vpnctl_probe/status \
     > "$run_root/gateway-limit-backend.json"
   jq -e '.responses == 72 and (.errors | length) == 0 and .status_counts["200"] == 64 and .status_counts["503"] == 8' \
@@ -766,9 +769,72 @@ run_connection_limits() {
     "$run_root/gateway-limit-backend.json" >/dev/null
 }
 
+wait_background_group() {
+  local context=$1 index pid status result=0
+  for index in "${!background_pids[@]}"; do
+    pid=${background_pids[$index]}
+    status=0
+    wait "$pid" || status=$?
+    if [ "$status" -ne 0 ]; then
+      printf '%s process failed: %s (exit %s)\n' "$context" "${background_labels[$index]}" "$status" >&2
+      result=1
+    fi
+  done
+  background_pids=()
+  background_labels=()
+  return "$result"
+}
+
+run_warmup() {
+  local gateway_ip duration webhook_rate api_rate body expected_sha timeout webhook_workers api_workers
+  local failure_start failure_end stable_recovery recovery_success maximum_disruption
+  gateway_ip=$(lab_ip "$gateway_instance")
+  duration=$(value '.load_generator.warmup_seconds')
+  webhook_rate=$(value '.profile.webhook_requests_per_second')
+  api_rate=$(value '.profile.bot_api_requests_per_second')
+  body=$(value '.profile.webhook_body_bytes')
+  timeout=$(value '.load_generator.request_timeout_seconds')
+  webhook_workers=$(value '.load_generator.webhook_workers')
+  api_workers=$(value '.load_generator.bot_api_workers')
+  stable_recovery=$(value '.bounds.client_disruption_stable_recovery_probes')
+  recovery_success=$(value '.bounds.webhook_steady_state_success_p99_ms')
+  maximum_disruption=$(value '.bounds.maximum_client_disruption_seconds')
+  failure_start=$((duration + 1))
+  failure_end=$((duration + 2))
+  expected_sha=$(shasum -a 256 "$repository_root/test/v2lab/restricted/telegram-api.json" | awk '{print $1}')
+
+  guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load webhook \
+    --duration "$duration" --rate "$webhook_rate" --workers "$webhook_workers" --timeout "$timeout" \
+    --failure-window-start "$failure_start" --failure-window-end "$failure_end" \
+    --stable-recovery-probes "$stable_recovery" --recovery-success-max-ms "$recovery_success" \
+    --maximum-disruption-seconds "$maximum_disruption" \
+    --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt --body-bytes "$body" \
+    > "$run_root/webhook-warmup.json" &
+  background_pids+=("$!")
+  background_labels+=("webhook-warmup")
+  guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load api \
+    --duration "$duration" --rate "$api_rate" --workers "$api_workers" --timeout "$timeout" \
+    --failure-window-start "$failure_start" --failure-window-end "$failure_end" \
+    --target http://127.0.0.1:18080/telegram-api.json --expected-sha256 "$expected_sha" \
+    > "$run_root/api-warmup.json" &
+  background_pids+=("$!")
+  background_labels+=("bot-api-warmup")
+  wait_background_group "capacity warm-up"
+  jq -e --argjson expected "$((duration * webhook_rate))" '
+    .status == "completed" and .scheduled_requests == $expected and
+    .submitted_requests == $expected and .completed_requests == $expected and
+    .successful_requests == $expected and .failed_requests == 0
+  ' "$run_root/webhook-warmup.json" >/dev/null
+  jq -e --argjson expected "$((duration * api_rate))" '
+    .status == "completed" and .scheduled_requests == $expected and
+    .submitted_requests == $expected and .completed_requests == $expected and
+    .successful_requests == $expected and .failed_requests == 0
+  ' "$run_root/api-warmup.json" >/dev/null
+}
+
 start_loads() {
   local gateway_ip duration webhook_rate api_rate body fault_start fault_end expected_sha monitor_duration
-  local stable_recovery recovery_success maximum_disruption
+  local stable_recovery recovery_success maximum_disruption timeout webhook_workers api_workers
   gateway_ip=$(lab_ip "$gateway_instance")
   duration=$(value '.profile.duration_seconds')
   webhook_rate=$(value '.profile.webhook_requests_per_second')
@@ -779,6 +845,9 @@ start_loads() {
   stable_recovery=$(value '.bounds.client_disruption_stable_recovery_probes')
   recovery_success=$(value '.bounds.webhook_steady_state_success_p99_ms')
   maximum_disruption=$(value '.bounds.maximum_client_disruption_seconds')
+  timeout=$(value '.load_generator.request_timeout_seconds')
+  webhook_workers=$(value '.load_generator.webhook_workers')
+  api_workers=$(value '.load_generator.bot_api_workers')
   expected_sha=$(shasum -a 256 "$repository_root/test/v2lab/restricted/telegram-api.json" | awk '{print $1}')
   monitor_duration=$((duration + 10))
 
@@ -790,6 +859,7 @@ start_loads() {
     --unit "$restricted_echo_unit" --unit "$restricted_udp_unit" \
     > "$run_root/gateway-resources.json" &
   background_pids+=("$!")
+  background_labels+=("gateway-resource-monitor")
   guest "$node_instance" sudo env VPNCTL_CAPACITY_FRPC_PASSWORD="$capacity_admin_password" /tmp/monitor.py \
     --duration "$monitor_duration" --interval 2 \
     --diagnostic-start "$fault_start" --diagnostic-end "$fault_end" \
@@ -797,23 +867,27 @@ start_loads() {
     --unit "$restricted_node_unit" --unit "$tunnel_backend_unit" --unit "$tunnel_client_unit" \
     > "$run_root/node-resources.json" &
   background_pids+=("$!")
+  background_labels+=("node-resource-monitor")
   guest "$node_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/client-load --duration "$duration" \
     > "$run_root/clients.json" &
   background_pids+=("$!")
+  background_labels+=("five-client-workload")
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load webhook \
-    --duration "$duration" --rate "$webhook_rate" --workers 32 --timeout 8 \
+    --duration "$duration" --rate "$webhook_rate" --workers "$webhook_workers" --timeout "$timeout" \
     --failure-window-start "$fault_start" --failure-window-end "$fault_end" \
     --stable-recovery-probes "$stable_recovery" --recovery-success-max-ms "$recovery_success" \
     --maximum-disruption-seconds "$maximum_disruption" \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt --body-bytes "$body" \
     > "$run_root/webhook-load.json" &
   background_pids+=("$!")
+  background_labels+=("webhook-load-generator")
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load api \
-    --duration "$duration" --rate "$api_rate" --workers 24 --timeout 8 \
+    --duration "$duration" --rate "$api_rate" --workers "$api_workers" --timeout "$timeout" \
     --failure-window-start "$fault_start" --failure-window-end "$fault_end" \
     --target http://127.0.0.1:18080/telegram-api.json --expected-sha256 "$expected_sha" \
     > "$run_root/api-load.json" &
   background_pids+=("$!")
+  background_labels+=("bot-api-load-generator")
 }
 
 start_reconnect() {
@@ -866,15 +940,7 @@ wait_reconnect() {
 }
 
 wait_loads() {
-  local pid result=0
-  for pid in "${background_pids[@]}"; do
-    wait "$pid" || result=$?
-  done
-  background_pids=()
-  if [ "$result" -ne 0 ]; then
-    echo "one or more sustained workload processes failed" >&2
-    return "$result"
-  fi
+  wait_background_group "capacity sustained workload"
 }
 
 write_summary() {
@@ -887,15 +953,17 @@ write_summary() {
 
 assert_summary() {
   jq -e '
-    .schema_version == 2 and .status == "passed" and .measurement_classification == "passed" and
+    .schema_version == 3 and .status == "passed" and .measurement_classification == "passed" and
     .topology.capacity_boundary_role == "gateway" and .topology.load_generator_role == "node" and
     .gateway_capacity.within_contract and .node_fixture_health.within_contract and
+    .measurement_validity.within_contract and
     .load_generator_validity.within_contract and .fault_reconnect.within_contract and
     .client_disruption.within_contract and .steady_state_latency.within_contract and
     .client_health.within_contract and
     .node_fixture_health.resource_acceptance_thresholds_applied == false and
     (.fixture_contract_sha256 | test("^[0-9a-f]{64}$")) and
     (.failure_reasons.load_generator | length) == 0 and
+    (.failure_reasons.measurement | length) == 0 and
     (.failure_reasons.node_fixture | length) == 0 and
     (.failure_reasons.product | length) == 0 and
     .cleanup == {owner_scoped:true,temporary_resources_absent:true,prior_fixture_states_restored:true}
@@ -940,6 +1008,7 @@ verify() {
   compose_ingress_tunnel
   setup_controller
   run_connection_limits
+  run_warmup
   capture_tunnel_client_process_state_before
   start_reconnect
   start_loads

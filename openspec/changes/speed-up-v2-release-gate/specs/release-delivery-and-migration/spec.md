@@ -31,6 +31,8 @@ Every new stage attempt and VM session SHALL record bounded structured monotonic
 ### Requirement: One isolated Lima session per VM-phase invocation
 Each VM-phase invocation SHALL begin with both exact pinned fixtures stopped, have the parent orchestration start each required fixture at most once, atomically install and SHA-256-verify the exact topology-owned lab report/fault helpers on both fixtures before the first witness, run all pending VM stages sequentially while preserving the fixtures running, and stop both fixtures before returning. Helper source, destination, mode, and bytes SHALL be fingerprinted; missing or mismatching setup SHALL fail before any VM stage and SHALL retain the same immutable failed-session/resume evidence as fixture startup failure. The mandatory `transport-supervision` boot-recovery assertion MAY perform exactly one additional stage-owned Gateway restart; the gate SHALL record that restart separately and SHALL NOT permit any other additional fixture restart. A mandatory fail-closed clean-state witness SHALL run before the first stage and between stages, proving that all known stage-owned units, processes, ports, namespaces, files, routes, firewall objects, and temporary configuration are absent or at their documented baseline. A missing or failed witness SHALL prevent the next stage and final aggregation. On stage failure, cleanup failure, `INT`, or `TERM`, the gate SHALL apply only existing owner-scoped cleanup, stop both exact fixtures, retain the failed/interrupted evidence, and refuse success.
 
+Each witness MAY inspect the two independent fixtures concurrently and SHALL batch repeated read-only observations within a fixture, but MUST preserve the complete manifest, unknown owner-marker search, one-pass executable inspection, every resource-class assertion, and the sequential stage boundary. Batching SHALL NOT parallelize VM stages or introduce a cleanup mutation.
+
 #### Scenario: Clean multi-stage VM pass
 - **WHEN** several pending VM stages run successfully in one invocation
 - **THEN** parent orchestration boots both fixtures once, only `transport-supervision` may additionally restart Gateway once for its boot-recovery assertion, every adjacent stage pair is separated by a passing clean-state witness, and both fixtures are stopped after the final stage
@@ -67,11 +69,15 @@ Every webhook request SHALL retain a sanitized bounded lifecycle record containi
 
 Pre-disruption and post-recovery webhook success latency SHALL be asserted as separate samples against the unchanged p95 and p99 bounds. Fault-intersecting requests MAY be excluded only from those two steady-state samples and SHALL remain represented in disruption and global success evidence. Global and pre/post webhook dispatch-lag p99 plus global Bot API dispatch-lag p99 SHALL each be at most 1,000 ms, and no request in either final scheduled 30-second tail MAY exceed that lag bound. Bot API failures and latency SHALL remain globally asserted without a fault exclusion. A reconnect failure after workload start SHALL retain bounded transport diagnostics captured by monitors already running across the fault window, allow only the already-started fixed-duration workloads to finish, emit a failed summary, and perform the existing owner-scoped cleanup.
 
+Before the unchanged measured workload, both paths SHALL complete one versioned ten-second warm-up at the same 10/s webhook and 5/s Bot API rates; warm-up requests MUST all complete successfully and SHALL NOT enter measured counts or percentiles. Generator concurrency SHALL be the checked-in rate times the unchanged eight-second request timeout plus 20% headroom: 96 webhook workers and 48 Bot API workers. These values, warm-up, and timeout SHALL be fingerprinted and SHALL NOT alter the 300-second duration, 3,000/1,500 scheduled requests, request rates, fault schedule, or any acceptance threshold.
+
 The normative minimum-capacity resource profile SHALL apply only to the exact Gateway role: 1 vCPU, 512 MiB RAM, 10 GiB disk, and 1 GiB managed swap. The exact shared Node role SHALL use the checked-in 4-vCPU/2-GiB/10-GiB profile and retained managed swap as functional/load infrastructure. Node resource values MUST NOT be compared with the Gateway acceptance thresholds, but Node OOM, service crash, failed functional checks, or incomplete workload MUST fail or invalidate the attempt. No capacity command MAY resize a VM.
 
 The role names, template paths, CPU, memory, disk, swap, pinned image digest, isolated network, exact readiness-probe metadata and script SHA-256, and capacity responsibility SHALL form one versioned topology contract. Every reusable VM attempt, shared session, and final aggregate SHALL bind its exact contract SHA-256; a topology/profile change or drifted live fixture SHALL invalidate or refuse evidence before session allocation or VM mutation. A resource-only metadata edit that retains a stale readiness probe SHALL remain drift and require explicit replacement of only the stopped disposable fixture from its checked-in template.
 
 Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_health`, `load_generator_validity`, `fault_reconnect`, `client_disruption`, and `steady_state_latency` domains. Load-generator validity SHALL require both scheduled counts, completion of every scheduled request, the predeclared dispatch-lag bounds, no persistent post-recovery queue, and a backlog/error-free final scheduled 30 seconds. An invalid generator or unhealthy Node SHALL never pass and SHALL be distinguished from a proven Gateway-capacity rejection. Prestarted resource timelines SHALL retain load average, run queue, CPU busy, iowait, and steal plus bounded FRPC/supervisor/unit/process/TCP-state evidence around the fault without a new boundary-time Lima session.
+
+Required Gateway and Node monitors SHALL batch unit-state collection in a bounded call and retain sanitized unit/offset/error-class records when a sample cannot be collected. Collection SHALL continue after a diagnostic timeout, but any degraded required monitor MUST classify the aggregate as `invalid_measurement_evidence`, MUST remain non-passing, and MUST NOT by itself assert Gateway saturation. The managed-swap profile SHALL continue to require an exact one-GiB allocation while recognizing only the versioned 4,096-byte kernel metadata reservation in observed `SwapTotal`; swap-use and all other resource thresholds remain unchanged.
 
 #### Scenario: Optimized candidate reaches aggregation
 - **WHEN** the phase-selective optimized gate completes every mandatory stage
@@ -108,3 +114,15 @@ Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_hea
 #### Scenario: Fresh fixture has no historical lab helpers
 - **WHEN** an exact fixture created from its checked-in template reaches readiness without either lab helper on its new disk
 - **THEN** the parent installs only the exact topology-owned helper bytes and modes, verifies their guest SHA-256 before the first witness, and either proceeds self-contained or fails and stops both fixtures before any VM stage
+
+#### Scenario: Capacity diagnostic query times out
+- **WHEN** a bounded unit-state snapshot times out during the fault window
+- **THEN** the monitor retains a structured degraded sample, continues later resource collection, and the attempt fails as invalid measurement evidence without claiming Gateway saturation
+
+#### Scenario: Load path starts cold
+- **WHEN** the capacity fixture has just completed provider and connection-limit setup
+- **THEN** both paths must pass the separate fixed warm-up before the unchanged 300-second measured workload and its pre-disruption percentiles begin
+
+#### Scenario: Clean-state manifest has many entries
+- **WHEN** a between-stage witness checks the two running fixtures
+- **THEN** it may batch each resource-class snapshot and inspect the fixtures concurrently while preserving every declared absence check and the sequential stage boundary
