@@ -36,14 +36,15 @@ Network faults are always explicit and role-scoped:
 ./scripts/v2lab.sh fault node clear
 ```
 
-The latency/loss helper owns the dedicated `1abc:` qdisc handle on the peer-route interface; partitioning owns only the `inet vpnctl_v2_lab_fault` table. `clear` removes those exact controls. Before any existing exact-name VM is started, inspected, stopped, or deleted, the orchestrator verifies QEMU/amd64, resource limits, pinned image digest, and rootless network. A mismatch exits as a conflict instead of operating on the instance.
+The latency/loss helper owns the dedicated `1abc:` qdisc handle on the peer-route interface; partitioning owns only the `inet vpnctl_v2_lab_fault` table. `clear` removes those exact controls. Before any existing exact-name VM is started, inspected, stopped, or deleted, the orchestrator verifies QEMU/amd64, resource limits, pinned image digest, rootless network, and the exact stored readiness probe from the topology contract. A mismatch exits as a conflict instead of operating on the instance.
 
-A legacy 1-vCPU/512-MiB `vpnctl-v2-node` is deliberate contract drift after this change. Stop it and make the one-time, explicit metadata update before the next VM gate:
+A legacy `vpnctl-v2-node` is deliberate contract drift after the role-specific topology change. A resource-only `limactl edit` is insufficient because Lima retains the old readiness probe, including its `nproc == 1` assertion. With that exact fixture stopped, replace only Node from the checked-in template before the next VM gate:
 
 ```bash
-limactl edit vpnctl-v2-node --tty=false --cpus 4 --memory 2
+limactl delete vpnctl-v2-node
+limactl create --tty=false --name=vpnctl-v2-node test/v2lab/lima-node.yaml
 ```
 
-The capacity harness never resizes either VM during a run. Recreating only the stopped Node from `test/v2lab/lima-node.yaml` is the rollback-safe alternative when an edit cannot be applied.
+This one-time replacement discards only the disposable test Node disk; it does not touch Gateway or any similarly named instance. The new instance remains stopped after `create`. The capacity harness never edits or resizes either VM during a run. Record the exact precondition, replacement, verification, and rollback in `docs/v2/HOST_CHANGELOG.md`.
 
 Use `./scripts/v2lab.sh shell gateway` or `shell node` for an interactive guest shell, `down` to stop both persistent fixtures, and explicit `destroy` to delete them. Generated evidence is intentionally untracked; accepted spike results are summarized in versioned ADRs and the pinned [v2 component/limit manifest](COMPONENT_LIMITS.v1.json).

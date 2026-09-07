@@ -96,6 +96,60 @@ func TestV2DeployedReleaseGateRefusesVMBeforeFastWithoutLima(t *testing.T) {
 	}
 }
 
+func TestV2DeployedReleaseGateRefusesReadinessProbeDriftBeforeMutation(t *testing.T) {
+	fixture := newDeployedGateFixture(t)
+	evidence := fixture.prepare(t, "evidence-probe-drift")
+	if output, code := fixture.run(t, "", "run-fast", evidence); code != 0 {
+		t.Fatalf("run-fast code=%d output=%s", code, output)
+	}
+	operations := countFixtureOperations(t, fixture.runLog)
+	output, code := fixture.runExtra(t, []string{"VPNCTL_TEST_DRIFT_PROBE_INSTANCE=vpnctl-v2-node"}, "", "run-vm", evidence)
+	if code != 4 || !strings.Contains(output, "readiness probe does not match topology contract") ||
+		!strings.Contains(output, "resource-only limactl edit is insufficient") {
+		t.Fatalf("probe drift code=%d output=%s", code, output)
+	}
+	if countFixtureOperations(t, fixture.runLog) != operations {
+		t.Fatal("probe-drift preflight mutated fixtures")
+	}
+	entries, err := os.ReadDir(filepath.Join(evidence, "automated-fixture-sessions"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("probe-drift preflight created session entries=%v err=%v", entries, err)
+	}
+	fixture.assertLimaStopped(t)
+}
+
+func TestV2DeployedReleaseGateSealsStartupFailureAndResumes(t *testing.T) {
+	fixture := newDeployedGateFixture(t)
+	evidence := fixture.prepare(t, "evidence-startup-failure")
+	if output, code := fixture.run(t, "", "run-fast", evidence); code != 0 {
+		t.Fatalf("run-fast code=%d output=%s", code, output)
+	}
+	output, code := fixture.runExtra(t, []string{"VPNCTL_TEST_FAIL_START_INSTANCE=vpnctl-v2-node"}, "", "run-vm", evidence)
+	if code != 12 || !strings.Contains(output, "release fixture startup failed: node/vpnctl-v2-node") ||
+		!strings.Contains(output, "session-0001/session.log") || !strings.Contains(output, "run-vm --resume "+evidence) {
+		t.Fatalf("startup failure code=%d output=%s", code, output)
+	}
+	fixture.assertLimaStopped(t)
+	session := filepath.Join(evidence, "automated-fixture-sessions", "session-0001")
+	assertMode(t, session, 0o500)
+	result := readJSONObject(t, filepath.Join(session, "result.json"))
+	timings, ok := result["timings"].(map[string]any)
+	if result["status"] != "failed" || !ok || timings["startup_ms"].(float64) <= 0 {
+		t.Fatalf("startup failure result = %#v", result)
+	}
+	if witnesses, ok := result["witnesses"].([]any); !ok || len(witnesses) != 0 {
+		t.Fatalf("startup failure witnesses = %#v", result["witnesses"])
+	}
+	before := snapshotSealedSession(t, session)
+	if output, code = fixture.run(t, "", "run-vm", "--resume", evidence); code != 0 {
+		t.Fatalf("startup resume code=%d output=%s", code, output)
+	}
+	if after := snapshotSealedSession(t, session); after != before {
+		t.Fatalf("startup failure session changed across resume\nbefore=%s\nafter=%s", before, after)
+	}
+	assertSessionEvidence(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0002"), "passed")
+}
+
 func TestV2DeployedReleaseGateDoesNotLeakPrivateVMEnvironmentIntoFastStages(t *testing.T) {
 	fixture := newDeployedGateFixture(t)
 	evidence := fixture.prepare(t, "evidence-fast-environment")
@@ -570,6 +624,9 @@ func newDeployedGateFixture(t *testing.T) deployedGateFixture {
 	if err := os.MkdirAll(fixture.limaState, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"vpnctl-v2-gateway", "vpnctl-v2-node"} {
+		writeTestFile(t, filepath.Join(fixture.limaState, name), "Stopped\n", 0o600)
+	}
 	fixture.git(t, "init", "-q")
 	fixture.git(t, "config", "user.email", "release-gate-test@example.invalid")
 	fixture.git(t, "config", "user.name", "Release Gate Test")
@@ -740,11 +797,24 @@ printf 'lima:%%s\n' "$*" >> "$VPNCTL_TEST_RUN_LOG"
 	      status=$(status_for "$name")
 	      cpus=1
 	      memory=536870912
-	      if [ "$name" = vpnctl-v2-node ]; then cpus=4; memory=2147483648; fi
-	      printf '{"name":"%%s","status":"%%s","vmType":"qemu","arch":"x86_64","cpus":%%s,"memory":%%s,"disk":10737418240,"config":{"images":[{"digest":"%s"}]},"network":[{"lima":"user-v2"}]}\n' "$name" "$status" "$cpus" "$memory"
+	      probe_description='vpnctl v2 lab prerequisites'
+	      probe_cpus=1
+	      if [ "$name" = vpnctl-v2-node ]; then
+	        cpus=4
+	        memory=2147483648
+	        probe_description='vpnctl v2 functional node prerequisites'
+	        probe_cpus=4
+	      fi
+	      probe_script=$(printf '%%s\n' '#!/bin/sh' 'set -eu' 'test "$(dpkg --print-architecture)" = amd64' "grep -q '^VERSION_ID=\"24.04\"$' /etc/os-release" "test \"\$(nproc)\" -eq $probe_cpus" 'command -v jq >/dev/null' 'command -v nft >/dev/null' 'command -v ss >/dev/null' 'command -v tc >/dev/null' 'command -v vmstat >/dev/null')
+	      probe_script="${probe_script}"$'\n'
+	      if [ "${VPNCTL_TEST_DRIFT_PROBE_INSTANCE:-}" = "$name" ]; then probe_description='drifted readiness probe'; fi
+	      jq -cn --arg name "$name" --arg status "$status" --argjson cpus "$cpus" --argjson memory "$memory" \
+	        --arg digest "%s" --arg description "$probe_description" --arg script "$probe_script" \
+	        '{name:$name,status:$status,vmType:"qemu",arch:"x86_64",cpus:$cpus,memory:$memory,disk:10737418240,config:{images:[{digest:$digest}],probes:[{mode:"readiness",description:$description,script:$script,hint:"See /var/log/cloud-init-output.log in the guest"}]},network:[{lima:"user-v2"}]}'
 	    done
     ;;
   start)
+	    if [ "${VPNCTL_TEST_FAIL_START_INSTANCE:-}" = "$2" ]; then sleep 0.03; exit 12; fi
     printf 'Running\n' > "$state_dir/$2"
     printf 'fixture:start:%%s\n' "$2" >> "$VPNCTL_TEST_RUN_LOG"
     ;;
@@ -834,6 +904,20 @@ func snapshotAttempt(t *testing.T, directory string) string {
 	for _, name := range []string{"input.json", "output.log", "child-timing.json", "result.json"} {
 		path := filepath.Join(directory, name)
 		parts = append(parts, fmt.Sprintf("%s:%o:%s", name, fileMode(t, path), fileSHA256(t, path)))
+	}
+	return strings.Join(parts, "|")
+}
+
+func snapshotSealedSession(t *testing.T, directory string) string {
+	t.Helper()
+	parts := []string{fmt.Sprintf("dir:%o", fileMode(t, directory))}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.Name())
+		parts = append(parts, fmt.Sprintf("%s:%o:%s", entry.Name(), fileMode(t, path), fileSHA256(t, path)))
 	}
 	return strings.Join(parts, "|")
 }

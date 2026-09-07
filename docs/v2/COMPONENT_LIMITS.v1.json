@@ -14,7 +14,7 @@
     },
     {
       "path": "test/v2lab/fixtures.json",
-      "sha256": "f9f52c45017b3ce2b64265ee0b79081ccbdbdf2a74df4e4d8394ca9daf77094f"
+      "sha256": "ff66de5fc1360ecb459dedf46319731e6dd8ba58aa1ea7af6cdcb89441233610"
     },
     {
       "path": "test/v2lab/restricted/manifest.json",

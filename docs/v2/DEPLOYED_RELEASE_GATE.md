@@ -89,7 +89,11 @@ again. Fresh-attempt refusal is scoped to the selected phase; a normal
 explicit opt-in. Neither standalone phase writes `automated.json`; the common
 aggregator does so only after the complete mandatory set passes.
 
-Each `run-vm` invocation requires both exact fixtures `Stopped`, creates an
+Each `run-vm` invocation first requires both exact fixtures `Stopped` and verifies
+their resource/image/network fields plus the exact stored readiness-probe SHA-256
+from `test/v2lab/fixtures.json`. This catches stale Lima metadata before creating
+session evidence or starting either VM; changing only CPU/RAM metadata is not a
+valid fixture migration when the probe contract changed. The invocation then creates an
 append-only `automated-fixture-sessions/session-NNNN/`, starts Gateway and Node
 once in the parent, and runs every pending VM attempt sequentially without
 per-stage cold boots. The existing `transport-supervision` boot-recovery check
@@ -101,8 +105,11 @@ attempts. Witness failure blocks later stages; only the registered harness
 owner-scoped cleanup adapter may run. Success, failure, `INT`, and `TERM` all
 stop Node before Gateway and verify both exact fixtures `Stopped`.
 
-Session `input.json`, `session.log`, numbered witness JSON files, and
-`result.json` are sealed together. Attempt and session results contain
+Session `input.json`, `session.log`, any numbered witness JSON files, and
+`result.json` are sealed together. A fixture-start failure can legitimately have
+zero witnesses; it is still an immutable failed session, records the elapsed
+startup and shutdown time, and prints its log plus the exact explicit resume
+command. Attempt and session results contain
 non-negative monotonic diagnostic timings for validation, execution, witness,
 cleanup, boot, and shutdown where applicable. These timings never change a
 product latency, reconnect, capacity, or workload acceptance result.

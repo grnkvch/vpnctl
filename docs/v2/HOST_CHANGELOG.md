@@ -2,6 +2,16 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 13:16–13:29 +03 — optimized release-gate startup failure
+
+### Immutable failed session; exact fixtures restored stopped
+
+- Prepared candidate evidence `artifacts/v2lab/deployed-release-gate/evidence-2026-09-07T100538Z` for source `cc7dae6a0ef1a07e09810e5d14de812f8ba9a39b` and release `v2.0.0`, then invoked its first `run-automated` attempt. All seven fast stages passed and remain immutable; `automated.json` was not created.
+- The parent started the exact `vpnctl-v2-gateway` and `vpnctl-v2-node` fixtures. Gateway reached `Running`; Node reached SSH, user session, and guest-agent readiness but timed out before Lima's final `running` event. No VM test stage or test-owned service/network/package mutation started.
+- Root cause is deterministic legacy instance metadata: the stored Node readiness probe still requires `nproc == 1`, while the checked-in Node role and edited VM expose 4 vCPU. `limactl edit --cpus 4 --memory 2` updated resources but did not replace the stored probe. Retrying this candidate without repairing the exact fixture contract would repeat the same failure.
+- Parent cleanup stopped Node and then Gateway. Post-check observed Gateway stopped at 1 vCPU/512 MiB/10 GiB and Node stopped at 4 vCPU/2 GiB/10 GiB; no foreign VM or deployed host was touched. The failed session is retained at `automated-fixture-sessions/session-0001` and requires no host rollback. Any fixture repair must remain limited to the exact stopped Node and be recorded separately before another VM gate.
+- The source correction adds preflight coverage for the stored readiness probe and makes future startup failures sealed and resumable. It intentionally changes the candidate commit, so this evidence remains immutable and cannot itself be resumed; a new evidence directory is required after the corrective commit.
+
 ## 2026-09-07 12:47 +03 — Node capacity-fixture metadata update
 
 ### Exact stopped Lima instance; no guest or Gateway mutation

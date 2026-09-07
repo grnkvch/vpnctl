@@ -243,17 +243,23 @@ elapsed_ms() {
 validate_stage_registry() {
   jq -e --arg digest "$lab_image_digest" '
     (keys == ["architecture","capacity_boundary_role","contract_version","image_digest","load_generator_role","network","roles","schema_version","vm_type"]) and
-    .schema_version == 1 and .contract_version == 1 and .vm_type == "qemu" and
+    .schema_version == 1 and .contract_version == 2 and .vm_type == "qemu" and
     .architecture == "x86_64" and .image_digest == $digest and .network == "user-v2" and
     .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
     .roles.gateway == {
       instance:"vpnctl-v2-gateway",template:"test/v2lab/lima.yaml",cpus:1,
       memory_bytes:536870912,disk_bytes:10737418240,managed_swap_bytes:1073741824,
+      readiness_probe:{mode:"readiness",description:"vpnctl v2 lab prerequisites",
+        hint:"See /var/log/cloud-init-output.log in the guest",
+        script_sha256:"ce5e71613d3acb6a85308f0ffdf34b26af36c70f01163f61db1cb59871243ae9"},
       normative_capacity_host:true
     } and
     .roles.node == {
       instance:"vpnctl-v2-node",template:"test/v2lab/lima-node.yaml",cpus:4,
       memory_bytes:2147483648,disk_bytes:10737418240,managed_swap_bytes:1073741824,
+      readiness_probe:{mode:"readiness",description:"vpnctl v2 functional node prerequisites",
+        hint:"See /var/log/cloud-init-output.log in the guest",
+        script_sha256:"778c34b783efc3870044facf66b114cfae2686134fa007e1e44b1b69a8fcc143"},
       normative_capacity_host:false
     }
   ' "$fixture_contract" >/dev/null || {
@@ -314,8 +320,17 @@ instance_json() {
 }
 
 assert_lab_instance() {
-  local instance=$1 expected_status=$2
-  if ! instance_json "$instance" | jq -e --arg digest "$lab_image_digest" --arg status "$expected_status" --arg instance "$instance" '
+  local instance=$1 expected_status=$2 role json probe_mode probe_description probe_hint expected_probe_sha live_probe_sha
+  case "$instance" in
+    "$gateway_instance") role=gateway ;;
+    "$node_instance") role=node ;;
+    *) echo "unknown release gate fixture: $instance" >&2; return 4 ;;
+  esac
+  json=$(instance_json "$instance") || {
+    echo "release gate fixture is absent or ambiguous: $instance" >&2
+    return 4
+  }
+  if ! printf '%s\n' "$json" | jq -e --arg digest "$lab_image_digest" --arg status "$expected_status" --arg instance "$instance" '
     .status == $status and .vmType == "qemu" and .arch == "x86_64" and
     .cpus == (if $instance == "vpnctl-v2-node" then 4 else 1 end) and
     .memory == (if $instance == "vpnctl-v2-node" then 2147483648 else 536870912 end) and
@@ -323,6 +338,25 @@ assert_lab_instance() {
     .config.images[0].digest == $digest and any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
     echo "release gate fixture does not match contract: $instance/$expected_status" >&2
+    return 4
+  fi
+  probe_mode=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.mode' "$fixture_contract") || return 4
+  probe_description=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.description' "$fixture_contract") || return 4
+  probe_hint=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.hint' "$fixture_contract") || return 4
+  expected_probe_sha=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.script_sha256' "$fixture_contract") || return 4
+  if ! printf '%s\n' "$json" | jq -e --arg mode "$probe_mode" --arg description "$probe_description" --arg hint "$probe_hint" '
+    (.config.probes | type == "array" and length == 1) and
+    .config.probes[0].mode == $mode and .config.probes[0].description == $description and
+    .config.probes[0].hint == $hint and (.config.probes[0].script | type == "string")
+  ' >/dev/null; then
+    echo "release gate fixture readiness probe does not match topology contract: $instance" >&2
+    echo "recreate the stopped fixture from its checked-in template; a resource-only limactl edit is insufficient" >&2
+    return 4
+  fi
+  live_probe_sha=$(printf '%s\n' "$json" | jq -j '.config.probes[0].script' | shasum -a 256 | awk '{print $1}')
+  if [ "$live_probe_sha" != "$expected_probe_sha" ]; then
+    echo "release gate fixture readiness probe does not match topology contract: $instance" >&2
+    echo "recreate the stopped fixture from its checked-in template; a resource-only limactl edit is insufficient" >&2
     return 4
   fi
 }
@@ -544,7 +578,7 @@ assert_fixture_session_ledger() {
       count=$((count + 1))
     done
     if [ "$mode" = 500 ]; then
-      [ "$count" -ge 4 ] || { echo "sealed release fixture-session is incomplete: $session" >&2; return 3; }
+      [ "$count" -ge 3 ] || { echo "sealed release fixture-session is incomplete: $session" >&2; return 3; }
       assert_bounded_regular_file "$session_dir/input.json" 400 65536
       assert_bounded_regular_file "$session_dir/session.log" 400 134217728
       assert_bounded_regular_file "$session_dir/result.json" 400 65536
@@ -946,9 +980,12 @@ seal_fixture_session() {
       chmod 0600 "$fixture_session_log" || status=4
     fi
     for entry in "$fixture_session_directory"/witness-*.json; do [ -f "$entry" ] && witness_count=$((witness_count + 1)); done
-    if [ -f "$fixture_session_directory/input.json" ] && [ -f "$fixture_session_directory/result.json" ] && [ "$witness_count" -gt 0 ]; then
+    if [ -f "$fixture_session_directory/input.json" ] && [ -f "$fixture_session_directory/result.json" ]; then
       chmod 0400 "$fixture_session_directory/input.json" "$fixture_session_log" \
-        "$fixture_session_directory/result.json" "$fixture_session_directory"/witness-*.json || status=4
+        "$fixture_session_directory/result.json" || status=4
+      if [ "$witness_count" -gt 0 ]; then
+        chmod 0400 "$fixture_session_directory"/witness-*.json || status=4
+      fi
       chmod 0500 "$fixture_session_directory" || status=4
     fi
   fi
@@ -1009,13 +1046,41 @@ run_vm_stages() {
   trap 'cleanup_started_fixtures 143' TERM
   started=$(monotonic_ms)
   gateway_started=true
-  limactl start "$gateway_instance" >> "$fixture_session_log" 2>&1
-  assert_lab_instance "$gateway_instance" Running
-  node_started=true
-  limactl start "$node_instance" >> "$fixture_session_log" 2>&1
-  assert_lab_instance "$node_instance" Running
+  if limactl start "$gateway_instance" >> "$fixture_session_log" 2>&1; then
+    if assert_lab_instance "$gateway_instance" Running >> "$fixture_session_log" 2>&1; then
+      stage_status=0
+    else
+      stage_status=$?
+    fi
+  else
+    stage_status=$?
+  fi
   finished=$(monotonic_ms)
   fixture_session_startup_ms=$(elapsed_ms "$started" "$finished")
+  if [ "$stage_status" -ne 0 ]; then
+    printf 'release fixture startup failed: gateway/%s\n' "$gateway_instance" >&2
+    printf 'inspect: %s\n' "$fixture_session_log" >&2
+    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    return "$stage_status"
+  fi
+  node_started=true
+  if limactl start "$node_instance" >> "$fixture_session_log" 2>&1; then
+    if assert_lab_instance "$node_instance" Running >> "$fixture_session_log" 2>&1; then
+      stage_status=0
+    else
+      stage_status=$?
+    fi
+  else
+    stage_status=$?
+  fi
+  finished=$(monotonic_ms)
+  fixture_session_startup_ms=$(elapsed_ms "$started" "$finished")
+  if [ "$stage_status" -ne 0 ]; then
+    printf 'release fixture startup failed: node/%s\n' "$node_instance" >&2
+    printf 'inspect: %s\n' "$fixture_session_log" >&2
+    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    return "$stage_status"
+  fi
   current_post_witness_sha256=
   capture_clean_witness
   current_pre_witness_sha256=$current_post_witness_sha256

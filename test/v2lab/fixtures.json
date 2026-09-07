@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": 1,
+  "contract_version": 2,
   "vm_type": "qemu",
   "architecture": "x86_64",
   "image_digest": "sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7",
@@ -15,6 +15,12 @@
       "memory_bytes": 536870912,
       "disk_bytes": 10737418240,
       "managed_swap_bytes": 1073741824,
+      "readiness_probe": {
+        "mode": "readiness",
+        "description": "vpnctl v2 lab prerequisites",
+        "hint": "See /var/log/cloud-init-output.log in the guest",
+        "script_sha256": "ce5e71613d3acb6a85308f0ffdf34b26af36c70f01163f61db1cb59871243ae9"
+      },
       "normative_capacity_host": true
     },
     "node": {
@@ -24,6 +30,12 @@
       "memory_bytes": 2147483648,
       "disk_bytes": 10737418240,
       "managed_swap_bytes": 1073741824,
+      "readiness_probe": {
+        "mode": "readiness",
+        "description": "vpnctl v2 functional node prerequisites",
+        "hint": "See /var/log/cloud-init-output.log in the guest",
+        "script_sha256": "778c34b783efc3870044facf66b114cfae2686134fa007e1e44b1b69a8fcc143"
+      },
       "normative_capacity_host": false
     }
   }

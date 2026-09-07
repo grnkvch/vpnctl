@@ -50,12 +50,16 @@ instance_json() {
 }
 
 assert_instance_contract() {
-  local instance=$1 role cpus memory disk
+  local instance=$1 role cpus memory disk json probe_mode probe_description probe_hint expected_probe_sha live_probe_sha
   role=$(role_for_instance "$instance")
   cpus=$(jq -er --arg role "$role" '.roles[$role].cpus' "$fixture_contract")
   memory=$(jq -er --arg role "$role" '.roles[$role].memory_bytes' "$fixture_contract")
   disk=$(jq -er --arg role "$role" '.roles[$role].disk_bytes' "$fixture_contract")
-  if ! instance_json "$instance" | jq -e --arg digest "$image_digest" \
+  json=$(instance_json "$instance") || {
+    echo "refusing to operate on absent or ambiguous Lima instance: $instance" >&2
+    exit 3
+  }
+  if ! printf '%s\n' "$json" | jq -e --arg digest "$image_digest" \
     --argjson cpus "$cpus" --argjson memory "$memory" --argjson disk "$disk" '
     .vmType == "qemu" and
     .arch == "x86_64" and
@@ -66,6 +70,23 @@ assert_instance_contract() {
     any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
     echo "refusing to operate on non-lab or drifted Lima instance: $instance" >&2
+    exit 3
+  fi
+  probe_mode=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.mode' "$fixture_contract")
+  probe_description=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.description' "$fixture_contract")
+  probe_hint=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.hint' "$fixture_contract")
+  expected_probe_sha=$(jq -er --arg role "$role" '.roles[$role].readiness_probe.script_sha256' "$fixture_contract")
+  if ! printf '%s\n' "$json" | jq -e --arg mode "$probe_mode" --arg description "$probe_description" --arg hint "$probe_hint" '
+    (.config.probes | type == "array" and length == 1) and
+    .config.probes[0].mode == $mode and .config.probes[0].description == $description and
+    .config.probes[0].hint == $hint and (.config.probes[0].script | type == "string")
+  ' >/dev/null; then
+    echo "refusing to operate on Lima instance with a drifted readiness probe: $instance" >&2
+    exit 3
+  fi
+  live_probe_sha=$(printf '%s\n' "$json" | jq -j '.config.probes[0].script' | shasum -a 256 | awk '{print $1}')
+  if [ "$live_probe_sha" != "$expected_probe_sha" ]; then
+    echo "refusing to operate on Lima instance with a drifted readiness probe: $instance" >&2
     exit 3
   fi
 }
@@ -163,16 +184,22 @@ case "$command" in
   up)
     output_dir=${2:-$(default_report_dir)}
     jq -e '
-      .schema_version == 1 and .contract_version == 1 and
+      .schema_version == 1 and .contract_version == 2 and
       .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
       .roles.gateway == {
         instance:"vpnctl-v2-gateway", template:"test/v2lab/lima.yaml", cpus:1,
         memory_bytes:536870912, disk_bytes:10737418240, managed_swap_bytes:1073741824,
+        readiness_probe:{mode:"readiness",description:"vpnctl v2 lab prerequisites",
+          hint:"See /var/log/cloud-init-output.log in the guest",
+          script_sha256:"ce5e71613d3acb6a85308f0ffdf34b26af36c70f01163f61db1cb59871243ae9"},
         normative_capacity_host:true
       } and
       .roles.node == {
         instance:"vpnctl-v2-node", template:"test/v2lab/lima-node.yaml", cpus:4,
         memory_bytes:2147483648, disk_bytes:10737418240, managed_swap_bytes:1073741824,
+        readiness_probe:{mode:"readiness",description:"vpnctl v2 functional node prerequisites",
+          hint:"See /var/log/cloud-init-output.log in the guest",
+          script_sha256:"778c34b783efc3870044facf66b114cfae2686134fa007e1e44b1b69a8fcc143"},
         normative_capacity_host:false
       }
     ' "$fixture_contract" >/dev/null

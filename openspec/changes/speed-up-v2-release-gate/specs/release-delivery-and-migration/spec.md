@@ -18,7 +18,7 @@ Private VM-harness timing and shared-session environment variables MUST NOT be i
 - **THEN** the gate applies the same fast-then-VM ordering and produces the same logical mandatory evidence as separate phase invocations
 
 ### Requirement: Structured diagnostic phase timings
-Every new stage attempt and VM session SHALL record bounded structured monotonic durations for the phases controlled by that layer, including validation/preflight, fixture startup, test execution, clean-state verification, cleanup, and fixture shutdown where applicable. Timings SHALL be diagnostic evidence only and MUST NOT alter pass/fail outcomes or existing product latency, reconnect, workload, and capacity bounds.
+Every new stage attempt and VM session SHALL record bounded structured monotonic durations for the phases controlled by that layer, including validation/preflight, fixture startup, test execution, clean-state verification, cleanup, and fixture shutdown where applicable. A fixture-start/readiness failure SHALL retain and seal an immutable failed session with the actual elapsed startup/shutdown timings, an empty witness list when no witness was reached, its diagnostic log, and an explicit resume command. Timings SHALL be diagnostic evidence only and MUST NOT alter pass/fail outcomes or existing product latency, reconnect, workload, and capacity bounds.
 
 #### Scenario: Inspect a slow stage
 - **WHEN** a stage attempt or shared VM session completes or fails normally
@@ -69,7 +69,7 @@ Pre-disruption and post-recovery webhook success latency SHALL be asserted as se
 
 The normative minimum-capacity resource profile SHALL apply only to the exact Gateway role: 1 vCPU, 512 MiB RAM, 10 GiB disk, and 1 GiB managed swap. The exact shared Node role SHALL use the checked-in 4-vCPU/2-GiB/10-GiB profile and retained managed swap as functional/load infrastructure. Node resource values MUST NOT be compared with the Gateway acceptance thresholds, but Node OOM, service crash, failed functional checks, or incomplete workload MUST fail or invalidate the attempt. No capacity command MAY resize a VM.
 
-The role names, template paths, CPU, memory, disk, swap, pinned image digest, isolated network, and capacity responsibility SHALL form one versioned topology contract. Every reusable VM attempt, shared session, and final aggregate SHALL bind its exact contract SHA-256; a topology/profile change or drifted live fixture SHALL invalidate or refuse evidence before mutation.
+The role names, template paths, CPU, memory, disk, swap, pinned image digest, isolated network, exact readiness-probe metadata and script SHA-256, and capacity responsibility SHALL form one versioned topology contract. Every reusable VM attempt, shared session, and final aggregate SHALL bind its exact contract SHA-256; a topology/profile change or drifted live fixture SHALL invalidate or refuse evidence before session allocation or VM mutation. A resource-only metadata edit that retains a stale readiness probe SHALL remain drift and require explicit replacement of only the stopped disposable fixture from its checked-in template.
 
 Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_health`, `load_generator_validity`, `fault_reconnect`, `client_disruption`, and `steady_state_latency` domains. Load-generator validity SHALL require both scheduled counts, completion of every scheduled request, the predeclared dispatch-lag bounds, no persistent post-recovery queue, and a backlog/error-free final scheduled 30 seconds. An invalid generator or unhealthy Node SHALL never pass and SHALL be distinguished from a proven Gateway-capacity rejection. Prestarted resource timelines SHALL retain load average, run queue, CPU busy, iowait, and steal plus bounded FRPC/supervisor/unit/process/TCP-state evidence around the fault without a new boundary-time Lima session.
 
@@ -100,3 +100,7 @@ Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_hea
 #### Scenario: Role profile drifts
 - **WHEN** either exact live fixture or its evidence differs from the checked-in role-specific topology contract
 - **THEN** the VM phase refuses before mutation or invalidates reuse, without resizing the instance inside the gate
+
+#### Scenario: Fixture readiness fails during parent startup
+- **WHEN** an exact preflighted fixture fails to start or satisfy readiness
+- **THEN** the parent restores both fixtures stopped, seals a non-reusable failed session with measured startup/shutdown timing and any zero-or-more completed witnesses, and prints the diagnostic log and explicit resume command

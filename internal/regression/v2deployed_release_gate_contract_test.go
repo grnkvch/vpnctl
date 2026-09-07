@@ -1,12 +1,16 @@
 package regression
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestV2DeployedReleaseGateContract(t *testing.T) {
@@ -167,12 +171,18 @@ func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
 		CapacityBoundaryRole string `json:"capacity_boundary_role"`
 		LoadGeneratorRole    string `json:"load_generator_role"`
 		Roles                map[string]struct {
-			Template              string `json:"template"`
-			CPUs                  int    `json:"cpus"`
-			MemoryBytes           int64  `json:"memory_bytes"`
-			DiskBytes             int64  `json:"disk_bytes"`
-			ManagedSwapBytes      int64  `json:"managed_swap_bytes"`
-			NormativeCapacityHost bool   `json:"normative_capacity_host"`
+			Template         string `json:"template"`
+			CPUs             int    `json:"cpus"`
+			MemoryBytes      int64  `json:"memory_bytes"`
+			DiskBytes        int64  `json:"disk_bytes"`
+			ManagedSwapBytes int64  `json:"managed_swap_bytes"`
+			ReadinessProbe   struct {
+				Mode         string `json:"mode"`
+				Description  string `json:"description"`
+				Hint         string `json:"hint"`
+				ScriptSHA256 string `json:"script_sha256"`
+			} `json:"readiness_probe"`
+			NormativeCapacityHost bool `json:"normative_capacity_host"`
 		} `json:"roles"`
 	}
 	if err := json.Unmarshal([]byte(readContractFile(t, path)), &contract); err != nil {
@@ -180,7 +190,7 @@ func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
 	}
 	gateway := contract.Roles["gateway"]
 	node := contract.Roles["node"]
-	if contract.SchemaVersion != 1 || contract.ContractVersion != 1 ||
+	if contract.SchemaVersion != 1 || contract.ContractVersion != 2 ||
 		contract.CapacityBoundaryRole != "gateway" || contract.LoadGeneratorRole != "node" {
 		t.Fatalf("topology header = %+v", contract)
 	}
@@ -193,6 +203,38 @@ func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
 		node.MemoryBytes != 2147483648 || node.DiskBytes != 10737418240 ||
 		node.ManagedSwapBytes != 1073741824 || node.NormativeCapacityHost {
 		t.Fatalf("node topology = %+v", node)
+	}
+	for role, expected := range map[string]struct {
+		description string
+		digest      string
+	}{
+		"gateway": {"vpnctl v2 lab prerequisites", "ce5e71613d3acb6a85308f0ffdf34b26af36c70f01163f61db1cb59871243ae9"},
+		"node":    {"vpnctl v2 functional node prerequisites", "778c34b783efc3870044facf66b114cfae2686134fa007e1e44b1b69a8fcc143"},
+	} {
+		roleContract := contract.Roles[role]
+		probeContract := roleContract.ReadinessProbe
+		if probeContract.Mode != "readiness" || probeContract.Description != expected.description ||
+			probeContract.Hint != "See /var/log/cloud-init-output.log in the guest" || probeContract.ScriptSHA256 != expected.digest {
+			t.Fatalf("%s readiness contract = %+v", role, probeContract)
+		}
+		var template struct {
+			Probes []struct {
+				Mode        string `yaml:"mode"`
+				Description string `yaml:"description"`
+				Script      string `yaml:"script"`
+				Hint        string `yaml:"hint"`
+			} `yaml:"probes"`
+		}
+		if err := yaml.Unmarshal([]byte(readContractFile(t, filepath.Join("..", "..", roleContract.Template))), &template); err != nil {
+			t.Fatalf("decode %s template: %v", role, err)
+		}
+		if len(template.Probes) != 1 || template.Probes[0].Mode != probeContract.Mode ||
+			template.Probes[0].Description != probeContract.Description || template.Probes[0].Hint != probeContract.Hint {
+			t.Fatalf("%s template readiness probe = %+v", role, template.Probes)
+		}
+		if digest := fmt.Sprintf("%x", sha256.Sum256([]byte(template.Probes[0].Script))); digest != probeContract.ScriptSHA256 {
+			t.Fatalf("%s template readiness SHA-256 = %s, want %s", role, digest, probeContract.ScriptSHA256)
+		}
 	}
 }
 
