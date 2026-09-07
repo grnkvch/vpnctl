@@ -42,6 +42,7 @@ node_started=false
 temporary_root=
 run_root=
 background_pids=()
+reconnect_pid=
 tunnel_service_pid_before=
 tunnel_service_restarts_before=
 tunnel_frpc_pid_before=
@@ -303,9 +304,16 @@ cleanup_owned() {
 
 stop_background() {
   local pid
+  if [ -n "$reconnect_pid" ]; then
+    kill "$reconnect_pid" >/dev/null 2>&1 || true
+  fi
   for pid in "${background_pids[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
+  if [ -n "$reconnect_pid" ]; then
+    wait "$reconnect_pid" >/dev/null 2>&1 || true
+    reconnect_pid=
+  fi
   for pid in "${background_pids[@]:-}"; do
     wait "$pid" >/dev/null 2>&1 || true
   done
@@ -755,17 +763,29 @@ start_loads() {
   background_pids+=("$!")
 }
 
-inject_reconnect() {
-  local gateway_ip down_seconds recovery_limit reconnect_base fault_status=0
+start_reconnect() {
+  local gateway_ip down_seconds recovery_limit reconnect_base fault_after
   gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
   recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
+  fault_after=$(value '.fault.frps_stop_after_seconds')
   reconnect_base="$run_root/reconnect.base.json"
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/fault \
     --unit "$tunnel_server_unit" --public-ip "$gateway_ip" \
     --certificate /etc/vpnctl-v2-spike/ingress/gateway.crt \
     --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
-    > "$reconnect_base" || fault_status=$?
+    --start-after-seconds "$fault_after" > "$reconnect_base" &
+  reconnect_pid=$!
+}
+
+wait_reconnect() {
+  local fault_status=0
+  if [ -z "$reconnect_pid" ]; then
+    echo "capacity reconnect fault was not started" >&2
+    return 3
+  fi
+  wait "$reconnect_pid" || fault_status=$?
+  reconnect_pid=
   if [ "$fault_status" -ne 0 ]; then
     finalize_reconnect_process_state
     jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
@@ -845,6 +865,7 @@ assert_summary() {
     .resources.disk.minimum_free_bytes >= $limits[0].bounds.minimum_free_disk_bytes and
     .resources.disk.growth_bytes <= $limits[0].bounds.maximum_disk_growth_bytes and
     .reconnect.status == "passed" and
+    .reconnect.scheduled_start_after_seconds == $limits[0].fault.frps_stop_after_seconds and
     .reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds and
     .reconnect.down_seconds >= ($limits[0].fault.frps_down_seconds - 0.25) and
     .reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5) and
@@ -902,6 +923,7 @@ verify() {
   setup_controller
   run_connection_limits
   capture_tunnel_client_process_state_before
+  start_reconnect
   start_loads
   v2_timing_mark fixture_and_provider_setup
 
@@ -915,7 +937,7 @@ verify() {
     elapsed=$((elapsed + step))
     printf 'capacity sustained load: %ss/%ss before reconnect injection\n' "$elapsed" "$fault_after"
   done
-  inject_reconnect
+  wait_reconnect
   duration=$(value '.profile.duration_seconds')
   remaining=$((duration - fault_after))
   elapsed=$fault_after

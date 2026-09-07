@@ -6,6 +6,7 @@ public_ip=
 certificate=
 down_seconds=
 recovery_limit_seconds=
+start_after_seconds=0
 restart_job=vpnctl-v2-capacity-frps-restart
 restart_job_armed=false
 restore_required=false
@@ -35,7 +36,7 @@ recovery_probe_pid=
 armed_probe_root_created=false
 
 usage() {
-  echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N'
+  echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N [--start-after-seconds N]'
 }
 
 monotonic() {
@@ -52,6 +53,7 @@ emit_result() {
   jq -n \
     --arg status "$result_status" \
     --arg fault_stage "$fault_stage" \
+    --argjson scheduled_start_after_seconds "$start_after_seconds" \
     --argjson unavailable_probe "$unavailable_probe" \
     --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
     --argjson requested_down_seconds "$down_seconds" \
@@ -67,6 +69,7 @@ emit_result() {
     '{
       status: $status,
       fault_stage: $fault_stage,
+      scheduled_start_after_seconds: $scheduled_start_after_seconds,
       unavailable_status: $unavailable_probe.status,
       unavailable_probe: $unavailable_probe,
       stop_seconds: $stop_seconds,
@@ -247,6 +250,7 @@ while [ "$#" -gt 0 ]; do
     --certificate) certificate=${2:-}; shift 2 ;;
     --down-seconds) down_seconds=${2:-}; shift 2 ;;
     --recovery-limit-seconds) recovery_limit_seconds=${2:-}; shift 2 ;;
+    --start-after-seconds) start_after_seconds=${2:-}; shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
@@ -255,13 +259,20 @@ done
 [ -n "$public_ip" ] && [ -f "$certificate" ] || { usage >&2; exit 2; }
 awk -v value="$down_seconds" 'BEGIN {exit !(value > 0)}'
 awk -v value="$recovery_limit_seconds" 'BEGIN {exit !(value > 0)}'
+awk -v value="$start_after_seconds" 'BEGIN {exit !(value >= 0)}'
 scheduled_down_seconds=$(awk -v value="$down_seconds" -v advance="$restart_advance_seconds" '
   BEGIN {value -= advance; if (value <= 0) exit 1; printf "%.3f", value}
 ')
 
 trap cleanup EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if awk -v value="$start_after_seconds" 'BEGIN {exit !(value > 0)}'; then
+  fault_stage=scheduled
+  sleep "$start_after_seconds"
+fi
 
 original_restart=$(systemctl show --value -p Restart "$unit")
 if [ "$original_restart" != on-failure ]; then

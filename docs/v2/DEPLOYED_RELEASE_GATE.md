@@ -117,6 +117,15 @@ phase and removing those duplicate provider runs. The gate records timings for
 measurement, but deliberately defines neither an estimated percentage nor a
 new duration threshold.
 
+For capacity, the host enters the Gateway fault command before starting the
+measured workload. That tracked guest process waits locally until the unchanged
+145-second fault offset, so opening a new Lima control connection under load
+cannot shift the outage toward the end of the fixed 135–175-second accepted
+window. The harness waits for the same process at the boundary and includes it
+in signal/failure cleanup. This scheduling does not change the 300-second
+profile, request rates, three-second outage, accepted window, reconnect limit,
+or latency/resource thresholds.
+
 The gate writes schema-v2 `automated.json` only after every mandatory stage has
 a matching passing attempt and both fixtures are back in `Stopped`. The final
 document records the selected attempt name and result SHA-256 for all 19 stages;

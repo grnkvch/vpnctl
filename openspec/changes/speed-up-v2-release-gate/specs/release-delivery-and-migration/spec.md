@@ -61,6 +61,12 @@ The tunnel and ingress release harnesses SHALL each run once as canonical mandat
 ### Requirement: Optimized gate preserves the release boundary
 Optimization SHALL NOT remove a mandatory assertion, weaken a capacity threshold, shorten the 300-second capacity workload, parallelize conflicting VM stages, migrate or rewrite old evidence, or reuse an attempt across a source commit, release version, tracked input, stage/dependency contract, or pinned Lima image mismatch. Final `automated.json` SHALL continue to reference exact immutable passing results for the complete mandatory stage set.
 
+The capacity harness SHALL enter its fault command on Gateway before starting measured workload processes, SHALL perform the manifest-defined delay inside that already-open guest command, and SHALL wait for that exact process at the fault boundary. This scheduling MUST NOT change the fixed fault offset, accepted failure window, outage duration, reconnect bound, request profile, or latency bounds. Failure or interruption SHALL terminate and wait for the tracked command before existing owner-scoped cleanup and fixture shutdown.
+
 #### Scenario: Optimized candidate reaches aggregation
 - **WHEN** the phase-selective optimized gate completes every mandatory stage
 - **THEN** its logical checks and fixed acceptance values equal the pre-optimization contract, all failed attempts remain visible, and final aggregation succeeds only from exact matching results
+
+#### Scenario: Fault delivery is not delayed by a loaded Lima control connection
+- **WHEN** the minimum-host capacity workload reaches its manifest-defined fault offset
+- **THEN** an already-open tracked Gateway command injects the outage after its guest-local delay, no new Lima shell must enter the loaded fixture at that boundary, and unchanged steady-state latency checks exclude only the existing accepted window

@@ -2,6 +2,14 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 — capacity fault scheduling correction
+
+### Retained evidence and reversible harness change
+
+- Candidate `40f7e9a10c6655a190e43d568360437e0eeb6b47` retained one capacity readiness failure and six complete failed measurements in `evidence-2026-09-06T212405Z`; the complete measurements missed unchanged webhook success/p99 or API p99 boundaries while API correctness, reconnect, OOM, cleanup, and five-client isolation remained fail-visible. Every parent session restored and stopped the exact Gateway and Node fixtures; no foreign VM or deployed host was changed.
+- Across the retained runs, webhook failure offsets began near 159–160 seconds although the manifest schedules FRPS stop at 145 seconds. The host was opening a new `limactl shell` only after sleeping to that boundary, so loaded-fixture control-plane latency shifted the real outage toward the fixed 175-second end of the accepted window.
+- The capacity harness now enters and tracks the Gateway fault process before starting load; that already-open guest process delays locally to the unchanged 145-second offset. Existing workload duration, rates, 135–175 failure window, three-second outage, reconnect/latency/resource bounds, ownership, and cleanup remain unchanged. Rollback is the corrective source commit; all old evidence remains immutable and intentionally becomes non-resumable after the commit changes.
+
 ## 2026-09-07 — canonical provider evidence-path correction
 
 ### Retained VM failure and recovery boundary

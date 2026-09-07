@@ -106,10 +106,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"--timeout 2", "--connect-timeout 5",
 		"--recovery-limit-seconds \"$recovery_limit_seconds\"", "recovery-trigger", "recovery-ready", "recovery-result.json",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
+		"scheduled_start_after_seconds: $scheduled_start_after_seconds", "trap 'exit 129' HUP",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
 		"recovery_probe_attempts: $recovery_probe_attempts", "run_armed_recovery",
 		"--stable-probes 5 --probe-interval 0.1",
+		"--start-after-seconds", "fault_stage=scheduled", "sleep \"$start_after_seconds\"",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)
@@ -122,8 +124,10 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
 	temporaryPolicyApplied := strings.Index(faultHelper, "FRPS temporary restart policy was not applied")
+	delayedStart := strings.Index(faultHelper, "sleep \"$start_after_seconds\"")
 	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
-	if temporaryPolicyApplied < 0 || armedProbe < 0 || !(temporaryPolicyApplied < armedProbe && armedProbe < restartTimer) {
+	if delayedStart < 0 || temporaryPolicyApplied < 0 || armedProbe < 0 ||
+		!(delayedStart < temporaryPolicyApplied && temporaryPolicyApplied < armedProbe && armedProbe < restartTimer) {
 		t.Fatal("capacity HTTPS probe must be armed after slow policy setup and immediately before the restart timer")
 	}
 	recoveryWorker := strings.Index(faultHelper, "load armed-recover")
@@ -162,6 +166,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",
 		"recovered_without_client_service_restart:",
 		".reconnect.status == \"passed\"",
+		".reconnect.scheduled_start_after_seconds == $limits[0].fault.frps_stop_after_seconds",
 		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
 		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
 		".workload.webhook.latency_by_fault_window.outside.latency_ms.p95",
@@ -186,13 +191,18 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	verifyHarness := harness[verifyStart:]
 	beforeState := strings.Index(verifyHarness, "capture_tunnel_client_process_state_before\n")
+	startFault := strings.Index(verifyHarness, "start_reconnect\n")
 	startLoads := strings.Index(verifyHarness, "start_loads\n")
-	fault := strings.Index(verifyHarness, "inject_reconnect\n")
+	waitFault := strings.Index(verifyHarness, "wait_reconnect\n")
 	waitLoads := strings.Index(verifyHarness, "wait_loads\n")
 	afterState := strings.Index(verifyHarness, "finalize_reconnect_process_state\n")
-	if beforeState < 0 || startLoads < 0 || fault < 0 || waitLoads < 0 || afterState < 0 ||
-		!(beforeState < startLoads && startLoads < fault && fault < waitLoads && waitLoads < afterState) {
+	if beforeState < 0 || startFault < 0 || startLoads < 0 || waitFault < 0 || waitLoads < 0 || afterState < 0 ||
+		!(beforeState < startFault && startFault < startLoads && startLoads < waitFault && waitFault < waitLoads && waitLoads < afterState) {
 		t.Fatal("capacity tunnel PID snapshots must remain outside the measured workload")
+	}
+	if !strings.Contains(harness, "--start-after-seconds \"$fault_after\"") ||
+		!strings.Contains(harness, "reconnect_pid=$!") {
+		t.Fatal("capacity fault must enter its guest before load and delay there until the manifest offset")
 	}
 	if !strings.Contains(harness, "guest \"$node_instance\" sudo bash -c") {
 		t.Fatal("capacity tunnel process snapshot must use one bounded guest session")
