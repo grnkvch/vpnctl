@@ -5,6 +5,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -64,17 +65,9 @@ def load_sample() -> dict[str, float | int]:
 
 
 def cgroup_for(unit: str) -> str:
-    value = os.popen(f"systemctl show --value -p ControlGroup {unit}").read().strip()
-    if not value or not value.startswith("/"):
-        raise RuntimeError(f"unit has no cgroup: {unit}")
-    return "/sys/fs/cgroup" + value
-
-
-def unit_integer(unit: str, property_name: str) -> int:
-    value = os.popen(
-        f"systemctl show --value -p {property_name} {unit}"
-    ).read().strip()
-    return int(value)
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]+[.]service", unit):
+        raise ValueError(f"unsupported system service unit: {unit}")
+    return f"/sys/fs/cgroup/system.slice/{unit}"
 
 
 def cgroup_processes(cgroup_root: str) -> list[dict[str, object]]:
@@ -92,6 +85,58 @@ def cgroup_processes(cgroup_root: str) -> list[dict[str, object]]:
             continue
         processes.append({"pid": int(pid), "command": command})
     return processes
+
+
+def cgroup_state(
+    cgroup_root: str,
+) -> tuple[dict[str, object], str | None]:
+    events_path = os.path.join(cgroup_root, "cgroup.events")
+    try:
+        events = read_pairs(events_path)
+    except (OSError, TypeError, ValueError):
+        return {
+            "observation_source": "cgroup_v2",
+            "cgroup_present": True,
+            "populated": None,
+            "cgroup_processes": cgroup_processes(cgroup_root),
+        }, "malformed_cgroup_events"
+    if not os.path.exists(events_path):
+        return {
+            "observation_source": "cgroup_v2",
+            "cgroup_present": False,
+            "populated": False,
+            "cgroup_processes": [],
+        }, None
+    populated = events.get("populated")
+    if populated not in (0, 1):
+        return {
+            "observation_source": "cgroup_v2",
+            "cgroup_present": True,
+            "populated": None,
+            "cgroup_processes": cgroup_processes(cgroup_root),
+        }, "malformed_cgroup_events"
+    return {
+        "observation_source": "cgroup_v2",
+        "cgroup_present": True,
+        "populated": populated == 1,
+        "cgroup_processes": cgroup_processes(cgroup_root),
+    }, None
+
+
+def cgroup_states(
+    units: list[str], groups: dict[str, str], allowed_absent: set[str] | None = None
+) -> tuple[dict[str, dict[str, object]], list[dict[str, str]]]:
+    allowed_absent = allowed_absent or set()
+    states = {}
+    errors = []
+    for unit in units:
+        state, error_class = cgroup_state(groups[unit])
+        states[unit] = state
+        if not state["cgroup_present"] and unit not in allowed_absent:
+            error_class = "missing_cgroup"
+        if error_class is not None:
+            errors.append({"unit": unit, "error_class": error_class})
+    return states, errors
 
 
 def unavailable_unit_state(
@@ -156,7 +201,7 @@ def unit_states(
             check=False,
             capture_output=True,
             text=True,
-            timeout=1,
+            timeout=5,
         )
     except subprocess.TimeoutExpired:
         error_class = "timeout"
@@ -245,6 +290,7 @@ def main() -> None:
     parser.add_argument("--duration", type=int, required=True)
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--unit", action="append", required=True)
+    parser.add_argument("--fault-unit")
     parser.add_argument("--diagnostic-start", type=float, required=True)
     parser.add_argument("--diagnostic-end", type=float, required=True)
     parser.add_argument("--frpc-url")
@@ -252,6 +298,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.diagnostic_start < 0 or args.diagnostic_end <= args.diagnostic_start:
         raise ValueError("runtime diagnostic window is invalid")
+    if args.fault_unit and args.fault_unit not in args.unit:
+        raise ValueError("fault unit must be one of the monitored units")
     frpc_password = os.environ.get("VPNCTL_CAPACITY_FRPC_PASSWORD", "")
     if args.frpc_url and not frpc_password:
         raise ValueError("FRPC diagnostic password is absent")
@@ -261,13 +309,24 @@ def main() -> None:
         unit: read_pairs(os.path.join(root, "memory.events")).get("oom_kill", 0)
         for unit, root in groups.items()
     }
-    service_restarts_before = {unit: unit_integer(unit, "NRestarts") for unit in args.unit}
+    initial_unit_states, initial_state_errors = unit_states(args.unit, groups)
+    service_restarts_before = {
+        unit: int(initial_unit_states[unit]["restarts"]) for unit in args.unit
+    }
     host_oom_before = read_pairs("/proc/vmstat").get("oom_kill", 0)
     cpu_before = cpu_sample()
     cpu_previous = cpu_before
     interval_cpu = []
     timeline = []
-    diagnostic_errors = []
+    diagnostic_errors = [
+        {
+            "offset_seconds": 0.0,
+            "unit": error["unit"],
+            "operation": "systemctl_initial_state",
+            "error_class": error["error_class"],
+        }
+        for error in initial_state_errors
+    ]
     minimum_available = 1 << 62
     maximum_resident = 0
     maximum_swap_used = 0
@@ -299,12 +358,16 @@ def main() -> None:
             "load": current_load,
         }
         if args.diagnostic_start <= offset <= args.diagnostic_end:
-            states, state_errors = unit_states(args.unit, groups)
+            states, state_errors = cgroup_states(
+                args.unit,
+                groups,
+                {args.fault_unit} if args.fault_unit else set(),
+            )
             diagnostic_errors.extend(
                 {
                     "offset_seconds": round(offset, 3),
                     "unit": error["unit"],
-                    "operation": "systemctl_show",
+                    "operation": "cgroup_v2_snapshot",
                     "error_class": error["error_class"],
                 }
                 for error in state_errors
@@ -331,8 +394,19 @@ def main() -> None:
         unit: read_pairs(os.path.join(root, "memory.events")).get("oom_kill", 0) - service_oom_before[unit]
         for unit, root in groups.items()
     }
+    final_unit_states, final_state_errors = unit_states(args.unit, groups)
+    diagnostic_errors.extend(
+        {
+            "offset_seconds": round(time.monotonic() - started, 3),
+            "unit": error["unit"],
+            "operation": "systemctl_final_state",
+            "error_class": error["error_class"],
+        }
+        for error in final_state_errors
+    )
     service_restarts = {
-        unit: unit_integer(unit, "NRestarts") - service_restarts_before[unit]
+        unit: int(final_unit_states[unit]["restarts"])
+        - service_restarts_before[unit]
         for unit in args.unit
     }
     host_oom_kills = read_pairs("/proc/vmstat").get("oom_kill", 0) - host_oom_before

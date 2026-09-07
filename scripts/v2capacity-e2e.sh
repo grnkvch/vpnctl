@@ -854,6 +854,7 @@ start_loads() {
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/monitor \
     --duration "$monitor_duration" --interval 2 \
     --diagnostic-start "$fault_start" --diagnostic-end "$fault_end" \
+    --fault-unit "$tunnel_server_unit" \
     --unit "$controller_unit" --unit "$ingress_unit" --unit "$tunnel_auth_unit" \
     --unit "$tunnel_server_unit" --unit "$restricted_gateway_unit" \
     --unit "$restricted_echo_unit" --unit "$restricted_udp_unit" \

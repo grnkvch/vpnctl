@@ -77,7 +77,7 @@ The role names, template paths, CPU, memory, disk, swap, pinned image digest, is
 
 Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_health`, `load_generator_validity`, `fault_reconnect`, `client_disruption`, and `steady_state_latency` domains. Load-generator validity SHALL require both scheduled counts, completion of every scheduled request, the predeclared dispatch-lag bounds, no persistent post-recovery queue, and a backlog/error-free final scheduled 30 seconds. An invalid generator or unhealthy Node SHALL never pass and SHALL be distinguished from a proven Gateway-capacity rejection. Prestarted resource timelines SHALL retain load average, run queue, CPU busy, iowait, and steal plus bounded FRPC/supervisor/unit/process/TCP-state evidence around the fault without a new boundary-time Lima session.
 
-Required Gateway and Node monitors SHALL batch unit-state collection in a bounded call and retain sanitized unit/offset/error-class records when a sample cannot be collected. Collection SHALL continue after a diagnostic timeout, but any degraded required monitor MUST classify the aggregate as `invalid_measurement_evidence`, MUST remain non-passing, and MUST NOT by itself assert Gateway saturation. The managed-swap profile SHALL continue to require an exact one-GiB allocation while recognizing only the versioned 4,096-byte kernel metadata reservation in observed `SwapTotal`; swap-use and all other resource thresholds remain unchanged.
+Required Gateway and Node monitors SHALL use one bounded batched systemd snapshot before and after measurement for authoritative restart counters. During the measured interval they MUST NOT spawn systemd queries; each fault-window sample SHALL instead read direct cgroup-v2 population and bounded process state for every declared unit. Only the exact Gateway FRPS fault unit MAY have an absent cgroup during the declared outage; an absent cgroup for any other unit is a structured monitor error. Collection SHALL retain sanitized unit/offset/error-class records and continue after a malformed or unavailable required observation, but any degraded required monitor MUST classify the aggregate as `invalid_measurement_evidence`, MUST remain non-passing, and MUST NOT by itself assert Gateway saturation. The managed-swap profile SHALL continue to require an exact one-GiB allocation while recognizing only the versioned 4,096-byte kernel metadata reservation in observed `SwapTotal`; swap-use and all other resource thresholds remain unchanged.
 
 #### Scenario: Optimized candidate reaches aggregation
 - **WHEN** the phase-selective optimized gate completes every mandatory stage
@@ -115,9 +115,9 @@ Required Gateway and Node monitors SHALL batch unit-state collection in a bounde
 - **WHEN** an exact fixture created from its checked-in template reaches readiness without either lab helper on its new disk
 - **THEN** the parent installs only the exact topology-owned helper bytes and modes, verifies their guest SHA-256 before the first witness, and either proceeds self-contained or fails and stops both fixtures before any VM stage
 
-#### Scenario: Capacity diagnostic query times out
-- **WHEN** a bounded unit-state snapshot times out during the fault window
-- **THEN** the monitor retains a structured degraded sample, continues later resource collection, and the attempt fails as invalid measurement evidence without claiming Gateway saturation
+#### Scenario: Capacity runtime diagnostics observe a loaded Gateway
+- **WHEN** the fault-window monitor samples declared services while the one-vCPU Gateway carries the measured workload
+- **THEN** it reads cgroup-v2 state without spawning systemd commands, retains structured degraded evidence if a required observation is malformed, and never converts missing telemetry into a Gateway-saturation claim
 
 #### Scenario: Load path starts cold
 - **WHEN** the capacity fixture has just completed provider and connection-limit setup

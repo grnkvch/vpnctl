@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -13,6 +14,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class CapacityMonitorTest(unittest.TestCase):
+    def test_system_service_cgroup_path_is_exact_and_bounded(self):
+        self.assertEqual(
+            MODULE.cgroup_for("vpnctl-v2-spike-tunnel-server.service"),
+            "/sys/fs/cgroup/system.slice/vpnctl-v2-spike-tunnel-server.service",
+        )
+        with self.assertRaises(ValueError):
+            MODULE.cgroup_for("../../foreign.service")
+
     def test_cpu_delta_separates_busy_iowait_and_steal(self):
         before = {"total": 100, "idle": 40, "iowait": 10, "steal": 2}
         after = {"total": 200, "idle": 70, "iowait": 20, "steal": 7}
@@ -88,6 +97,69 @@ class CapacityMonitorTest(unittest.TestCase):
             states["one.service"]["diagnostic_error"]["error_class"],
             "malformed_response",
         )
+
+    def test_runtime_cgroup_snapshot_reports_populated_processes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            (root / "cgroup.events").write_text("populated 1\nfrozen 0\n")
+            with mock.patch.object(
+                MODULE,
+                "cgroup_processes",
+                return_value=[{"pid": 42, "command": "frps"}],
+            ):
+                with mock.patch.object(
+                    MODULE.subprocess,
+                    "run",
+                    side_effect=AssertionError("runtime snapshot invoked systemctl"),
+                ):
+                    states, errors = MODULE.cgroup_states(
+                        ["one.service"], {"one.service": str(root)}
+                    )
+        self.assertEqual(errors, [])
+        self.assertTrue(states["one.service"]["cgroup_present"])
+        self.assertTrue(states["one.service"]["populated"])
+        self.assertEqual(
+            states["one.service"]["cgroup_processes"],
+            [{"pid": 42, "command": "frps"}],
+        )
+
+    def test_missing_runtime_cgroup_is_an_expected_inactive_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "stopped.service"
+            states, errors = MODULE.cgroup_states(
+                ["stopped.service"],
+                {"stopped.service": str(root)},
+                {"stopped.service"},
+            )
+        self.assertEqual(errors, [])
+        self.assertFalse(states["stopped.service"]["cgroup_present"])
+        self.assertFalse(states["stopped.service"]["populated"])
+
+    def test_missing_non_fault_cgroup_is_structured(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "crashed.service"
+            states, errors = MODULE.cgroup_states(
+                ["crashed.service"], {"crashed.service": str(root)}
+            )
+        self.assertEqual(
+            errors,
+            [{"unit": "crashed.service", "error_class": "missing_cgroup"}],
+        )
+        self.assertFalse(states["crashed.service"]["populated"])
+
+    def test_malformed_runtime_cgroup_is_structured(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            (root / "cgroup.events").write_text("populated invalid\n")
+            with mock.patch.object(MODULE, "cgroup_processes", return_value=[]):
+                states, errors = MODULE.cgroup_states(
+                    ["one.service"], {"one.service": str(root)}
+                )
+        self.assertEqual(
+            errors,
+            [{"unit": "one.service", "error_class": "malformed_cgroup_events"}],
+        )
+        self.assertIsNone(states["one.service"]["populated"])
 
 
 if __name__ == "__main__":

@@ -190,11 +190,15 @@ Node CPU starvation, worker exhaustion from hanging requests, FRP reconnect
 failure, and Gateway saturation without claiming that a heuristic is causal
 proof.
 
-Each monitor obtains all declared systemd unit state in one bounded query. A
-timeout or malformed diagnostic sample is retained as a sanitized unit/offset/
-error-class record, collection continues, and the aggregate is classified
-`invalid_measurement_evidence`. Such an attempt fails but is not reported as
-proof of Gateway saturation. The managed swap contract still provisions exactly
+Each monitor obtains authoritative restart counters in one bounded systemd
+query before and after measurement. It does not spawn systemd commands inside
+the measured interval: fault-window service state comes directly from each
+declared system-slice cgroup's `cgroup.events`, `cgroup.procs`, and bounded
+process names. Only the exact Gateway FRPS cgroup may be absent during the
+declared outage; another missing or malformed required observation is retained as a sanitized
+unit/offset/error-class record, collection continues, and the aggregate is
+classified `invalid_measurement_evidence`. Such an attempt fails but is not
+reported as proof of Gateway saturation. The managed swap contract still provisions exactly
 1 GiB; its observed `SwapTotal` may be exactly 4,096 bytes lower because Linux
 reserves the first `mkswap` page for metadata. No swap-use or Gateway resource
 threshold is changed. The top-level release aggregate remains schema v2.

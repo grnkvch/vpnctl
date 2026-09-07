@@ -234,6 +234,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",
 		"recovered_without_client_service_restart:",
 		"--diagnostic-start \"$fault_start\" --diagnostic-end \"$fault_end\"",
+		"--fault-unit \"$tunnel_server_unit\"",
 		"VPNCTL_CAPACITY_FRPC_PASSWORD=\"$capacity_admin_password\"", "capture_node_health",
 		"wait_reconnect || reconnect_status=$?", "wait_loads || load_status=$?",
 		"run_warmup", "webhook-warmup.json", "api-warmup.json", "wait_background_group",
@@ -313,11 +314,14 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	monitor := readContractFile(t, filepath.Join(fixtureRoot, "monitor.py"))
 	for _, required := range []string{
 		"iowait", "steal", "load1", "run_queue", "host_oom_kills", "NRestarts",
-		"unit_states", "cgroup_processes", "tcp_state_counts", "frpc_status", `"timeline": timeline`,
+		"unit_states", "cgroup_states", "cgroup.events", "cgroup_processes", "tcp_state_counts", "frpc_status", `"timeline": timeline`,
 		`"swap_total_bytes": swap_total_bytes`, `"diagnostic_errors": diagnostic_errors`, `"degraded"`,
 	} {
 		if !strings.Contains(monitor, required) {
 			t.Errorf("capacity monitor is missing %q", required)
 		}
+	}
+	if got := strings.Count(monitor, "unit_states(args.unit, groups)"); got != 2 {
+		t.Errorf("capacity monitor takes %d systemd state snapshots, want exactly pre/post", got)
 	}
 }
