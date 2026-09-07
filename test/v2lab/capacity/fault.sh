@@ -34,6 +34,9 @@ armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe
 armed_probe_pid=
 recovery_probe_pid=
 armed_probe_root_created=false
+start_ready_file=/var/lib/vpnctl-v2-capacity/fault-start.ready
+start_trigger_file=/var/lib/vpnctl-v2-capacity/fault-start.trigger
+start_schedule_created=false
 
 usage() {
   echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N [--start-after-seconds N]'
@@ -192,6 +195,57 @@ cleanup_armed_probe() {
   return "$cleanup_status"
 }
 
+cleanup_start_schedule() {
+  local path cleanup_status=0
+  if [ "$start_schedule_created" != true ]; then
+    return
+  fi
+  for path in "$start_ready_file" "$start_trigger_file"; do
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+      continue
+    fi
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "refusing cleanup of changed capacity fault schedule file: $path" >&2
+      cleanup_status=3
+      continue
+    fi
+    rm -f -- "$path" || cleanup_status=$?
+  done
+  start_schedule_created=false
+  return "$cleanup_status"
+}
+
+wait_for_start_trigger() {
+  local triggered=false
+  if [ -e "$start_ready_file" ] || [ -L "$start_ready_file" ] ||
+     [ -e "$start_trigger_file" ] || [ -L "$start_trigger_file" ]; then
+    echo 'refusing existing capacity fault schedule files' >&2
+    return 3
+  fi
+  start_schedule_created=true
+  (
+    umask 077
+    set -o noclobber
+    printf '%s\n' "$start_after_seconds" > "$start_ready_file"
+  )
+  for _attempt in $(seq 1 1200); do
+    if [ -f "$start_trigger_file" ] && [ ! -L "$start_trigger_file" ]; then
+      triggered=true
+      break
+    fi
+    if [ -e "$start_trigger_file" ] || [ -L "$start_trigger_file" ]; then
+      echo 'capacity fault start trigger has an unsafe type' >&2
+      return 3
+    fi
+    sleep 0.1
+  done
+  if [ "$triggered" != true ]; then
+    echo 'capacity fault start trigger did not arrive' >&2
+    return 1
+  fi
+  cleanup_start_schedule
+}
+
 restore_restart_policy() {
   local actual_sha256 current_restart
   if [ "$runtime_dropin_installed" != true ]; then
@@ -229,6 +283,7 @@ cleanup() {
     systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
     restart_job_armed=false
   fi
+  cleanup_start_schedule || cleanup_status=$?
   cleanup_armed_probe || cleanup_status=$?
   restore_restart_policy || cleanup_status=$?
   if [ "$restore_required" = true ]; then
@@ -271,6 +326,7 @@ trap 'exit 143' TERM
 
 if awk -v value="$start_after_seconds" 'BEGIN {exit !(value > 0)}'; then
   fault_stage=scheduled
+  wait_for_start_trigger
   sleep "$start_after_seconds"
 fi
 

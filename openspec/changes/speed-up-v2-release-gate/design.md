@@ -98,7 +98,7 @@ Fast and VM stage lists, order, dependencies, and commands are versioned data us
 
 Retained real attempts showed that invoking a new `limactl shell` at the nominal 145-second fault offset can take roughly 14 seconds while both minimum fixtures are loaded. The actual outage therefore moved to about 159 seconds while the fixed accepted window remained 135–175 seconds, allowing recovery-tail latency to contaminate the steady-state p99.
 
-The host now starts the fault command before the workload and the already-open guest process performs the manifest-defined 145-second delay. Only after starting that delayed process does the host start the same monitors, five clients, webhook load, and Bot API load. The fault helper performs policy mutation and arms timeout-sensitive probes after the delay, so it adds no polling worker or altered restart policy during the steady-state prefix. Its local PID is explicitly waited on and included in signal/failure cleanup. The 300-second duration, 145-second target, 135–175 accepted window, three-second outage, reconnect bound, request counts, latency thresholds, and product configuration remain unchanged.
+The host now starts the fault command before the workload and waits for a fixed root-only readiness marker proving that the guest command has entered. The fault helper boundedly waits for a fixed trigger. The host creates that trigger while the fixture is still idle and only then starts the same monitors, five clients, webhook load, and Bot API load; the already-open guest process performs the manifest-defined 145-second delay. The fault helper performs policy mutation and arms timeout-sensitive probes after the delay, so it adds no polling worker or altered restart policy during the steady-state prefix. Its local PID and fixed schedule files are explicitly included in signal/failure cleanup. The 300-second duration, 145-second target, 135–175 accepted window, three-second outage, reconnect bound, request counts, latency thresholds, and product configuration remain unchanged.
 
 Alternatives considered:
 
@@ -115,6 +115,7 @@ Alternatives considered:
 - **[Schema change strands in-progress evidence]** → this is intentional because source commit already invalidates it; refuse with a clear message and never mutate old evidence.
 - **[Timing instrumentation becomes another source of failure]** → validate only presence/shape/bounds for schema 2; never compare diagnostic durations to performance thresholds.
 - **[The prestarted fault command survives an interrupted host runner]** → retain it in the harness's explicit background PID lifecycle; its existing EXIT/signal trap and the outer owner-scoped cleanup restore the restart policy, transient timer, probes, and service before fixture shutdown.
+- **[The fault and load guest commands race at startup]** → require an exact readiness marker and explicit trigger before load; reject pre-existing, symlinked, mistyped, or timed-out schedule files and clean only those fixed owner-scoped paths.
 
 ## Migration Plan
 

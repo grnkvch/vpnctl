@@ -112,6 +112,8 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"recovery_probe_attempts: $recovery_probe_attempts", "run_armed_recovery",
 		"--stable-probes 5 --probe-interval 0.1",
 		"--start-after-seconds", "fault_stage=scheduled", "sleep \"$start_after_seconds\"",
+		"fault-start.ready", "fault-start.trigger", "wait_for_start_trigger", "seq 1 1200",
+		"refusing existing capacity fault schedule files", "cleanup_start_schedule",
 	} {
 		if !strings.Contains(faultHelper, required) {
 			t.Errorf("capacity fault helper is missing %q", required)
@@ -201,7 +203,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatal("capacity tunnel PID snapshots must remain outside the measured workload")
 	}
 	if !strings.Contains(harness, "--start-after-seconds \"$fault_after\"") ||
-		!strings.Contains(harness, "reconnect_pid=$!") {
+		!strings.Contains(harness, "reconnect_pid=$!") ||
+		!strings.Contains(harness, "capacity reconnect fault did not become ready before load") ||
+		!strings.Contains(harness, "sudo install -m 0600 /dev/null \"$capacity_fault_start_trigger\"") {
 		t.Fatal("capacity fault must enter its guest before load and delay there until the manifest offset")
 	}
 	if !strings.Contains(harness, "guest \"$node_instance\" sudo bash -c") {

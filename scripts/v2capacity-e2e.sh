@@ -35,6 +35,8 @@ capacity_fault_restart_job=vpnctl-v2-capacity-frps-restart
 capacity_fault_dropin_dir=/run/systemd/system/$tunnel_server_unit.d
 capacity_fault_dropin=$capacity_fault_dropin_dir/vpnctl-v2-capacity-fault.conf
 capacity_fault_dropin_sha256=9b6943ff77b31e063152214a3aa57a6f73782b14434700170a0f30ca70ef2524
+capacity_fault_start_ready=/var/lib/vpnctl-v2-capacity/fault-start.ready
+capacity_fault_start_trigger=/var/lib/vpnctl-v2-capacity/fault-start.trigger
 gateway_initial=
 node_initial=
 gateway_started=false
@@ -764,7 +766,7 @@ start_loads() {
 }
 
 start_reconnect() {
-  local gateway_ip down_seconds recovery_limit reconnect_base fault_after
+  local gateway_ip down_seconds recovery_limit reconnect_base fault_after attempt ready=false
   gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
   recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
@@ -776,6 +778,25 @@ start_reconnect() {
     --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
     --start-after-seconds "$fault_after" > "$reconnect_base" &
   reconnect_pid=$!
+  for attempt in $(seq 1 120); do
+    if guest "$gateway_instance" sudo test -f "$capacity_fault_start_ready" &&
+       ! guest "$gateway_instance" sudo test -L "$capacity_fault_start_ready"; then
+      ready=true
+      break
+    fi
+    if ! kill -0 "$reconnect_pid" >/dev/null 2>&1; then
+      wait "$reconnect_pid" || true
+      reconnect_pid=
+      echo "capacity reconnect fault exited before start readiness" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+  if [ "$ready" != true ]; then
+    echo "capacity reconnect fault did not become ready before load" >&2
+    return 4
+  fi
+  guest "$gateway_instance" sudo install -m 0600 /dev/null "$capacity_fault_start_trigger"
 }
 
 wait_reconnect() {

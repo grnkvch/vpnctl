@@ -2,6 +2,14 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 — capacity fault/load start handshake
+
+### Retained race evidence and reversible correction
+
+- Candidate `1316a3963e9c9b93e5e580e4aca610e939da3663` retained a full 18-stage passing prefix, one transient WireGuard readiness failure, and one complete capacity measurement in `evidence-2026-09-07T013453Z`. The complete measurement kept failures within the unchanged accepted window but placed them at 156–168 seconds, proving the delayed fault guest had entered roughly 11 seconds after the node load process; it correctly failed unchanged webhook count and p99 boundaries. Parent cleanup stopped both exact fixtures and no foreign VM or deployed host was changed.
+- The prestarted fault helper now creates a fixed root-only ready marker and boundedly waits for a fixed trigger. The host waits for readiness, creates the trigger while fixtures are idle, and only then starts load. Pre-existing, symlinked, mistyped, missing, or timed-out schedule files fail closed; signal/error cleanup removes only the two exact schedule files and retains the existing service/timer/probe cleanup.
+- The 300-second workload, 145-second target, 135–175 window, three-second outage, reconnect, request, latency, resource, ownership, and cleanup contracts remain unchanged. Rollback is the corrective source commit; the retained candidate evidence remains immutable and is intentionally non-resumable after the commit changes.
+
 ## 2026-09-07 — capacity fault scheduling correction
 
 ### Retained evidence and reversible harness change
