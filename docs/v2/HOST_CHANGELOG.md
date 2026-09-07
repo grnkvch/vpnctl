@@ -2,6 +2,15 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 12:47 +03 — Node capacity-fixture metadata update
+
+### Exact stopped Lima instance; no guest or Gateway mutation
+
+- Preflight observed `vpnctl-v2-gateway` stopped at 1 vCPU/512 MiB/10 GiB and `vpnctl-v2-node` stopped at the legacy 1-vCPU/512-MiB/10-GiB profile. No VM was started.
+- Applied `limactl edit vpnctl-v2-node --tty=false --cpus 4 --memory 2` only to the exact stopped Node fixture. Lima reported that its configuration was edited.
+- Post-change verification observed `vpnctl-v2-node` still `Stopped` with 4 vCPU, 2,147,483,648 bytes RAM, and 10,737,418,240 bytes disk. `vpnctl-v2-gateway`, guests, services, routes, firewall state, packages, credentials, evidence, and foreign VMs were not changed.
+- Rollback, while the same exact Node is stopped: `limactl edit vpnctl-v2-node --tty=false --cpus 1 --memory 0.5`. Recreating only that stopped VM from the prior Node template is the fallback; do not delete or edit any other instance.
+
 ## 2026-09-07 — Gateway-only capacity boundary and load-fixture model
 
 ### Source-only implementation; Node metadata update remains manual
