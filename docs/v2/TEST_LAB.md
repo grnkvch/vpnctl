@@ -1,6 +1,6 @@
-# vpnctl v2 minimum-host test lab
+# vpnctl v2 role-specific test lab
 
-The mandatory v2 spikes run in two pinned Ubuntu 24.04 amd64 Lima/QEMU VMs named `vpnctl-v2-gateway` and `vpnctl-v2-node`. Each VM has exactly 1 vCPU, 512 MiB RAM, a 10 GiB root disk, and a managed 1 GiB swap file. The dated Ubuntu cloud image and SHA-256 digest are pinned in `test/v2lab/lima.yaml`.
+The mandatory v2 spikes run in two pinned Ubuntu 24.04 amd64 Lima/QEMU VMs named `vpnctl-v2-gateway` and `vpnctl-v2-node`. Their role contract is versioned in `test/v2lab/fixtures.json`: Gateway uses `test/v2lab/lima.yaml` with exactly 1 vCPU, 512 MiB RAM, a 10 GiB root disk, and 1 GiB managed swap; Node uses `test/v2lab/lima-node.yaml` with 4 vCPU, 2 GiB RAM, the same disk, and 1 GiB managed swap. Only Gateway is the normative minimum-capacity product host. Node supplies private services, clients, monitors, and load generators and remains subject to functional, crash, OOM, and cleanup checks, not Gateway resource thresholds.
 
 All development-host mutations and rollback instructions are recorded in `docs/v2/HOST_CHANGELOG.md`. Do not operate on similarly named or pre-existing Lima instances.
 
@@ -12,7 +12,7 @@ Boot both fixtures and immediately capture baseline evidence:
 ./scripts/v2lab.sh up
 ```
 
-The command validates the template, creates or starts both VMs, installs the lab helpers, and writes timestamped JSON under `artifacts/v2lab/`. `summary.json` contains OS/architecture, vCPU and memory limits, swap, disk capacity, CPU/load sample, total and top-process RSS, listening/connected TCP+UDP sockets, guest addresses, peer latency, and packet loss. Re-run measurement without recreating the VMs with:
+The command validates both role templates and the topology contract, creates or starts both VMs, installs the lab helpers, and writes timestamped JSON under `artifacts/v2lab/`. `summary.json` contains OS/architecture, vCPU and memory limits, swap, disk capacity, CPU/load sample, total and top-process RSS, listening/connected TCP+UDP sockets, guest addresses, peer latency, and packet loss. Re-run measurement without recreating the VMs with:
 
 Package provisioning records `/var/lib/vpnctl-v2-lab.provisioned` only after a successful install. Fixtures created from the current template therefore skip network package work on later boots.
 
@@ -37,5 +37,13 @@ Network faults are always explicit and role-scoped:
 ```
 
 The latency/loss helper owns the dedicated `1abc:` qdisc handle on the peer-route interface; partitioning owns only the `inet vpnctl_v2_lab_fault` table. `clear` removes those exact controls. Before any existing exact-name VM is started, inspected, stopped, or deleted, the orchestrator verifies QEMU/amd64, resource limits, pinned image digest, and rootless network. A mismatch exits as a conflict instead of operating on the instance.
+
+A legacy 1-vCPU/512-MiB `vpnctl-v2-node` is deliberate contract drift after this change. Stop it and make the one-time, explicit metadata update before the next VM gate:
+
+```bash
+limactl edit vpnctl-v2-node --tty=false --cpus 4 --memory 2
+```
+
+The capacity harness never resizes either VM during a run. Recreating only the stopped Node from `test/v2lab/lima-node.yaml` is the rollback-safe alternative when an edit cannot be applied.
 
 Use `./scripts/v2lab.sh shell gateway` or `shell node` for an interactive guest shell, `down` to stop both persistent fixtures, and explicit `destroy` to delete them. Generated evidence is intentionally untracked; accepted spike results are summarized in versioned ADRs and the pinned [v2 component/limit manifest](COMPONENT_LIMITS.v1.json).

@@ -315,6 +315,13 @@ func TestV2DeployedReleaseGateInvalidatesOutdatedStageFingerprints(t *testing.T)
 		t.Fatalf("first run code=%d output=%s", code, output)
 	}
 	failureInput := readJSONObject(t, filepath.Join(evidence, "automated-attempts", "failure", "attempt-0001", "input.json"))
+	fastInput := readJSONObject(t, filepath.Join(evidence, "automated-attempts", "go-test", "attempt-0001", "input.json"))
+	if fastInput["fixture_contract_sha256"] != nil {
+		t.Fatalf("fast attempt unexpectedly carries VM topology fingerprint: %#v", fastInput)
+	}
+	if topology, ok := failureInput["fixture_contract_sha256"].(string); !ok || len(topology) != 64 {
+		t.Fatalf("VM attempt topology fingerprint = %#v", failureInput["fixture_contract_sha256"])
+	}
 	dependencies, ok := failureInput["dependencies"].(map[string]any)
 	if !ok || len(dependencies) != 2 {
 		t.Fatalf("failure dependency input = %#v", failureInput["dependencies"])
@@ -498,6 +505,7 @@ func newDeployedGateFixture(t *testing.T) deployedGateFixture {
 		filepath.Join(repository, "scripts"),
 		filepath.Join(repository, "openspec", "changes", "vpnctl-v2"),
 		filepath.Join(repository, "test", "v2lab", "deployed-release-gate"),
+		filepath.Join(repository, "test", "v2lab", "capacity"),
 		fakeBin,
 	} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -511,6 +519,20 @@ func newDeployedGateFixture(t *testing.T) deployedGateFixture {
 	copyTestFile(t, filepath.Join("..", "..", "test", "v2lab", "deployed-release-gate", "clean-state.json"), filepath.Join(repository, "test", "v2lab", "deployed-release-gate", "clean-state.json"), 0o644)
 	copyTestFile(t, filepath.Join("..", "..", "test", "v2lab", "deployed-release-gate", "deployment.example.json"), filepath.Join(repository, "test", "v2lab", "deployed-release-gate", "deployment.example.json"), 0o644)
 	copyTestFile(t, filepath.Join("..", "..", "test", "v2lab", "deployed-release-gate", "clash-mi.example.json"), filepath.Join(repository, "test", "v2lab", "deployed-release-gate", "clash-mi.example.json"), 0o644)
+	for _, path := range []string{
+		"test/v2lab/fixtures.json",
+		"test/v2lab/lima.yaml",
+		"test/v2lab/lima-node.yaml",
+		"test/v2lab/provision.sh",
+		"test/v2lab/capacity/manifest.json",
+		"test/v2lab/capacity/load.py",
+		"test/v2lab/capacity/client_load.py",
+		"test/v2lab/capacity/monitor.py",
+		"test/v2lab/capacity/fault.sh",
+		"test/v2lab/capacity/evaluate.py",
+	} {
+		copyTestFile(t, filepath.Join("..", "..", filepath.FromSlash(path)), filepath.Join(repository, filepath.FromSlash(path)), 0o644)
+	}
 	writeTestFile(t, filepath.Join(repository, "test", "v2lab", "ingress", "telegram_webhook_gate.py"), "#!/usr/bin/env python3\n", 0o755)
 	writeTestFile(t, filepath.Join(repository, "openspec", "changes", "vpnctl-v2", "tasks.md"), "- [ ] 16.11 deployed release gate\n", 0o644)
 	writeTestFile(t, filepath.Join(repository, ".gitignore"), "artifacts/\n", 0o644)
@@ -712,12 +734,15 @@ status_for() {
 }
 printf 'lima:%%s\n' "$*" >> "$VPNCTL_TEST_RUN_LOG"
 [ "${VPNCTL_TEST_FORBID_LIMA:-}" != true ] || exit 97
-case "${1:-}" in
-  list)
-    for name in vpnctl-v2-gateway vpnctl-v2-node; do
-      status=$(status_for "$name")
-      printf '{"name":"%%s","status":"%%s","vmType":"qemu","arch":"x86_64","cpus":1,"memory":536870912,"disk":10737418240,"config":{"images":[{"digest":"%s"}]},"network":[{"lima":"user-v2"}]}\n' "$name" "$status"
-    done
+	case "${1:-}" in
+	  list)
+	    for name in vpnctl-v2-gateway vpnctl-v2-node; do
+	      status=$(status_for "$name")
+	      cpus=1
+	      memory=536870912
+	      if [ "$name" = vpnctl-v2-node ]; then cpus=4; memory=2147483648; fi
+	      printf '{"name":"%%s","status":"%%s","vmType":"qemu","arch":"x86_64","cpus":%%s,"memory":%%s,"disk":10737418240,"config":{"images":[{"digest":"%s"}]},"network":[{"lima":"user-v2"}]}\n' "$name" "$status" "$cpus" "$memory"
+	    done
     ;;
   start)
     printf 'Running\n' > "$state_dir/$2"
@@ -750,6 +775,8 @@ func invalidateAttemptFingerprint(t *testing.T, directory string, lima bool) {
 		wrongImage := "sha256:" + invalid
 		input["lima_image_digest"] = wrongImage
 		result["lima_image_digest"] = wrongImage
+		input["fixture_contract_sha256"] = invalid
+		result["fixture_contract_sha256"] = invalid
 	}
 	writeJSONObject(t, inputPath, input, 0o400)
 	result["input_sha256"] = fileSHA256(t, inputPath)
@@ -776,6 +803,9 @@ func assertAutomatedAggregate(t *testing.T, evidence, stage, attempt string) {
 	automated := readJSONObject(t, filepath.Join(evidence, "automated.json"))
 	if automated["schema_version"] != float64(2) || automated["status"] != "passed" {
 		t.Fatalf("automated aggregate header = %+v", automated)
+	}
+	if topology, ok := automated["fixture_contract_sha256"].(string); !ok || len(topology) != 64 {
+		t.Fatalf("automated topology fingerprint = %#v", automated["fixture_contract_sha256"])
 	}
 	stageAttempts, ok := automated["stage_attempts"].(map[string]any)
 	if !ok || len(stageAttempts) != 19 {
@@ -858,6 +888,9 @@ func assertSessionEvidence(t *testing.T, directory, status string) {
 	result := readJSONObject(t, filepath.Join(directory, "result.json"))
 	if result["schema_version"] != float64(2) || result["status"] != status {
 		t.Fatalf("session result = %#v", result)
+	}
+	if topology, ok := result["fixture_contract_sha256"].(string); !ok || len(topology) != 64 {
+		t.Fatalf("session topology fingerprint = %#v", result["fixture_contract_sha256"])
 	}
 	timings, ok := result["timings"].(map[string]any)
 	if !ok || len(timings) != 6 {

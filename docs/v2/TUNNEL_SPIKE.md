@@ -28,7 +28,7 @@ Prepare, inspect, and run the complete acceptance gate:
 - restarting frps reconnects without restarting frpc; revocation closes the live connection and rejects retries;
 - standard transport reaches frps directly, while the manually selected restricted transport has exactly one frpc-to-Mihomo connection and sends steady-state tunnel traffic only through ShadowTLS `8443/TCP`;
 - the standard transport, node identity, mapping ownership, and authorization state are restored after the switch;
-- both 1-vCPU/512-MiB guests retain the manifest memory floor with zero unit OOM events.
+- Gateway retains its minimum-host memory floor, while the larger functional Node remains OOM/crash-free; Node resource usage is diagnostic rather than a Gateway capacity threshold.
 
 Generated credentials and evidence are mode-restricted and ignored under `artifacts/v2lab/tunnel-spike/`. The accepted run is summarized in `evidence-20260901T220258Z/summary.json`: effective pool zero, one persistent connection, two exposes, 24 concurrent streams, controller-state failure rejection, reconnect in 7 seconds, revoke in 2 seconds, standard direct traffic, and restricted steady-state `17000 = 0` plus ShadowTLS `8443 > 0`. Temporary `info` logs exist only while the disposable spike units are intentionally active; production logging remains default-off.
 

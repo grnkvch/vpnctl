@@ -42,7 +42,8 @@ run by `scripts/v2standard-test.sh verify`; actual deployed-service and Clash
 Mi behavior remain task 16.11.
 
 Both `verify` commands arm cleanup before applying host integration. They
-accept only the pinned, exact-name 1-vCPU/512-MiB/10-GiB Lima fixtures and
+accept only the pinned, exact-name role-specific Lima fixtures (Gateway
+1-vCPU/512-MiB/10-GiB and Node 4-vCPU/2-GiB/10-GiB) and
 owner-marked paths. Their final phase performs full uninstall, compares the
 saved root network/resolver state, and rejects a leftover namespace, unit,
 table, route, rule, drop-in, service user, or owned path.

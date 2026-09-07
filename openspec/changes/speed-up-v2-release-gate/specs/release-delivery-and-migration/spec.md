@@ -61,7 +61,17 @@ The tunnel and ingress release harnesses SHALL each run once as canonical mandat
 ### Requirement: Optimized gate preserves the release boundary
 Optimization SHALL NOT remove a mandatory assertion, weaken a capacity threshold, shorten the 300-second capacity workload, parallelize conflicting VM stages, migrate or rewrite old evidence, or reuse an attempt across a source commit, release version, tracked input, stage/dependency contract, or pinned Lima image mismatch. Final `automated.json` SHALL continue to reference exact immutable passing results for the complete mandatory stage set.
 
-The capacity harness SHALL enter its fault command on Gateway before starting measured workload processes, require a bounded exact ready/trigger handshake while the fixtures are idle, SHALL perform the manifest-defined delay inside that already-open guest command, and SHALL wait for that exact process at the fault boundary. Pre-existing, missing, timed-out, symlinked, or mistyped schedule files SHALL fail closed. This scheduling MUST NOT change the fixed fault offset, accepted failure window, outage duration, reconnect bound, request profile, or latency bounds. Failure or interruption SHALL terminate and wait for the tracked command and remove only its fixed owner-scoped schedule files before existing cleanup and fixture shutdown.
+The capacity harness SHALL enter its fault command on Gateway before starting measured workload processes, require a bounded exact ready/trigger handshake while the fixtures are idle, SHALL perform the manifest-defined delay inside that already-open guest command, and SHALL wait for that exact process at the fault boundary. Pre-existing, missing, timed-out, symlinked, or mistyped schedule files SHALL fail closed. This scheduling MUST NOT change the fixed fault offset, scheduling sanity bound, outage duration, reconnect bound, request profile, fixed 2,890 webhook-success minimum, or product latency bounds. Failure or interruption SHALL terminate and wait for the tracked command and remove only its fixed owner-scoped schedule files before existing cleanup and fixture shutdown.
+
+Every webhook request SHALL retain a sanitized bounded lifecycle record containing scheduled order and offset, actual start, completion, response latency, dispatch lag, status, and error class. The first webhook failure within the fixed 135–175-second scheduling sanity bound SHALL freeze the client disruption start. The latest completion of the first five consecutive later webhook successes that each complete within the existing 2,000 ms bound SHALL freeze its end. The end SHALL NOT be recomputed after a later failure. The interval MUST NOT exceed 11.5 seconds, every failure outside it MUST fail the gate, and the independent fixed success minimum MUST still pass.
+
+Pre-disruption and post-recovery webhook success latency SHALL be asserted as separate samples against the unchanged p95 and p99 bounds. Fault-intersecting requests MAY be excluded only from those two steady-state samples and SHALL remain represented in disruption and global success evidence. Global and pre/post webhook dispatch-lag p99 plus global Bot API dispatch-lag p99 SHALL each be at most 1,000 ms, and no request in either final scheduled 30-second tail MAY exceed that lag bound. Bot API failures and latency SHALL remain globally asserted without a fault exclusion. A reconnect failure after workload start SHALL retain bounded transport diagnostics captured by monitors already running across the fault window, allow only the already-started fixed-duration workloads to finish, emit a failed summary, and perform the existing owner-scoped cleanup.
+
+The normative minimum-capacity resource profile SHALL apply only to the exact Gateway role: 1 vCPU, 512 MiB RAM, 10 GiB disk, and 1 GiB managed swap. The exact shared Node role SHALL use the checked-in 4-vCPU/2-GiB/10-GiB profile and retained managed swap as functional/load infrastructure. Node resource values MUST NOT be compared with the Gateway acceptance thresholds, but Node OOM, service crash, failed functional checks, or incomplete workload MUST fail or invalidate the attempt. No capacity command MAY resize a VM.
+
+The role names, template paths, CPU, memory, disk, swap, pinned image digest, isolated network, and capacity responsibility SHALL form one versioned topology contract. Every reusable VM attempt, shared session, and final aggregate SHALL bind its exact contract SHA-256; a topology/profile change or drifted live fixture SHALL invalidate or refuse evidence before mutation.
+
+Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_health`, `load_generator_validity`, `fault_reconnect`, `client_disruption`, and `steady_state_latency` domains. Load-generator validity SHALL require both scheduled counts, completion of every scheduled request, the predeclared dispatch-lag bounds, no persistent post-recovery queue, and a backlog/error-free final scheduled 30 seconds. An invalid generator or unhealthy Node SHALL never pass and SHALL be distinguished from a proven Gateway-capacity rejection. Prestarted resource timelines SHALL retain load average, run queue, CPU busy, iowait, and steal plus bounded FRPC/supervisor/unit/process/TCP-state evidence around the fault without a new boundary-time Lima session.
 
 #### Scenario: Optimized candidate reaches aggregation
 - **WHEN** the phase-selective optimized gate completes every mandatory stage
@@ -69,4 +79,24 @@ The capacity harness SHALL enter its fault command on Gateway before starting me
 
 #### Scenario: Fault delivery is not delayed by a loaded Lima control connection
 - **WHEN** the minimum-host capacity workload reaches its manifest-defined fault offset
-- **THEN** a ready and explicitly triggered already-open tracked Gateway command injects the outage after its guest-local delay, no new Lima shell must enter the loaded fixture at that boundary, and unchanged steady-state latency checks exclude only the existing accepted window
+- **THEN** a ready and explicitly triggered already-open tracked Gateway command injects the outage after its guest-local delay, no new Lima shell must enter the loaded fixture at that boundary, and the first client-visible impact is inside the fixed scheduling sanity bound
+
+#### Scenario: Fault tail crosses the scheduling window
+- **WHEN** an in-flight or queued request affected by a correctly scheduled bounded outage completes after the fixed 175-second sanity boundary
+- **THEN** it remains disruption evidence, does not pollute either steady-state latency sample, and cannot move the already frozen recovery boundary
+
+#### Scenario: Degradation continues after recovery
+- **WHEN** a request fails, steady-state latency exceeds its unchanged bound, or dispatch backlog exceeds its generator-validity bound after the first stable recovery cohort
+- **THEN** the gate fails without enlarging or reopening the client disruption interval
+
+#### Scenario: Reconnect fails during measured load
+- **WHEN** FRP does not produce stable recovery within eight seconds
+- **THEN** the bounded workloads and immediate diagnostics are retained in a failed capacity summary, no passing stage result is produced, and owner-scoped cleanup restores both fixtures
+
+#### Scenario: Load-generating Node is saturated
+- **WHEN** the Node cannot dispatch or complete the fixed workload within the declared generator-validity contract
+- **THEN** the attempt remains non-passing, records `invalid_load_generation` with Node/worker diagnostics, and does not claim that the Gateway exceeded its capacity
+
+#### Scenario: Role profile drifts
+- **WHEN** either exact live fixture or its evidence differs from the checked-in role-specific topology contract
+- **THEN** the VM phase refuses before mutation or invalidates reuse, without resizing the instance inside the gate

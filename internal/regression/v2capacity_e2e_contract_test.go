@@ -14,29 +14,59 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	fixtureRoot := filepath.Join(repositoryRoot, "test", "v2lab", "capacity")
 	manifestData := readContractFile(t, filepath.Join(fixtureRoot, "manifest.json"))
 	var manifest struct {
-		Profile struct {
+		SchemaVersion int `json:"schema_version"`
+		Profile       struct {
 			LogicalTelegramUsers int `json:"logical_telegram_users"`
 			DurationSeconds      int `json:"duration_seconds"`
 			WebhookRPS           int `json:"webhook_requests_per_second"`
 			BotAPIRPS            int `json:"bot_api_requests_per_second"`
 			PersonalClients      int `json:"personal_clients"`
 		} `json:"profile"`
-		Target struct {
+		Topology struct {
+			CapacityBoundaryRole string `json:"capacity_boundary_role"`
+			LoadGeneratorRole    string `json:"load_generator_role"`
+			Contract             string `json:"contract"`
+		} `json:"topology"`
+		GatewayTarget struct {
 			VCPU             int `json:"vcpu"`
 			MemoryBytes      int `json:"memory_bytes"`
 			DiskBytes        int `json:"disk_bytes"`
 			ManagedSwapBytes int `json:"managed_swap_bytes"`
-		} `json:"target"`
+		} `json:"gateway_target"`
+		NodeFixture struct {
+			VCPU                    int  `json:"vcpu"`
+			MemoryBytes             int  `json:"memory_bytes"`
+			DiskBytes               int  `json:"disk_bytes"`
+			ManagedSwapBytes        int  `json:"managed_swap_bytes"`
+			NormativeCapacityTarget bool `json:"normative_capacity_target"`
+		} `json:"node_fixture"`
 		Bounds struct {
-			ControllerRSS          int `json:"controller_idle_rss_bytes"`
-			WebhookSuccessMinimum  int `json:"webhook_successful_requests_minimum"`
-			WebhookSteadyP95Millis int `json:"webhook_steady_state_success_p95_ms"`
-			WebhookSteadyP99Millis int `json:"webhook_steady_state_success_p99_ms"`
-			BotAPIGlobalP95Millis  int `json:"bot_api_success_p95_ms"`
-			BotAPIGlobalP99Millis  int `json:"bot_api_success_p99_ms"`
-			PerExposeConcurrent    int `json:"per_expose_concurrent_requests"`
-			GatewayConcurrent      int `json:"gateway_concurrent_requests"`
+			ControllerRSS            int     `json:"controller_idle_rss_bytes"`
+			MinimumMemoryAvailable   int     `json:"minimum_mem_available_bytes"`
+			MaximumSwapUsed          int     `json:"maximum_swap_used_bytes"`
+			MaximumAverageCPU        int     `json:"maximum_average_cpu_percent"`
+			MinimumFreeDisk          int     `json:"minimum_free_disk_bytes"`
+			MaximumDiskGrowth        int     `json:"maximum_disk_growth_bytes"`
+			WebhookSuccessMinimum    int     `json:"webhook_successful_requests_minimum"`
+			WebhookFailuresOutside   int     `json:"webhook_failures_outside_client_disruption"`
+			WebhookSteadyP95Millis   int     `json:"webhook_steady_state_success_p95_ms"`
+			WebhookSteadyP99Millis   int     `json:"webhook_steady_state_success_p99_ms"`
+			BotAPIGlobalP95Millis    int     `json:"bot_api_success_p95_ms"`
+			BotAPIGlobalP99Millis    int     `json:"bot_api_success_p99_ms"`
+			DispatchLagP99Millis     int     `json:"load_generator_dispatch_lag_p99_ms"`
+			TailSeconds              int     `json:"load_generator_tail_seconds"`
+			StableRecoveryProbes     int     `json:"client_disruption_stable_recovery_probes"`
+			MaximumDisruptionSeconds float64 `json:"maximum_client_disruption_seconds"`
+			ReconnectSeconds         int     `json:"tunnel_reconnect_seconds"`
+			PerExposeConcurrent      int     `json:"per_expose_concurrent_requests"`
+			GatewayConcurrent        int     `json:"gateway_concurrent_requests"`
 		} `json:"bounds"`
+		Fault struct {
+			StopAfter   int `json:"frps_stop_after_seconds"`
+			DownSeconds int `json:"frps_down_seconds"`
+			SanityStart int `json:"accepted_failure_window_start_seconds"`
+			SanityEnd   int `json:"accepted_failure_window_end_seconds"`
+		} `json:"fault"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
 		t.Fatalf("decode capacity manifest: %v", err)
@@ -45,16 +75,34 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		manifest.Profile.WebhookRPS != 10 || manifest.Profile.BotAPIRPS != 5 || manifest.Profile.PersonalClients != 5 {
 		t.Fatalf("unexpected sustained capacity profile: %+v", manifest.Profile)
 	}
-	if manifest.Target.VCPU != 1 || manifest.Target.MemoryBytes != 512*1024*1024 ||
-		manifest.Target.DiskBytes != 10*1024*1024*1024 || manifest.Target.ManagedSwapBytes != 1024*1024*1024 {
-		t.Fatalf("unexpected minimum host target: %+v", manifest.Target)
+	if manifest.SchemaVersion != 2 || manifest.Topology.CapacityBoundaryRole != "gateway" ||
+		manifest.Topology.LoadGeneratorRole != "node" || manifest.Topology.Contract != "test/v2lab/fixtures.json" {
+		t.Fatalf("unexpected capacity topology: %+v", manifest.Topology)
+	}
+	if manifest.GatewayTarget.VCPU != 1 || manifest.GatewayTarget.MemoryBytes != 512*1024*1024 ||
+		manifest.GatewayTarget.DiskBytes != 10*1024*1024*1024 || manifest.GatewayTarget.ManagedSwapBytes != 1024*1024*1024 {
+		t.Fatalf("unexpected minimum Gateway target: %+v", manifest.GatewayTarget)
+	}
+	if manifest.NodeFixture.VCPU != 4 || manifest.NodeFixture.MemoryBytes != 2*1024*1024*1024 ||
+		manifest.NodeFixture.DiskBytes != 10*1024*1024*1024 || manifest.NodeFixture.ManagedSwapBytes != 1024*1024*1024 ||
+		manifest.NodeFixture.NormativeCapacityTarget {
+		t.Fatalf("unexpected functional Node fixture: %+v", manifest.NodeFixture)
 	}
 	if manifest.Bounds.ControllerRSS != 20*1024*1024 || manifest.Bounds.WebhookSuccessMinimum != 2890 ||
+		manifest.Bounds.MinimumMemoryAvailable != 64*1024*1024 || manifest.Bounds.MaximumSwapUsed != 512*1024*1024 ||
+		manifest.Bounds.MaximumAverageCPU != 85 || manifest.Bounds.MinimumFreeDisk != 512*1024*1024 ||
+		manifest.Bounds.MaximumDiskGrowth != 64*1024*1024 || manifest.Bounds.WebhookFailuresOutside != 0 ||
 		manifest.Bounds.WebhookSteadyP95Millis != 1000 || manifest.Bounds.WebhookSteadyP99Millis != 2000 ||
 		manifest.Bounds.BotAPIGlobalP95Millis != 1000 || manifest.Bounds.BotAPIGlobalP99Millis != 2000 ||
-		manifest.Bounds.PerExposeConcurrent != 40 ||
+		manifest.Bounds.DispatchLagP99Millis != 1000 || manifest.Bounds.TailSeconds != 30 ||
+		manifest.Bounds.StableRecoveryProbes != 5 || manifest.Bounds.MaximumDisruptionSeconds != 11.5 ||
+		manifest.Bounds.ReconnectSeconds != 8 || manifest.Bounds.PerExposeConcurrent != 40 ||
 		manifest.Bounds.GatewayConcurrent != 64 {
 		t.Fatalf("unexpected capacity bounds: %+v", manifest.Bounds)
+	}
+	if manifest.Fault.StopAfter != 145 || manifest.Fault.DownSeconds != 3 ||
+		manifest.Fault.SanityStart != 135 || manifest.Fault.SanityEnd != 175 {
+		t.Fatalf("unexpected capacity fault contract: %+v", manifest.Fault)
 	}
 
 	backendDropIn := readContractFile(t, filepath.Join(fixtureRoot, "vpnctl-v2-capacity-backend.conf"))
@@ -167,18 +215,17 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"/etc/systemd/system/$tunnel_client_unit.d/$capacity_client_dropin",
 		"expected one active tunnel client service and supervised frpc child", "frpc_child_recycled:",
 		"recovered_without_client_service_restart:",
-		".reconnect.status == \"passed\"",
-		".reconnect.scheduled_start_after_seconds == $limits[0].fault.frps_stop_after_seconds",
-		".reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds",
-		".reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5)",
-		".workload.webhook.latency_by_fault_window.outside.latency_ms.p95",
-		".workload.webhook.latency_by_fault_window.outside.latency_ms.p99",
-		".workload.bot_api.latency_ms.p95", ".workload.bot_api.latency_ms.p99",
-		"status: \"candidate\"", "finalize_summary", ".status = \"passed\"",
+		"--diagnostic-start \"$fault_start\" --diagnostic-end \"$fault_end\"",
+		"VPNCTL_CAPACITY_FRPC_PASSWORD=\"$capacity_admin_password\"", "capture_node_health",
+		"wait_reconnect || reconnect_status=$?", "wait_loads || load_status=$?",
+		"evaluate.py", "fixture_topology_sha256", "measurement_classification",
+		".gateway_capacity.within_contract", ".node_fixture_health.within_contract",
+		".load_generator_validity.within_contract", ".fault_reconnect.within_contract",
+		".client_disruption.within_contract", ".steady_state_latency.within_contract",
+		"resource_acceptance_thresholds_applied == false",
 		"cleanup_capacity_fault", "capacity_fault_dropin_dir=/run/systemd/system/$tunnel_server_unit.d",
 		"capacity_fault_dropin=$capacity_fault_dropin_dir/vpnctl-v2-capacity-fault.conf",
 		"assert_transient_unit_absent \"$capacity_fault_restart_job.timer\"",
-		"cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}",
 	} {
 		if !strings.Contains(harness, required) {
 			t.Errorf("capacity E2E harness is missing %q", required)
@@ -195,12 +242,15 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	beforeState := strings.Index(verifyHarness, "capture_tunnel_client_process_state_before\n")
 	startFault := strings.Index(verifyHarness, "start_reconnect\n")
 	startLoads := strings.Index(verifyHarness, "start_loads\n")
-	waitFault := strings.Index(verifyHarness, "wait_reconnect\n")
-	waitLoads := strings.Index(verifyHarness, "wait_loads\n")
+	waitFault := strings.Index(verifyHarness, "wait_reconnect || reconnect_status=$?")
+	waitLoads := strings.Index(verifyHarness, "wait_loads || load_status=$?")
 	afterState := strings.Index(verifyHarness, "finalize_reconnect_process_state\n")
 	if beforeState < 0 || startFault < 0 || startLoads < 0 || waitFault < 0 || waitLoads < 0 || afterState < 0 ||
 		!(beforeState < startFault && startFault < startLoads && startLoads < waitFault && waitFault < waitLoads && waitLoads < afterState) {
 		t.Fatal("capacity tunnel PID snapshots must remain outside the measured workload")
+	}
+	if strings.Contains(verifyHarness[startLoads:waitFault], "guest \"") {
+		t.Fatal("capacity must not open a new Lima guest session to deliver or diagnose the scheduled fault")
 	}
 	if !strings.Contains(harness, "--start-after-seconds \"$fault_after\"") ||
 		!strings.Contains(harness, "reconnect_pid=$!") ||
@@ -211,13 +261,43 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	if !strings.Contains(harness, "guest \"$node_instance\" sudo bash -c") {
 		t.Fatal("capacity tunnel process snapshot must use one bounded guest session")
 	}
+	if strings.Contains(harness, "limactl edit") {
+		t.Fatal("capacity verification must never resize a fixture at runtime")
+	}
 	loadReporter := readContractFile(t, filepath.Join(fixtureRoot, "load.py"))
 	for _, required := range []string{
 		"successful_latency_by_30_second_start_bucket", "dispatch_lag_ms",
-		"latency_by_start_bucket", "annotate_dispatch_lag",
+		"latency_by_start_bucket", "annotate_request_lifecycle", "scheduled_offset_seconds",
+		"started_offset_seconds", "completed_offset_seconds", "end_to_end_ms",
+		"classify_client_disruption", "stable_recovery_request_indexes", "worker_queue_lag_ms",
 	} {
 		if !strings.Contains(loadReporter, required) {
 			t.Errorf("capacity load reporter is missing aggregate temporal diagnostic %q", required)
+		}
+	}
+	evaluator := readContractFile(t, filepath.Join(fixtureRoot, "evaluate.py"))
+	for _, required := range []string{
+		`"gateway_capacity"`, `"node_fixture_health"`, `"load_generator_validity"`,
+		`"fault_reconnect"`, `"client_disruption"`, `"steady_state_latency"`,
+		`"webhook_global_dispatch_lag_p99_within_bound"`, `nested(tail, "dispatch_lag_ms", "max")`,
+		`"managed_swap_profile"`,
+		`classification = "invalid_load_generation"`, `classification = "invalid_node_fixture"`,
+		`classification = "gateway_capacity_not_demonstrated"`,
+		`"resource_acceptance_thresholds_applied": False`,
+		`"heuristic_signals_not_causal_proof"`,
+	} {
+		if !strings.Contains(evaluator, required) {
+			t.Errorf("capacity evaluator is missing %q", required)
+		}
+	}
+	monitor := readContractFile(t, filepath.Join(fixtureRoot, "monitor.py"))
+	for _, required := range []string{
+		"iowait", "steal", "load1", "run_queue", "host_oom_kills", "NRestarts",
+		"unit_state", "cgroup_processes", "tcp_state_counts", "frpc_status", `"timeline": timeline`,
+		`"swap_total_bytes": swap_total_bytes`,
+	} {
+		if !strings.Contains(monitor, required) {
+			t.Errorf("capacity monitor is missing %q", required)
 		}
 	}
 }

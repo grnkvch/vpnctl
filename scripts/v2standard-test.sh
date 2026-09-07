@@ -32,8 +32,8 @@ assert_lab_instance() {
     .status == "Running" and
     .vmType == "qemu" and
     .arch == "x86_64" and
-    .cpus == 1 and
-    .memory == 536870912 and
+    .cpus == 4 and
+    .memory == 2147483648 and
     .disk == 10737418240 and
     .config.images[0].digest == $digest and
     any(.network[]?; .lima == "user-v2")

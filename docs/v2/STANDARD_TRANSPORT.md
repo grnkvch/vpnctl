@@ -74,5 +74,5 @@ It loads firewall bytes from the production renderer and verifies:
   removed.
 
 Run `./scripts/v2standard-test.sh status|verify|cleanup`. The wrapper refuses
-an unowned runtime or a lab VM outside the pinned 1-vCPU/512-MiB/10-GiB
-contract.
+an unowned runtime or a Node fixture outside its pinned 4-vCPU/2-GiB/10-GiB
+functional-lab contract.

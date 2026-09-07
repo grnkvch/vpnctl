@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "vm_type": "qemu",
+  "architecture": "x86_64",
+  "image_digest": "sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7",
+  "network": "user-v2",
+  "capacity_boundary_role": "gateway",
+  "load_generator_role": "node",
+  "roles": {
+    "gateway": {
+      "instance": "vpnctl-v2-gateway",
+      "template": "test/v2lab/lima.yaml",
+      "cpus": 1,
+      "memory_bytes": 536870912,
+      "disk_bytes": 10737418240,
+      "managed_swap_bytes": 1073741824,
+      "normative_capacity_host": true
+    },
+    "node": {
+      "instance": "vpnctl-v2-node",
+      "template": "test/v2lab/lima-node.yaml",
+      "cpus": 4,
+      "memory_bytes": 2147483648,
+      "disk_bytes": 10737418240,
+      "managed_swap_bytes": 1073741824,
+      "normative_capacity_host": false
+    }
+  }
+}

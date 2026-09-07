@@ -9,6 +9,10 @@ The deployed-release execution topology is separately traced by the versioned
 `speed-up-v2-release-gate`. Contract tests require its exact stage set, phase,
 order, command, dependency, cleanup, and capacity-last semantics; the table
 below remains the capability-scenario source of truth.
+The role topology contract makes only Gateway the 1-vCPU/512-MiB capacity
+boundary; model tests separately verify Node fixture health, load-generator
+validity, frozen client disruption, and deterministic failed-measurement
+classification.
 
 | Capability | Requirement | Scenario | Verification | Task coverage |
 | --- | --- | --- | --- | --- |

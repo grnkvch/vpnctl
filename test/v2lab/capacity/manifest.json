@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "status": "development-gate",
   "profile": {
     "logical_telegram_users": 300,
@@ -10,13 +10,27 @@
     "personal_clients": 5,
     "client_probe_interval_seconds": 1
   },
-  "target": {
+  "topology": {
+    "capacity_boundary_role": "gateway",
+    "load_generator_role": "node",
+    "contract": "test/v2lab/fixtures.json"
+  },
+  "gateway_target": {
     "os": "Ubuntu 24.04",
     "architecture": "amd64",
     "vcpu": 1,
     "memory_bytes": 536870912,
     "disk_bytes": 10737418240,
     "managed_swap_bytes": 1073741824
+  },
+  "node_fixture": {
+    "os": "Ubuntu 24.04",
+    "architecture": "amd64",
+    "vcpu": 4,
+    "memory_bytes": 2147483648,
+    "disk_bytes": 10737418240,
+    "managed_swap_bytes": 1073741824,
+    "normative_capacity_target": false
   },
   "bounds": {
     "controller_idle_rss_bytes": 20971520,
@@ -26,11 +40,15 @@
     "minimum_free_disk_bytes": 536870912,
     "maximum_disk_growth_bytes": 67108864,
     "webhook_successful_requests_minimum": 2890,
-    "webhook_failures_outside_reconnect_window": 0,
+    "webhook_failures_outside_client_disruption": 0,
     "webhook_steady_state_success_p95_ms": 1000,
     "webhook_steady_state_success_p99_ms": 2000,
     "bot_api_success_p95_ms": 1000,
     "bot_api_success_p99_ms": 2000,
+    "load_generator_dispatch_lag_p99_ms": 1000,
+    "load_generator_tail_seconds": 30,
+    "client_disruption_stable_recovery_probes": 5,
+    "maximum_client_disruption_seconds": 11.5,
     "client_packet_loss_percent": 0,
     "tunnel_reconnect_seconds": 8,
     "per_expose_concurrent_requests": 40,

@@ -12,6 +12,7 @@ import socket
 import ssl
 import statistics
 import sys
+import threading
 import time
 
 
@@ -33,6 +34,59 @@ def numeric_summary(values: list[float]) -> dict[str, float]:
 
 def latency_summary(results: list[dict[str, object]]) -> dict[str, float]:
     return numeric_summary([float(result["elapsed_ms"]) for result in results])
+
+
+def phase_summary(results: list[dict[str, object]]) -> dict[str, object]:
+    successes = [result for result in results if bool(result["ok"])]
+    failures = [result for result in results if not bool(result["ok"])]
+    return {
+        "requests": len(results),
+        "successful_requests": len(successes),
+        "failed_requests": len(failures),
+        "latency_ms": latency_summary(successes),
+        "end_to_end_ms": numeric_summary(
+            [float(result["end_to_end_ms"]) for result in successes]
+        ),
+        "dispatch_lag_ms": numeric_summary(
+            [float(result["dispatch_lag_ms"]) for result in results]
+        ),
+    }
+
+
+class WorkerTracker:
+    def __init__(self, workers: int):
+        self.workers = workers
+        self.active = 0
+        self.maximum_active = 0
+        self.lock = threading.Lock()
+
+    def enter(self) -> int:
+        with self.lock:
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            return self.active
+
+    def leave(self) -> None:
+        with self.lock:
+            self.active -= 1
+
+
+def tracked_operation(
+    operation,
+    args: argparse.Namespace,
+    index: int,
+    started: float,
+    tracker: WorkerTracker,
+) -> dict[str, object]:
+    worker_started = time.monotonic()
+    active_workers = tracker.enter()
+    try:
+        result = operation(args, index, started)
+        result["worker_started_offset_seconds"] = round(worker_started - started, 6)
+        result["active_workers_at_start"] = active_workers
+        return result
+    finally:
+        tracker.leave()
 
 
 def latency_by_fault_window(
@@ -78,14 +132,166 @@ def latency_by_start_bucket(
     return buckets
 
 
-def annotate_dispatch_lag(
+def annotate_request_lifecycle(
     results: list[dict[str, object]], rate: int
 ) -> list[dict[str, object]]:
     for index, result in enumerate(results):
         scheduled_offset = index / rate
-        actual_offset = float(result["offset_seconds"])
-        result["dispatch_lag_ms"] = max(0.0, (actual_offset - scheduled_offset) * 1000)
+        started_offset = float(result["offset_seconds"])
+        completed_offset = started_offset + float(result["elapsed_ms"]) / 1000
+        result["request_index"] = index
+        result["scheduled_offset_seconds"] = round(scheduled_offset, 6)
+        result["started_offset_seconds"] = round(started_offset, 6)
+        result["completed_offset_seconds"] = round(completed_offset, 6)
+        result["dispatch_lag_ms"] = round(
+            max(0.0, (started_offset - scheduled_offset) * 1000), 3
+        )
+        worker_started_offset = float(
+            result.get("worker_started_offset_seconds", started_offset)
+        )
+        result["worker_queue_lag_ms"] = round(
+            max(0.0, (worker_started_offset - scheduled_offset) * 1000), 3
+        )
+        result["end_to_end_ms"] = round(
+            max(0.0, (completed_offset - scheduled_offset) * 1000), 3
+        )
     return results
+
+
+def classify_client_disruption(
+    results: list[dict[str, object]],
+    sanity_start: float,
+    sanity_end: float,
+    stable_recovery_probes: int,
+    recovery_success_max_ms: float,
+    maximum_disruption_seconds: float,
+) -> dict[str, object]:
+    if sanity_start < 0 or sanity_end <= sanity_start:
+        raise ValueError("client disruption sanity bound is invalid")
+    if stable_recovery_probes < 1 or recovery_success_max_ms <= 0:
+        raise ValueError("client disruption recovery contract is invalid")
+    if maximum_disruption_seconds <= 0:
+        raise ValueError("client disruption duration bound is invalid")
+
+    failures = [result for result in results if not bool(result["ok"])]
+    if not failures:
+        return {
+            "status": "fault_not_observed",
+            "sanity_window_start_seconds": sanity_start,
+            "sanity_window_end_seconds": sanity_end,
+            "start_offset_seconds": None,
+            "end_offset_seconds": None,
+            "duration_seconds": None,
+            "maximum_duration_seconds": maximum_disruption_seconds,
+            "stable_recovery_probes_required": stable_recovery_probes,
+            "stable_recovery_observed": False,
+            "failures_inside": 0,
+            "failures_outside": 0,
+            "affected_requests": 0,
+            "latency_by_client_phase": None,
+        }
+
+    first_failure = min(
+        failures, key=lambda result: float(result["started_offset_seconds"])
+    )
+    disruption_start = float(first_failure["started_offset_seconds"])
+    start_inside_sanity = sanity_start <= disruption_start <= sanity_end
+    first_failure_position = results.index(first_failure)
+    first_failure_index = int(first_failure["request_index"])
+    stable: list[dict[str, object]] = []
+    recovery_cohort: list[dict[str, object]] | None = None
+    for result in results[first_failure_position + 1 :]:
+        timely_success = (
+            bool(result["ok"])
+            and int(result["status"]) == 200
+            and float(result["end_to_end_ms"]) <= recovery_success_max_ms
+        )
+        if timely_success:
+            stable.append(result)
+            if len(stable) == stable_recovery_probes:
+                recovery_cohort = list(stable)
+                break
+        else:
+            stable.clear()
+
+    if recovery_cohort is None:
+        return {
+            "status": "stable_recovery_not_observed",
+            "sanity_window_start_seconds": sanity_start,
+            "sanity_window_end_seconds": sanity_end,
+            "first_impact_within_sanity_window": start_inside_sanity,
+            "start_offset_seconds": round(disruption_start, 6),
+            "end_offset_seconds": None,
+            "duration_seconds": None,
+            "maximum_duration_seconds": maximum_disruption_seconds,
+            "stable_recovery_probes_required": stable_recovery_probes,
+            "stable_recovery_observed": False,
+            "failures_inside": len(failures),
+            "failures_outside": 0,
+            "affected_requests": len(results) - first_failure_index,
+            "latency_by_client_phase": None,
+        }
+
+    disruption_end = max(
+        float(result["completed_offset_seconds"]) for result in recovery_cohort
+    )
+    disruption_duration = max(0.0, disruption_end - disruption_start)
+    affected = [
+        result
+        for result in results
+        if float(result["scheduled_offset_seconds"]) < disruption_end
+        and float(result["completed_offset_seconds"]) >= disruption_start
+    ]
+    affected_indexes = {int(result["request_index"]) for result in affected}
+    outside_failures = [
+        result
+        for result in failures
+        if int(result["request_index"]) not in affected_indexes
+    ]
+    pre = [
+        result
+        for result in results
+        if float(result["completed_offset_seconds"]) < disruption_start
+    ]
+    post = [
+        result
+        for result in results
+        if float(result["scheduled_offset_seconds"]) >= disruption_end
+    ]
+    status = "passed"
+    if (
+        not start_inside_sanity
+        or disruption_duration > maximum_disruption_seconds
+        or outside_failures
+    ):
+        status = "failed"
+    return {
+        "status": status,
+        "sanity_window_start_seconds": sanity_start,
+        "sanity_window_end_seconds": sanity_end,
+        "first_impact_within_sanity_window": start_inside_sanity,
+        "start_offset_seconds": round(disruption_start, 6),
+        "end_offset_seconds": round(disruption_end, 6),
+        "duration_seconds": round(disruption_duration, 6),
+        "maximum_duration_seconds": maximum_disruption_seconds,
+        "stable_recovery_probes_required": stable_recovery_probes,
+        "stable_recovery_observed": True,
+        "stable_recovery_request_indexes": [
+            int(result["request_index"]) for result in recovery_cohort
+        ],
+        "recovery_success_max_ms": recovery_success_max_ms,
+        "affected_requests": len(affected),
+        "failures_inside": len(failures) - len(outside_failures),
+        "failures_outside": len(outside_failures),
+        "failure_indexes_outside": [
+            int(result["request_index"]) for result in outside_failures
+        ],
+        "latency_by_client_phase": {
+            "pre_disruption": phase_summary(pre),
+            "disruption": phase_summary(affected),
+            "post_recovery": phase_summary(post),
+        },
+    }
 
 
 def telegram_body(index: int, size: int) -> bytes:
@@ -254,14 +460,19 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
     requests = args.duration * args.rate
     started = time.monotonic()
     futures = []
+    tracker = WorkerTracker(args.workers)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         for index in range(requests):
             due = started + index / args.rate
             remaining = due - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
-            futures.append(executor.submit(operation, args, index, started))
-        results = annotate_dispatch_lag(
+            futures.append(
+                executor.submit(
+                    tracked_operation, operation, args, index, started, tracker
+                )
+            )
+        results = annotate_request_lifecycle(
             [future.result(timeout=args.timeout + args.duration) for future in futures],
             args.rate,
         )
@@ -280,13 +491,19 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
         result for result in failures
         if not args.failure_window_start <= float(result["offset_seconds"]) <= args.failure_window_end
     ]
-    tail = [result for result in results if float(result["offset_seconds"]) >= args.duration - 30]
-    return {
-        "schema_version": 1,
+    tail = [
+        result
+        for result in results
+        if float(result["scheduled_offset_seconds"]) >= args.duration - 30
+    ]
+    summary = {
+        "schema_version": 2,
         "status": "completed",
         "duration_seconds": args.duration,
         "rate_per_second": args.rate,
         "scheduled_requests": requests,
+        "submitted_requests": len(futures),
+        "completed_requests": len(results),
         "successful_requests": len(successes),
         "failed_requests": len(failures),
         "failures_outside_accepted_window": len(outside),
@@ -304,9 +521,35 @@ def run_scheduled(args: argparse.Namespace, operation) -> dict[str, object]:
         "dispatch_lag_ms": numeric_summary(
             [float(result["dispatch_lag_ms"]) for result in results]
         ),
+        "tail_30_seconds": phase_summary(tail),
+        "worker_pool": {
+            "configured_workers": args.workers,
+            "maximum_active_workers": tracker.maximum_active,
+            "saturation_observed": tracker.maximum_active >= args.workers,
+            "worker_queue_lag_ms": numeric_summary(
+                [float(result["worker_queue_lag_ms"]) for result in results]
+            ),
+            "timeout_like_failures": sum(
+                1
+                for result in failures
+                if int(result["status"]) == 0
+                and float(result["elapsed_ms"]) >= args.timeout * 900
+            ),
+        },
         "wall_seconds": round(wall, 3),
         "achieved_requests_per_second": round(requests / wall, 3),
+        "request_results": results,
     }
+    if args.classify_disruption:
+        summary["client_disruption"] = classify_client_disruption(
+            results,
+            args.failure_window_start,
+            args.failure_window_end,
+            args.stable_recovery_probes,
+            args.recovery_success_max_ms,
+            args.maximum_disruption_seconds,
+        )
+    return summary
 
 
 def run_recovery_probe(
@@ -380,7 +623,10 @@ def main() -> None:
     webhook.add_argument("--public-ip", required=True)
     webhook.add_argument("--certificate", required=True)
     webhook.add_argument("--body-bytes", type=int, required=True)
-    webhook.set_defaults(operation=webhook_request)
+    webhook.add_argument("--stable-recovery-probes", type=int, required=True)
+    webhook.add_argument("--recovery-success-max-ms", type=float, required=True)
+    webhook.add_argument("--maximum-disruption-seconds", type=float, required=True)
+    webhook.set_defaults(operation=webhook_request, classify_disruption=True)
     probe = commands.add_parser("probe")
     probe.add_argument("--public-ip", required=True)
     probe.add_argument("--certificate", required=True)
@@ -420,7 +666,7 @@ def main() -> None:
     api.add_argument("--proxy-port", type=int, default=17890)
     api.add_argument("--target", required=True)
     api.add_argument("--expected-sha256", required=True)
-    api.set_defaults(operation=proxy_api_request)
+    api.set_defaults(operation=proxy_api_request, classify_disruption=False)
     args = parser.parse_args()
     if args.command == "probe":
         print(json.dumps(webhook_request(args, 0, time.monotonic()), separators=(",", ":"), sort_keys=True))
@@ -440,8 +686,16 @@ def main() -> None:
             raise ValueError("armed recovery bounds are invalid")
         print(json.dumps(run_armed_recovery(args), separators=(",", ":"), sort_keys=True))
         return
-    if args.duration < 1 or args.rate < 1 or args.workers < 1:
-        raise ValueError("duration, rate, and workers must be positive")
+    if args.duration < 1 or args.rate < 1 or args.workers < 1 or args.timeout <= 0:
+        raise ValueError("duration, rate, workers, and timeout must be positive")
+    if args.failure_window_start < 0 or args.failure_window_end <= args.failure_window_start:
+        raise ValueError("failure window bounds are invalid")
+    if args.classify_disruption and (
+        args.stable_recovery_probes < 1
+        or args.recovery_success_max_ms <= 0
+        or args.maximum_disruption_seconds <= 0
+    ):
+        raise ValueError("client disruption bounds are invalid")
     print(json.dumps(run_scheduled(args, args.operation), separators=(",", ":"), sort_keys=True))
 
 

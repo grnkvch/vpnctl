@@ -38,12 +38,12 @@ instance_json() {
 
 assert_lab_instance() {
   local instance=$1
-  if ! instance_json "$instance" | jq -e '
+  if ! instance_json "$instance" | jq -e --arg instance "$instance" '
     .status == "Running" and
     .vmType == "qemu" and
     .arch == "x86_64" and
-    .cpus == 1 and
-    .memory == 536870912 and
+    .cpus == (if $instance == "vpnctl-v2-node" then 4 else 1 end) and
+    .memory == (if $instance == "vpnctl-v2-node" then 2147483648 else 536870912 end) and
     .disk == 10737418240 and
     any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then

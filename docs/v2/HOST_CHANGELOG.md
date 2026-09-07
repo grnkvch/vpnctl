@@ -2,6 +2,17 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-07 — Gateway-only capacity boundary and load-fixture model
+
+### Source-only implementation; Node metadata update remains manual
+
+- The normative capacity object is now only `vpnctl-v2-gateway`, whose pinned 1-vCPU/512-MiB/10-GiB/1-GiB-swap profile and CPU, memory, swap, disk, reconnect, latency, success-count, and connection thresholds remain unchanged. The shared `vpnctl-v2-node` functional/load-generator contract is versioned at 4 vCPU/2 GiB/10 GiB/1 GiB swap, with service health, crash, OOM, workload, and cleanup checks but no copied Gateway resource thresholds.
+- Repository-only changes add the role topology fingerprint, immutable release-attempt/session binding, request lifecycle and frozen disruption classification, independent load-generator validity, split capacity evidence, continuous fault-window scheduler/unit/process/TCP/FRPC diagnostics, documentation, and model/regression tests. Earlier capacity and deployed-release evidence was neither edited nor removed.
+- No Lima VM, deployed host, service, route, firewall, listener, package, credential, or external provider was started, stopped, edited, or contacted while implementing and running the fast tests. Only repository files and ordinary `/private/tmp/vpnctl-go-cache` build-cache entries changed; `limactl edit --help` was read-only. The full Lima/capacity gate is intentionally deferred.
+- Validation completed without starting a VM: 33 Python capacity model tests, Bash syntax, JSON parsing, Python compilation, both Lima template validations, targeted capacity/release orchestration tests, the full `internal/regression` package (224.284 s), clean diff checks, and strict validation of `speed-up-v2-release-gate`. Go race was not repeated because this change adds Python/shell evidence orchestration and Go contract tests but changes no concurrent Go product code.
+- Before the next VM gate, the operator must stop and explicitly edit only the exact owner-controlled `vpnctl-v2-node` metadata to 4 CPUs and 2 GiB RAM, or recreate only that stopped VM from `test/v2lab/lima-node.yaml`. The capacity harness refuses drift and never resizes a fixture. The foreign `realty-front-docker-vm` and every other VM remain out of scope.
+- Rollback is the eventual single source commit. If the one-time Node metadata edit has subsequently been applied, metadata rollback is `limactl edit vpnctl-v2-node --tty=false --cpus 1 --memory 0.5` while that exact VM is stopped, followed by checkout of the earlier source contract; destroying and recreating only the stopped Node from the earlier template is the fallback.
+
 ## 2026-09-07 — capacity fault/load start handshake
 
 ### Retained race evidence and reversible correction

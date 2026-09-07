@@ -9,6 +9,14 @@
       "sha256": "0471a9cadd371122dd8697960360be8e8e2cf7ae4f962d103ed7578cd0f01d46"
     },
     {
+      "path": "test/v2lab/lima-node.yaml",
+      "sha256": "d66cf1e5fcbe821258186f4990ebf677685f3122d15241847eada5128d1db343"
+    },
+    {
+      "path": "test/v2lab/fixtures.json",
+      "sha256": "f9f52c45017b3ce2b64265ee0b79081ccbdbdf2a74df4e4d8394ca9daf77094f"
+    },
+    {
       "path": "test/v2lab/restricted/manifest.json",
       "sha256": "01299bfe43f3b8d06144139ea030c37adfa4b5d7c9b5b6d66066ce9476dc3dd2"
     },
@@ -38,7 +46,7 @@
     },
     {
       "path": "test/v2lab/capacity/manifest.json",
-      "sha256": "7fc28dd94d914c58e95d228305acf91ef2859dbe4337be25a29f142b30efb184"
+      "sha256": "573b9dd94d8d7ce7d26287134703593ac271014ea7a3e6c7bab74bd71b602fcb"
     },
     {
       "path": "docs/v2/CLI_CONTRACT.md",
@@ -364,16 +372,34 @@
       "logging_opt_in_max_seconds": 3600
     },
     "minimum_gateway_capacity": {
+      "capacity_boundary_role": "gateway",
+      "gateway_vcpu": 1,
+      "gateway_memory_bytes": 536870912,
+      "gateway_disk_bytes": 10737418240,
+      "gateway_managed_swap_bytes": 1073741824,
+      "node_fixture_vcpu": 4,
+      "node_fixture_memory_bytes": 2147483648,
+      "node_resource_thresholds_normative": false,
       "logical_telegram_users": 300,
       "duration_seconds": 300,
       "webhook_requests_per_second": 10,
       "bot_api_requests_per_second": 5,
       "personal_clients": 5,
       "controller_idle_rss_bytes": 20971520,
+      "minimum_mem_available_bytes": 67108864,
+      "maximum_swap_used_bytes": 536870912,
+      "maximum_average_cpu_percent": 85,
+      "minimum_free_disk_bytes": 536870912,
+      "maximum_disk_growth_bytes": 67108864,
+      "webhook_successful_requests_minimum": 2890,
       "webhook_steady_state_success_p95_ms": 1000,
       "webhook_steady_state_success_p99_ms": 2000,
       "bot_api_success_p95_ms": 1000,
       "bot_api_success_p99_ms": 2000,
+      "load_generator_dispatch_lag_p99_ms": 1000,
+      "load_generator_tail_seconds": 30,
+      "client_disruption_stable_recovery_probes": 5,
+      "maximum_client_disruption_seconds": 11.5,
       "tunnel_reconnect_seconds": 8,
       "per_expose_concurrent_requests": 40,
       "gateway_concurrent_requests": 64,

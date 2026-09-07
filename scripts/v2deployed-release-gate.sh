@@ -13,6 +13,8 @@ telegram_helper="$repository_root/test/v2lab/ingress/telegram_webhook_gate.py"
 gateway_instance=vpnctl-v2-gateway
 node_instance=vpnctl-v2-node
 lab_image_digest=sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7
+fixture_contract=$repository_root/test/v2lab/fixtures.json
+fixture_contract_sha256=
 owner_value=vpnctl-v2-deployed-release-gate-v1
 attempts_directory_name=automated-attempts
 fixture_sessions_directory_name=automated-fixture-sessions
@@ -239,10 +241,29 @@ elapsed_ms() {
 }
 
 validate_stage_registry() {
+  jq -e --arg digest "$lab_image_digest" '
+    (keys == ["architecture","capacity_boundary_role","contract_version","image_digest","load_generator_role","network","roles","schema_version","vm_type"]) and
+    .schema_version == 1 and .contract_version == 1 and .vm_type == "qemu" and
+    .architecture == "x86_64" and .image_digest == $digest and .network == "user-v2" and
+    .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
+    .roles.gateway == {
+      instance:"vpnctl-v2-gateway",template:"test/v2lab/lima.yaml",cpus:1,
+      memory_bytes:536870912,disk_bytes:10737418240,managed_swap_bytes:1073741824,
+      normative_capacity_host:true
+    } and
+    .roles.node == {
+      instance:"vpnctl-v2-node",template:"test/v2lab/lima-node.yaml",cpus:4,
+      memory_bytes:2147483648,disk_bytes:10737418240,managed_swap_bytes:1073741824,
+      normative_capacity_host:false
+    }
+  ' "$fixture_contract" >/dev/null || {
+    echo "deployed release fixture topology contract is invalid" >&2
+    return 3
+  }
   jq -e '
     . as $registry |
     (keys == ["contract_version", "schema_version", "stages"]) and
-    .schema_version == 1 and .contract_version == 3 and (.stages | length == 19) and
+    .schema_version == 1 and .contract_version == 4 and (.stages | length == 19) and
     ([.stages[].name] | length == (unique | length)) and
     ([.stages[].order] | length == (unique | length)) and
     ([.stages[].order] == ([.stages[].order] | sort)) and
@@ -270,6 +291,18 @@ validate_stage_registry() {
     return 3
   }
   "$clean_state_witness" validate-manifest
+  fixture_contract_sha256=$(
+    {
+      printf '%s\0' vpnctl-v2-fixture-topology-v1
+      for file in "$fixture_contract" "$repository_root/test/v2lab/lima.yaml" \
+        "$repository_root/test/v2lab/lima-node.yaml" "$repository_root/test/v2lab/provision.sh" \
+        "$repository_root/test/v2lab/capacity/manifest.json" "$repository_root/test/v2lab/capacity/load.py" \
+        "$repository_root/test/v2lab/capacity/client_load.py" "$repository_root/test/v2lab/capacity/monitor.py" \
+        "$repository_root/test/v2lab/capacity/fault.sh" "$repository_root/test/v2lab/capacity/evaluate.py"; do
+        printf '%s\0%s\0' "${file#"$repository_root/"}" "$(sha256_file "$file")"
+      done
+    } | shasum -a 256 | awk '{print $1}'
+  )
   stage_registry_sha256=$(sha256_file "$stage_registry")
   all_automated_stages=$(jq -r '.stages[].name' "$stage_registry")
   fast_automated_stages=$(jq -r '.stages[] | select(.phase == "fast") | .name' "$stage_registry")
@@ -282,9 +315,11 @@ instance_json() {
 
 assert_lab_instance() {
   local instance=$1 expected_status=$2
-  if ! instance_json "$instance" | jq -e --arg digest "$lab_image_digest" --arg status "$expected_status" '
+  if ! instance_json "$instance" | jq -e --arg digest "$lab_image_digest" --arg status "$expected_status" --arg instance "$instance" '
     .status == $status and .vmType == "qemu" and .arch == "x86_64" and
-    .cpus == 1 and .memory == 536870912 and .disk == 10737418240 and
+    .cpus == (if $instance == "vpnctl-v2-node" then 4 else 1 end) and
+    .memory == (if $instance == "vpnctl-v2-node" then 2147483648 else 536870912 end) and
+    .disk == 10737418240 and
     .config.images[0].digest == $digest and any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
     echo "release gate fixture does not match contract: $instance/$expected_status" >&2
@@ -347,13 +382,16 @@ stage_dependencies_json() {
 }
 
 stage_contract_sha256() {
-  local stage=$1 command lima_digest=none dependencies
+  local stage=$1 command lima_digest=none topology_digest=none dependencies
   command=$(stage_command_contract "$stage")
   dependencies=$(stage_dependencies_json "$stage") || return 3
-  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  if stage_uses_lima "$stage"; then
+    lima_digest=$lab_image_digest
+    topology_digest=$fixture_contract_sha256
+  fi
   printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
-    "vpnctl-v2-deployed-stage-contract-v2" "$stage_registry_sha256" "$stage" "$current_source_commit" \
-    "$current_release_version" "$current_source_tree_sha256" "$command|$lima_digest" "$dependencies" |
+    "vpnctl-v2-deployed-stage-contract-v3" "$stage_registry_sha256" "$stage" "$current_source_commit" \
+    "$current_release_version" "$current_source_tree_sha256" "$command|$lima_digest|$topology_digest" "$dependencies" |
     shasum -a 256 | awk '{print $1}'
 }
 
@@ -540,17 +578,21 @@ find_reusable_fixture_session() {
     input_sha=$(sha256_file "$directory/input.json")
     log_sha=$(sha256_file "$directory/session.log")
     jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
-      --arg source_tree "$current_source_tree_sha256" --arg registry "$stage_registry_sha256" --arg lima "$lab_image_digest" '
+      --arg source_tree "$current_source_tree_sha256" --arg registry "$stage_registry_sha256" --arg lima "$lab_image_digest" \
+      --arg topology "$fixture_contract_sha256" '
       .schema_version == 2 and .phase == "vm" and .source_commit == $source_commit and
       .release_version == $release_version and .source_tree_sha256 == $source_tree and
       .stage_registry_sha256 == $registry and .lima_image_digest == $lima and
+      .fixture_contract_sha256 == $topology and
       (.pending_stages | type == "array") and .transport_supervision_gateway_restart_exception == 1
     ' "$directory/input.json" >/dev/null 2>&1 || continue
     jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
-      --arg registry "$stage_registry_sha256" --arg input_sha "$input_sha" --arg log_sha "$log_sha" '
+      --arg registry "$stage_registry_sha256" --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
+      --arg topology "$fixture_contract_sha256" '
       .schema_version == 2 and .status == "passed" and .exit_code == 0 and
       .source_commit == $source_commit and .release_version == $release_version and
-      .stage_registry_sha256 == $registry and .input_sha256 == $input_sha and .log_sha256 == $log_sha and
+      .stage_registry_sha256 == $registry and .fixture_contract_sha256 == $topology and
+      .input_sha256 == $input_sha and .log_sha256 == $log_sha and
       (.witnesses | type == "array" and length > 0 and all(.[];
         keys == ["file","sha256"] and (.file | test("^witness-[0-9]{4}[.]json$")) and (.sha256 | test("^[0-9a-f]{64}$")))) and
       (.timings | keys == ["cleanup_ms","execution_ms","shutdown_ms","startup_ms","total_ms","witness_ms"] and
@@ -578,11 +620,14 @@ witness_sha_exists() {
 
 find_reusable_attempt() {
   local stage=$1 stage_dir="$evidence_dir/$attempts_directory_name/$1" attempt_dir attempt contract input_sha log_sha child_sha lima_digest=
-  local dependencies artifact_path artifact_sha pre_witness post_witness
+  local dependencies artifact_path artifact_sha pre_witness post_witness topology_digest=
   [ -d "$stage_dir" ] && [ ! -L "$stage_dir" ] || return 1
   contract=$(stage_contract_sha256 "$stage")
   dependencies=$(stage_dependencies_json "$stage") || return 1
-  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  if stage_uses_lima "$stage"; then
+    lima_digest=$lab_image_digest
+    topology_digest=$fixture_contract_sha256
+  fi
   for attempt_dir in "$stage_dir"/attempt-*; do
     [ -d "$attempt_dir" ] && [ ! -L "$attempt_dir" ] && [ "$(path_mode "$attempt_dir")" = 500 ] || continue
     attempt=$(basename -- "$attempt_dir")
@@ -592,21 +637,25 @@ find_reusable_attempt() {
     if jq -e --arg stage "$stage" --arg attempt "$attempt" --arg source_commit "$current_source_commit" \
       --arg release_version "$current_release_version" --arg source_tree "$current_source_tree_sha256" \
       --arg contract "$contract" --arg lima "$lima_digest" --arg registry "$stage_registry_sha256" \
+      --arg topology "$topology_digest" \
       --argjson dependencies "$dependencies" '
         .schema_version == 2 and .stage == $stage and .attempt == $attempt and
         .source_commit == $source_commit and .release_version == $release_version and
         .source_tree_sha256 == $source_tree and .contract_sha256 == $contract and .stage_registry_sha256 == $registry and
         .dependencies == $dependencies and
+        (($lima == "" and .fixture_contract_sha256 == null) or .fixture_contract_sha256 == $topology) and
         (($lima == "" and .pre_clean_witness_sha256 == null) or (.pre_clean_witness_sha256 | test("^[0-9a-f]{64}$"))) and
         (($lima == "" and .lima_image_digest == null) or .lima_image_digest == $lima)
       ' "$attempt_dir/input.json" >/dev/null 2>&1 &&
       jq -e --arg stage "$stage" --arg attempt "$attempt" --arg source_commit "$current_source_commit" \
         --arg release_version "$current_release_version" --arg contract "$contract" --arg input_sha "$input_sha" \
-        --arg log_sha "$log_sha" --arg child_sha "$child_sha" --arg lima "$lima_digest" --argjson dependencies "$dependencies" '
+        --arg log_sha "$log_sha" --arg child_sha "$child_sha" --arg lima "$lima_digest" --arg topology "$topology_digest" \
+        --argjson dependencies "$dependencies" '
           .schema_version == 2 and .stage == $stage and .attempt == $attempt and .status == "passed" and
           .exit_code == 0 and .source_commit == $source_commit and .release_version == $release_version and
           .contract_sha256 == $contract and .input_sha256 == $input_sha and .log_sha256 == $log_sha and
           .child_timing_sha256 == $child_sha and .dependencies == $dependencies and
+          (($lima == "" and .fixture_contract_sha256 == null) or .fixture_contract_sha256 == $topology) and
           (($lima == "" and .post_clean_witness_sha256 == null) or (.post_clean_witness_sha256 | test("^[0-9a-f]{64}$"))) and
           (.timings | type == "object" and all(.[]; type == "number" and floor == . and . >= 0)) and
           (($lima == "" and .lima_image_digest == null) or .lima_image_digest == $lima)
@@ -681,7 +730,7 @@ run_stage_cleanup_adapter() {
 
 run_stage_attempt() {
   local stage=$1 reused command contract started_at finished_at exit_status status input_sha log_sha child_sha
-  local lima_digest= dependencies validation_start validation_end execution_start execution_end validation_ms execution_ms
+  local lima_digest= topology_digest= dependencies validation_start validation_end execution_start execution_end validation_ms execution_ms
   local witness_ms=0 witness_start witness_end artifact_path= artifact_sha= artifact_json=null child_producer=parent-command-wrapper timing_scratch
   current_stage_cleanup_ms=0
   current_stage_cleanup_exit_code=null
@@ -694,18 +743,22 @@ run_stage_attempt() {
   command=$(stage_command_contract "$stage")
   contract=$(stage_contract_sha256 "$stage")
   dependencies=$(stage_dependencies_json "$stage")
-  if stage_uses_lima "$stage"; then lima_digest=$lab_image_digest; fi
+  if stage_uses_lima "$stage"; then
+    lima_digest=$lab_image_digest
+    topology_digest=$fixture_contract_sha256
+  fi
   started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   jq -n --arg stage "$stage" --arg attempt "$current_attempt_name" \
     --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
     --arg source_tree "$current_source_tree_sha256" --arg command "$command" --arg contract "$contract" \
-    --arg lima "$lima_digest" --arg started_at "$started_at" --arg registry "$stage_registry_sha256" \
+    --arg lima "$lima_digest" --arg topology "$topology_digest" --arg started_at "$started_at" --arg registry "$stage_registry_sha256" \
     --arg pre_witness "$current_pre_witness_sha256" --argjson dependencies "$dependencies" '{
       schema_version: 2, stage: $stage, attempt: $attempt,
       source_commit: $source_commit, release_version: $release_version,
       source_tree_sha256: $source_tree, command: $command, contract_sha256: $contract,
       stage_registry_sha256: $registry, dependencies: $dependencies,
       lima_image_digest: (if $lima == "" then null else $lima end),
+      fixture_contract_sha256: (if $topology == "" then null else $topology end),
       pre_clean_witness_sha256: (if $pre_witness == "" then null else $pre_witness end), started_at: $started_at
     }' > "$current_attempt_directory/input.json"
   chmod 0400 "$current_attempt_directory/input.json"
@@ -766,7 +819,7 @@ run_stage_attempt() {
   jq -n --arg stage "$stage" --arg attempt "$current_attempt_name" --arg status "$status" \
     --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
     --arg contract "$contract" --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
-    --arg lima "$lima_digest" --arg started_at "$started_at" --arg finished_at "$finished_at" \
+    --arg lima "$lima_digest" --arg topology "$topology_digest" --arg started_at "$started_at" --arg finished_at "$finished_at" \
     --arg child_sha "$child_sha" --arg post_witness "$current_post_witness_sha256" \
     --argjson dependencies "$dependencies" --argjson artifact "$artifact_json" \
     --argjson validation_ms "$validation_ms" --argjson execution_ms "$execution_ms" \
@@ -776,6 +829,7 @@ run_stage_attempt() {
       schema_version: 2, stage: $stage, attempt: $attempt, status: $status, exit_code: $exit_code,
       source_commit: $source_commit, release_version: $release_version, contract_sha256: $contract,
       lima_image_digest: (if $lima == "" then null else $lima end),
+      fixture_contract_sha256: (if $topology == "" then null else $topology end),
       input_sha256: $input_sha, log_sha256: $log_sha, child_timing_sha256: $child_sha,
       dependencies: $dependencies, artifact: $artifact,
       post_clean_witness_sha256: (if $post_witness == "" then null else $post_witness end),
@@ -841,9 +895,11 @@ allocate_fixture_session() {
   rm -f -- "$pending_records"
   jq -n --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
     --arg source_tree "$current_source_tree_sha256" --arg registry "$stage_registry_sha256" \
-    --arg lima "$lab_image_digest" --arg started_at "$fixture_session_started_at" --argjson pending "$pending_json" '{
+    --arg lima "$lab_image_digest" --arg topology "$fixture_contract_sha256" \
+    --arg started_at "$fixture_session_started_at" --argjson pending "$pending_json" '{
       schema_version:2,phase:"vm",source_commit:$source_commit,release_version:$release_version,
       source_tree_sha256:$source_tree,stage_registry_sha256:$registry,lima_image_digest:$lima,
+      fixture_contract_sha256:$topology,
       pending_stages:$pending,transport_supervision_gateway_restart_exception:1,started_at:$started_at
     }' > "$fixture_session_directory/input.json"
   chmod 0400 "$fixture_session_directory/input.json"
@@ -867,13 +923,15 @@ write_fixture_session_result() {
   witnesses=$(jq -sc '.' "$records")
   rm -f -- "$records"
   jq -n --arg status "$status" --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
-    --arg registry "$stage_registry_sha256" --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
+    --arg registry "$stage_registry_sha256" --arg topology "$fixture_contract_sha256" \
+    --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
     --arg started_at "$fixture_session_started_at" --arg finished_at "$finished_at" --argjson witnesses "$witnesses" \
     --argjson exit_code "$exit_status" --argjson startup "$fixture_session_startup_ms" \
     --argjson execution "$fixture_session_execution_ms" --argjson witness "$fixture_session_witness_ms" \
     --argjson cleanup "$fixture_session_cleanup_ms" --argjson shutdown "$fixture_session_shutdown_ms" --argjson total "$total_ms" '{
       schema_version:2,status:$status,exit_code:$exit_code,source_commit:$source_commit,release_version:$release_version,
-      stage_registry_sha256:$registry,input_sha256:$input_sha,log_sha256:$log_sha,witnesses:$witnesses,
+      stage_registry_sha256:$registry,fixture_contract_sha256:$topology,
+      input_sha256:$input_sha,log_sha256:$log_sha,witnesses:$witnesses,
       timings:{startup_ms:$startup,execution_ms:$execution,witness_ms:$witness,cleanup_ms:$cleanup,shutdown_ms:$shutdown,total_ms:$total},
       started_at:$started_at,finished_at:$finished_at
     }' > "$fixture_session_directory/result.json"
@@ -1048,12 +1106,14 @@ aggregate_automated_evidence() {
   done
   attempts_json=$(jq -sc 'map({key: .stage, value: {attempt: .attempt, result_sha256: .result_sha256}}) | from_entries' "$records")
   jq -n --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
-    --arg source_tree "$current_source_tree_sha256" --argjson stage_attempts "$attempts_json" '{
+    --arg source_tree "$current_source_tree_sha256" --arg topology "$fixture_contract_sha256" \
+    --argjson stage_attempts "$attempts_json" '{
       schema_version: 2,
       status: "passed",
       source_commit: $source_commit,
       release_version: $release_version,
       source_tree_sha256: $source_tree,
+      fixture_contract_sha256: $topology,
       stage_attempts: $stage_attempts,
       checks: {
         requirement_traceability: true,
@@ -1178,11 +1238,11 @@ assert_automated_evidence() {
     return 3
   }
   jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
-    --arg source_tree "$current_source_tree_sha256" '
-    (keys == ["checks", "release_version", "schema_version", "source_commit", "source_tree_sha256", "stage_attempts", "status"]) and
+    --arg source_tree "$current_source_tree_sha256" --arg topology "$fixture_contract_sha256" '
+    (keys == ["checks", "fixture_contract_sha256", "release_version", "schema_version", "source_commit", "source_tree_sha256", "stage_attempts", "status"]) and
     .schema_version == 2 and .status == "passed" and
     .source_commit == $source_commit and .release_version == $release_version and
-    .source_tree_sha256 == $source_tree and
+    .source_tree_sha256 == $source_tree and .fixture_contract_sha256 == $topology and
     (.stage_attempts | keys == ["adversarial", "capacity", "credential-lifecycle", "failure", "fleet-isolation", "go-race", "go-test", "go-vet", "ingress-release", "node-transport", "openspec", "personal-client", "restricted-process", "traceability", "transport-supervision", "tunnel-release", "update-restore", "watchdog-confirm", "watchdog-timeout"]) and
     (.stage_attempts | length == 19 and all(.[];
       keys == ["attempt", "result_sha256"] and

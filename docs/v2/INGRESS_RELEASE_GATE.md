@@ -8,7 +8,8 @@ scripts/v2ingress-release-gate.sh run
 ```
 
 The command requires clean source and the two running, isolated Ubuntu 24.04
-amd64 Lima fixtures at 1 vCPU, 512 MiB RAM, and 10 GiB disk. It refuses an
+amd64 role-specific Lima fixtures: Gateway remains 1 vCPU/512 MiB/10 GiB and
+Node is the shared 4-vCPU/2-GiB functional fixture. It refuses an
 existing ingress fixture, nginx package, test path, evidence path, or occupied
 owned listener instead of adopting it.
 

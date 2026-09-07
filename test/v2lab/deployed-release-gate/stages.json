@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": 3,
+  "contract_version": 4,
   "stages": [
     {"name":"traceability","phase":"fast","order":10,"uses_lima":false,"command":"go test ./internal/regression -run ^TestV2RequirementTraceabilityIsComplete$ -count=1","cleanup_adapter":null,"dependencies":[]},
     {"name":"openspec","phase":"fast","order":20,"uses_lima":false,"command":"openspec validate vpnctl-v2 --strict --no-interactive","cleanup_adapter":null,"dependencies":[]},

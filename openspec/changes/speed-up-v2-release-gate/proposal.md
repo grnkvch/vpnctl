@@ -8,6 +8,9 @@ The clean deployed v2 release gate spends roughly 90% of its wall time in Lima s
 - Record structured monotonic phase timings so future optimization is based on comparable evidence rather than reconstructed timestamps.
 - Run all pending VM stages inside one owner-scoped Lima session per invocation, with a fail-closed clean-state witness between stages and stopped fixtures before and after the invocation.
 - Make tunnel and ingress release checks canonical VM attempts and let the unique failure-path stage depend on their exact immutable result hashes instead of executing both release harnesses a second time.
+- Separate the capacity fault scheduling sanity bound, the bounded client-observed disruption interval, and pre/post-fault steady-state latency so a shifted fault cannot pollute or enlarge the performance sample.
+- Retain the fixed 2,890-success budget, qualify the load generator independently, and preserve complete sanitized request/failure diagnostics even when reconnect fails before final aggregation.
+- Make the 1-vCPU/512-MiB capacity boundary explicitly Gateway-only and give the shared functional Node/load-generator fixture a versioned 4-vCPU/2-GiB profile, with both role profiles and topology bound into reusable evidence.
 - Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal.
 - Keep parallel VM boot, background-service quiescence, lean images, deeper standard/tunnel/routing deduplication, and APT caching outside this change until separate measurements justify them.
 
@@ -23,6 +26,6 @@ None.
 
 ## Impact
 
-- Affects `scripts/v2deployed-release-gate.sh`, the Lima E2E harness boundary, failure/tunnel/ingress orchestration, release-gate evidence schemas, regression fixtures, traceability, and operator documentation.
-- Adds no product command, daemon, network endpoint, dependency, relaxed threshold, or migration of existing evidence.
+- Affects `scripts/v2deployed-release-gate.sh`, the Lima E2E harness boundary, failure/tunnel/ingress orchestration, the capacity load model and reporter, release-gate evidence schemas, regression fixtures, traceability, and operator documentation.
+- Adds no product command, daemon, network endpoint, dependency, relaxed Gateway threshold, or migration of existing evidence. The shared Node fixture changes from 1 vCPU/512 MiB to 4 vCPU/2 GiB because it is test infrastructure rather than the claimed minimum-capacity product host.
 - The next release candidate must use a newly prepared evidence directory because these source and evidence-contract changes invalidate earlier candidates by design.

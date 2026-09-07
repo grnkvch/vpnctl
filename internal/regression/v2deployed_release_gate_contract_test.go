@@ -122,7 +122,7 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 	if err := json.Unmarshal([]byte(readContractFile(t, path)), &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || registry.ContractVersion != 3 || len(registry.Stages) != 19 {
+	if registry.SchemaVersion != 1 || registry.ContractVersion != 4 || len(registry.Stages) != 19 {
 		t.Fatalf("registry header = %+v", registry)
 	}
 	wantFast := []string{"traceability", "openspec", "go-test", "go-race", "go-vet", "credential-lifecycle", "update-restore"}
@@ -155,6 +155,44 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 		if (stage.Name == "tunnel-release" || stage.Name == "ingress-release") && !strings.Contains(stage.Command, "{repository}/artifacts/") {
 			t.Fatalf("provider release path is not repository-absolute: %+v", stage)
 		}
+	}
+}
+
+func TestV2LabTopologySeparatesGatewayCapacityFromNodeFixture(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "..", "test", "v2lab", "fixtures.json")
+	var contract struct {
+		SchemaVersion        int    `json:"schema_version"`
+		ContractVersion      int    `json:"contract_version"`
+		CapacityBoundaryRole string `json:"capacity_boundary_role"`
+		LoadGeneratorRole    string `json:"load_generator_role"`
+		Roles                map[string]struct {
+			Template              string `json:"template"`
+			CPUs                  int    `json:"cpus"`
+			MemoryBytes           int64  `json:"memory_bytes"`
+			DiskBytes             int64  `json:"disk_bytes"`
+			ManagedSwapBytes      int64  `json:"managed_swap_bytes"`
+			NormativeCapacityHost bool   `json:"normative_capacity_host"`
+		} `json:"roles"`
+	}
+	if err := json.Unmarshal([]byte(readContractFile(t, path)), &contract); err != nil {
+		t.Fatal(err)
+	}
+	gateway := contract.Roles["gateway"]
+	node := contract.Roles["node"]
+	if contract.SchemaVersion != 1 || contract.ContractVersion != 1 ||
+		contract.CapacityBoundaryRole != "gateway" || contract.LoadGeneratorRole != "node" {
+		t.Fatalf("topology header = %+v", contract)
+	}
+	if gateway.Template != "test/v2lab/lima.yaml" || gateway.CPUs != 1 ||
+		gateway.MemoryBytes != 536870912 || gateway.DiskBytes != 10737418240 ||
+		gateway.ManagedSwapBytes != 1073741824 || !gateway.NormativeCapacityHost {
+		t.Fatalf("gateway topology = %+v", gateway)
+	}
+	if node.Template != "test/v2lab/lima-node.yaml" || node.CPUs != 4 ||
+		node.MemoryBytes != 2147483648 || node.DiskBytes != 10737418240 ||
+		node.ManagedSwapBytes != 1073741824 || node.NormativeCapacityHost {
+		t.Fatalf("node topology = %+v", node)
 	}
 }
 

@@ -24,7 +24,9 @@ from every child command so nested tests cannot adopt the enclosing attempt's
 output path. `run-vm` executes the Lima-backed checks only after every fast
 result is reusable. `run-automated` is the backward-compatible ordered
 composition of those two phases and may
-start only the two exact owner-controlled minimum-host fixtures. Each child
+start only the two exact owner-controlled role-specific fixtures. Gateway is
+the 1-vCPU/512-MiB minimum-capacity host; Node is the 4-vCPU/2-GiB functional
+and load-generating fixture. Each child
 harness retains its existing owner checks and cleanup; the top-level gate
 requires both fixtures `Stopped` before starting and restores every fixture it
 starts to `Stopped` on success or failure.
@@ -117,16 +119,58 @@ phase and removing those duplicate provider runs. The gate records timings for
 measurement, but deliberately defines neither an estimated percentage nor a
 new duration threshold.
 
-For capacity, the host enters the Gateway fault command before starting the
-measured workload and waits for its fixed root-only ready marker. The guest
-process begins its local delay only after the host supplies a fixed trigger
-while the fixture is idle; load starts immediately afterward. Opening a new
-Lima control connection under load therefore cannot shift the outage toward
-the end of the fixed 135–175-second accepted window. The harness waits for the
-same process at the boundary and includes its PID and schedule files in
-signal/failure cleanup. This scheduling does not change the 300-second profile,
-145-second fault offset, request rates, three-second outage, accepted window,
-reconnect limit, or latency/resource thresholds.
+For capacity, only Gateway is the normative capacity target and it remains
+strictly 1 vCPU/512 MiB/10 GiB with 1 GiB managed swap. Node runs FRPC and its
+watchdog, Mihomo, the webhook backend, five synthetic WireGuard clients, both
+load generators, and the resource monitor on a fixed 4-vCPU/2-GiB profile. Its
+services must remain functional and OOM/crash-free, but Node CPU, memory, swap,
+and disk do not inherit Gateway acceptance thresholds. Neither role is resized
+inside a gate run.
+
+The host enters the Gateway fault command before starting the measured workload
+and waits for its fixed root-only ready marker. The guest process begins its
+local delay only after the host supplies a fixed trigger while the fixture is
+idle; load starts immediately afterward. Opening a new Lima control connection
+under load therefore cannot shift the outage toward the end of the fixed
+135–175-second scheduling-sanity window. The client-observed disruption instead
+starts at the first failed webhook request (`D0`) and ends at the completion of
+the first five consecutive later HTTP-200 requests whose end-to-end time is at
+most 2,000 ms (`D1`). That first recovery cohort freezes `D1`; a later failure
+cannot enlarge the interval. Requests scheduled before `D1` and completing at
+or after `D0` are affected. The disruption must be at most 11.5 seconds, derived
+from the accepted 3.5-second physical-outage tolerance plus the unchanged
+8-second reconnect bound.
+
+Webhook pre-disruption and post-recovery p95/p99 remain 1,000/2,000 ms, the
+global Bot API p95/p99 remain 1,000/2,000 ms with no disruption exception, and
+the fixed minimum remains 2,890 successful webhook requests. Independently,
+the load generator must submit and complete every scheduled request, keep
+global and pre/post webhook dispatch-lag p99 plus global Bot API dispatch-lag
+p99 at or below the predeclared 1,000 ms, drain its queue after recovery, and
+finish the last 30 scheduled seconds with no errors and no individual request
+dispatched more than 1,000 ms late. The 1,000-ms bound equals ten
+webhook scheduling periods: it permits ordinary scheduler jitter but rejects a
+generator that is a full second behind the declared 10-request/s profile. It is
+fixed before the next real run and must not be tuned from that result.
+
+Capacity evidence is split into `gateway_capacity`, `node_fixture_health`,
+`load_generator_validity`, `fault_reconnect`, `client_disruption`, and
+`steady_state_latency`. Invalid/degraded generation remains a failed attempt
+and is never aggregated into `automated.json`, but is classified separately
+from a demonstrated Gateway capacity failure. The two-second monitors start
+before load and record busy CPU, iowait, steal, load average, and run queue on
+both VMs; across the fixed fault-sanity window they also retain bounded
+unit/cgroup-process/TCP-state and authenticated FRPC status without opening
+another Lima control session at the fault boundary. Worker occupancy and queue lag help distinguish
+Node CPU starvation, worker exhaustion from hanging requests, FRP reconnect
+failure, and Gateway saturation without claiming that a heuristic is causal
+proof.
+
+The VM topology digest covers the role contract, both templates, provisioning,
+and capacity load/monitor/evaluation contracts. It is stored in each VM attempt,
+fixture session, and final automated aggregate. Together with the source tree,
+release version, stage contract, and Lima image digest it invalidates stale
+attempts without rewriting any earlier evidence.
 
 The gate writes schema-v2 `automated.json` only after every mandatory stage has
 a matching passing attempt and both fixtures are back in `Stopped`. The final

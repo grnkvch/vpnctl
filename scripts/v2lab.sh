@@ -3,7 +3,9 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-template="$repository_root/test/v2lab/lima.yaml"
+gateway_template="$repository_root/test/v2lab/lima.yaml"
+node_template="$repository_root/test/v2lab/lima-node.yaml"
+fixture_contract="$repository_root/test/v2lab/fixtures.json"
 guest_report="$repository_root/test/v2lab/guest/report.sh"
 guest_fault="$repository_root/test/v2lab/guest/fault.sh"
 gateway_instance=vpnctl-v2-gateway
@@ -48,19 +50,40 @@ instance_json() {
 }
 
 assert_instance_contract() {
-  local instance=$1
-  if ! instance_json "$instance" | jq -e --arg digest "$image_digest" '
+  local instance=$1 role cpus memory disk
+  role=$(role_for_instance "$instance")
+  cpus=$(jq -er --arg role "$role" '.roles[$role].cpus' "$fixture_contract")
+  memory=$(jq -er --arg role "$role" '.roles[$role].memory_bytes' "$fixture_contract")
+  disk=$(jq -er --arg role "$role" '.roles[$role].disk_bytes' "$fixture_contract")
+  if ! instance_json "$instance" | jq -e --arg digest "$image_digest" \
+    --argjson cpus "$cpus" --argjson memory "$memory" --argjson disk "$disk" '
     .vmType == "qemu" and
     .arch == "x86_64" and
-    .cpus == 1 and
-    .memory == 536870912 and
-    .disk == 10737418240 and
+    .cpus == $cpus and
+    .memory == $memory and
+    .disk == $disk and
     .config.images[0].digest == $digest and
     any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
     echo "refusing to operate on non-lab or drifted Lima instance: $instance" >&2
     exit 3
   fi
+}
+
+role_for_instance() {
+  case "$1" in
+    "$gateway_instance") printf '%s\n' gateway ;;
+    "$node_instance") printf '%s\n' node ;;
+    *) echo "unknown lab instance: $1" >&2; exit 2 ;;
+  esac
+}
+
+template_for_instance() {
+  case "$1" in
+    "$gateway_instance") printf '%s\n' "$gateway_template" ;;
+    "$node_instance") printf '%s\n' "$node_template" ;;
+    *) echo "unknown lab instance: $1" >&2; exit 2 ;;
+  esac
 }
 
 operate_existing_instances() {
@@ -91,7 +114,8 @@ operate_existing_instances() {
 }
 
 start_instance() {
-  local instance=$1
+  local instance=$1 template
+  template=$(template_for_instance "$instance")
   if instance_exists "$instance"; then
     assert_instance_contract "$instance"
     limactl start --tty=false "$instance"
@@ -138,7 +162,22 @@ command=${1:-}
 case "$command" in
   up)
     output_dir=${2:-$(default_report_dir)}
-    limactl template validate "$template"
+    jq -e '
+      .schema_version == 1 and .contract_version == 1 and
+      .capacity_boundary_role == "gateway" and .load_generator_role == "node" and
+      .roles.gateway == {
+        instance:"vpnctl-v2-gateway", template:"test/v2lab/lima.yaml", cpus:1,
+        memory_bytes:536870912, disk_bytes:10737418240, managed_swap_bytes:1073741824,
+        normative_capacity_host:true
+      } and
+      .roles.node == {
+        instance:"vpnctl-v2-node", template:"test/v2lab/lima-node.yaml", cpus:4,
+        memory_bytes:2147483648, disk_bytes:10737418240, managed_swap_bytes:1073741824,
+        normative_capacity_host:false
+      }
+    ' "$fixture_contract" >/dev/null
+    limactl template validate "$gateway_template"
+    limactl template validate "$node_template"
     start_instance "$gateway_instance"
     start_instance "$node_instance"
     install_helpers "$gateway_instance"

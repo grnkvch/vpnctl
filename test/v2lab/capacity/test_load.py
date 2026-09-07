@@ -14,6 +14,22 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
+def disruption_result(index, ok=True, started=None, completed=None, end_to_end=100.0):
+    started = float(index) if started is None else started
+    completed = started + 0.1 if completed is None else completed
+    return {
+        "request_index": index,
+        "scheduled_offset_seconds": float(index),
+        "started_offset_seconds": started,
+        "completed_offset_seconds": completed,
+        "end_to_end_ms": end_to_end,
+        "dispatch_lag_ms": max(0.0, (started - index) * 1000),
+        "elapsed_ms": max(0.0, (completed - started) * 1000),
+        "ok": ok,
+        "status": 200 if ok else 503,
+    }
+
+
 class CapacityLoadTest(unittest.TestCase):
     def test_manifest_freezes_the_several_hundred_user_profile(self):
         manifest = json.loads(pathlib.Path(__file__).with_name("manifest.json").read_text())
@@ -26,6 +42,13 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(manifest["bounds"]["webhook_steady_state_success_p99_ms"], 2000)
         self.assertEqual(manifest["bounds"]["bot_api_success_p95_ms"], 1000)
         self.assertEqual(manifest["bounds"]["bot_api_success_p99_ms"], 2000)
+        self.assertEqual(manifest["bounds"]["load_generator_dispatch_lag_p99_ms"], 1000)
+        self.assertEqual(manifest["bounds"]["maximum_client_disruption_seconds"], 11.5)
+        self.assertEqual(manifest["gateway_target"]["vcpu"], 1)
+        self.assertEqual(manifest["gateway_target"]["memory_bytes"], 536870912)
+        self.assertEqual(manifest["node_fixture"]["vcpu"], 4)
+        self.assertEqual(manifest["node_fixture"]["memory_bytes"], 2147483648)
+        self.assertFalse(manifest["node_fixture"]["normative_capacity_target"])
         self.assertLess(manifest["fault"]["accepted_failure_window_start_seconds"], manifest["fault"]["frps_stop_after_seconds"])
         self.assertGreater(manifest["fault"]["accepted_failure_window_end_seconds"], manifest["fault"]["frps_stop_after_seconds"])
 
@@ -68,16 +91,84 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(buckets[0]["latency_ms"]["p99"], 20.0)
         self.assertEqual(buckets[2]["latency_ms"]["max"], 40.0)
 
-    def test_dispatch_lag_uses_scheduled_rate_without_retaining_requests(self):
+    def test_request_lifecycle_uses_the_scheduled_rate(self):
         results = [
-            {"offset_seconds": 0.01},
-            {"offset_seconds": 0.60},
-            {"offset_seconds": 1.25},
+            {"offset_seconds": 0.01, "elapsed_ms": 10.0},
+            {"offset_seconds": 0.60, "elapsed_ms": 20.0},
+            {"offset_seconds": 1.25, "elapsed_ms": 30.0},
         ]
-        annotated = MODULE.annotate_dispatch_lag(results, 2)
+        annotated = MODULE.annotate_request_lifecycle(results, 2)
         self.assertAlmostEqual(annotated[0]["dispatch_lag_ms"], 10.0)
         self.assertAlmostEqual(annotated[1]["dispatch_lag_ms"], 100.0)
         self.assertAlmostEqual(annotated[2]["dispatch_lag_ms"], 250.0)
+        self.assertEqual(annotated[1]["scheduled_offset_seconds"], 0.5)
+        self.assertEqual(annotated[1]["completed_offset_seconds"], 0.62)
+        self.assertEqual(annotated[2]["end_to_end_ms"], 280.0)
+
+    def test_disruption_end_is_frozen_after_five_timely_successes(self):
+        results = []
+        for index in range(12):
+            ok = index not in (2, 9)
+            results.append(
+                {
+                    "request_index": index,
+                    "scheduled_offset_seconds": float(index),
+                    "started_offset_seconds": float(index),
+                    "completed_offset_seconds": float(index) + 0.1,
+                    "end_to_end_ms": 100.0,
+                    "dispatch_lag_ms": 0.0,
+                    "elapsed_ms": 100.0,
+                    "ok": ok,
+                    "status": 200 if ok else 503,
+                }
+            )
+        result = MODULE.classify_client_disruption(results, 1.0, 3.0, 5, 2000, 11.5)
+        self.assertEqual(result["end_offset_seconds"], 7.1)
+        self.assertEqual(result["stable_recovery_request_indexes"], [3, 4, 5, 6, 7])
+        self.assertEqual(result["failures_inside"], 1)
+        self.assertEqual(result["failure_indexes_outside"], [9])
+        self.assertEqual(result["status"], "failed")
+
+    def test_disruption_membership_uses_scheduled_and_completed_overlap(self):
+        results = [
+            {
+                "request_index": index,
+                "scheduled_offset_seconds": float(index),
+                "started_offset_seconds": float(index),
+                "completed_offset_seconds": float(index) + (3.5 if index == 0 else 0.1),
+                "end_to_end_ms": 100.0,
+                "dispatch_lag_ms": 0.0,
+                "elapsed_ms": 100.0,
+                "ok": index != 2,
+                "status": 503 if index == 2 else 200,
+            }
+            for index in range(8)
+        ]
+        result = MODULE.classify_client_disruption(results, 1.0, 3.0, 5, 2000, 11.5)
+        self.assertEqual(result["affected_requests"], 7)
+        self.assertEqual(result["status"], "passed")
+
+    def test_shifted_first_impact_fails_scheduling_sanity(self):
+        results = [disruption_result(index, ok=index != 2) for index in range(8)]
+        result = MODULE.classify_client_disruption(results, 135.0, 175.0, 5, 2000, 11.5)
+        self.assertFalse(result["first_impact_within_sanity_window"])
+        self.assertEqual(result["status"], "failed")
+
+    def test_recovery_may_cross_sanity_end_without_expanding_the_sanity_window(self):
+        results = [
+            disruption_result(index, ok=index != 174)
+            for index in range(181)
+        ]
+        result = MODULE.classify_client_disruption(results, 135.0, 175.0, 5, 2000, 11.5)
+        self.assertEqual(result["start_offset_seconds"], 174.0)
+        self.assertEqual(result["end_offset_seconds"], 179.1)
+        self.assertEqual(result["status"], "passed")
+
+    def test_sustained_degradation_never_fabricates_recovery(self):
+        results = [disruption_result(index, ok=index < 2) for index in range(12)]
+        result = MODULE.classify_client_disruption(results, 1.0, 3.0, 5, 2000, 11.5)
+        self.assertEqual(result["status"], "stable_recovery_not_observed")
+        self.assertIsNone(result["end_offset_seconds"])
 
     def test_recovery_probe_reuses_one_process_and_requires_five_successes_before_deadline(self):
         clock = FakeClock()

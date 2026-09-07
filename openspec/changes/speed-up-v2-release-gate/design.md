@@ -105,6 +105,47 @@ Alternatives considered:
 - Advancing the host call by an observed fixed number of seconds would encode one machine's Lima dispatch latency and could inject outside the window on a faster host.
 - Widening the accepted window or raising p99 would hide the orchestration defect by weakening the release boundary.
 
+### 7. Separate capacity scheduling, disruption, and steady-state evidence
+
+The fixed 135–175-second interval remains only a sanity bound for the first client-visible fault impact. It no longer defines the latency sample. Every scheduled webhook result records its fixed request index, scheduled offset, actual start, completion, response latency, and dispatch lag. These sanitized records are bounded by the unchanged 3,000-request profile and retained in failed as well as passing evidence.
+
+The client-observed disruption begins at `D0`, the actual start of the first failed webhook request. `D0` must be within the fixed sanity bound. Results are then processed once in scheduled-request order. The first five consecutive valid HTTP 200 webhook results whose end-to-end time from scheduled dispatch through completion is no greater than the unchanged 2,000 ms webhook p99 bound form the stable recovery cohort. `D1` is the latest completion time in that first cohort and is frozen; a later failure cannot reopen or extend the interval. A request is fault-affected only when it was scheduled before `D1` and completed at or after `D0`, which includes in-flight and queued work without extending either boundary from an arbitrary slow tail.
+
+The disruption duration `D1 - D0` must not exceed 11.5 seconds: the existing maximum accepted 3.5-second physical outage (the requested three seconds plus the existing 0.5-second upper tolerance) plus the unchanged eight-second reconnect bound. The existing gateway-local FRPS downtime, unavailable-503, stable reconnect, and no-client-service-restart checks remain independent. The fixed global minimum of 2,890 successful webhooks also remains independent, so dynamic classification cannot grant a larger failure budget.
+
+Webhook latency is reported and asserted separately for successes completed before `D0` and successes scheduled at or after `D1`; requests intersecting the disruption are reported but excluded from both steady-state percentiles. Each pre- and post-disruption segment must independently satisfy p95 at most 1,000 ms and p99 at most 2,000 ms. Every failure outside the frozen disruption and every failure in the final scheduled 30 seconds remains fatal.
+
+Dispatch lag is generator-validity evidence, not product response latency. Global and pre/post-disruption webhook p99 plus global Bot API p99 must each remain at most 1,000 ms. This deliberately coarse bound is ten webhook scheduling periods and detects multi-second executor backlog without reclassifying it as service latency or absorbing it into the dynamic disruption. Bot API correctness and latency continue to cover its entire workload because an FRPS reverse-tunnel outage is not an allowed exception for the independent outbound path. Every request scheduled in the final 30 seconds must also remain within the 1,000-ms lag bound, rather than applying another percentile to that tail.
+
+The capacity harness waits for the complete fixed workload even if the fault helper reports reconnect failure and retains bounded unit/listener/status diagnostics from the monitors already running around the fault. It then performs owner-scoped cleanup and fixture-state restoration before deterministically emitting the passing or failed summary, so the summary can attest that cleanup completed. A passing summary is possible only when every independent scheduling, disruption, workload, resource, reconnect, and cleanup assertion passes.
+
+Alternatives considered:
+
+- Replacing 2,890 with a dynamically calculated failure allowance would silently change the accepted product boundary and could reward a longer outage.
+- Defining `D1` as the final failure or final slow result would make the interval self-expanding and hide degradation.
+- Comparing Gateway and Node monotonic timestamps would create false precision across separate VM clock domains; client boundaries therefore use only the Node workload clock while Gateway recovery remains a separate duration assertion.
+- Excluding the disruption from Bot API latency would hide host-wide overload unrelated to the reverse ingress tunnel fault.
+
+### 8. Make Gateway the only normative minimum-capacity host
+
+The product capacity claim is for a dedicated Gateway with one vCPU, 512 MiB RAM, a 10 GiB disk, and one GiB managed swap. The private Node has no matching minimum-resource product promise. During the capacity stage it also hosts FRPC supervision, Mihomo, the webhook backend, five synthetic WireGuard clients, two load generators, and a resource monitor. Retained attempts reached roughly 79% average Node CPU, 100% intervals, and 17–19 seconds webhook dispatch lag without memory pressure, so keeping artificial resource parity can turn the load source into the hidden system under test.
+
+The lab retains the same two exact QEMU/amd64 instances and pinned image. Role-specific checked-in templates keep `vpnctl-v2-gateway` at 1 vCPU/512 MiB/10 GiB and set `vpnctl-v2-node` to 4 vCPU/2 GiB/10 GiB; both retain the provisioned one-GiB swap and isolated `lima:user-v2` network. A third capacity VM is rejected because the earlier Node stages are functional rather than minimum-capacity claims, and a third concurrently running fixture would add host scheduling noise and another lifecycle/cleanup boundary. Every harness continues to enforce the exact role-specific profile.
+
+A checked-in fixture-topology contract names both roles, templates, resources, image digest, network, and capacity responsibility. Its SHA-256 is part of every VM stage and shared-session input/result/final aggregate fingerprint in addition to the source-tree hash. Existing one-vCPU Node instances are deliberate drift and must be explicitly edited or recreated from the versioned Node template while stopped; no capacity invocation mutates VM resources.
+
+Capacity summary evidence is split into `gateway_capacity`, `node_fixture_health`, `load_generator_validity`, `fault_reconnect`, `client_disruption`, and `steady_state_latency`. Only Gateway CPU, memory, swap, disk, service OOM, request/latency, and connection bounds contribute to the Gateway capacity claim. Node must remain functional and OOM/crash-free, but its CPU, memory, swap, disk, load average, and run queue remain diagnostic rather than Gateway acceptance thresholds.
+
+Load generation is valid only when both fixed scheduled counts complete, global and pre/post webhook plus global Bot API dispatch-lag p99 are at most 1,000 ms, no post-recovery queue persists, and the final scheduled 30 seconds have neither errors nor any request dispatched more than 1,000 ms late. A Node with dispatch lag outside that predeclared contract yields `invalid_load_generation`, never a pass and never a proven Gateway capacity defect. The frozen disruption cannot absorb dispatch lag.
+
+Both resource monitors are started before load and retain a fixed two-second timeline containing CPU busy, iowait, steal, load averages, runnable/total process counts, and bounded runtime snapshots across the fixed fault-sanity window. Those snapshots add Gateway/Node unit and cgroup-process state, TCP state counts, and authenticated FRPC status without opening a new Lima control session at the fault boundary. These signals distinguish likely Node CPU starvation, worker-pool exhaustion/timeout accumulation, FRP control recovery failure, and Gateway saturation without automatically promoting a heuristic diagnosis to a product verdict.
+
+Alternatives considered:
+
+- Keeping both VMs at the Gateway minimum conflates load-infrastructure failure with the product claim, as the retained evidence demonstrates.
+- A third capacity-only Node preserves the old shared Node size but consumes more host resources and adds lifecycle complexity without preserving a stated product boundary.
+- Resizing Node dynamically during a run would make evidence non-reproducible and is prohibited; the exact stopped VM must already match its checked-in role contract.
+
 ## Risks / Trade-offs
 
 - **[Incomplete clean-state manifest could permit contamination]** → derive it from all existing owner constants, add adversarial residue fixtures for every resource class, and make unknown owner-marked state fail closed.
@@ -116,6 +157,11 @@ Alternatives considered:
 - **[Timing instrumentation becomes another source of failure]** → validate only presence/shape/bounds for schema 2; never compare diagnostic durations to performance thresholds.
 - **[The prestarted fault command survives an interrupted host runner]** → retain it in the harness's explicit background PID lifecycle; its existing EXIT/signal trap and the outer owner-scoped cleanup restore the restart policy, transient timer, probes, and service before fixture shutdown.
 - **[The fault and load guest commands race at startup]** → require an exact readiness marker and explicit trigger before load; reject pre-existing, symlinked, mistyped, or timed-out schedule files and clean only those fixed owner-scoped paths.
+- **[A dynamic disruption interval hides a slow system]** → freeze the first qualifying recovery cohort, cap the interval at 11.5 seconds, retain the independent 2,890-success minimum, and reject every later failure plus pre/post dispatch backlog.
+- **[The load generator, rather than vpnctl, is saturated]** → record scheduled/start/completion timestamps for every request and fail the sample independently when p99 dispatch lag exceeds the fixed generator-validity bound.
+- **[Reconnect fails before the workload reporter completes]** → continue only the already-started bounded workload, capture immediate diagnostics, emit a failed summary, and then apply the existing owner-scoped cleanup.
+- **[A larger Node weakens a hidden minimum-host claim]** → state explicitly that only Gateway has the minimum-capacity promise; retain all Node functional, crash, OOM, and cleanup checks, and fingerprint the role-specific topology.
+- **[Diagnostic heuristics overclaim root cause]** → report independent resource, worker-pool, transport, and Gateway domains; classify invalid measurements deterministically but leave causal signals descriptive.
 
 ## Migration Plan
 
@@ -124,6 +170,7 @@ Alternatives considered:
 3. Move all VM attempts into the single parent session and add signal/failure/resume tests using fake Lima plus focused real-harness tests run manually.
 4. Reorder canonical tunnel/ingress before failure, add dependency-bound unique mode, and prove standalone full coverage remains unchanged.
 5. Update operator documentation and host journal, validate OpenSpec/full Go/targeted regression locally, then commit without running the complete heavy gate.
-6. The operator prepares a new evidence directory and runs one clean full gate. Its schema-2 timing evidence becomes the first optimized benchmark; retain all earlier failed evidence for comparison.
+6. Replace fixed-window capacity latency classification with the bounded client disruption model, load-generator validity checks, and failed-run diagnostics; validate the model without Lima and retain all earlier evidence unchanged.
+7. The operator prepares a new evidence directory and runs one clean full gate. Its schema-2 timing evidence becomes the first optimized benchmark; retain all earlier failed evidence for comparison.
 
 Rollback is a source revert before preparing another candidate. No evidence directory is downgraded or rewritten.

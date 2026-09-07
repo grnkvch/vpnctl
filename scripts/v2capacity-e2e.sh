@@ -6,6 +6,7 @@ repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 fixture_root=$repository_root/test/v2lab/capacity
 manifest=$fixture_root/manifest.json
+fixture_contract=$repository_root/test/v2lab/fixtures.json
 artifact_root=$repository_root/artifacts/v2lab/capacity-e2e
 cache_root=$repository_root/artifacts/v2lab/cache
 gateway_instance=vpnctl-v2-gateway
@@ -48,6 +49,7 @@ reconnect_pid=
 tunnel_service_pid_before=
 tunnel_service_restarts_before=
 tunnel_frpc_pid_before=
+reconnect_finalized=false
 
 usage() {
   cat <<'EOF'
@@ -55,13 +57,27 @@ Usage:
   scripts/v2capacity-e2e.sh verify
   scripts/v2capacity-e2e.sh status
 
-The verify command runs the fixed five-minute 300-user profile on the two
-minimum-host Lima fixtures. It never contacts Telegram or a public VPS.
+The verify command runs the fixed five-minute 300-user profile against the
+minimum Gateway. The larger Node fixture supplies the private services and
+load generators; it is not a normative product capacity target. The command
+never contacts Telegram or a public VPS.
 EOF
 }
 
 value() {
   jq -er "$1" "$manifest"
+}
+
+fixture_topology_sha256() {
+  {
+    printf '%s\0' vpnctl-v2-fixture-topology-v1
+    for file in "$fixture_contract" "$repository_root/test/v2lab/lima.yaml" \
+      "$repository_root/test/v2lab/lima-node.yaml" "$repository_root/test/v2lab/provision.sh" \
+      "$manifest" "$fixture_root/load.py" "$fixture_root/client_load.py" "$fixture_root/monitor.py" \
+      "$fixture_root/fault.sh" "$fixture_root/evaluate.py"; do
+      printf '%s\0%s\0' "${file#"$repository_root/"}" "$(shasum -a 256 "$file" | awk '{print $1}')"
+    done
+  } | shasum -a 256 | awk '{print $1}'
 }
 
 instance_json() {
@@ -78,10 +94,12 @@ instance_running() {
 
 assert_instance_contract() {
   local instance=$1
-  if ! instance_json "$instance" | jq -e --arg digest "$lab_image_digest" '
+  if ! instance_json "$instance" | jq -e --arg digest "$lab_image_digest" --arg instance "$instance" '
     (.status == "Running" or .status == "Stopped") and
-    .vmType == "qemu" and .arch == "x86_64" and .cpus == 1 and
-    .memory == 536870912 and .disk == 10737418240 and
+    .vmType == "qemu" and .arch == "x86_64" and
+    .cpus == (if $instance == "vpnctl-v2-node" then 4 else 1 end) and
+    .memory == (if $instance == "vpnctl-v2-node" then 2147483648 else 536870912 end) and
+    .disk == 10737418240 and
     .config.images[0].digest == $digest and
     any(.network[]?; .lima == "user-v2")
   ' >/dev/null; then
@@ -132,7 +150,11 @@ wait_for_degraded_boot() {
   for attempt in $(seq 1 "$degraded_boot_attempts"); do
     if guest "$instance" sudo test -s /run/lima-boot-done; then
       [ "$(guest "$instance" dpkg --print-architecture)" = amd64 ]
-      [ "$(guest "$instance" nproc)" -eq 1 ]
+      if [ "$instance" = "$node_instance" ]; then
+        [ "$(guest "$instance" nproc)" -eq 4 ]
+      else
+        [ "$(guest "$instance" nproc)" -eq 1 ]
+      fi
       guest "$instance" grep -q '^VERSION_ID="24.04"$' /etc/os-release
       for command in jq nft ss tc vmstat; do
         guest "$instance" command -v "$command" >/dev/null
@@ -646,27 +668,47 @@ capture_tunnel_client_process_state_before() {
 }
 
 finalize_reconnect_process_state() {
-  local service_pid_after service_restarts_after frpc_pid_after
-  read -r service_pid_after service_restarts_after frpc_pid_after < <(tunnel_client_process_state)
+  local service_pid_after=null service_restarts_after=null frpc_pid_after=null process_state_observed=false
+  if read -r service_pid_after service_restarts_after frpc_pid_after < <(tunnel_client_process_state); then
+    process_state_observed=true
+  fi
   jq \
     --argjson service_pid_before "$tunnel_service_pid_before" \
     --argjson service_restarts_before "$tunnel_service_restarts_before" \
     --argjson frpc_pid_before "$tunnel_frpc_pid_before" \
     --argjson service_pid_after "$service_pid_after" \
     --argjson service_restarts_after "$service_restarts_after" \
-    --argjson frpc_pid_after "$frpc_pid_after" '
+    --argjson frpc_pid_after "$frpc_pid_after" \
+    --argjson process_state_observed "$process_state_observed" '
     . + {
+      client_process_state_observed_after_fault: $process_state_observed,
       client_service_pid_before: $service_pid_before,
       client_service_pid_after: $service_pid_after,
       client_service_restarts_before: $service_restarts_before,
       client_service_restarts_after: $service_restarts_after,
       frpc_child_pid_before: $frpc_pid_before,
       frpc_child_pid_after: $frpc_pid_after,
-      frpc_child_recycled: ($frpc_pid_before != $frpc_pid_after),
+      frpc_child_recycled: ($process_state_observed and $frpc_pid_before != $frpc_pid_after),
       recovered_without_client_service_restart:
-        ($service_pid_before == $service_pid_after and $service_restarts_before == $service_restarts_after)
+        ($process_state_observed and $service_pid_before == $service_pid_after and $service_restarts_before == $service_restarts_after)
     }' "$run_root/reconnect.base.json" > "$run_root/reconnect.json"
   rm -f -- "$run_root/reconnect.base.json"
+  reconnect_finalized=true
+}
+
+capture_node_health() {
+  local restricted=false backend=false client=false frpc_api=false
+  guest "$node_instance" systemctl is-active --quiet "$restricted_node_unit" && restricted=true
+  guest "$node_instance" systemctl is-active --quiet "$tunnel_backend_unit" && backend=true
+  guest "$node_instance" systemctl is-active --quiet "$tunnel_client_unit" && client=true
+  guest "$node_instance" curl -fsS --max-time 2 -u "vpnctl:$capacity_admin_password" \
+    http://127.0.0.1:17400/api/status > "$run_root/node-health-frpc-status.json" 2>&1 && frpc_api=true
+  jq -n --argjson restricted "$restricted" --argjson backend "$backend" \
+    --argjson client "$client" --argjson frpc_api "$frpc_api" '{
+      schema_version:1,
+      status:(if $restricted and $backend and $client and $frpc_api then "passed" else "failed" end),
+      checks:{mihomo_active:$restricted,webhook_backend_active:$backend,watchdog_frpc_unit_active:$client,frpc_api_reachable:$frpc_api}
+    }' > "$run_root/node-health.json"
 }
 
 run_connection_limits() {
@@ -726,6 +768,7 @@ run_connection_limits() {
 
 start_loads() {
   local gateway_ip duration webhook_rate api_rate body fault_start fault_end expected_sha monitor_duration
+  local stable_recovery recovery_success maximum_disruption
   gateway_ip=$(lab_ip "$gateway_instance")
   duration=$(value '.profile.duration_seconds')
   webhook_rate=$(value '.profile.webhook_requests_per_second')
@@ -733,18 +776,24 @@ start_loads() {
   body=$(value '.profile.webhook_body_bytes')
   fault_start=$(value '.fault.accepted_failure_window_start_seconds')
   fault_end=$(value '.fault.accepted_failure_window_end_seconds')
+  stable_recovery=$(value '.bounds.client_disruption_stable_recovery_probes')
+  recovery_success=$(value '.bounds.webhook_steady_state_success_p99_ms')
+  maximum_disruption=$(value '.bounds.maximum_client_disruption_seconds')
   expected_sha=$(shasum -a 256 "$repository_root/test/v2lab/restricted/telegram-api.json" | awk '{print $1}')
   monitor_duration=$((duration + 10))
 
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/monitor \
     --duration "$monitor_duration" --interval 2 \
+    --diagnostic-start "$fault_start" --diagnostic-end "$fault_end" \
     --unit "$controller_unit" --unit "$ingress_unit" --unit "$tunnel_auth_unit" \
     --unit "$tunnel_server_unit" --unit "$restricted_gateway_unit" \
     --unit "$restricted_echo_unit" --unit "$restricted_udp_unit" \
     > "$run_root/gateway-resources.json" &
   background_pids+=("$!")
-  guest "$node_instance" sudo /tmp/monitor.py \
+  guest "$node_instance" sudo env VPNCTL_CAPACITY_FRPC_PASSWORD="$capacity_admin_password" /tmp/monitor.py \
     --duration "$monitor_duration" --interval 2 \
+    --diagnostic-start "$fault_start" --diagnostic-end "$fault_end" \
+    --frpc-url http://127.0.0.1:17400/api/status --frpc-user vpnctl \
     --unit "$restricted_node_unit" --unit "$tunnel_backend_unit" --unit "$tunnel_client_unit" \
     > "$run_root/node-resources.json" &
   background_pids+=("$!")
@@ -754,6 +803,8 @@ start_loads() {
   guest "$node_instance" python3 /usr/local/libexec/vpnctl-v2-capacity/load webhook \
     --duration "$duration" --rate "$webhook_rate" --workers 32 --timeout 8 \
     --failure-window-start "$fault_start" --failure-window-end "$fault_end" \
+    --stable-recovery-probes "$stable_recovery" --recovery-success-max-ms "$recovery_success" \
+    --maximum-disruption-seconds "$maximum_disruption" \
     --public-ip "$gateway_ip" --certificate /tmp/vpnctl-v2-capacity-gateway.crt --body-bytes "$body" \
     > "$run_root/webhook-load.json" &
   background_pids+=("$!")
@@ -820,94 +871,39 @@ wait_loads() {
     wait "$pid" || result=$?
   done
   background_pids=()
-  [ "$result" -eq 0 ] || { echo "one or more sustained workload processes failed" >&2; exit "$result"; }
+  if [ "$result" -ne 0 ]; then
+    echo "one or more sustained workload processes failed" >&2
+    return "$result"
+  fi
 }
 
 write_summary() {
-  local source_commit=$1
-  jq -n \
-    --arg source_commit "$source_commit" \
-    --slurpfile profile "$manifest" \
-    --slurpfile controller "$run_root/controller-idle.json" \
-    --slurpfile webhook "$run_root/webhook-load.json" \
-    --slurpfile api "$run_root/api-load.json" \
-    --slurpfile clients "$run_root/clients.json" \
-    --slurpfile resources "$run_root/gateway-resources.json" \
-    --slurpfile node_resources "$run_root/node-resources.json" \
-    --slurpfile reconnect "$run_root/reconnect.json" \
-    --slurpfile expose_limit "$run_root/per-expose-limit.json" \
-    --slurpfile gateway_limit "$run_root/gateway-limit.json" \
-    --slurpfile gateway_limit_backend "$run_root/gateway-limit-backend.json" '
-    {
-      schema_version: 1,
-      status: "candidate",
-      source_commit: $source_commit,
-      profile: $profile[0].profile,
-      target: $profile[0].target,
-      controller: $controller[0],
-      workload: {webhook: $webhook[0], bot_api: $api[0], clients: $clients[0]},
-      resources: $resources[0],
-      node_resources: $node_resources[0],
-      reconnect: $reconnect[0],
-      connection_limits: {
-        per_expose: {accepted: $expose_limit[0].status_counts["200"], rejected: $expose_limit[0].status_counts["503"]},
-        gateway: {
-          accepted: $gateway_limit[0].status_counts["200"],
-          rejected: $gateway_limit[0].status_counts["503"],
-          observed_maximum_active_upstreams: $gateway_limit_backend[0].max_active_requests
-        }
-      },
-      no_oom: (([ $resources[0].services[].oom_kills, $node_resources[0].services[].oom_kills ] | add) == 0),
-      no_deadlock: ($webhook[0].status == "completed" and $api[0].status == "completed" and $clients[0].status == "passed"),
-      cleanup: {owner_scoped: true, temporary_resources_absent: true, prior_fixture_states_restored: true}
-    }' > "$run_root/summary.json"
+  local source_commit=$1 topology_sha
+  topology_sha=$(fixture_topology_sha256)
+  python3 "$fixture_root/evaluate.py" --manifest "$manifest" --run-root "$run_root" \
+    --source-commit "$source_commit" --fixture-contract-sha256 "$topology_sha" \
+    > "$run_root/summary.json"
 }
 
 assert_summary() {
-  jq -e --slurpfile limits "$manifest" '
-    .status == "candidate" and
-    .profile.logical_telegram_users == 300 and .profile.personal_clients == 5 and
-    .controller.within_target and
-    .workload.webhook.scheduled_requests == (.profile.duration_seconds * .profile.webhook_requests_per_second) and
-    .workload.webhook.successful_requests >= $limits[0].bounds.webhook_successful_requests_minimum and
-    .workload.webhook.failures_outside_accepted_window == $limits[0].bounds.webhook_failures_outside_reconnect_window and
-    .workload.webhook.tail_30_seconds_successful and
-    .workload.webhook.latency_by_fault_window.outside.latency_ms.p95 <= $limits[0].bounds.webhook_steady_state_success_p95_ms and
-    .workload.webhook.latency_by_fault_window.outside.latency_ms.p99 <= $limits[0].bounds.webhook_steady_state_success_p99_ms and
-    .workload.bot_api.scheduled_requests == (.profile.duration_seconds * .profile.bot_api_requests_per_second) and
-    .workload.bot_api.failed_requests == 0 and .workload.bot_api.tail_30_seconds_successful and
-    .workload.bot_api.latency_ms.p95 <= $limits[0].bounds.bot_api_success_p95_ms and
-    .workload.bot_api.latency_ms.p99 <= $limits[0].bounds.bot_api_success_p99_ms and
-    (.workload.clients.clients | length) == 5 and
-    all(.workload.clients.clients[]; .packet_loss_percent == $limits[0].bounds.client_packet_loss_percent) and
-    .resources.cpu_percent.average <= $limits[0].bounds.maximum_average_cpu_percent and
-    .resources.memory.minimum_available_bytes >= $limits[0].bounds.minimum_mem_available_bytes and
-    .resources.memory.maximum_swap_used_bytes <= $limits[0].bounds.maximum_swap_used_bytes and
-    .resources.disk.minimum_free_bytes >= $limits[0].bounds.minimum_free_disk_bytes and
-    .resources.disk.growth_bytes <= $limits[0].bounds.maximum_disk_growth_bytes and
-    .reconnect.status == "passed" and
-    .reconnect.scheduled_start_after_seconds == $limits[0].fault.frps_stop_after_seconds and
-    .reconnect.requested_down_seconds == $limits[0].fault.frps_down_seconds and
-    .reconnect.down_seconds >= ($limits[0].fault.frps_down_seconds - 0.25) and
-    .reconnect.down_seconds <= ($limits[0].fault.frps_down_seconds + 0.5) and
-    .reconnect.recovery_seconds <= $limits[0].bounds.tunnel_reconnect_seconds and
-    .reconnect.stable_recovery_observed and .reconnect.recovered_without_client_service_restart and
-    .connection_limits.per_expose == {accepted: 40, rejected: 5} and
-    .connection_limits.gateway.accepted == 64 and .connection_limits.gateway.rejected == 8 and
-    .connection_limits.gateway.observed_maximum_active_upstreams >= 60 and
-    .no_oom and .no_deadlock
+  jq -e '
+    .schema_version == 2 and .status == "passed" and .measurement_classification == "passed" and
+    .topology.capacity_boundary_role == "gateway" and .topology.load_generator_role == "node" and
+    .gateway_capacity.within_contract and .node_fixture_health.within_contract and
+    .load_generator_validity.within_contract and .fault_reconnect.within_contract and
+    .client_disruption.within_contract and .steady_state_latency.within_contract and
+    .client_health.within_contract and
+    .node_fixture_health.resource_acceptance_thresholds_applied == false and
+    (.fixture_contract_sha256 | test("^[0-9a-f]{64}$")) and
+    (.failure_reasons.load_generator | length) == 0 and
+    (.failure_reasons.node_fixture | length) == 0 and
+    (.failure_reasons.product | length) == 0 and
+    .cleanup == {owner_scoped:true,temporary_resources_absent:true,prior_fixture_states_restored:true}
   ' "$run_root/summary.json" >/dev/null
 }
 
-finalize_summary() {
-  local candidate="$run_root/summary.json"
-  local accepted="$run_root/summary.json.accepted"
-  jq '.status = "passed"' "$candidate" > "$accepted"
-  mv -f -- "$accepted" "$candidate"
-}
-
 verify() {
-  local stamp source_commit duration fault_after elapsed remaining step
+  local stamp source_commit duration fault_after elapsed remaining step reconnect_status=0 load_status=0
   VPNCTL_V2_TIMING_PRODUCER=capacity
   v2_timing_begin
   if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
@@ -920,7 +916,8 @@ verify() {
   (umask 077; mkdir -p "$run_root")
   assert_cached_archive "$repository_root/test/v2lab/tunnel/manifest.json" '.frp'
   assert_cached_archive "$repository_root/test/v2lab/restricted/manifest.json" '.mihomo'
-  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test/v2lab/capacity/test_load.py > "$run_root/source-tests.log" 2>&1
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v -s test/v2lab/capacity -p 'test_*.py' \
+    > "$run_root/source-tests.log" 2>&1
   bash -n "$fixture_root/fault.sh"
   env GOCACHE=/private/tmp/vpnctl-go-cache go test ./test/v2lab/capacity/controller > "$run_root/controller-build-test.log"
   prepare_capacity_binaries
@@ -958,7 +955,7 @@ verify() {
     elapsed=$((elapsed + step))
     printf 'capacity sustained load: %ss/%ss before reconnect injection\n' "$elapsed" "$fault_after"
   done
-  wait_reconnect
+  wait_reconnect || reconnect_status=$?
   duration=$(value '.profile.duration_seconds')
   remaining=$((duration - fault_after))
   elapsed=$fault_after
@@ -970,9 +967,14 @@ verify() {
     elapsed=$((elapsed + step))
     printf 'capacity sustained load: %ss/%ss after FRP recovery\n' "$elapsed" "$duration"
   done
-  wait_loads
-  finalize_reconnect_process_state
-  jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json"
+  wait_loads || load_status=$?
+  if [ "$reconnect_finalized" != true ] && [ -f "$run_root/reconnect.base.json" ]; then
+    finalize_reconnect_process_state
+  fi
+  if [ -f "$run_root/reconnect.json" ]; then
+    jq '.unavailable_probe' "$run_root/reconnect.json" > "$run_root/reconnect-unavailable-probe.json" || true
+  fi
+  capture_node_health
   v2_timing_mark sustained_load_and_reconnect
 
   stop_background
@@ -988,8 +990,15 @@ verify() {
   rm -rf -- "$temporary_root"
   temporary_root=
   write_summary "$source_commit"
-  assert_summary
-  finalize_summary
+  if ! assert_summary; then
+    printf 'capacity measurement failed: %s\n' "$(jq -r '.measurement_classification' "$run_root/summary.json")" >&2
+    printf 'inspect: %s\n' "$run_root/summary.json" >&2
+    exit 1
+  fi
+  if [ "$reconnect_status" -ne 0 ] || [ "$load_status" -ne 0 ]; then
+    echo "capacity subprocess failed despite a passing aggregate" >&2
+    exit 3
+  fi
   v2_timing_finish cleanup_and_validation
   printf 'minimum-gateway capacity E2E evidence: %s\n' "$run_root/summary.json"
 }

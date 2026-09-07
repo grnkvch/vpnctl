@@ -93,21 +93,39 @@ type spikeBaseline struct {
 			RemoteDelivery bool   `json:"remote_delivery"`
 		} `json:"backup"`
 		MinimumGatewayCapacity struct {
-			LogicalTelegramUsers int    `json:"logical_telegram_users"`
-			DurationSeconds      int    `json:"duration_seconds"`
-			WebhookRPS           int    `json:"webhook_requests_per_second"`
-			BotAPIRPS            int    `json:"bot_api_requests_per_second"`
-			PersonalClients      int    `json:"personal_clients"`
-			ControllerRSS        int    `json:"controller_idle_rss_bytes"`
-			WebhookSteadyP95     int    `json:"webhook_steady_state_success_p95_ms"`
-			WebhookSteadyP99     int    `json:"webhook_steady_state_success_p99_ms"`
-			BotAPIGlobalP95      int    `json:"bot_api_success_p95_ms"`
-			BotAPIGlobalP99      int    `json:"bot_api_success_p99_ms"`
-			TunnelReconnect      int    `json:"tunnel_reconnect_seconds"`
-			PerExposeConcurrent  int    `json:"per_expose_concurrent_requests"`
-			GatewayConcurrent    int    `json:"gateway_concurrent_requests"`
-			AcceptedSourceCommit string `json:"accepted_source_commit"`
-			AcceptedEvidence     string `json:"accepted_evidence"`
+			CapacityBoundaryRole    string  `json:"capacity_boundary_role"`
+			GatewayVCPU             int     `json:"gateway_vcpu"`
+			GatewayMemoryBytes      int64   `json:"gateway_memory_bytes"`
+			GatewayDiskBytes        int64   `json:"gateway_disk_bytes"`
+			GatewayManagedSwapBytes int64   `json:"gateway_managed_swap_bytes"`
+			NodeFixtureVCPU         int     `json:"node_fixture_vcpu"`
+			NodeFixtureMemoryBytes  int64   `json:"node_fixture_memory_bytes"`
+			NodeThresholdsNormative bool    `json:"node_resource_thresholds_normative"`
+			LogicalTelegramUsers    int     `json:"logical_telegram_users"`
+			DurationSeconds         int     `json:"duration_seconds"`
+			WebhookRPS              int     `json:"webhook_requests_per_second"`
+			BotAPIRPS               int     `json:"bot_api_requests_per_second"`
+			PersonalClients         int     `json:"personal_clients"`
+			ControllerRSS           int     `json:"controller_idle_rss_bytes"`
+			MinimumMemAvailable     int64   `json:"minimum_mem_available_bytes"`
+			MaximumSwapUsed         int64   `json:"maximum_swap_used_bytes"`
+			MaximumAverageCPU       int     `json:"maximum_average_cpu_percent"`
+			MinimumFreeDisk         int64   `json:"minimum_free_disk_bytes"`
+			MaximumDiskGrowth       int64   `json:"maximum_disk_growth_bytes"`
+			WebhookSuccessMin       int     `json:"webhook_successful_requests_minimum"`
+			WebhookSteadyP95        int     `json:"webhook_steady_state_success_p95_ms"`
+			WebhookSteadyP99        int     `json:"webhook_steady_state_success_p99_ms"`
+			BotAPIGlobalP95         int     `json:"bot_api_success_p95_ms"`
+			BotAPIGlobalP99         int     `json:"bot_api_success_p99_ms"`
+			DispatchLagP99          int     `json:"load_generator_dispatch_lag_p99_ms"`
+			LoadTailSeconds         int     `json:"load_generator_tail_seconds"`
+			DisruptionProbes        int     `json:"client_disruption_stable_recovery_probes"`
+			MaximumDisruption       float64 `json:"maximum_client_disruption_seconds"`
+			TunnelReconnect         int     `json:"tunnel_reconnect_seconds"`
+			PerExposeConcurrent     int     `json:"per_expose_concurrent_requests"`
+			GatewayConcurrent       int     `json:"gateway_concurrent_requests"`
+			AcceptedSourceCommit    string  `json:"accepted_source_commit"`
+			AcceptedEvidence        string  `json:"accepted_evidence"`
 		} `json:"minimum_gateway_capacity"`
 	} `json:"limits"`
 	ResolvedParameters   []string `json:"resolved_design_parameters"`
@@ -140,8 +158,8 @@ func TestV2SpikeBaselinePinsEverySource(t *testing.T) {
 	if baseline.SchemaVersion != 1 || baseline.ManifestID != "vpnctl-v2-development-baseline" || baseline.Status != "development-accepted" {
 		t.Fatalf("unexpected spike baseline identity: version=%d id=%q status=%q", baseline.SchemaVersion, baseline.ManifestID, baseline.Status)
 	}
-	if len(baseline.Sources) != 10 {
-		t.Fatalf("source manifest count = %d, want 10", len(baseline.Sources))
+	if len(baseline.Sources) != 12 {
+		t.Fatalf("source manifest count = %d, want 12", len(baseline.Sources))
 	}
 	repositoryRoot := filepath.Join("..", "..")
 	seen := make(map[string]struct{}, len(baseline.Sources))
@@ -251,11 +269,20 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 		t.Errorf("unexpected backup operational defaults: %#v", limits.Backup)
 	}
 	capacity := limits.MinimumGatewayCapacity
-	if capacity.LogicalTelegramUsers != 300 || capacity.DurationSeconds != 300 ||
+	if capacity.CapacityBoundaryRole != "gateway" || capacity.GatewayVCPU != 1 ||
+		capacity.GatewayMemoryBytes != 536870912 || capacity.GatewayDiskBytes != 10737418240 ||
+		capacity.GatewayManagedSwapBytes != 1073741824 || capacity.NodeFixtureVCPU != 4 ||
+		capacity.NodeFixtureMemoryBytes != 2147483648 || capacity.NodeThresholdsNormative ||
+		capacity.LogicalTelegramUsers != 300 || capacity.DurationSeconds != 300 ||
 		capacity.WebhookRPS != 10 || capacity.BotAPIRPS != 5 || capacity.PersonalClients != 5 ||
-		capacity.ControllerRSS != 20*1024*1024 || capacity.WebhookSteadyP95 != 1000 ||
+		capacity.ControllerRSS != 20*1024*1024 || capacity.MinimumMemAvailable != 64*1024*1024 ||
+		capacity.MaximumSwapUsed != 512*1024*1024 || capacity.MaximumAverageCPU != 85 ||
+		capacity.MinimumFreeDisk != 512*1024*1024 || capacity.MaximumDiskGrowth != 64*1024*1024 ||
+		capacity.WebhookSuccessMin != 2890 || capacity.WebhookSteadyP95 != 1000 ||
 		capacity.WebhookSteadyP99 != 2000 || capacity.BotAPIGlobalP95 != 1000 ||
-		capacity.BotAPIGlobalP99 != 2000 || capacity.TunnelReconnect != 8 ||
+		capacity.BotAPIGlobalP99 != 2000 || capacity.DispatchLagP99 != 1000 ||
+		capacity.LoadTailSeconds != 30 || capacity.DisruptionProbes != 5 || capacity.MaximumDisruption != 11.5 ||
+		capacity.TunnelReconnect != 8 ||
 		capacity.PerExposeConcurrent != 40 || capacity.GatewayConcurrent != 64 ||
 		capacity.AcceptedSourceCommit != "69e46fa00933f714a90207ee20be4a657b4c9b9d" ||
 		capacity.AcceptedEvidence != "artifacts/v2lab/capacity-e2e/run-20260905T134326Z/summary.json" {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestV2MinimumHostLabContract(t *testing.T) {
+func TestV2RoleSpecificLabContract(t *testing.T) {
 	t.Parallel()
 
 	repositoryRoot := filepath.Join("..", "..")
@@ -25,6 +25,16 @@ func TestV2MinimumHostLabContract(t *testing.T) {
 	} {
 		if !strings.Contains(template, required) {
 			t.Errorf("v2 lab template is missing %q", required)
+		}
+	}
+	nodeTemplate := readContractFile(t, filepath.Join(repositoryRoot, "test", "v2lab", "lima-node.yaml"))
+	for _, required := range []string{
+		"vmType: qemu", "arch: x86_64", "cpus: 4", "memory: 2GiB", "disk: 10GiB",
+		"sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7",
+		"lima: user-v2", "url: ./provision.sh",
+	} {
+		if !strings.Contains(nodeTemplate, required) {
+			t.Errorf("v2 node lab template is missing %q", required)
 		}
 	}
 
@@ -51,6 +61,7 @@ func TestV2MinimumHostLabContract(t *testing.T) {
 	for _, guard := range []string{
 		"assert_instance_contract", "refusing to operate on non-lab or drifted Lima instance",
 		"refusing to delete running lab instance", "operate_existing_instances", `limactl "$operation" "$instance"`,
+		"fixtures.json", "lima-node.yaml",
 	} {
 		if !strings.Contains(orchestratorScript, guard) {
 			t.Errorf("v2 lab orchestration is missing conflict guard %q", guard)
