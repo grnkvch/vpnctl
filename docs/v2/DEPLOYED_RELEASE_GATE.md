@@ -164,6 +164,14 @@ or after `D0` are affected. The disruption must be at most 11.5 seconds, derived
 from the accepted 3.5-second physical-outage tolerance plus the unchanged
 8-second reconnect bound.
 
+Before publishing the ready marker, that already-open helper verifies the
+normal FRPS restart policy, applies and verifies its owner-scoped temporary
+`Restart=no` drop-in, and completes the required `daemon-reload`. No measured
+request exists yet. At the 145-second boundary it only arms the bounded probes
+and protected restart job before the hard KILL; it does not create policy files
+or reload systemd under load. Existing success, failure, and signal cleanup
+restores the original policy.
+
 Webhook pre-disruption and post-recovery p95/p99 remain 1,000/2,000 ms, the
 global Bot API p95/p99 remain 1,000/2,000 ms with no disruption exception, and
 the fixed minimum remains 2,890 successful webhook requests. Independently,

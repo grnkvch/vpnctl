@@ -192,11 +192,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
 	temporaryPolicyApplied := strings.Index(faultHelper, "FRPS temporary restart policy was not applied")
+	startTriggerWait := strings.LastIndex(faultHelper, "wait_for_start_trigger\n")
 	delayedStart := strings.Index(faultHelper, "sleep \"$start_after_seconds\"")
 	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
-	if delayedStart < 0 || temporaryPolicyApplied < 0 || armedProbe < 0 ||
-		!(delayedStart < temporaryPolicyApplied && temporaryPolicyApplied < armedProbe && armedProbe < restartTimer) {
-		t.Fatal("capacity HTTPS probe must be armed after slow policy setup and immediately before the restart timer")
+	if temporaryPolicyApplied < 0 || startTriggerWait < 0 || delayedStart < 0 || armedProbe < 0 ||
+		!(temporaryPolicyApplied < startTriggerWait && startTriggerWait < delayedStart && delayedStart < armedProbe && armedProbe < restartTimer) {
+		t.Fatal("capacity restart-policy setup must finish before the workload-ready handshake and fault delay")
 	}
 	recoveryWorker := strings.Index(faultHelper, "load armed-recover")
 	outageWorker := strings.Index(faultHelper, "load armed-probe")

@@ -324,12 +324,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if awk -v value="$start_after_seconds" 'BEGIN {exit !(value > 0)}'; then
-  fault_stage=scheduled
-  wait_for_start_trigger
-  sleep "$start_after_seconds"
-fi
-
 original_restart=$(systemctl show --value -p Restart "$unit")
 if [ "$original_restart" != on-failure ]; then
   echo 'unexpected FRPS restart policy' >&2
@@ -358,6 +352,13 @@ systemctl daemon-reload
   echo 'FRPS temporary restart policy was not applied' >&2
   exit 3
 }
+
+if awk -v value="$start_after_seconds" 'BEGIN {exit !(value > 0)}'; then
+  fault_stage=scheduled
+  wait_for_start_trigger
+  sleep "$start_after_seconds"
+fi
+
 prepare_armed_probe
 fault_stage=armed
 systemd-run --quiet --collect --unit="$restart_job" \
