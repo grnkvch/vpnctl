@@ -166,11 +166,26 @@ from the accepted 3.5-second physical-outage tolerance plus the unchanged
 
 Before publishing the ready marker, that already-open helper verifies the
 normal FRPS restart policy, applies and verifies its owner-scoped temporary
-`Restart=no` drop-in, and completes the required `daemon-reload`. No measured
-request exists yet. At the 145-second boundary it only arms the bounded probes
-and protected restart job before the hard KILL; it does not create policy files
-or reload systemd under load. Existing success, failure, and signal cleanup
-restores the original policy.
+`Restart=no` drop-in, completes the required `daemon-reload`, starts both fault
+workers, and establishes one validated Gateway-local TLS/HTTP connection. No
+measured request exists yet. The connection receives an expected HTTP 404 from
+the ingress root every fixed five seconds, below nginx's 15-second idle
+timeout. Its trigger wait is derived from the fixed 145-second delay, unchanged
+eight-second reconnect bound, and fixed 60-second control headroom. Both values
+come from the capacity manifest and therefore invalidate old attempts when
+changed. Five seconds is one third of the server idle timeout; the 60-second
+headroom is the existing 30-second host readiness/trigger budget plus an equal
+scheduling margin, selected before the next real run.
+
+At the 145-second boundary the helper only arms the protected restart job,
+hard-kills FRPS, and reuses that exact connection for the unavailable webhook
+POST. It starts no new Lima shell, Python/TLS client, policy file, or
+`daemon-reload` under load. A retained connection failure remains fatal but is
+collected after the KILL, so it cannot suppress the scheduled outage. The
+five-second keepalive adds a conservative unscored 0.2 request/s to the local
+ingress root and does not reduce or replace the fixed measured workload.
+Existing success, failure, and signal cleanup restores the original policy and
+removes only its fixed owner-scoped runtime.
 
 Webhook pre-disruption and post-recovery p95/p99 remain 1,000/2,000 ms, the
 global Bot API p95/p99 remain 1,000/2,000 ms with no disruption exception, and

@@ -7,6 +7,9 @@ certificate=
 down_seconds=
 recovery_limit_seconds=
 start_after_seconds=0
+probe_keepalive_seconds=
+probe_trigger_timeout_headroom_seconds=
+armed_probe_trigger_timeout_seconds=
 restart_job=vpnctl-v2-capacity-frps-restart
 restart_job_armed=false
 restore_required=false
@@ -39,7 +42,7 @@ start_trigger_file=/var/lib/vpnctl-v2-capacity/fault-start.trigger
 start_schedule_created=false
 
 usage() {
-  echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N [--start-after-seconds N]'
+  echo 'usage: fault.sh --unit UNIT --public-ip IP --certificate FILE --down-seconds N --recovery-limit-seconds N --probe-keepalive-seconds N --probe-trigger-timeout-headroom-seconds N [--start-after-seconds N]'
 }
 
 monotonic() {
@@ -57,6 +60,8 @@ emit_result() {
     --arg status "$result_status" \
     --arg fault_stage "$fault_stage" \
     --argjson scheduled_start_after_seconds "$start_after_seconds" \
+    --argjson prearmed_probe_keepalive_seconds "$probe_keepalive_seconds" \
+    --argjson prearmed_probe_trigger_timeout_seconds "$armed_probe_trigger_timeout_seconds" \
     --argjson unavailable_probe "$unavailable_probe" \
     --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
     --argjson requested_down_seconds "$down_seconds" \
@@ -73,6 +78,8 @@ emit_result() {
       status: $status,
       fault_stage: $fault_stage,
       scheduled_start_after_seconds: $scheduled_start_after_seconds,
+      prearmed_probe_keepalive_seconds: $prearmed_probe_keepalive_seconds,
+      prearmed_probe_trigger_timeout_seconds: $prearmed_probe_trigger_timeout_seconds,
       unavailable_status: $unavailable_probe.status,
       unavailable_probe: $unavailable_probe,
       stop_seconds: $stop_seconds,
@@ -102,7 +109,7 @@ prepare_armed_probe() {
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 1 \
     --recovery-limit-seconds "$recovery_limit_seconds" --stable-probes 5 --probe-interval 0.1 \
     --trigger-file "$armed_probe_root/recovery-trigger" --ready-file "$armed_probe_root/recovery-ready" \
-    --trigger-timeout 30 > "$armed_probe_root/recovery-result.json" &
+    --trigger-timeout "$armed_probe_trigger_timeout_seconds" > "$armed_probe_root/recovery-result.json" &
   recovery_probe_pid=$!
   for _attempt in $(seq 1 200); do
     if [ -f "$armed_probe_root/recovery-ready" ] && [ ! -L "$armed_probe_root/recovery-ready" ]; then
@@ -124,8 +131,9 @@ prepare_armed_probe() {
   python3 /usr/local/libexec/vpnctl-v2-capacity/load armed-probe \
     --public-ip "$public_ip" --certificate "$certificate" --body-bytes 128 --timeout 2 \
     --connect-timeout 5 \
+    --keepalive-interval "$probe_keepalive_seconds" \
     --trigger-file "$armed_probe_root/trigger" --ready-file "$armed_probe_root/ready" \
-    --trigger-timeout 30 > "$armed_probe_root/result.json" &
+    --trigger-timeout "$armed_probe_trigger_timeout_seconds" > "$armed_probe_root/result.json" &
   armed_probe_pid=$!
   for _attempt in $(seq 1 200); do
     if [ -f "$armed_probe_root/ready" ] && [ ! -L "$armed_probe_root/ready" ]; then
@@ -306,6 +314,8 @@ while [ "$#" -gt 0 ]; do
     --down-seconds) down_seconds=${2:-}; shift 2 ;;
     --recovery-limit-seconds) recovery_limit_seconds=${2:-}; shift 2 ;;
     --start-after-seconds) start_after_seconds=${2:-}; shift 2 ;;
+    --probe-keepalive-seconds) probe_keepalive_seconds=${2:-}; shift 2 ;;
+    --probe-trigger-timeout-headroom-seconds) probe_trigger_timeout_headroom_seconds=${2:-}; shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
@@ -315,6 +325,12 @@ done
 awk -v value="$down_seconds" 'BEGIN {exit !(value > 0)}'
 awk -v value="$recovery_limit_seconds" 'BEGIN {exit !(value > 0)}'
 awk -v value="$start_after_seconds" 'BEGIN {exit !(value >= 0)}'
+awk -v value="$probe_keepalive_seconds" 'BEGIN {exit !(value > 0)}'
+awk -v value="$probe_trigger_timeout_headroom_seconds" 'BEGIN {exit !(value > 0)}'
+armed_probe_trigger_timeout_seconds=$(awk \
+  -v start="$start_after_seconds" -v recovery="$recovery_limit_seconds" \
+  -v headroom="$probe_trigger_timeout_headroom_seconds" \
+  'BEGIN {printf "%.3f", start + recovery + headroom}')
 scheduled_down_seconds=$(awk -v value="$down_seconds" -v advance="$restart_advance_seconds" '
   BEGIN {value -= advance; if (value <= 0) exit 1; printf "%.3f", value}
 ')
@@ -353,13 +369,16 @@ systemctl daemon-reload
   exit 3
 }
 
+fault_stage=probes_preparing
+prepare_armed_probe
+fault_stage=prearmed
+
 if awk -v value="$start_after_seconds" 'BEGIN {exit !(value > 0)}'; then
   fault_stage=scheduled
   wait_for_start_trigger
   sleep "$start_after_seconds"
 fi
 
-prepare_armed_probe
 fault_stage=armed
 systemd-run --quiet --collect --unit="$restart_job" \
   --on-active="${scheduled_down_seconds}s" --timer-property=AccuracySec=10ms \

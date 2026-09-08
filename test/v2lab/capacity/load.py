@@ -365,6 +365,43 @@ def wait_for_trigger(
         sleeper(min(0.01, remaining))
 
 
+def send_keepalive_probe(connection: http.client.HTTPSConnection) -> None:
+    connection.request("GET", "/", headers={"Connection": "keep-alive"})
+    response = connection.getresponse()
+    response.read(1024)
+    if response.status != 404:
+        raise ConnectionError("armed probe keepalive returned an unexpected status")
+    if response.will_close:
+        raise ConnectionError("armed probe keepalive connection was closed")
+
+
+def wait_for_trigger_with_keepalive(
+    trigger_file: pathlib.Path,
+    timeout: float,
+    connection: http.client.HTTPSConnection,
+    keepalive_interval: float,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> int:
+    if keepalive_interval <= 0:
+        raise ValueError("armed probe keepalive interval must be positive")
+    deadline = clock() + timeout
+    next_keepalive = clock() + keepalive_interval
+    keepalive_requests = 0
+    while not trigger_file.exists():
+        now = clock()
+        remaining = deadline - now
+        if remaining <= 0:
+            raise TimeoutError("armed probe trigger was not created")
+        if now >= next_keepalive:
+            send_keepalive_probe(connection)
+            keepalive_requests += 1
+            next_keepalive = clock() + keepalive_interval
+            continue
+        sleeper(min(0.01, remaining, next_keepalive - now))
+    return keepalive_requests
+
+
 def run_armed_probe(args: argparse.Namespace) -> dict[str, object]:
     trigger_file = pathlib.Path(args.trigger_file)
     ready_file = pathlib.Path(args.ready_file)
@@ -380,9 +417,17 @@ def run_armed_probe(args: argparse.Namespace) -> dict[str, object]:
             raise ConnectionError("armed probe TLS socket is unavailable")
         connection.timeout = args.timeout
         connection.sock.settimeout(args.timeout)
+        send_keepalive_probe(connection)
         ready_file.touch(mode=0o600, exist_ok=False)
-        wait_for_trigger(trigger_file, args.trigger_timeout)
-        return webhook_request(args, 0, time.monotonic(), connection)
+        keepalive_requests = 1 + wait_for_trigger_with_keepalive(
+            trigger_file,
+            args.trigger_timeout,
+            connection,
+            args.keepalive_interval,
+        )
+        result = webhook_request(args, 0, time.monotonic(), connection)
+        result["prearmed_keepalive_requests"] = keepalive_requests
+        return result
     except Exception:
         connection.close()
         raise
@@ -641,6 +686,7 @@ def main() -> None:
     armed_probe.add_argument("--ready-file", required=True)
     armed_probe.add_argument("--trigger-timeout", type=float, default=30.0)
     armed_probe.add_argument("--connect-timeout", type=float, default=5.0)
+    armed_probe.add_argument("--keepalive-interval", type=float, default=5.0)
     recover = commands.add_parser("recover")
     recover.add_argument("--public-ip", required=True)
     recover.add_argument("--certificate", required=True)
@@ -672,7 +718,7 @@ def main() -> None:
         print(json.dumps(webhook_request(args, 0, time.monotonic()), separators=(",", ":"), sort_keys=True))
         return
     if args.command == "armed-probe":
-        if args.timeout <= 0 or args.trigger_timeout <= 0:
+        if args.timeout <= 0 or args.trigger_timeout <= 0 or args.keepalive_interval <= 0:
             raise ValueError("armed probe bounds are invalid")
         print(json.dumps(run_armed_probe(args), separators=(",", ":"), sort_keys=True))
         return

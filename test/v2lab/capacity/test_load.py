@@ -53,6 +53,11 @@ class CapacityLoadTest(unittest.TestCase):
         self.assertEqual(generator["warmup_seconds"], 10)
         self.assertEqual(generator["request_timeout_seconds"], 8)
         self.assertEqual(generator["worker_headroom_percent"], 20)
+        self.assertEqual(manifest["fault"]["prearmed_probe_keepalive_seconds"], 5)
+        self.assertEqual(
+            manifest["fault"]["prearmed_probe_trigger_timeout_headroom_seconds"],
+            60,
+        )
         self.assertEqual(
             generator["webhook_workers"],
             profile["webhook_requests_per_second"]
@@ -223,6 +228,31 @@ class CapacityLoadTest(unittest.TestCase):
             MODULE.wait_for_trigger(trigger, 0.025, clock, clock.sleep)
         self.assertAlmostEqual(clock.value, 0.025)
 
+    def test_armed_probe_keeps_preconnected_tls_session_alive_until_trigger(self):
+        clock = FakeClock()
+        trigger = TriggerPath(clock, visible_at=12.0)
+        connection = FakeHTTPSConnection()
+        keepalives = MODULE.wait_for_trigger_with_keepalive(
+            trigger, 20.0, connection, 5.0, clock, clock.sleep
+        )
+        self.assertEqual(keepalives, 2)
+        self.assertGreaterEqual(clock.value, 12.0)
+        self.assertLessEqual(clock.value, 12.01)
+        self.assertEqual(
+            connection.requests,
+            [("GET", "/", {"Connection": "keep-alive"})] * 2,
+        )
+
+    def test_armed_probe_rejects_a_server_closed_keepalive_session(self):
+        connection = FakeHTTPSConnection(keepalive_will_close=True)
+        with self.assertRaisesRegex(ConnectionError, "connection was closed"):
+            MODULE.send_keepalive_probe(connection)
+
+    def test_armed_probe_requires_the_expected_ingress_keepalive_status(self):
+        connection = FakeHTTPSConnection(keepalive_status=200)
+        with self.assertRaisesRegex(ConnectionError, "unexpected status"):
+            MODULE.send_keepalive_probe(connection)
+
     def test_armed_probe_resets_connect_timeout_before_request(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -235,12 +265,15 @@ class CapacityLoadTest(unittest.TestCase):
                 trigger_file=str(root / "trigger"),
                 ready_file=str(root / "ready"),
                 trigger_timeout=30.0,
+                keepalive_interval=5.0,
             )
             connection = FakeHTTPSConnection()
             with (
                 mock.patch.object(MODULE.ssl, "create_default_context", return_value=object()),
                 mock.patch.object(MODULE.http.client, "HTTPSConnection", return_value=connection) as constructor,
-                mock.patch.object(MODULE, "wait_for_trigger"),
+                mock.patch.object(
+                    MODULE, "wait_for_trigger_with_keepalive", return_value=2
+                ),
             ):
                 result = MODULE.run_armed_probe(args)
 
@@ -249,6 +282,9 @@ class CapacityLoadTest(unittest.TestCase):
             self.assertEqual(connection.sock.timeouts, [2.0])
             self.assertEqual(result["status"], 503)
             self.assertFalse(result["ok"])
+            self.assertEqual(result["prearmed_keepalive_requests"], 3)
+            self.assertEqual(connection.requests[0][0:2], ("GET", "/"))
+            self.assertEqual(connection.requests[-1][0:2], ("POST", "/telegram/webhook"))
 
     def test_armed_recovery_reads_restart_timestamp_after_trigger(self):
         clock = FakeClock()
@@ -289,25 +325,32 @@ class FakeSocket:
 
 
 class FakeResponse:
-    status = 503
+    def __init__(self, status, will_close=False):
+        self.status = status
+        self.will_close = will_close
 
     def read(self, _limit):
         return b"{}"
 
 
 class FakeHTTPSConnection:
-    def __init__(self):
+    def __init__(self, keepalive_status=404, keepalive_will_close=False):
         self.timeout = None
         self.sock = None
+        self.requests = []
+        self.keepalive_status = keepalive_status
+        self.keepalive_will_close = keepalive_will_close
 
     def connect(self):
         self.sock = FakeSocket()
 
-    def request(self, *_args, **_kwargs):
-        return None
+    def request(self, method, path, **kwargs):
+        self.requests.append((method, path, kwargs.get("headers", {})))
 
     def getresponse(self):
-        return FakeResponse()
+        if self.requests[-1][0] == "GET":
+            return FakeResponse(self.keepalive_status, self.keepalive_will_close)
+        return FakeResponse(503)
 
     def close(self):
         return None

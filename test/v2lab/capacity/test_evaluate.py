@@ -118,11 +118,18 @@ def valid_case():
         "reconnect": {
             "status": "passed",
             "scheduled_start_after_seconds": 145,
+            "prearmed_probe_keepalive_seconds": 5,
+            "prearmed_probe_trigger_timeout_seconds": 213,
             "requested_down_seconds": 3,
             "down_seconds": 3.0,
             "recovery_seconds": 7.0,
             "stable_recovery_observed": True,
             "recovered_without_client_service_restart": True,
+            "unavailable_probe": {
+                "status": 503,
+                "ok": False,
+                "prearmed_keepalive_requests": 29,
+            },
         },
         "per_expose": {"status_counts": {"200": 40, "503": 5}},
         "gateway_limit": {"status_counts": {"200": 64, "503": 8}},
@@ -164,6 +171,16 @@ class CapacityEvaluationTest(unittest.TestCase):
         self.assertTrue(summary["gateway_capacity"]["within_contract"])
         self.assertTrue(summary["node_fixture_health"]["within_contract"])
         self.assertFalse(summary["node_fixture_health"]["resource_acceptance_thresholds_applied"])
+
+    def test_missing_prearmed_probe_evidence_rejects_reconnect(self):
+        manifest, evidence = valid_case()
+        del evidence["reconnect"]["unavailable_probe"]["prearmed_keepalive_requests"]
+        summary = self.evaluate(manifest, evidence)
+        self.assertFalse(summary["fault_reconnect"]["within_contract"])
+        self.assertIn(
+            "fault_reconnect.prearmed_probe_keepalive_observed",
+            summary["failure_reasons"]["product"],
+        )
 
     def test_dispatch_lag_classifies_measurement_as_invalid_generation(self):
         manifest, evidence = valid_case()

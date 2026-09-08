@@ -892,17 +892,23 @@ start_loads() {
 }
 
 start_reconnect() {
-  local gateway_ip down_seconds recovery_limit reconnect_base fault_after attempt ready=false
+  local gateway_ip down_seconds recovery_limit reconnect_base fault_after probe_keepalive
+  local probe_trigger_timeout_headroom attempt ready=false
   gateway_ip=$(lab_ip "$gateway_instance")
   down_seconds=$(value '.fault.frps_down_seconds')
   recovery_limit=$(value '.bounds.tunnel_reconnect_seconds')
   fault_after=$(value '.fault.frps_stop_after_seconds')
+  probe_keepalive=$(value '.fault.prearmed_probe_keepalive_seconds')
+  probe_trigger_timeout_headroom=$(value '.fault.prearmed_probe_trigger_timeout_headroom_seconds')
   reconnect_base="$run_root/reconnect.base.json"
   guest "$gateway_instance" sudo /usr/local/libexec/vpnctl-v2-capacity/fault \
     --unit "$tunnel_server_unit" --public-ip "$gateway_ip" \
     --certificate /etc/vpnctl-v2-spike/ingress/gateway.crt \
     --down-seconds "$down_seconds" --recovery-limit-seconds "$recovery_limit" \
-    --start-after-seconds "$fault_after" > "$reconnect_base" &
+    --start-after-seconds "$fault_after" \
+    --probe-keepalive-seconds "$probe_keepalive" \
+    --probe-trigger-timeout-headroom-seconds "$probe_trigger_timeout_headroom" \
+    > "$reconnect_base" &
   reconnect_pid=$!
   for attempt in $(seq 1 120); do
     if guest "$gateway_instance" sudo test -f "$capacity_fault_start_ready" &&

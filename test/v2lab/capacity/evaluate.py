@@ -281,6 +281,23 @@ def build_summary(
         == fault["frps_stop_after_seconds"],
         "requested_downtime_unchanged": reconnect.get("requested_down_seconds")
         == fault["frps_down_seconds"],
+        "prearmed_probe_keepalive_contract_applied": reconnect.get(
+            "prearmed_probe_keepalive_seconds"
+        )
+        == fault["prearmed_probe_keepalive_seconds"],
+        "prearmed_probe_timeout_contract_applied": reconnect.get(
+            "prearmed_probe_trigger_timeout_seconds"
+        )
+        == (
+            fault["frps_stop_after_seconds"]
+            + bounds["tunnel_reconnect_seconds"]
+            + fault["prearmed_probe_trigger_timeout_headroom_seconds"]
+        ),
+        "prearmed_probe_keepalive_observed": number(
+            nested(reconnect, "unavailable_probe", "prearmed_keepalive_requests"),
+            -1,
+        )
+        >= 1,
         "actual_downtime_within_timer_tolerance": fault["frps_down_seconds"] - 0.25
         <= number(reconnect.get("down_seconds"))
         <= fault["frps_down_seconds"] + 0.5,

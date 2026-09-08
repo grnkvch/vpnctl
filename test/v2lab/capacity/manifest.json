@@ -66,6 +66,8 @@
   "fault": {
     "frps_stop_after_seconds": 145,
     "frps_down_seconds": 3,
+    "prearmed_probe_keepalive_seconds": 5,
+    "prearmed_probe_trigger_timeout_headroom_seconds": 60,
     "accepted_failure_window_start_seconds": 135,
     "accepted_failure_window_end_seconds": 175
   }

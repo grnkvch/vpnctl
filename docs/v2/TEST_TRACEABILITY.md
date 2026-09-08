@@ -17,7 +17,11 @@ warm-up and rate/timeout-derived worker pools, preserves degraded monitor
 samples as invalid evidence rather than false Gateway saturation, and models
 the one-page `mkswap` metadata reservation. Runtime process diagnostics use
 direct cgroup-v2 observations with only bounded pre/post systemd restart
-snapshots, so the observer does not compete with the one-vCPU Gateway. Release orchestration tests require
+snapshots, so the observer does not compete with the one-vCPU Gateway. The
+fault helper also establishes and HTTP-validates its exact TLS control
+connection before workload readiness, retains it with a fingerprinted
+five-second keepalive, and cannot let a later probe failure suppress the hard
+KILL. Release orchestration tests require
 the clean-state witness to retain every residue class while batching each
 fixture snapshot and inspecting Gateway and Node concurrently.
 

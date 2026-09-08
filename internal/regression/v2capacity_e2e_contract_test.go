@@ -71,10 +71,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			GatewayConcurrent        int     `json:"gateway_concurrent_requests"`
 		} `json:"bounds"`
 		Fault struct {
-			StopAfter   int `json:"frps_stop_after_seconds"`
-			DownSeconds int `json:"frps_down_seconds"`
-			SanityStart int `json:"accepted_failure_window_start_seconds"`
-			SanityEnd   int `json:"accepted_failure_window_end_seconds"`
+			StopAfter            int `json:"frps_stop_after_seconds"`
+			DownSeconds          int `json:"frps_down_seconds"`
+			ProbeKeepalive       int `json:"prearmed_probe_keepalive_seconds"`
+			ProbeTimeoutHeadroom int `json:"prearmed_probe_trigger_timeout_headroom_seconds"`
+			SanityStart          int `json:"accepted_failure_window_start_seconds"`
+			SanityEnd            int `json:"accepted_failure_window_end_seconds"`
 		} `json:"fault"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
@@ -119,6 +121,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatalf("unexpected capacity bounds: %+v", manifest.Bounds)
 	}
 	if manifest.Fault.StopAfter != 145 || manifest.Fault.DownSeconds != 3 ||
+		manifest.Fault.ProbeKeepalive != 5 || manifest.Fault.ProbeTimeoutHeadroom != 60 ||
 		manifest.Fault.SanityStart != 135 || manifest.Fault.SanityEnd != 175 {
 		t.Fatalf("unexpected capacity fault contract: %+v", manifest.Fault)
 	}
@@ -168,10 +171,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"emit_result failed false", "emit_result passed true", "stable_recovery_probes: 5",
 		"fault_stage: $fault_stage", "result_emitted=false", "fault_incomplete",
 		"load armed-probe", "load armed-recover", "prepare_armed_probe", "run_armed_probe", "run_armed_recovery", "cleanup_armed_probe",
-		"armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe", "--trigger-timeout 30",
-		"--timeout 2", "--connect-timeout 5",
+		"armed_probe_root=/var/lib/vpnctl-v2-capacity/fault-probe", "armed_probe_trigger_timeout_seconds",
+		"--timeout 2", "--connect-timeout 5", "--keepalive-interval \"$probe_keepalive_seconds\"",
 		"--recovery-limit-seconds \"$recovery_limit_seconds\"", "recovery-trigger", "recovery-ready", "recovery-result.json",
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
+		"prearmed_probe_keepalive_seconds: $prearmed_probe_keepalive_seconds",
+		"prearmed_probe_trigger_timeout_seconds: $prearmed_probe_trigger_timeout_seconds",
 		"scheduled_start_after_seconds: $scheduled_start_after_seconds", "trap 'exit 129' HUP",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
@@ -192,12 +197,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatal("capacity fault helper must arm restart before measuring and hard-killing FRPS")
 	}
 	temporaryPolicyApplied := strings.Index(faultHelper, "FRPS temporary restart policy was not applied")
+	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
 	startTriggerWait := strings.LastIndex(faultHelper, "wait_for_start_trigger\n")
 	delayedStart := strings.Index(faultHelper, "sleep \"$start_after_seconds\"")
-	armedProbe := strings.LastIndex(faultHelper, "prepare_armed_probe\n")
 	if temporaryPolicyApplied < 0 || startTriggerWait < 0 || delayedStart < 0 || armedProbe < 0 ||
-		!(temporaryPolicyApplied < startTriggerWait && startTriggerWait < delayedStart && delayedStart < armedProbe && armedProbe < restartTimer) {
-		t.Fatal("capacity restart-policy setup must finish before the workload-ready handshake and fault delay")
+		!(temporaryPolicyApplied < armedProbe && armedProbe < startTriggerWait && startTriggerWait < delayedStart && delayedStart < restartTimer) {
+		t.Fatal("capacity policy and probes must be ready before the workload handshake and fault delay")
 	}
 	recoveryWorker := strings.Index(faultHelper, "load armed-recover")
 	outageWorker := strings.Index(faultHelper, "load armed-probe")
@@ -228,6 +233,9 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		".status_counts[\"503\"] == 8", ".max_active_requests == 64",
 		"log-level: silent", "log.level = \"error\"", "production-log-validation.txt",
 		"frps_stop_after_seconds", "/usr/local/libexec/vpnctl-v2-capacity/fault",
+		".fault.prearmed_probe_keepalive_seconds", ".fault.prearmed_probe_trigger_timeout_headroom_seconds",
+		"--probe-keepalive-seconds \"$probe_keepalive\"",
+		"--probe-trigger-timeout-headroom-seconds \"$probe_trigger_timeout_headroom\"",
 		"./test/v2lab/capacity/tunnel_client", "webServer.user = \"vpnctl\"",
 		"/var/lib/vpnctl-v2-capacity",
 		"capacity_admin_password=b29cf595a13d39c8445e2d42b6a5d8e7a50772b7703b26f9f7d8da9f45f4c485",

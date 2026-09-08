@@ -46,7 +46,7 @@
     },
     {
       "path": "test/v2lab/capacity/manifest.json",
-      "sha256": "b837722f7f71b3cc42f2ca8195a7dd7578616afad323eecabd537c5847d90619"
+      "sha256": "2303b5203371827ecf6cbb62a16fb000a614f5b7ecd1ae854c1896ea958bb448"
     },
     {
       "path": "docs/v2/CLI_CONTRACT.md",
@@ -404,6 +404,8 @@
       "load_generator_worker_headroom_percent": 20,
       "webhook_load_generator_workers": 96,
       "bot_api_load_generator_workers": 48,
+      "fault_probe_keepalive_seconds": 5,
+      "fault_probe_trigger_timeout_headroom_seconds": 60,
       "client_disruption_stable_recovery_probes": 5,
       "maximum_client_disruption_seconds": 11.5,
       "tunnel_reconnect_seconds": 8,

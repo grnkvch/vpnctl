@@ -125,6 +125,8 @@ type spikeBaseline struct {
 			LoadWorkerHeadroom      int     `json:"load_generator_worker_headroom_percent"`
 			WebhookLoadWorkers      int     `json:"webhook_load_generator_workers"`
 			BotAPILoadWorkers       int     `json:"bot_api_load_generator_workers"`
+			ProbeKeepalive          int     `json:"fault_probe_keepalive_seconds"`
+			ProbeTimeoutHeadroom    int     `json:"fault_probe_trigger_timeout_headroom_seconds"`
 			DisruptionProbes        int     `json:"client_disruption_stable_recovery_probes"`
 			MaximumDisruption       float64 `json:"maximum_client_disruption_seconds"`
 			TunnelReconnect         int     `json:"tunnel_reconnect_seconds"`
@@ -291,6 +293,7 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 		capacity.LoadTailSeconds != 30 || capacity.LoadWarmupSeconds != 10 ||
 		capacity.LoadRequestTimeout != 8 || capacity.LoadWorkerHeadroom != 20 ||
 		capacity.WebhookLoadWorkers != 96 || capacity.BotAPILoadWorkers != 48 ||
+		capacity.ProbeKeepalive != 5 || capacity.ProbeTimeoutHeadroom != 60 ||
 		capacity.DisruptionProbes != 5 || capacity.MaximumDisruption != 11.5 ||
 		capacity.TunnelReconnect != 8 ||
 		capacity.PerExposeConcurrent != 40 || capacity.GatewayConcurrent != 64 ||
