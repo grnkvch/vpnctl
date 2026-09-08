@@ -118,6 +118,7 @@ def valid_case():
         "reconnect": {
             "status": "passed",
             "scheduled_start_after_seconds": 145,
+            "restart_policy_restoration_phase": "post_measurement_cleanup",
             "prearmed_probe_keepalive_seconds": 5,
             "prearmed_probe_trigger_timeout_seconds": 213,
             "requested_down_seconds": 3,
@@ -179,6 +180,16 @@ class CapacityEvaluationTest(unittest.TestCase):
         self.assertFalse(summary["fault_reconnect"]["within_contract"])
         self.assertIn(
             "fault_reconnect.prearmed_probe_keepalive_observed",
+            summary["failure_reasons"]["product"],
+        )
+
+    def test_wrong_restart_policy_restoration_phase_rejects_reconnect(self):
+        manifest, evidence = valid_case()
+        evidence["reconnect"]["restart_policy_restoration_phase"] = "during_recovery"
+        summary = self.evaluate(manifest, evidence)
+        self.assertFalse(summary["fault_reconnect"]["within_contract"])
+        self.assertIn(
+            "fault_reconnect.restart_policy_restoration_phase_applied",
             summary["failure_reasons"]["product"],
         )
 

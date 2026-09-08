@@ -46,7 +46,7 @@
     },
     {
       "path": "test/v2lab/capacity/manifest.json",
-      "sha256": "2303b5203371827ecf6cbb62a16fb000a614f5b7ecd1ae854c1896ea958bb448"
+      "sha256": "864e2dd37eae590246b33dc6efaaae89db83165a93fe836ae10ac1319a5e2ee4"
     },
     {
       "path": "docs/v2/CLI_CONTRACT.md",

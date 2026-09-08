@@ -184,8 +184,13 @@ POST. It starts no new Lima shell, Python/TLS client, policy file, or
 collected after the KILL, so it cannot suppress the scheduled outage. The
 five-second keepalive adds a conservative unscored 0.2 request/s to the local
 ingress root and does not reduce or replace the fixed measured workload.
-Existing success, failure, and signal cleanup restores the original policy and
-removes only its fixed owner-scoped runtime.
+After stable recovery, the helper verifies the exact temporary drop-in and
+transfers its cleanup to the parent without changing systemd under measured
+load. The parent restores the original policy with its existing owner-scoped
+cleanup only after all fixed loads and monitors finish. Before that successful
+transfer, any helper failure or signal restores the policy immediately. The
+manifest and reconnect evidence require the fixed
+`post_measurement_cleanup` phase, so a different lifecycle invalidates reuse.
 
 Webhook pre-disruption and post-recovery p95/p99 remain 1,000/2,000 ms, the
 global Bot API p95/p99 remain 1,000/2,000 ms with no disruption exception, and

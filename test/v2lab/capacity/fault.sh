@@ -13,6 +13,8 @@ armed_probe_trigger_timeout_seconds=
 restart_job=vpnctl-v2-capacity-frps-restart
 restart_job_armed=false
 restore_required=false
+restart_policy_restoration_phase=post_measurement_cleanup
+restart_policy_cleanup_transferred=false
 restart_advance_seconds=0.2
 runtime_dropin_directory=/run/systemd/system/vpnctl-v2-spike-tunnel-server.service.d
 runtime_dropin=$runtime_dropin_directory/vpnctl-v2-capacity-fault.conf
@@ -66,6 +68,7 @@ emit_result() {
     --argjson stop_seconds "$(delta "$stop_started" "$stop_finished")" \
     --argjson requested_down_seconds "$down_seconds" \
     --argjson scheduled_down_seconds "$scheduled_down_seconds" \
+    --arg restart_policy_restoration_phase "$restart_policy_restoration_phase" \
     --argjson down_seconds "$(delta "$down_started" "$restart_started")" \
     --argjson recovery_seconds "$recovery_seconds" \
     --argjson first_recovery_seconds "$first_recovery_seconds" \
@@ -85,6 +88,7 @@ emit_result() {
       stop_seconds: $stop_seconds,
       requested_down_seconds: $requested_down_seconds,
       scheduled_down_seconds: $scheduled_down_seconds,
+      restart_policy_restoration_phase: $restart_policy_restoration_phase,
       down_seconds: $down_seconds,
       recovery_seconds: $recovery_seconds,
       first_recovery_seconds: $first_recovery_seconds,
@@ -282,6 +286,24 @@ restore_restart_policy() {
   fi
 }
 
+transfer_restart_policy_cleanup() {
+  local actual_sha256
+  if [ "$runtime_dropin_installed" != true ]; then
+    echo 'FRPS fault policy is absent before cleanup transfer' >&2
+    return 3
+  fi
+  if [ ! -f "$runtime_dropin" ] || [ -L "$runtime_dropin" ]; then
+    echo 'refusing to transfer changed FRPS fault drop-in type' >&2
+    return 3
+  fi
+  actual_sha256=$(sha256sum "$runtime_dropin" | awk '{print $1}')
+  if [ "$actual_sha256" != "$runtime_dropin_sha256" ]; then
+    echo 'refusing to transfer changed FRPS fault drop-in contents' >&2
+    return 3
+  fi
+  restart_policy_cleanup_transferred=true
+}
+
 cleanup() {
   local status=$? cleanup_status=0
   trap - EXIT INT TERM
@@ -293,7 +315,9 @@ cleanup() {
   fi
   cleanup_start_schedule || cleanup_status=$?
   cleanup_armed_probe || cleanup_status=$?
-  restore_restart_policy || cleanup_status=$?
+  if [ "$restart_policy_cleanup_transferred" != true ]; then
+    restore_restart_policy || cleanup_status=$?
+  fi
   if [ "$restore_required" = true ]; then
     systemctl start "$unit" >/dev/null 2>&1 || cleanup_status=$?
   fi
@@ -432,7 +456,6 @@ run_armed_recovery || true
 systemctl stop "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 systemctl reset-failed "$restart_job.timer" "$restart_job.service" >/dev/null 2>&1 || true
 restart_job_armed=false
-restore_restart_policy
 restore_required=false
 if [ "$unavailable_status" != 503 ]; then
   emit_result failed false
@@ -469,4 +492,5 @@ if [ "$recovery_status" != passed ]; then
 fi
 
 fault_stage=recovered
+transfer_restart_policy_cleanup
 emit_result passed true

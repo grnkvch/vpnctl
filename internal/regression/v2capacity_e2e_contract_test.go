@@ -71,12 +71,13 @@ func TestV2CapacityE2EContract(t *testing.T) {
 			GatewayConcurrent        int     `json:"gateway_concurrent_requests"`
 		} `json:"bounds"`
 		Fault struct {
-			StopAfter            int `json:"frps_stop_after_seconds"`
-			DownSeconds          int `json:"frps_down_seconds"`
-			ProbeKeepalive       int `json:"prearmed_probe_keepalive_seconds"`
-			ProbeTimeoutHeadroom int `json:"prearmed_probe_trigger_timeout_headroom_seconds"`
-			SanityStart          int `json:"accepted_failure_window_start_seconds"`
-			SanityEnd            int `json:"accepted_failure_window_end_seconds"`
+			StopAfter            int    `json:"frps_stop_after_seconds"`
+			DownSeconds          int    `json:"frps_down_seconds"`
+			RestorationPhase     string `json:"restart_policy_restoration_phase"`
+			ProbeKeepalive       int    `json:"prearmed_probe_keepalive_seconds"`
+			ProbeTimeoutHeadroom int    `json:"prearmed_probe_trigger_timeout_headroom_seconds"`
+			SanityStart          int    `json:"accepted_failure_window_start_seconds"`
+			SanityEnd            int    `json:"accepted_failure_window_end_seconds"`
 		} `json:"fault"`
 	}
 	if err := json.Unmarshal([]byte(manifestData), &manifest); err != nil {
@@ -121,6 +122,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		t.Fatalf("unexpected capacity bounds: %+v", manifest.Bounds)
 	}
 	if manifest.Fault.StopAfter != 145 || manifest.Fault.DownSeconds != 3 ||
+		manifest.Fault.RestorationPhase != "post_measurement_cleanup" ||
 		manifest.Fault.ProbeKeepalive != 5 || manifest.Fault.ProbeTimeoutHeadroom != 60 ||
 		manifest.Fault.SanityStart != 135 || manifest.Fault.SanityEnd != 175 {
 		t.Fatalf("unexpected capacity fault contract: %+v", manifest.Fault)
@@ -177,10 +179,12 @@ func TestV2CapacityE2EContract(t *testing.T) {
 		"scheduled_down_seconds: $scheduled_down_seconds", "stable_recovery_observed: $stable_recovery",
 		"prearmed_probe_keepalive_seconds: $prearmed_probe_keepalive_seconds",
 		"prearmed_probe_trigger_timeout_seconds: $prearmed_probe_trigger_timeout_seconds",
+		"restart_policy_restoration_phase: $restart_policy_restoration_phase",
 		"scheduled_start_after_seconds: $scheduled_start_after_seconds", "trap 'exit 129' HUP",
 		"first_recovery_seconds: $first_recovery_seconds", "maximum_stable_recovery_probes: $maximum_stable_recovery_probes",
 		"last_recovery_seconds: $last_recovery_seconds", "successful_recovery_probes: $successful_recovery_probes",
 		"recovery_probe_attempts: $recovery_probe_attempts", "run_armed_recovery",
+		"restart_policy_cleanup_transferred=true", "if [ \"$restart_policy_cleanup_transferred\" != true ]",
 		"--stable-probes 5 --probe-interval 0.1",
 		"--start-after-seconds", "fault_stage=scheduled", "sleep \"$start_after_seconds\"",
 		"fault-start.ready", "fault-start.trigger", "wait_for_start_trigger", "seq 1 1200",
@@ -216,10 +220,15 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	}
 	restartTimestamp := strings.Index(faultHelper, "restart_started=$(awk")
 	recoveryTrigger := strings.LastIndex(faultHelper, "run_armed_recovery || true")
-	policyRestore := strings.LastIndex(faultHelper, "restore_restart_policy\n")
-	if restartTimestamp < 0 || recoveryTrigger < 0 || policyRestore < 0 ||
-		!(restartTimestamp < recoveryTrigger && recoveryTrigger < policyRestore) {
-		t.Fatal("capacity recovery must start from the observed timestamp before slow policy restoration")
+	policyTransfer := strings.LastIndex(faultHelper, "transfer_restart_policy_cleanup\n")
+	resultPassed := strings.LastIndex(faultHelper, "emit_result passed true")
+	if restartTimestamp < 0 || recoveryTrigger < 0 || policyTransfer < 0 || resultPassed < 0 ||
+		!(restartTimestamp < recoveryTrigger && recoveryTrigger < policyTransfer && policyTransfer < resultPassed) {
+		t.Fatal("successful capacity recovery must transfer policy cleanup without restoring it under measured load")
+	}
+	mainStart := strings.LastIndex(faultHelper, "original_restart=$(systemctl show")
+	if mainStart < 0 || strings.Contains(faultHelper[mainStart:], "restore_restart_policy\n") {
+		t.Fatal("capacity fault main path must not restore policy or daemon-reload during measured load")
 	}
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))
@@ -274,10 +283,14 @@ func TestV2CapacityE2EContract(t *testing.T) {
 	startLoads := strings.Index(verifyHarness, "start_loads\n")
 	waitFault := strings.Index(verifyHarness, "wait_reconnect || reconnect_status=$?")
 	waitLoads := strings.Index(verifyHarness, "wait_loads || load_status=$?")
+	cleanupAfterLoad := strings.LastIndex(verifyHarness, "cleanup_owned\n")
 	afterState := strings.Index(verifyHarness, "finalize_reconnect_process_state\n")
 	if beforeState < 0 || startFault < 0 || startLoads < 0 || waitFault < 0 || waitLoads < 0 || afterState < 0 ||
 		!(beforeState < startFault && startFault < startLoads && startLoads < waitFault && waitFault < waitLoads && waitLoads < afterState) {
 		t.Fatal("capacity tunnel PID snapshots must remain outside the measured workload")
+	}
+	if cleanupAfterLoad < 0 || cleanupAfterLoad < waitLoads {
+		t.Fatal("capacity owner cleanup must restore the transferred fault policy only after measured loads finish")
 	}
 	if strings.Contains(verifyHarness[startLoads:waitFault], "guest \"") {
 		t.Fatal("capacity must not open a new Lima guest session to deliver or diagnose the scheduled fault")

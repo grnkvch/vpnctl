@@ -281,6 +281,10 @@ def build_summary(
         == fault["frps_stop_after_seconds"],
         "requested_downtime_unchanged": reconnect.get("requested_down_seconds")
         == fault["frps_down_seconds"],
+        "restart_policy_restoration_phase_applied": reconnect.get(
+            "restart_policy_restoration_phase"
+        )
+        == fault["restart_policy_restoration_phase"],
         "prearmed_probe_keepalive_contract_applied": reconnect.get(
             "prearmed_probe_keepalive_seconds"
         )
