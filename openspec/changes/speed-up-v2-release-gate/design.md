@@ -23,7 +23,7 @@ The child harnesses already distinguish fixtures they started from fixtures that
 
 ## Decisions
 
-### 1. Preserve the full command and add two phase commands
+### 1. Preserve the full command, add two mandatory phases, and isolate capacity
 
 The script will expose:
 
@@ -31,13 +31,16 @@ The script will expose:
 run-fast [--resume] <evidence-directory>
 run-vm [--resume] <evidence-directory>
 run-automated [--resume] <evidence-directory>
+run-capacity [--resume] <evidence-directory>
 ```
 
-`run-automated` remains the compatibility path and calls the same fast phase followed by the same VM phase. `run-fast` contains traceability, strict OpenSpec, ordinary Go, race, vet, credential lifecycle, and update/restore. It performs candidate/ledger validation but does not resolve, inspect, or execute `limactl`. `run-vm` refuses until all fast attempts are reusable.
+`run-automated` remains the compatibility path and calls the same fast phase followed by the same mandatory VM phase. `run-fast` contains traceability, strict OpenSpec, ordinary Go, race, vet, credential lifecycle, and update/restore. It performs candidate/ledger validation but does not resolve, inspect, or execute `limactl`. `run-vm` refuses until all fast attempts are reusable. Capacity is excluded from both commands and runs only through `run-capacity`; this on-demand command does not require fast-phase evidence and may run before or after final automated aggregation.
 
 The private child timing path and shared-Lima-session marker are supplied only to VM harness commands. Fast commands explicitly remove both variables from their child environment, including when the operator's shell already defines them, so a full Go regression cannot mistake the enclosing attempt timing file for its own nested harness output.
 
 Fresh-attempt refusal is phase-scoped: a first `run-vm` is valid after completed fast attempts, but a second invocation with an existing non-passing VM attempt requires `run-vm --resume`. `run-automated` without `--resume` still requires an empty complete ledger. This keeps retries explicit without forcing the split workflow to pretend that its second phase is an error recovery.
+
+`run-capacity` uses its own shared fixture-session type and requires `--resume` after an earlier capacity attempt. It reuses and appends attempts under the existing immutable ledger rules. A capacity failure never removes, replaces, or invalidates an existing `automated.json`, and a passing capacity attempt is not referenced by that aggregate. The capacity harness, five-minute load, profiles, fault shape, thresholds, fingerprinting, and stopped-fixture boundary remain unchanged.
 
 Alternatives considered:
 
@@ -67,7 +70,7 @@ Each child harness continues to own and validate its resources. On nonzero exit 
 
 `INT` and `TERM` use explicit nonzero signal exits and the same cleanup/stop path. An uncatchable host failure can leave VMs running; the next invocation refuses before mutation and prints the exact owner-scoped recovery action instead of adopting the session.
 
-The initial VM order is fail-fast and dependency-aware: short functional/supervision/watchdog stages precede broad capability suites, canonical tunnel and ingress precede their dependent unique failure stage, and the fixed five-minute capacity stage runs last. Ordering is part of the session and stage contract fingerprint.
+The mandatory VM order is fail-fast and dependency-aware: short functional/supervision/watchdog stages precede broad capability suites, and canonical tunnel and ingress precede their dependent unique failure stage. The fixed five-minute capacity stage has a separate on-demand session and is never appended implicitly. Both selections and their ordering are part of the stage contract fingerprint.
 
 Alternatives considered:
 
@@ -92,7 +95,7 @@ Alternatives considered:
 
 ### 5. Keep the complete acceptance set explicit
 
-Fast and VM stage lists, order, dependencies, and commands are versioned data used by both execution and aggregation rather than duplicated free-form shell lists. Regression tests compare the optimized mandatory check set and capacity manifest values with the pre-optimization contract. No phase can write `automated.json`; only the common aggregator can do so after all fast and VM attempts, dependencies, clean-state witnesses, and final stopped-state checks pass.
+Fast, mandatory VM, and on-demand stage selection, order, dependencies, and commands are versioned data used by both execution and aggregation rather than duplicated free-form shell lists. Regression tests compare the optimized mandatory check set and unchanged on-demand capacity manifest values with the pre-optimization contract. No phase can write `automated.json`; only the common aggregator can do so after all mandatory fast and VM attempts, dependencies, clean-state witnesses, and final stopped-state checks pass. Capacity evidence remains outside that aggregate.
 
 ### 6. Enter the capacity fault guest before measured load
 
@@ -195,6 +198,6 @@ Alternatives considered:
 4. Reorder canonical tunnel/ingress before failure, add dependency-bound unique mode, and prove standalone full coverage remains unchanged.
 5. Update operator documentation and host journal, validate OpenSpec/full Go/targeted regression locally, then commit without running the complete heavy gate.
 6. Replace fixed-window capacity latency classification with the bounded client disruption model, load-generator validity checks, and failed-run diagnostics; validate the model without Lima and retain all earlier evidence unchanged.
-7. The operator prepares a new evidence directory and runs one clean full gate. Its schema-2 timing evidence becomes the first optimized benchmark; retain all earlier failed evidence for comparison.
+7. The operator prepares a new evidence directory and runs the mandatory fast and VM gate. Capacity is run separately only when explicitly requested; both paths retain schema-2 timing evidence and all earlier failed evidence remains unchanged for comparison.
 
 Rollback is a source revert before preparing another candidate. No evidence directory is downgraded or rewritten.

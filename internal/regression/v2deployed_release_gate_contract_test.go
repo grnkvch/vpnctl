@@ -32,6 +32,7 @@ func TestV2DeployedReleaseGateContract(t *testing.T) {
 		"run-automated --resume <evidence-directory>",
 		"run-fast <evidence-directory>", "run-fast --resume <evidence-directory>",
 		"run-vm <evidence-directory>", "run-vm --resume <evidence-directory>",
+		"run-capacity <evidence-directory>", "run-capacity --resume <evidence-directory>",
 		"status <evidence-directory>", "finalize <evidence-directory>",
 		"deployed release gate requires a clean source tree", "task 16.11 to be the only pending task",
 		"grep -Eq -- '^- \\[ \\] 16[.]11 '",
@@ -118,6 +119,7 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 		Stages          []struct {
 			Name         string   `json:"name"`
 			Phase        string   `json:"phase"`
+			Automatic    bool     `json:"automatic"`
 			Order        int      `json:"order"`
 			UsesLima     bool     `json:"uses_lima"`
 			Command      string   `json:"command"`
@@ -127,19 +129,21 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 	if err := json.Unmarshal([]byte(readContractFile(t, path)), &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || registry.ContractVersion != 4 || len(registry.Stages) != 19 {
+	if registry.SchemaVersion != 1 || registry.ContractVersion != 5 || len(registry.Stages) != 19 {
 		t.Fatalf("registry header = %+v", registry)
 	}
 	wantFast := []string{"traceability", "openspec", "go-test", "go-race", "go-vet", "credential-lifecycle", "update-restore"}
-	wantVM := []string{"personal-client", "restricted-process", "transport-supervision", "watchdog-confirm", "watchdog-timeout", "node-transport", "fleet-isolation", "adversarial", "tunnel-release", "ingress-release", "failure", "capacity"}
-	var fast, vm []string
+	wantVM := []string{"personal-client", "restricted-process", "transport-supervision", "watchdog-confirm", "watchdog-timeout", "node-transport", "fleet-isolation", "adversarial", "tunnel-release", "ingress-release", "failure"}
+	var fast, vm, onDemand []string
 	lastOrder := 0
 	for _, stage := range registry.Stages {
 		if stage.Order <= lastOrder || stage.Command == "" {
 			t.Fatalf("non-monotonic or empty stage: %+v", stage)
 		}
 		lastOrder = stage.Order
-		if stage.Phase == "fast" && !stage.UsesLima {
+		if !stage.Automatic {
+			onDemand = append(onDemand, stage.Name)
+		} else if stage.Phase == "fast" && !stage.UsesLima {
 			fast = append(fast, stage.Name)
 		} else if stage.Phase == "vm" && stage.UsesLima {
 			vm = append(vm, stage.Name)
@@ -150,11 +154,11 @@ func TestV2DeployedReleaseGateStageRegistryContract(t *testing.T) {
 			t.Fatalf("failure dependencies = %v", stage.Dependencies)
 		}
 	}
-	if strings.Join(fast, ",") != strings.Join(wantFast, ",") || strings.Join(vm, ",") != strings.Join(wantVM, ",") {
-		t.Fatalf("stage order fast=%v vm=%v", fast, vm)
+	if strings.Join(fast, ",") != strings.Join(wantFast, ",") || strings.Join(vm, ",") != strings.Join(wantVM, ",") || strings.Join(onDemand, ",") != "capacity" {
+		t.Fatalf("stage order fast=%v vm=%v on-demand=%v", fast, vm, onDemand)
 	}
-	if registry.Stages[len(registry.Stages)-1].Name != "capacity" || registry.Stages[len(registry.Stages)-1].Command != "scripts/v2capacity-e2e.sh verify" {
-		t.Fatalf("capacity is not the unchanged final command: %+v", registry.Stages[len(registry.Stages)-1])
+	if registry.Stages[len(registry.Stages)-1].Name != "capacity" || registry.Stages[len(registry.Stages)-1].Automatic || registry.Stages[len(registry.Stages)-1].Phase != "vm" || registry.Stages[len(registry.Stages)-1].Command != "scripts/v2capacity-e2e.sh verify" {
+		t.Fatalf("capacity is not the unchanged on-demand command: %+v", registry.Stages[len(registry.Stages)-1])
 	}
 	for _, stage := range registry.Stages {
 		if (stage.Name == "tunnel-release" || stage.Name == "ingress-release") && !strings.Contains(stage.Command, "{repository}/artifacts/") {

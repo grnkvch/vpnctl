@@ -5,7 +5,8 @@ production-ready v2.0 release. It binds all evidence to the same clean Git commi
 and one explicit stable version. It does not weaken the earlier automated
 gates and it never labels or publishes a release.
 
-The gate intentionally has four explicit phases:
+The gate intentionally exposes separate preparation, mandatory execution,
+on-demand capacity, status, and finalization commands:
 
 ```text
 scripts/v2deployed-release-gate.sh prepare v2.0.0
@@ -13,6 +14,8 @@ scripts/v2deployed-release-gate.sh run-fast <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh run-vm <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh run-automated <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh run-automated --resume <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-capacity <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-capacity --resume <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh status <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absolute-release-assets-directory>
 ```
@@ -23,7 +26,8 @@ or invoking `limactl`; it also removes the private VM timing/session variables
 from every child command so nested tests cannot adopt the enclosing attempt's
 output path. `run-vm` executes the Lima-backed checks only after every fast
 result is reusable. `run-automated` is the backward-compatible ordered
-composition of those two phases and may
+composition of those two mandatory phases. Neither command runs capacity.
+`run-capacity` is the only capacity entry point and may
 start only the two exact owner-controlled role-specific fixtures. Gateway is
 the 1-vCPU/512-MiB minimum-capacity host; Node is the 4-vCPU/2-GiB functional
 and load-generating fixture. Each child
@@ -51,13 +55,12 @@ scripts/v2deployed-release-gate.sh run-vm <absolute-evidence-directory>
 ```
 
 After a phase failure, repeat only that phase with `--resume`. The complete
-compatibility command remains `run-automated [--resume]`. Both workflows run:
+compatibility command remains `run-automated [--resume]`. Both mandatory workflows run:
 
 - requirement traceability, strict OpenSpec validation, full ordinary and race
   Go suites, and vet;
 - credential lifecycle plus update/restore/migration suites;
-- node transport, fleet isolation, failure, adversarial security, and sustained
-  minimum-host capacity E2Es;
+- node transport, fleet isolation, failure, and adversarial security E2Es;
 - personal-client, transport supervision, restricted child-process, both SSH
   watchdog paths, native reverse-tunnel, and native ingress release gates.
 
@@ -87,7 +90,9 @@ attempt is appended for that stage. Unaffected matching passes are not run
 again. Fresh-attempt refusal is scoped to the selected phase; a normal
 `run-automated` still refuses any existing attempt, making continuation an
 explicit opt-in. Neither standalone phase writes `automated.json`; the common
-aggregator does so only after the complete mandatory set passes.
+aggregator does so only after the complete mandatory automatic set passes.
+Capacity attempts in the same ledger are ignored by fresh automatic-attempt
+refusal and by aggregation.
 
 Each `run-vm` invocation first requires both exact fixtures `Stopped` and verifies
 their resource/image/network fields plus the exact stored readiness-probe SHA-256
@@ -122,8 +127,8 @@ cleanup, boot, and shutdown where applicable. These timings never change a
 product latency, reconnect, capacity, or workload acceptance result.
 
 The VM order is versioned in
-`test/v2lab/deployed-release-gate/stages.json`; inexpensive checks run first and
-the unchanged 300-second capacity workload runs last. `tunnel-release` and
+`test/v2lab/deployed-release-gate/stages.json`; inexpensive checks run first.
+`tunnel-release` and
 `ingress-release` are canonical attempts. `failure` consumes their exact
 immutable result SHA-256 values and runs only its unique source failure checks,
 instead of executing both complete provider release gates a second time. Its
@@ -132,6 +137,25 @@ The expected speedup comes only from starting the two fixtures once per VM
 phase and removing those duplicate provider runs. The gate records timings for
 measurement, but deliberately defines neither an estimated percentage nor a
 new duration threshold.
+
+## On-demand capacity
+
+Capacity is advisory for each release candidate and is never invoked by
+`run-fast`, `run-vm`, `run-automated`, or `finalize`. Run it explicitly when a
+new capacity measurement is useful:
+
+```text
+scripts/v2deployed-release-gate.sh run-capacity <absolute-evidence-directory>
+scripts/v2deployed-release-gate.sh run-capacity --resume <absolute-evidence-directory>
+```
+
+The command does not require completed fast evidence and may run before or
+after `automated.json` exists. It uses a distinct `phase=capacity` fixture
+session, appends immutable numbered attempts, applies the same candidate,
+source-tree, stage, topology, and Lima-image fingerprints, and restores both
+fixtures stopped. A failed attempt remains visible and requires explicit
+`--resume`; neither failure nor success creates, replaces, removes, or is
+referenced by `automated.json`.
 
 For capacity, only Gateway is the normative capacity target and it remains
 strictly 1 vCPU/512 MiB/10 GiB with 1 GiB managed swap. Node runs FRPC and its
@@ -237,9 +261,9 @@ fixture session, and final automated aggregate. Together with the source tree,
 release version, stage contract, and Lima image digest it invalidates stale
 attempts without rewriting any earlier evidence.
 
-The gate writes schema-v2 `automated.json` only after every mandatory stage has
+The gate writes schema-v2 `automated.json` only after every mandatory automatic stage has
 a matching passing attempt and both fixtures are back in `Stopped`. The final
-document records the selected attempt name and result SHA-256 for all 19 stages;
+document records the selected attempt name and result SHA-256 for all 18 automatic stages;
 `finalize` revalidates those references. The evidence directory name also
 scopes each nested watchdog/tunnel/ingress attempt, so retries append new child
 evidence rather than colliding with or adopting a prior attempt.

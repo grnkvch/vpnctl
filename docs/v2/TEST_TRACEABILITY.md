@@ -7,7 +7,7 @@ The regression test fails when a spec scenario is added, removed, or renamed wit
 The deployed-release execution topology is separately traced by the versioned
 `test/v2lab/deployed-release-gate/stages.json` registry and the OpenSpec change
 `speed-up-v2-release-gate`. Contract tests require its exact stage set, phase,
-order, command, dependency, cleanup, and capacity-last semantics; the table
+automatic/on-demand selection, order, command, dependency, and cleanup semantics; the table
 below remains the capability-scenario source of truth.
 The role topology contract makes only Gateway the 1-vCPU/512-MiB capacity
 boundary; model tests separately verify Node fixture health, load-generator
@@ -123,7 +123,7 @@ fixture snapshot and inspecting Gateway and Node concurrently.
 | `release-delivery-and-migration` | One-time v1 migration | Migrate existing v1 clients | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Minimum capacity target | Minimum-host benchmark | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Full non-backlog release gate | Vertical slice passes before remaining capabilities | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
-| `release-delivery-and-migration` | Resumable immutable automated release evidence | Capacity retry after a late failure | integration, e2e, documentation | 16.11-16.12 |
+| `release-delivery-and-migration` | Resumable immutable automated release evidence | Explicit on-demand capacity retry | integration, e2e, documentation | 16.11-16.12 |
 | `release-delivery-and-migration` | Resumable immutable automated release evidence | Stage input no longer matches | integration, e2e | 16.11-16.12 |
 | `release-delivery-and-migration` | Resumable immutable automated release evidence | Automated evidence remains incomplete | integration, e2e, documentation | 16.11-16.12 |
 | `release-delivery-and-migration` | Explicit v2.0 exclusions | Request for excluded capability | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |

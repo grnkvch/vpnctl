@@ -23,6 +23,7 @@ fixture_sessions_directory_name=automated-fixture-sessions
 all_automated_stages=
 fast_automated_stages=
 vm_automated_stages=
+capacity_stages=
 stage_registry_sha256=
 gateway_started=false
 node_started=false
@@ -59,12 +60,15 @@ Usage:
   scripts/v2deployed-release-gate.sh run-vm --resume <evidence-directory>
   scripts/v2deployed-release-gate.sh run-automated <evidence-directory>
   scripts/v2deployed-release-gate.sh run-automated --resume <evidence-directory>
+  scripts/v2deployed-release-gate.sh run-capacity <evidence-directory>
+  scripts/v2deployed-release-gate.sh run-capacity --resume <evidence-directory>
   scripts/v2deployed-release-gate.sh status <evidence-directory>
   scripts/v2deployed-release-gate.sh finalize <evidence-directory> <absolute-release-assets-directory>
 
 prepare/status/finalize never contact Telegram or mutate a deployed server.
-run-fast runs host-only checks and never invokes Lima. run-vm runs the heavy Lima checks.
-run-automated composes both phases. Every VM invocation restores the exact fixtures to Stopped.
+run-fast runs host-only checks and never invokes Lima. run-vm runs mandatory Lima checks.
+run-automated composes both mandatory phases. Capacity runs only through explicit run-capacity.
+Every VM invocation restores the exact fixtures to Stopped.
 Real Clash Mi and Telegram evidence is collected manually as documented in
 docs/v2/DEPLOYED_RELEASE_GATE.md.
 EOF
@@ -275,14 +279,15 @@ validate_stage_registry() {
   jq -e '
     . as $registry |
     (keys == ["contract_version", "schema_version", "stages"]) and
-    .schema_version == 1 and .contract_version == 4 and (.stages | length == 19) and
+    .schema_version == 1 and .contract_version == 5 and (.stages | length == 19) and
     ([.stages[].name] | length == (unique | length)) and
     ([.stages[].order] | length == (unique | length)) and
     ([.stages[].order] == ([.stages[].order] | sort)) and
     ([.stages[].name] | sort) == (["adversarial","capacity","credential-lifecycle","failure","fleet-isolation","go-race","go-test","go-vet","ingress-release","node-transport","openspec","personal-client","restricted-process","traceability","transport-supervision","tunnel-release","update-restore","watchdog-confirm","watchdog-timeout"] | sort) and
     all(.stages[];
-      (keys == ["cleanup_adapter","command","dependencies","name","order","phase","uses_lima"]) and
+      (keys == ["automatic","cleanup_adapter","command","dependencies","name","order","phase","uses_lima"]) and
       (.name | test("^[a-z0-9-]{1,64}$")) and (.phase == "fast" or .phase == "vm") and
+      (.automatic | type == "boolean") and
       (.order | type == "number" and floor == .) and (.command | type == "string" and length > 0 and length <= 1024) and
       (.cleanup_adapter == null or (.cleanup_adapter | type == "string" and startswith("scripts/") and length <= 256)) and
       (.dependencies | type == "array" and length == (unique | length)) and
@@ -296,6 +301,8 @@ validate_stage_registry() {
       ["watchdog-confirm","scripts/v2watchdog-test.sh cleanup"],
       ["watchdog-timeout","scripts/v2watchdog-test.sh cleanup"]
     ]) and
+    ([.stages[] | select(.automatic == false) | .name] == ["capacity"]) and
+    (all(.stages[] | select(.name != "capacity"); .automatic == true)) and
     (.stages[-1].name == "capacity") and
     (.stages[] | select(.name == "failure").dependencies == ["tunnel-release","ingress-release"])
   ' "$stage_registry" >/dev/null || {
@@ -317,9 +324,10 @@ validate_stage_registry() {
     } | shasum -a 256 | awk '{print $1}'
   )
   stage_registry_sha256=$(sha256_file "$stage_registry")
-  all_automated_stages=$(jq -r '.stages[].name' "$stage_registry")
-  fast_automated_stages=$(jq -r '.stages[] | select(.phase == "fast") | .name' "$stage_registry")
-  vm_automated_stages=$(jq -r '.stages[] | select(.phase == "vm") | .name' "$stage_registry")
+  all_automated_stages=$(jq -r '.stages[] | select(.automatic) | .name' "$stage_registry")
+  fast_automated_stages=$(jq -r '.stages[] | select(.automatic and .phase == "fast") | .name' "$stage_registry")
+  vm_automated_stages=$(jq -r '.stages[] | select(.automatic and .phase == "vm") | .name' "$stage_registry")
+  capacity_stages=$(jq -r '.stages[] | select(.automatic == false) | .name' "$stage_registry")
 }
 
 instance_json() {
@@ -613,19 +621,25 @@ session_witnesses_valid() {
 }
 
 find_reusable_fixture_session() {
-  local root="$evidence_dir/$fixture_sessions_directory_name" directory input_sha log_sha file sha
+  local phase=${1:-vm} root="$evidence_dir/$fixture_sessions_directory_name" directory input_sha log_sha restart_exception
+  case "$phase" in
+    vm) restart_exception=1 ;;
+    capacity) restart_exception=0 ;;
+    *) return 1 ;;
+  esac
   for directory in "$root"/session-*; do
     [ -d "$directory" ] && [ ! -L "$directory" ] && [ "$(path_mode "$directory")" = 500 ] || continue
     input_sha=$(sha256_file "$directory/input.json")
     log_sha=$(sha256_file "$directory/session.log")
-    jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
+    jq -e --arg phase "$phase" --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
       --arg source_tree "$current_source_tree_sha256" --arg registry "$stage_registry_sha256" --arg lima "$lab_image_digest" \
-      --arg topology "$fixture_contract_sha256" '
-      .schema_version == 2 and .phase == "vm" and .source_commit == $source_commit and
+      --arg topology "$fixture_contract_sha256" --argjson restart_exception "$restart_exception" '
+      .schema_version == 2 and .phase == $phase and .source_commit == $source_commit and
       .release_version == $release_version and .source_tree_sha256 == $source_tree and
       .stage_registry_sha256 == $registry and .lima_image_digest == $lima and
       .fixture_contract_sha256 == $topology and
-      (.pending_stages | type == "array") and .transport_supervision_gateway_restart_exception == 1
+      (.pending_stages | type == "array") and
+      .transport_supervision_gateway_restart_exception == $restart_exception
     ' "$directory/input.json" >/dev/null 2>&1 || continue
     jq -e --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
       --arg registry "$stage_registry_sha256" --arg input_sha "$input_sha" --arg log_sha "$log_sha" \
@@ -907,7 +921,12 @@ restore_exact_fixtures_stopped() {
 }
 
 allocate_fixture_session() {
-  local root="$evidence_dir/$fixture_sessions_directory_name" number=1 candidate pending_records pending_json
+  local phase=$1 stages=$2 root="$evidence_dir/$fixture_sessions_directory_name" number=1 candidate pending_records pending_json restart_exception
+  case "$phase" in
+    vm) restart_exception=1 ;;
+    capacity) restart_exception=0 ;;
+    *) echo "unknown fixture-session phase: $phase" >&2; return 3 ;;
+  esac
   while [ "$number" -le 9999 ]; do
     printf -v candidate 'session-%04d' "$number"
     if [ ! -e "$root/$candidate" ] && [ ! -L "$root/$candidate" ]; then break; fi
@@ -929,7 +948,7 @@ allocate_fixture_session() {
   fixture_session_shutdown_ms=0
   fixture_witness_number=0
   pending_records=$(mktemp /private/tmp/vpnctl-v2-pending-stages.XXXXXX)
-  for candidate in $vm_automated_stages; do
+  for candidate in $stages; do
     if ! find_reusable_attempt "$candidate" >/dev/null; then jq -cn --arg value "$candidate" '$value' >> "$pending_records"; fi
   done
   pending_json=$(jq -sc '.' "$pending_records")
@@ -937,11 +956,12 @@ allocate_fixture_session() {
   jq -n --arg source_commit "$current_source_commit" --arg release_version "$current_release_version" \
     --arg source_tree "$current_source_tree_sha256" --arg registry "$stage_registry_sha256" \
     --arg lima "$lab_image_digest" --arg topology "$fixture_contract_sha256" \
-    --arg started_at "$fixture_session_started_at" --argjson pending "$pending_json" '{
-      schema_version:2,phase:"vm",source_commit:$source_commit,release_version:$release_version,
+    --arg phase "$phase" --arg started_at "$fixture_session_started_at" --argjson pending "$pending_json" \
+    --argjson restart_exception "$restart_exception" '{
+      schema_version:2,phase:$phase,source_commit:$source_commit,release_version:$release_version,
       source_tree_sha256:$source_tree,stage_registry_sha256:$registry,lima_image_digest:$lima,
       fixture_contract_sha256:$topology,
-      pending_stages:$pending,transport_supervision_gateway_restart_exception:1,started_at:$started_at
+      pending_stages:$pending,transport_supervision_gateway_restart_exception:$restart_exception,started_at:$started_at
     }' > "$fixture_session_directory/input.json"
   chmod 0400 "$fixture_session_directory/input.json"
 }
@@ -1083,14 +1103,14 @@ cleanup_started_fixtures() {
 }
 
 run_vm_stages() {
-  local stage needed=false stage_status=0 cleanup_status=0 started finished
-  for stage in $vm_automated_stages; do
+  local phase=$1 stages=$2 stage needed=false stage_status=0 cleanup_status=0 started finished
+  for stage in $stages; do
     if ! find_reusable_attempt "$stage" >/dev/null; then needed=true; break; fi
   done
-  if [ "$needed" != true ] && ! find_reusable_fixture_session >/dev/null; then needed=true; fi
+  if [ "$needed" != true ] && ! find_reusable_fixture_session "$phase" >/dev/null; then needed=true; fi
   [ "$needed" = true ] || return 0
   assert_fixtures_stopped
-  allocate_fixture_session
+  allocate_fixture_session "$phase" "$stages"
   trap 'cleanup_started_fixtures $?' EXIT
   trap 'cleanup_started_fixtures 130' INT
   trap 'cleanup_started_fixtures 143' TERM
@@ -1147,7 +1167,7 @@ run_vm_stages() {
   current_post_witness_sha256=
   capture_clean_witness
   current_pre_witness_sha256=$current_post_witness_sha256
-  for stage in $vm_automated_stages; do
+  for stage in $stages; do
     if run_stage_attempt "$stage"; then
       :
     else
@@ -1178,8 +1198,9 @@ run_vm_stages() {
 }
 
 attempt_ledger_has_entries() {
-  local stage_dir attempt_dir
-  for stage_dir in "$evidence_dir/$attempts_directory_name"/*; do
+  local stage stage_dir attempt_dir
+  for stage in $all_automated_stages; do
+    stage_dir="$evidence_dir/$attempts_directory_name/$stage"
     [ -d "$stage_dir" ] && [ ! -L "$stage_dir" ] || continue
     for attempt_dir in "$stage_dir"/*; do
       [ -e "$attempt_dir" ] || [ -L "$attempt_dir" ] || continue
@@ -1190,8 +1211,14 @@ attempt_ledger_has_entries() {
 }
 
 phase_attempt_ledger_has_entries() {
-  local phase=$1 stage stage_dir attempt_dir
-  for stage in $( [ "$phase" = fast ] && printf '%s\n' "$fast_automated_stages" || printf '%s\n' "$vm_automated_stages" ); do
+  local phase=$1 stage stages stage_dir attempt_dir
+  case "$phase" in
+    fast) stages=$fast_automated_stages ;;
+    vm) stages=$vm_automated_stages ;;
+    capacity) stages=$capacity_stages ;;
+    *) return 1 ;;
+  esac
+  for stage in $stages; do
     stage_dir="$evidence_dir/$attempts_directory_name/$stage"
     [ -d "$stage_dir" ] && [ ! -L "$stage_dir" ] || continue
     for attempt_dir in "$stage_dir"/*; do
@@ -1204,14 +1231,19 @@ phase_attempt_ledger_has_entries() {
 
 phase_is_complete() {
   local phase=$1 stage stages
-  [ "$phase" = fast ] && stages=$fast_automated_stages || stages=$vm_automated_stages
+  case "$phase" in
+    fast) stages=$fast_automated_stages ;;
+    vm) stages=$vm_automated_stages ;;
+    capacity) stages=$capacity_stages ;;
+    *) return 1 ;;
+  esac
   for stage in $stages; do find_reusable_attempt "$stage" >/dev/null || return 1; done
 }
 
 aggregate_automated_evidence() {
   local records output attempts_json stage attempt attempt_dir result_sha
   assert_fixtures_stopped
-  find_reusable_fixture_session >/dev/null || {
+  find_reusable_fixture_session vm >/dev/null || {
     echo "mandatory release gate has no reusable passing VM session" >&2
     return 3
   }
@@ -1255,7 +1287,6 @@ aggregate_automated_evidence() {
         fleet_isolation: true,
         failure_paths: true,
         adversarial_security: true,
-        minimum_host_capacity: true,
         personal_clients: true,
         transport_supervision: true,
         restricted_process_lifecycle: true,
@@ -1306,7 +1337,7 @@ run_automated_gate() {
     fi
   else
     phase=$mode
-    if phase_is_complete "$phase" && { [ "$phase" != vm ] || find_reusable_fixture_session >/dev/null; }; then
+    if phase_is_complete "$phase" && { [ "$phase" != vm ] || find_reusable_fixture_session vm >/dev/null; }; then
       printf 'release gate phase already complete: %s\n' "$phase"
       [ "$phase" = vm ] && aggregate_automated_evidence
       return 0
@@ -1329,8 +1360,32 @@ run_automated_gate() {
   done
   current_gate_command=$( [ "$mode" = automated ] && printf run-automated || printf run-vm )
   assert_fixtures_stopped
-  run_vm_stages
+  run_vm_stages vm "$vm_automated_stages"
   aggregate_automated_evidence
+}
+
+run_capacity_gate() {
+  local resume=$1 attempt
+  initialize_automated_gate
+  if phase_is_complete capacity && find_reusable_fixture_session capacity >/dev/null; then
+    attempt=$(find_reusable_attempt capacity)
+    printf 'on-demand capacity evidence already complete: %s/%s/capacity/%s/result.json\n' \
+      "$evidence_dir" "$attempts_directory_name" "$attempt"
+    return 0
+  fi
+  if [ "$resume" != true ] && phase_attempt_ledger_has_entries capacity; then
+    echo "capacity attempts already exist; continue explicitly with run-capacity --resume" >&2
+    return 3
+  fi
+  current_gate_command=run-capacity
+  assert_fixtures_stopped
+  run_vm_stages capacity "$capacity_stages"
+  attempt=$(find_reusable_attempt capacity) || {
+    echo "on-demand capacity has no reusable passing attempt" >&2
+    return 3
+  }
+  printf 'on-demand capacity evidence: %s/%s/capacity/%s/result.json\n' \
+    "$evidence_dir" "$attempts_directory_name" "$attempt"
 }
 
 run_phase_command() {
@@ -1342,6 +1397,19 @@ run_phase_command() {
   elif [ "$#" -eq 2 ] && [ "$1" = --resume ]; then
     evidence_dir=$2
     run_automated_gate "$mode" true
+  else
+    usage >&2
+    return 2
+  fi
+}
+
+run_capacity_command() {
+  if [ "$#" -eq 1 ]; then
+    evidence_dir=$1
+    run_capacity_gate false
+  elif [ "$#" -eq 2 ] && [ "$1" = --resume ]; then
+    evidence_dir=$2
+    run_capacity_gate true
   else
     usage >&2
     return 2
@@ -1361,7 +1429,7 @@ json_matches_candidate() {
 
 assert_automated_evidence() {
   local stage attempt expected_attempt result_sha
-  find_reusable_fixture_session >/dev/null || {
+  find_reusable_fixture_session vm >/dev/null || {
     echo "automated release evidence has no reusable passing VM session" >&2
     return 3
   }
@@ -1371,12 +1439,12 @@ assert_automated_evidence() {
     .schema_version == 2 and .status == "passed" and
     .source_commit == $source_commit and .release_version == $release_version and
     .source_tree_sha256 == $source_tree and .fixture_contract_sha256 == $topology and
-    (.stage_attempts | keys == ["adversarial", "capacity", "credential-lifecycle", "failure", "fleet-isolation", "go-race", "go-test", "go-vet", "ingress-release", "node-transport", "openspec", "personal-client", "restricted-process", "traceability", "transport-supervision", "tunnel-release", "update-restore", "watchdog-confirm", "watchdog-timeout"]) and
-    (.stage_attempts | length == 19 and all(.[];
+    (.stage_attempts | keys == ["adversarial", "credential-lifecycle", "failure", "fleet-isolation", "go-race", "go-test", "go-vet", "ingress-release", "node-transport", "openspec", "personal-client", "restricted-process", "traceability", "transport-supervision", "tunnel-release", "update-restore", "watchdog-confirm", "watchdog-timeout"]) and
+    (.stage_attempts | length == 18 and all(.[];
       keys == ["attempt", "result_sha256"] and
       (.attempt | test("^attempt-[0-9]{4}$")) and (.result_sha256 | test("^[0-9a-f]{64}$")))) and
-    (.checks | keys == ["adversarial_security", "credential_lifecycle", "failure_paths", "fixtures_restored_stopped", "fleet_isolation", "go_unit_integration", "ingress_release", "minimum_host_capacity", "node_transport", "personal_clients", "race_detector", "requirement_traceability", "restricted_process_lifecycle", "reverse_tunnel_release", "ssh_watchdog_timeout_and_confirm", "strict_openspec", "transport_supervision", "update_restore_migration", "vet"]) and
-    (.checks | length == 19 and all(.[]; . == true))
+    (.checks | keys == ["adversarial_security", "credential_lifecycle", "failure_paths", "fixtures_restored_stopped", "fleet_isolation", "go_unit_integration", "ingress_release", "node_transport", "personal_clients", "race_detector", "requirement_traceability", "restricted_process_lifecycle", "reverse_tunnel_release", "ssh_watchdog_timeout_and_confirm", "strict_openspec", "transport_supervision", "update_restore_migration", "vet"]) and
+    (.checks | length == 18 and all(.[]; . == true))
   ' "$evidence_dir/automated.json" >/dev/null || {
     echo "automated release evidence is incomplete" >&2
     return 3
@@ -1570,6 +1638,7 @@ case "$command" in
   run-fast) shift; run_phase_command fast "$@" ;;
   run-vm) shift; run_phase_command vm "$@" ;;
   run-automated) shift; run_phase_command automated "$@" ;;
+  run-capacity) shift; run_capacity_command "$@" ;;
   status)
     [ "$#" -eq 2 ] || { usage >&2; exit 2; }
     evidence_dir=$2

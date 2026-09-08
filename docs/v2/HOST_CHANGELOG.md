@@ -2,6 +2,15 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-08 14:45–15:29 +03 — capacity moved to explicit on-demand release evidence
+
+### Source-only orchestration change; no Lima fixture or deployed host mutation
+
+- Changed the deployed release-gate contract so `run-fast`, `run-vm`, `run-automated`, `automated.json`, and `finalize` no longer invoke or require capacity. The unchanged five-minute capacity harness is available only through explicit `run-capacity [--resume]`, uses a distinct `phase=capacity` shared fixture session, and preserves the same source/version/stage/topology/image fingerprints, immutable numbered attempts, and stopped-fixture cleanup boundary. Capacity is now advisory per candidate; the accepted task-16.9 minimum-Gateway evidence and every numerical capacity threshold remain unchanged.
+- Fake-orchestrator regression covers capacity both before and after automatic aggregation, verifies zero implicit capacity invocations, independent capacity sessions, explicit retry, immutable failed/invalidated attempts, fingerprint invalidation, and byte-stable `automated.json` across failed and passing on-demand measurements. Automatic aggregation now binds the exact 18 mandatory automatic attempts and carries no `minimum_host_capacity` claim.
+- Validation passed Bash syntax, JSON parsing, diff checks, strict OpenSpec validation for both `speed-up-v2-release-gate` and `vpnctl-v2`, focused release-gate tests, and the complete sequential Go suite. The first sandboxed full-suite attempt was expectedly non-authoritative because local TCP/Unix `bind` was denied; the identical rerun with loopback socket access passed every package, including `internal/regression` in 290.034 seconds. Race was not repeated because no production Go or concurrent behavior changed.
+- No `limactl` command ran, neither `vpnctl-v2-gateway` nor `vpnctl-v2-node` was started or modified, and no deployed server, package, service, network, credential, external provider, or prior evidence directory changed. The existing `/private/tmp/vpnctl-go-cache` was reused as an ordinary disposable build cache and needs no rollback. Source rollback is one revert of the isolated on-demand-capacity commit; no host rollback remains.
+
 ## 2026-09-08 11:48–12:10 +03 — post-measurement-cleanup capacity attempt and execution-platform diagnosis
 
 ### Immutable failed measurement; exact fixtures restored stopped

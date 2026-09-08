@@ -90,18 +90,18 @@ v2.0 SHALL support a gateway with 1 vCPU, 512 MB RAM, and 10 GB disk for one pri
 - **THEN** it remains stable within documented CPU, memory, disk, connection, and latency acceptance bounds
 
 ### Requirement: Full non-backlog release gate
-v2.0 SHALL not be declared complete until every requirement in all capabilities of this change is implemented, all mandatory restricted-transport, ingress, reverse-tunnel, firewall/control, resource, and security spikes pass, actual supported Clash Mi passes its manual acceptance suite against an actually deployed service, v1 behavior is preserved or deliberately migrated, and the full unit/integration/E2E/resource/migration suite passes. Internal vertical slices and automated development-candidate gates SHALL be ordering and risk-reduction milestones only and MUST NOT reduce or waive the v2.0 scope.
+v2.0 SHALL not be declared complete until every requirement in all capabilities of this change is implemented, all mandatory restricted-transport, ingress, reverse-tunnel, firewall/control, and security spikes pass, actual supported Clash Mi passes its manual acceptance suite against an actually deployed service, v1 behavior is preserved or deliberately migrated, and the full mandatory unit/integration/E2E/migration suite passes. The sustained minimum-host capacity contract remains available as an explicit on-demand advisory measurement and MUST NOT run automatically or block finalization. Internal vertical slices and automated development-candidate gates SHALL be ordering and risk-reduction milestones only and MUST NOT reduce or waive the remaining v2.0 scope.
 
 #### Scenario: Vertical slice passes before remaining capabilities
 - **WHEN** one node, restricted Telegram egress, and one webhook expose pass E2E but other non-backlog requirements remain incomplete
 - **THEN** the build is treated as an internal milestone and not a completed v2.0 release
 
 ### Requirement: Resumable immutable automated release evidence
-The deployed-service automated release gate SHALL store every stage attempt in a separate append-only evidence directory and SHALL create `automated.json` only after every mandatory stage has a reusable passing attempt and the exact Lima fixtures are stopped. An explicit resume invocation SHALL reuse a passing attempt only when its source commit, release version, stage command contract, tracked source/script/fixture/configuration fingerprint, and, for VM stages, pinned Lima image digest match the current candidate. A failed, interrupted, malformed, or invalidated attempt MUST NOT be treated as passing, overwritten, or hidden; resume SHALL append a new attempt for the first stage without reusable passing evidence while retaining all earlier attempts. Legacy evidence SHALL remain read-only and SHALL not be migrated in place.
+The deployed-service automated release gate SHALL store every stage attempt in a separate append-only evidence directory and SHALL create `automated.json` only after every mandatory automatic stage has a reusable passing attempt and the exact Lima fixtures are stopped. Capacity SHALL be an explicit on-demand advisory stage, SHALL NOT run automatically, and SHALL NOT be required or referenced by `automated.json` or finalization. An explicit resume invocation SHALL reuse a passing attempt only when its source commit, release version, stage command contract, tracked source/script/fixture/configuration fingerprint, and, for VM stages, pinned Lima image digest match the current candidate. A failed, interrupted, malformed, or invalidated attempt MUST NOT be treated as passing, overwritten, or hidden; resume SHALL append a new attempt for the first selected stage without reusable passing evidence while retaining all earlier attempts. Legacy evidence SHALL remain read-only and SHALL not be migrated in place.
 
-#### Scenario: Capacity retry after a late failure
-- **WHEN** every earlier automated stage passed but a capacity attempt failed and the operator explicitly resumes the same unchanged candidate
-- **THEN** the gate reuses the matching earlier passes, appends a second capacity attempt, and retains the failed capacity attempt for audit
+#### Scenario: Explicit on-demand capacity retry
+- **WHEN** an on-demand capacity attempt failed and the operator explicitly resumes capacity for the same unchanged candidate
+- **THEN** the gate appends a second capacity attempt, retains the failed attempt for audit, and does not change automated release evidence
 
 #### Scenario: Stage input no longer matches
 - **WHEN** a recorded passing attempt does not match the current stage command, relevant tracked inputs, release version, source commit, or required Lima image digest

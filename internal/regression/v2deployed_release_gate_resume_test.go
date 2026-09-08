@@ -45,7 +45,7 @@ func TestV2DeployedReleaseGateSplitsFastAndVMPhases(t *testing.T) {
 		t.Fatalf("fast phase created automated.json: %v", err)
 	}
 
-	output, code = fixture.run(t, "capacity", "run-vm", evidence)
+	output, code = fixture.run(t, "failure", "run-vm", evidence)
 	if code != 9 || !strings.Contains(output, "run-vm --resume") {
 		t.Fatalf("failed VM phase code=%d output=%s", code, output)
 	}
@@ -66,7 +66,10 @@ func TestV2DeployedReleaseGateSplitsFastAndVMPhases(t *testing.T) {
 	if output, code = fixture.run(t, "", "run-vm", "--resume", evidence); code != 0 {
 		t.Fatalf("VM resume code=%d output=%s", code, output)
 	}
-	assertAutomatedAggregate(t, evidence, "capacity", "attempt-0002")
+	assertAutomatedAggregate(t, evidence, "failure", "attempt-0002")
+	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 0 {
+		t.Fatalf("automatic phases ran capacity %d times", got)
+	}
 	assertSessionEvidence(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0001"), "failed")
 	assertSessionEvidence(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0002"), "passed")
 	automatedPath := filepath.Join(evidence, "automated.json")
@@ -342,59 +345,73 @@ func TestV2DeployedReleaseGateRecoversOneStopFailureWithoutRerunningStages(t *te
 	if output, code = fixture.run(t, "", "run-vm", "--resume", evidence); code != 0 {
 		t.Fatalf("stop-failure resume code=%d output=%s", code, output)
 	}
-	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 1 {
-		t.Fatalf("validation-only resume reran capacity: %d", got)
+	if got := countStageRuns(t, fixture.runLog, "failure"); got != 1 {
+		t.Fatalf("validation-only resume reran failure: %d", got)
 	}
 	assertSessionEvidence(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0002"), "passed")
 }
 
-func TestV2DeployedReleaseGateResumesFailedCapacityWithoutOverwritingAttempts(t *testing.T) {
+func TestV2DeployedReleaseGateRunsCapacityOnlyOnDemandAndPreservesAutomatedEvidence(t *testing.T) {
 	fixture := newDeployedGateFixture(t)
 	evidence := fixture.prepare(t, "evidence-capacity-resume")
 
 	output, code := fixture.run(t, "capacity", "run-automated", evidence)
-	if code != 9 || !strings.Contains(output, "run-automated --resume") {
-		logs, _ := filepath.Glob(filepath.Join(evidence, "automated-attempts", "*", "*", "*"))
-		var details []string
-		for _, log := range logs {
-			data, _ := os.ReadFile(log)
-			details = append(details, log+": "+string(data))
-		}
-		t.Fatalf("first run code=%d output=%s logs=%s", code, output, strings.Join(details, "\n"))
+	if code != 0 {
+		t.Fatalf("automatic run code=%d output=%s", code, output)
 	}
-	if _, err := os.Stat(filepath.Join(evidence, "automated.json")); !os.IsNotExist(err) {
-		t.Fatalf("automated.json after failed capacity = %v", err)
+	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 0 {
+		t.Fatalf("automatic run invoked capacity %d times", got)
+	}
+	automatedPath := filepath.Join(evidence, "automated.json")
+	automatedBefore := fileSHA256(t, automatedPath)
+	automated := readJSONObject(t, automatedPath)
+	if _, exists := automated["stage_attempts"].(map[string]any)["capacity"]; exists {
+		t.Fatal("automated evidence references on-demand capacity")
+	}
+	if _, exists := automated["checks"].(map[string]any)["minimum_host_capacity"]; exists {
+		t.Fatal("automated evidence claims on-demand capacity")
+	}
+
+	output, code = fixture.run(t, "capacity", "run-capacity", evidence)
+	if code != 9 || !strings.Contains(output, "run-capacity --resume") {
+		t.Fatalf("failed on-demand capacity code=%d output=%s", code, output)
+	}
+	if fileSHA256(t, automatedPath) != automatedBefore {
+		t.Fatal("failed capacity changed automated evidence")
 	}
 	failedAttempt := filepath.Join(evidence, "automated-attempts", "capacity", "attempt-0001")
 	before := snapshotAttempt(t, failedAttempt)
 
-	output, code = fixture.run(t, "", "run-automated", evidence)
-	if code != 3 || !strings.Contains(output, "continue explicitly") {
+	output, code = fixture.run(t, "", "run-capacity", evidence)
+	if code != 3 || !strings.Contains(output, "run-capacity --resume") {
 		t.Fatalf("non-resume retry code=%d output=%s", code, output)
 	}
 	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 1 {
 		t.Fatalf("capacity runs after refused retry = %d, want 1", got)
 	}
 
-	output, code = fixture.run(t, "", "run-automated", "--resume", evidence)
-	if code != 0 || !strings.Contains(output, "reusing release gate: adversarial") {
+	output, code = fixture.run(t, "", "run-capacity", "--resume", evidence)
+	if code != 0 || !strings.Contains(output, "on-demand capacity evidence:") {
 		t.Fatalf("resume code=%d output=%s", code, output)
 	}
 	after := snapshotAttempt(t, failedAttempt)
 	if before != after {
 		t.Fatalf("failed capacity attempt changed across resume\nbefore=%s\nafter=%s", before, after)
 	}
-	if got := countStageRuns(t, fixture.runLog, "traceability"); got != 1 {
-		t.Fatalf("traceability runs = %d, want 1", got)
-	}
 	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 2 {
 		t.Fatalf("capacity runs = %d, want 2", got)
 	}
 	assertAttemptCount(t, evidence, "capacity", 2)
-	assertAutomatedAggregate(t, evidence, "capacity", "attempt-0002")
+	if fileSHA256(t, automatedPath) != automatedBefore {
+		t.Fatal("successful capacity changed automated evidence")
+	}
+	capacitySession := readJSONObject(t, filepath.Join(evidence, "automated-fixture-sessions", "session-0003", "input.json"))
+	if capacitySession["phase"] != "capacity" || capacitySession["transport_supervision_gateway_restart_exception"] != float64(0) {
+		t.Fatalf("capacity session contract = %#v", capacitySession)
+	}
 
 	runsBefore := readLines(t, fixture.runLog)
-	output, code = fixture.run(t, "", "run-automated", "--resume", evidence)
+	output, code = fixture.run(t, "", "run-capacity", "--resume", evidence)
 	if code != 0 || !strings.Contains(output, "already complete") {
 		t.Fatalf("completed resume code=%d output=%s", code, output)
 	}
@@ -403,10 +420,41 @@ func TestV2DeployedReleaseGateResumesFailedCapacityWithoutOverwritingAttempts(t 
 	}
 }
 
+func TestV2DeployedReleaseGateAllowsCapacityBeforeAutomatedAndInvalidatesItsFingerprint(t *testing.T) {
+	fixture := newDeployedGateFixture(t)
+	evidence := fixture.prepare(t, "evidence-capacity-first")
+
+	if output, code := fixture.run(t, "", "run-capacity", evidence); code != 0 {
+		t.Fatalf("capacity-first run code=%d output=%s", code, output)
+	}
+	firstAttempt := filepath.Join(evidence, "automated-attempts", "capacity", "attempt-0001")
+	before := snapshotAttempt(t, firstAttempt)
+	invalidateAttemptFingerprint(t, firstAttempt, true)
+	invalidated := snapshotAttempt(t, firstAttempt)
+	if before == invalidated {
+		t.Fatal("capacity fingerprint fixture was not invalidated")
+	}
+	if output, code := fixture.run(t, "", "run-capacity", "--resume", evidence); code != 0 {
+		t.Fatalf("capacity invalidation resume code=%d output=%s", code, output)
+	}
+	if after := snapshotAttempt(t, firstAttempt); after != invalidated {
+		t.Fatalf("invalidated capacity attempt changed across resume\nbefore=%s\nafter=%s", invalidated, after)
+	}
+	assertAttemptCount(t, evidence, "capacity", 2)
+
+	if output, code := fixture.run(t, "", "run-automated", evidence); code != 0 {
+		t.Fatalf("automatic run after capacity code=%d output=%s", code, output)
+	}
+	if got := countStageRuns(t, fixture.runLog, "capacity"); got != 2 {
+		t.Fatalf("automatic run changed capacity run count to %d", got)
+	}
+	assertAutomatedAggregate(t, evidence, "failure", "attempt-0001")
+}
+
 func TestV2DeployedReleaseGateInvalidatesOutdatedStageFingerprints(t *testing.T) {
 	fixture := newDeployedGateFixture(t)
 	evidence := fixture.prepare(t, "evidence-input-invalidation")
-	if output, code := fixture.run(t, "capacity", "run-automated", evidence); code != 9 {
+	if output, code := fixture.run(t, "failure", "run-automated", evidence); code != 9 {
 		t.Fatalf("first run code=%d output=%s", code, output)
 	}
 	failureInput := readJSONObject(t, filepath.Join(evidence, "automated-attempts", "failure", "attempt-0001", "input.json"))
@@ -948,7 +996,7 @@ func assertAutomatedAggregate(t *testing.T, evidence, stage, attempt string) {
 		t.Fatalf("automated topology fingerprint = %#v", automated["fixture_contract_sha256"])
 	}
 	stageAttempts, ok := automated["stage_attempts"].(map[string]any)
-	if !ok || len(stageAttempts) != 19 {
+	if !ok || len(stageAttempts) != 18 {
 		t.Fatalf("stage attempts = %#v", automated["stage_attempts"])
 	}
 	selected, ok := stageAttempts[stage].(map[string]any)

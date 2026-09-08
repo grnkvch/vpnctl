@@ -372,6 +372,7 @@
       "logging_opt_in_max_seconds": 3600
     },
     "minimum_gateway_capacity": {
+      "release_gate_execution": "on-demand-advisory",
       "capacity_boundary_role": "gateway",
       "gateway_vcpu": 1,
       "gateway_memory_bytes": 536870912,
@@ -431,7 +432,8 @@
     "backup-warning-age",
     "numeric-cli-exit-codes",
     "public-command-tree",
-    "minimum-gateway-target-capacity"
+    "minimum-gateway-target-capacity",
+    "on-demand-advisory-capacity-gate"
   ],
   "unresolved_design_parameters": [],
   "deferred_release_gates": [

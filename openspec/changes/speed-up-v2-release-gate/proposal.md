@@ -4,7 +4,8 @@ The clean deployed v2 release gate spends roughly 90% of its wall time in Lima s
 
 ## What Changes
 
-- Split automated execution into explicit host-only `fast` and Lima-backed `vm` phases while retaining the existing full `run-automated` composition and explicit resume behavior.
+- Split mandatory automated execution into explicit host-only `fast` and Lima-backed `vm` phases while retaining the existing full `run-automated` composition and explicit resume behavior.
+- Move the unchanged sustained capacity measurement to an explicit resumable `run-capacity` command. It remains append-only, source/topology-bound evidence, but is advisory and never runs implicitly or participates in `automated.json`.
 - Record structured monotonic phase timings so future optimization is based on comparable evidence rather than reconstructed timestamps.
 - Run all pending VM stages inside one owner-scoped Lima session per invocation, with a fail-closed clean-state witness between stages and stopped fixtures before and after the invocation.
 - Make tunnel and ingress release checks canonical VM attempts and let the unique failure-path stage depend on their exact immutable result hashes instead of executing both release harnesses a second time.
@@ -19,7 +20,7 @@ The clean deployed v2 release gate spends roughly 90% of its wall time in Lima s
 - Establish and validate the Gateway-local TLS/HTTP fault probe before readiness, keep that exact connection alive at a versioned five-second interval, and reuse it at the fault boundary so no new Python/TLS client setup competes with the minimum Gateway under measured load.
 - Keep successful fault recovery free of test-only system-manager cleanup: transfer the exact temporary restart-policy drop-in to the parent and restore it only after the fixed workload, while retaining immediate restoration on fault-helper failure or interruption.
 - Batch each read-only clean-state snapshot and inspect the two independent fixtures concurrently while preserving every residue class and the between-stage fail-closed boundary.
-- Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal.
+- Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal; change only capacity scheduling and release-blocking status.
 - Keep parallel VM boot, background-service quiescence, lean images, deeper standard/tunnel/routing deduplication, and APT caching outside this change until separate measurements justify them.
 
 ## Capabilities

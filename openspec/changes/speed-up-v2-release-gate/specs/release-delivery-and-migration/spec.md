@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Phase-selective automated release execution
-The deployed release gate SHALL expose a host-only fast phase and a Lima-backed VM phase while retaining the existing full automated command as the ordered composition of both phases. `run-fast` MUST execute no Lima command and MUST NOT require Lima to be installed. `run-vm` SHALL require reusable passing evidence for every mandatory fast stage before starting a fixture. Fresh-versus-resume refusal SHALL be scoped to the selected phase, and the explicit `--resume` form SHALL retain the same immutable-attempt reuse rules as the full gate. Partial phase completion MUST NOT create `automated.json`.
+The deployed release gate SHALL expose a host-only fast phase and a Lima-backed mandatory VM phase while retaining the existing full automated command as the ordered composition of both phases. `run-fast` MUST execute no Lima command and MUST NOT require Lima to be installed. `run-vm` SHALL require reusable passing evidence for every mandatory fast stage before starting a fixture. Fresh-versus-resume refusal SHALL be scoped to the selected phase, and the explicit `--resume` form SHALL retain the same immutable-attempt reuse rules as the full gate. Partial phase completion MUST NOT create `automated.json`. The capacity stage MUST NOT run from `run-fast`, `run-vm`, or `run-automated` and MUST NOT be required by `automated.json` or finalization.
 
 Private VM-harness timing and shared-session environment variables MUST NOT be inherited by fast-stage commands or their nested test processes.
 
@@ -16,6 +16,21 @@ Private VM-harness timing and shared-session environment variables MUST NOT be i
 #### Scenario: Backward-compatible full execution
 - **WHEN** the operator invokes the existing `run-automated` command on a new or resumable evidence directory
 - **THEN** the gate applies the same fast-then-VM ordering and produces the same logical mandatory evidence as separate phase invocations
+
+#### Scenario: Automated execution omits capacity
+- **WHEN** any automatic phase completes successfully
+- **THEN** it has not invoked the capacity harness and its final aggregate contains no capacity attempt or minimum-capacity pass claim
+
+### Requirement: Capacity executes only on explicit demand
+The deployed release gate SHALL expose `run-capacity [--resume] <evidence-directory>` as the only top-level capacity invocation. It SHALL run the unchanged capacity stage in its own owner-scoped Lima session, preserve the same source commit, release version, tracked-input, stage-contract, topology, and image-digest binding, append every attempt without replacement, and restore both fixtures stopped. It SHALL NOT require fast-phase evidence and MAY run before or after `automated.json` exists. Its success or failure MUST NOT create, replace, remove, invalidate, or become referenced by `automated.json`; capacity is advisory release evidence.
+
+#### Scenario: Explicit capacity retry
+- **WHEN** an on-demand capacity attempt fails and the operator invokes `run-capacity --resume` for the unchanged candidate
+- **THEN** the failed attempt remains immutable, matching evidence is reused, and a new capacity attempt is appended in a distinct capacity fixture session
+
+#### Scenario: Capacity runs after automated aggregation
+- **WHEN** mandatory automated evidence already exists and the operator explicitly invokes capacity
+- **THEN** capacity runs independently and the exact existing `automated.json` remains unchanged regardless of the capacity result
 
 ### Requirement: Structured diagnostic phase timings
 Every new stage attempt and VM session SHALL record bounded structured monotonic durations for the phases controlled by that layer, including validation/preflight, fixture startup, test execution, clean-state verification, cleanup, and fixture shutdown where applicable. A fixture-start/readiness failure SHALL retain and seal an immutable failed session with the actual elapsed startup/shutdown timings, an empty witness list when no witness was reached, its diagnostic log, and an explicit resume command. Timings SHALL be diagnostic evidence only and MUST NOT alter pass/fail outcomes or existing product latency, reconnect, workload, and capacity bounds.
@@ -61,7 +76,7 @@ The tunnel and ingress release harnesses SHALL each run once as canonical mandat
 - **THEN** it runs the canonical provider checks and unique failure assertions as a self-contained gate
 
 ### Requirement: Optimized gate preserves the release boundary
-Optimization SHALL NOT remove a mandatory assertion, weaken a capacity threshold, shorten the 300-second capacity workload, parallelize conflicting VM stages, migrate or rewrite old evidence, or reuse an attempt across a source commit, release version, tracked input, stage/dependency contract, or pinned Lima image mismatch. Final `automated.json` SHALL continue to reference exact immutable passing results for the complete mandatory stage set.
+Optimization SHALL NOT remove any remaining mandatory automated assertion, weaken an on-demand capacity threshold, shorten the 300-second capacity workload, parallelize conflicting VM stages, migrate or rewrite old evidence, or reuse an attempt across a source commit, release version, tracked input, stage/dependency contract, or pinned Lima image mismatch. Final `automated.json` SHALL continue to reference exact immutable passing results for the complete mandatory automatic stage set and SHALL contain no capacity claim.
 
 The capacity harness SHALL enter its fault command on Gateway before starting measured workload processes, require a bounded exact ready/trigger handshake while the fixtures are idle, SHALL perform the manifest-defined delay inside that already-open guest command, and SHALL wait for that exact process at the fault boundary. Creation, `daemon-reload`, and effective-value verification of the test-only FRPS restart-policy drop-in MUST complete before the helper publishes readiness and before measured workload starts. The recovery worker and unavailable-response probe MUST also become ready before that marker; the latter SHALL establish and validate one TLS/HTTP connection, retain it with an expected HTTP-404 keepalive every versioned five seconds, and reuse that exact connection after the KILL. Its trigger timeout SHALL be derived from the fixed fault delay, reconnect bound, and a versioned 60-second control headroom. No Python/TLS client startup, restart-policy preparation, or `daemon-reload` may execute at the fault boundary. A probe that dies after readiness MUST remain fail-visible but MUST NOT prevent the already-scheduled hard KILL. After successful stable recovery, the helper SHALL verify and transfer the exact owner-scoped restart-policy drop-in to the parent without removing it or invoking `daemon-reload`; the parent SHALL restore the original policy through existing owner-scoped cleanup only after all fixed measured loads and monitors finish. Before successful transfer, helper failure or interruption MUST restore the policy immediately. The fixed `post_measurement_cleanup` phase MUST be present in the manifest and reconnect evidence and therefore participate in attempt fingerprinting. Pre-existing, missing, timed-out, symlinked, mistyped, or changed schedule/policy files SHALL fail closed. This scheduling MUST NOT change the fixed fault offset, scheduling sanity bound, outage duration, reconnect bound, request profile, fixed 2,890 webhook-success minimum, or product latency bounds. Failure or interruption SHALL terminate and wait for the tracked command and remove only its fixed owner-scoped schedule files before existing cleanup and fixture shutdown.
 
@@ -80,8 +95,8 @@ Capacity evidence SHALL report independent `gateway_capacity`, `node_fixture_hea
 Required Gateway and Node monitors SHALL use one bounded batched systemd snapshot before and after measurement for authoritative restart counters. During the measured interval they MUST NOT spawn systemd queries; each fault-window sample SHALL instead read direct cgroup-v2 population and bounded process state for every declared unit. Only the exact Gateway FRPS fault unit MAY have an absent cgroup during the declared outage; an absent cgroup for any other unit is a structured monitor error. Collection SHALL retain sanitized unit/offset/error-class records and continue after a malformed or unavailable required observation, but any degraded required monitor MUST classify the aggregate as `invalid_measurement_evidence`, MUST remain non-passing, and MUST NOT by itself assert Gateway saturation. The managed-swap profile SHALL continue to require an exact one-GiB allocation while recognizing only the versioned 4,096-byte kernel metadata reservation in observed `SwapTotal`; swap-use and all other resource thresholds remain unchanged.
 
 #### Scenario: Optimized candidate reaches aggregation
-- **WHEN** the phase-selective optimized gate completes every mandatory stage
-- **THEN** its logical checks and fixed acceptance values equal the pre-optimization contract, all failed attempts remain visible, and final aggregation succeeds only from exact matching results
+- **WHEN** the phase-selective optimized gate completes every mandatory automatic stage
+- **THEN** its non-capacity logical checks and fixed acceptance values equal the pre-optimization contract, all failed attempts remain visible, and final aggregation succeeds only from exact matching mandatory results without invoking capacity
 
 #### Scenario: Fault delivery is not delayed by a loaded Lima control connection
 - **WHEN** the minimum-host capacity workload reaches its manifest-defined fault offset

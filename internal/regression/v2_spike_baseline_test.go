@@ -93,6 +93,7 @@ type spikeBaseline struct {
 			RemoteDelivery bool   `json:"remote_delivery"`
 		} `json:"backup"`
 		MinimumGatewayCapacity struct {
+			ReleaseGateExecution    string  `json:"release_gate_execution"`
 			CapacityBoundaryRole    string  `json:"capacity_boundary_role"`
 			GatewayVCPU             int     `json:"gateway_vcpu"`
 			GatewayMemoryBytes      int64   `json:"gateway_memory_bytes"`
@@ -209,6 +210,7 @@ func TestV2SpikeBaselineClosesProviderAndParameterChoices(t *testing.T) {
 		"numeric-cli-exit-codes",
 		"public-command-tree",
 		"minimum-gateway-target-capacity",
+		"on-demand-advisory-capacity-gate",
 	)
 	resolved := make(map[string]struct{}, len(baseline.ResolvedParameters))
 	for _, parameter := range baseline.ResolvedParameters {
@@ -277,7 +279,7 @@ func TestV2SpikeBaselineFreezesCriticalLimits(t *testing.T) {
 		t.Errorf("unexpected backup operational defaults: %#v", limits.Backup)
 	}
 	capacity := limits.MinimumGatewayCapacity
-	if capacity.CapacityBoundaryRole != "gateway" || capacity.GatewayVCPU != 1 ||
+	if capacity.ReleaseGateExecution != "on-demand-advisory" || capacity.CapacityBoundaryRole != "gateway" || capacity.GatewayVCPU != 1 ||
 		capacity.GatewayMemoryBytes != 536870912 || capacity.GatewayDiskBytes != 10737418240 ||
 		capacity.GatewayManagedSwapBytes != 1073741824 || capacity.SwapKernelReservedBytes != 4096 ||
 		capacity.NodeFixtureVCPU != 4 ||
