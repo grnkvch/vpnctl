@@ -116,6 +116,12 @@ blocks later stages; only the registered harness
 owner-scoped cleanup adapter may run. Success, failure, `INT`, and `TERM` all
 stop Node before Gateway and verify both exact fixtures `Stopped`.
 
+Ingress cleanup also covers a package-manager failure immediately after its
+exact owner marker is created but before either custom unit exists. It skips
+only units reported as `LoadState=not-found`; a foreign owner, unexpected unit
+state, or real stop failure remains fail-closed and retains the owned state for
+inspection.
+
 Session `input.json`, `session.log`, any numbered witness JSON files, and
 `result.json` are sealed together. A fixture-start failure can legitimately have
 zero witnesses; it is still an immutable failed session, records the elapsed

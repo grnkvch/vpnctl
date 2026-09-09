@@ -20,6 +20,7 @@ The clean deployed v2 release gate spends roughly 90% of its wall time in Lima s
 - Establish and validate the Gateway-local TLS/HTTP fault probe before readiness, keep that exact connection alive at a versioned five-second interval, and reuse it at the fault boundary so no new Python/TLS client setup competes with the minimum Gateway under measured load.
 - Keep successful fault recovery free of test-only system-manager cleanup: transfer the exact temporary restart-policy drop-in to the parent and restore it only after the fixed workload, while retaining immediate restoration on fault-helper failure or interruption.
 - Batch each read-only clean-state snapshot and inspect the two independent fixtures concurrently while preserving every residue class and the between-stage fail-closed boundary.
+- Make ingress teardown tolerate the exact owner-marked partial-prepare state in which package setup failed before either systemd unit existed, while retaining foreign-owner refusal and surfacing real stop failures.
 - Preserve every existing test, capacity threshold, five-minute workload, source/version/input/image binding, immutable failed-attempt history, and legacy-evidence refusal; change only capacity scheduling and release-blocking status.
 - Keep parallel VM boot, background-service quiescence, lean images, deeper standard/tunnel/routing deduplication, and APT caching outside this change until separate measurements justify them.
 

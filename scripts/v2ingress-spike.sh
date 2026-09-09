@@ -685,13 +685,36 @@ stop_spike() {
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$ingress_unit" "$webhook_unit"
 }
 
+stop_owned_unit_if_loaded() {
+  local unit=$1
+  local load_state
+  if ! load_state=$(limactl shell --tty=false "$gateway_instance" -- \
+    systemctl show --property=LoadState --value "$unit"); then
+    echo "could not inspect owned ingress spike unit: $unit" >&2
+    return 3
+  fi
+  case "$load_state" in
+    not-found)
+      return
+      ;;
+    loaded)
+      limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$unit"
+      ;;
+    *)
+      echo "refusing to remove owned ingress spike with unexpected unit state: $unit ($load_state)" >&2
+      return 3
+      ;;
+  esac
+}
+
 uninstall_spike() {
   assert_lab_instance "$gateway_instance"
   if ! limactl shell --tty=false "$gateway_instance" -- sudo grep -Fxq "$owner_value" "$owner_path"; then
     echo "refusing to uninstall unowned ingress spike" >&2
     exit 3
   fi
-  limactl shell --tty=false "$gateway_instance" -- sudo systemctl stop "$ingress_unit" "$webhook_unit"
+  stop_owned_unit_if_loaded "$ingress_unit"
+  stop_owned_unit_if_loaded "$webhook_unit"
   limactl shell --tty=false "$gateway_instance" -- sudo systemctl clean --what=state "$ingress_unit" "$webhook_unit" >/dev/null 2>&1 || true
   limactl shell --tty=false "$gateway_instance" -- sudo rm -f \
     "/etc/systemd/system/$ingress_unit" "/etc/systemd/system/$webhook_unit" \

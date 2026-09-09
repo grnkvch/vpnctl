@@ -68,6 +68,8 @@ A checked-in clean-state manifest enumerates the complete known test-owned surfa
 
 Each child harness continues to own and validate its resources. On nonzero exit the child's existing trap runs first. The parent then runs the witness. If a successful child leaves residue, the parent changes that attempt to failed. If residue exists after any failure, a stage-to-cleanup-command map may invoke only that harness's existing owner-checking cleanup entrypoint; no generic path deletion, process match, firewall flush, or cleanup of partial/foreign ownership is introduced. Both VMs are then stopped in node-before-gateway order and verified `Stopped` before the command returns.
 
+The ingress harness creates its exact owner marker before invoking APT. A transient package-manager failure can therefore leave a valid partial fixture before either custom systemd unit is installed. Its owner-scoped uninstall inspects each exact unit's `LoadState`: only `not-found` is treated as already absent, `loaded` is stopped normally, and any other state or stop error fails closed before owned files are removed. This lets the release-harness trap remove the marker-only partial fixture while preserving both ownership and service-stop safety.
+
 `INT` and `TERM` use explicit nonzero signal exits and the same cleanup/stop path. An uncatchable host failure can leave VMs running; the next invocation refuses before mutation and prints the exact owner-scoped recovery action instead of adopting the session.
 
 The mandatory VM order is fail-fast and dependency-aware: short functional/supervision/watchdog stages precede broad capability suites, and canonical tunnel and ingress precede their dependent unique failure stage. The fixed five-minute capacity stage has a separate on-demand session and is never appended implicitly. Both selections and their ordering are part of the stage contract fingerprint.
@@ -189,6 +191,7 @@ Alternatives considered:
 - **[A boundary-time control handshake becomes competing Gateway workload]** → establish and HTTP-validate the exact TLS connection before readiness, retain it with a fixed low-rate keepalive below the server idle timeout, and trigger the unavailable request only after the hard KILL.
 - **[Warm-up or worker headroom weakens the measured profile]** → keep warm-up outside the measured 300 seconds, require it to complete correctly, preserve exact rates/counts/timeouts, and derive rather than tune worker counts.
 - **[Batched clean-state checks miss residue]** → preserve the exact manifest and unknown-owner search, test all original resource classes, and change only command multiplicity plus safe cross-fixture concurrency.
+- **[Partial ingress preparation has no units to stop]** → require the exact owner marker, skip only an exact `LoadState=not-found`, and retain the marker and files when a loaded unit cannot be stopped or its state is unexpected.
 
 ## Migration Plan
 

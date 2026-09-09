@@ -48,6 +48,8 @@ Each VM-phase invocation SHALL begin with both exact pinned fixtures stopped, ha
 
 Each witness MAY inspect the two independent fixtures concurrently and SHALL batch repeated read-only observations within a fixture, but MUST preserve the complete manifest, unknown owner-marker search, one-pass executable inspection, every resource-class assertion, and the sequential stage boundary. Batching SHALL NOT parallelize VM stages or introduce a cleanup mutation.
 
+The ingress owner-scoped cleanup SHALL accept an exact owned partial-prepare state where package setup failed before one or both custom systemd units were installed. It MUST treat only an exact unit `LoadState` of `not-found` as already absent, MUST stop a loaded exact unit normally, and MUST refuse foreign ownership, an unexpected load state, or a real stop failure before removing the owner marker.
+
 #### Scenario: Clean multi-stage VM pass
 - **WHEN** several pending VM stages run successfully in one invocation
 - **THEN** parent orchestration boots both fixtures once, only `transport-supervision` may additionally restart Gateway once for its boot-recovery assertion, every adjacent stage pair is separated by a passing clean-state witness, and both fixtures are stopped after the final stage
@@ -59,6 +61,10 @@ Each witness MAY inspect the two independent fixtures concurrently and SHALL bat
 #### Scenario: Resume after VM failure
 - **WHEN** a VM stage fails and the operator resumes the unchanged candidate after both fixtures are stopped
 - **THEN** the new VM session skips matching passing attempts, begins at the first missing or non-reusable VM stage, and never adopts state from the prior VM session
+
+#### Scenario: Ingress package setup fails before unit installation
+- **WHEN** ingress preparation has written its exact owner marker but a package-manager error occurs before either custom systemd unit exists
+- **THEN** the release-harness trap treats both exact units as already absent, removes only the owned partial fixture, retains the failed attempt, and leaves the next explicit resume at a clean stopped-fixture boundary
 
 ### Requirement: Canonical hash-bound stage dependencies
 The tunnel and ingress release harnesses SHALL each run once as canonical mandatory stage attempts. Their registry commands SHALL receive shell-quoted absolute evidence paths below their exact repository artifact roots. The release-gate failure stage SHALL execute only its unique failure assertions when selected canonical tunnel and ingress attempts are reusable, and its input fingerprint SHALL bind the exact result SHA-256 of both dependencies plus their stage contracts. A changed, missing, failed, malformed, or invalidated dependency SHALL invalidate the dependent failure attempt. Direct standalone execution of the failure harness SHALL retain its complete self-contained coverage unless explicit validated dependency evidence is supplied.

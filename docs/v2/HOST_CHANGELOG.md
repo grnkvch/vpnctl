@@ -2,6 +2,17 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-09 13:31–14:06 +03 — owner-scoped recovery and partial ingress cleanup correction
+
+### Exact disposable Gateway fixture residue removed; both fixtures stopped
+
+- Deployed release evidence `artifacts/v2lab/deployed-release-gate/evidence-2026-09-09T033337Z` retained immutable `ingress-release/attempt-0001` failure evidence. An unrelated guest `apt-get` held `/var/lib/apt/lists/lock`; ingress preparation stopped after creating only `/etc/vpnctl-v2-spike/ingress/.owner`. The following post-stage witness failed closed, and resume session `session-0002` independently refused the retained residue before running another stage.
+- Started only the exact `vpnctl-v2-gateway` Lima fixture to recover the test-owned partial state. Read-only checks proved the directory contained exactly one regular owner file with value `vpnctl-v2-ingress-spike-v1` and that no `apt-get` or `dpkg` process remained. The normal `scripts/v2ingress-spike.sh uninstall` refused before cleanup because both partially uncreated systemd units were not loaded, exposing a non-idempotent partial-install cleanup defect.
+- Applied one guarded recovery command that revalidated the exact owner value and single-entry directory, removed only `/etc/vpnctl-v2-spike/ingress/.owner`, and removed only the resulting empty `/etc/vpnctl-v2-spike/ingress` directory. A read-only guest check confirmed the path absent. No recursive deletion, package operation, systemd unit mutation, network change, credential, foreign path, or prior evidence mutation occurred.
+- Stopped `vpnctl-v2-gateway` after recovery. Independent Lima state reports Gateway `Stopped` at 1 vCPU/512 MiB/10 GiB and Node `Stopped` at 4 vCPU/2 GiB/10 GiB. The deleted marker is disposable harness state reproducible from source and needs no recovery; no host rollback remains. The current candidate must not be resumed as a release candidate until the owner-scoped partial-install cleanup defect is fixed and a new clean-commit evidence directory is prepared.
+- Corrected the source-owned ingress teardown so it inspects each exact unit `LoadState`, skips only `not-found`, stops `loaded` units normally, and refuses an unexpected state or real stop failure before deleting the owner marker. The release-harness failure remains visible; this change only restores the clean boundary needed by a later explicit resume.
+- Added host-only fake-Lima behavior covering successful cleanup of the exact marker-only partial prepare and preservation of owned state when a loaded unit cannot stop. Focused ingress tests and the wider ingress/deployed-release/traceability regression selection passed in 273.106 seconds; Bash syntax and strict OpenSpec validation for both changes passed. No Lima command or VM mutation was used for source validation, and the task-scoped `/private/tmp/vpnctl-v2-ingress-cleanup-go-cache` was removed afterward. Source rollback is one revert of the isolated correction commit; both exact fixtures remain stopped.
+
 ## 2026-09-08 14:45–15:29 +03 — capacity moved to explicit on-demand release evidence
 
 ### Source-only orchestration change; no Lima fixture or deployed host mutation

@@ -3,6 +3,7 @@ package regression
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -183,6 +184,135 @@ func TestV2IngressSpikeContract(t *testing.T) {
 	if !strings.Contains(limaTemplate, "guestPort: 443") {
 		t.Error("Lima template does not isolate guest port 443 from host forwarding")
 	}
+}
+
+func TestV2IngressUninstallCleansOwnedPartialPrepareWithoutUnits(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := t.TempDir()
+	fakeBin := filepath.Join(temporary, "bin")
+	state := filepath.Join(temporary, "state")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ownerState := filepath.Join(state, "owner")
+	if err := os.WriteFile(ownerState, []byte("vpnctl-v2-ingress-spike-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(temporary, "limactl.log")
+	writeTestFile(t, filepath.Join(fakeBin, "limactl"), fakeIngressUninstallLima(), 0o755)
+
+	command := exec.Command(filepath.Join(repositoryRoot, "scripts", "v2ingress-spike.sh"), "uninstall")
+	command.Dir = repositoryRoot
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VPNCTL_TEST_CALL_LOG="+calls,
+		"VPNCTL_TEST_INGRESS_STATE="+state,
+		"VPNCTL_TEST_UNIT_LOAD_STATE=not-found",
+		"VPNCTL_TEST_STOP_EXIT=91",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("uninstall marker-only partial prepare: %v: %s", err, output)
+	}
+	if _, err := os.Stat(ownerState); !os.IsNotExist(err) {
+		t.Fatalf("owner marker state was not removed: %v", err)
+	}
+	log := readContractFile(t, calls)
+	for _, required := range []string{
+		"systemctl show --property=LoadState --value vpnctl-v2-spike-ingress.service",
+		"systemctl show --property=LoadState --value vpnctl-v2-spike-webhook.service",
+		"sudo rm -f /etc/systemd/system/vpnctl-v2-spike-ingress.service",
+	} {
+		if !strings.Contains(log, required) {
+			t.Errorf("partial cleanup did not invoke %q", required)
+		}
+	}
+	if strings.Contains(log, "sudo systemctl stop") {
+		t.Fatalf("partial cleanup tried to stop an absent unit:\n%s", log)
+	}
+}
+
+func TestV2IngressUninstallPreservesOwnerWhenLoadedUnitCannotStop(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := t.TempDir()
+	fakeBin := filepath.Join(temporary, "bin")
+	state := filepath.Join(temporary, "state")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ownerState := filepath.Join(state, "owner")
+	if err := os.WriteFile(ownerState, []byte("vpnctl-v2-ingress-spike-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(temporary, "limactl.log")
+	writeTestFile(t, filepath.Join(fakeBin, "limactl"), fakeIngressUninstallLima(), 0o755)
+
+	command := exec.Command(filepath.Join(repositoryRoot, "scripts", "v2ingress-spike.sh"), "uninstall")
+	command.Dir = repositoryRoot
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VPNCTL_TEST_CALL_LOG="+calls,
+		"VPNCTL_TEST_INGRESS_STATE="+state,
+		"VPNCTL_TEST_UNIT_LOAD_STATE=loaded",
+		"VPNCTL_TEST_STOP_EXIT=91",
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("uninstall unexpectedly ignored a loaded-unit stop failure: %s", output)
+	}
+	if _, err := os.Stat(ownerState); err != nil {
+		t.Fatalf("owner marker was removed after stop failure: %v", err)
+	}
+	log := readContractFile(t, calls)
+	if !strings.Contains(log, "sudo systemctl stop vpnctl-v2-spike-ingress.service") {
+		t.Fatalf("loaded unit was not stopped normally:\n%s", log)
+	}
+	if strings.Contains(log, "sudo rm -f") {
+		t.Fatalf("owned files were removed after stop failure:\n%s", log)
+	}
+}
+
+func fakeIngressUninstallLima() string {
+	return `#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$VPNCTL_TEST_CALL_LOG"
+if [ "${1:-}" = list ] && [ "${2:-}" = --json ]; then
+  printf '%s\n' '{"name":"vpnctl-v2-gateway","status":"Running","vmType":"qemu","arch":"x86_64","cpus":1,"memory":536870912,"disk":10737418240,"network":[{"lima":"user-v2"}],"config":{"images":[{"digest":"sha256:53fdde898feed8b027d94baa9cfe8229867f330a1d9c49dc7d84465ee7f229f7"}]}}'
+  exit 0
+fi
+case " $* " in
+  *" sudo grep -Fxq vpnctl-v2-ingress-spike-v1 /etc/vpnctl-v2-spike/ingress/.owner "*)
+    grep -Fxq vpnctl-v2-ingress-spike-v1 "$VPNCTL_TEST_INGRESS_STATE/owner"
+    ;;
+  *" systemctl show --property=LoadState --value vpnctl-v2-spike-"*)
+    printf '%s\n' "$VPNCTL_TEST_UNIT_LOAD_STATE"
+    ;;
+  *" sudo systemctl stop vpnctl-v2-spike-"*)
+    exit "$VPNCTL_TEST_STOP_EXIT"
+    ;;
+  *" sudo grep -Eq ^NGINX_INSTALLED_BY_SPIKE="*)
+    exit 1
+    ;;
+  *" sudo rm -f "*)
+    for argument in "$@"; do
+      if [ "$argument" = /etc/vpnctl-v2-spike/ingress/.owner ]; then
+        rm -f "$VPNCTL_TEST_INGRESS_STATE/owner"
+      fi
+    done
+    ;;
+esac
+`
 }
 
 func TestV2IngressReleaseGateContract(t *testing.T) {

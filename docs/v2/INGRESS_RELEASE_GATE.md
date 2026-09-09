@@ -34,6 +34,10 @@ reload, ingress cgroup peak below 128 MiB, zero OOM events, and no body files.
 It then removes only its owner-marked units, files, package, guest test tools,
 and listeners. Evidence is retained under the ignored
 `artifacts/v2lab/ingress-release-gate/` tree and records the source commit.
+If package preparation fails before the custom units are installed, the same
+owner-scoped teardown treats their exact `LoadState=not-found` as already
+absent and removes the partial fixture. It still refuses a foreign owner or a
+real failure to stop a loaded unit.
 
 ## Packaged Telegram gate
 
