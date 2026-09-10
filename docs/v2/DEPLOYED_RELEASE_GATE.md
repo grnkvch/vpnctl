@@ -279,6 +279,11 @@ evidence rather than colliding with or adopting a prior attempt.
 Build the three checksum-governed assets from the same clean commit with the
 pinned provider archives, transfer them over trusted `scp`, and install the
 same version on a dedicated Ubuntu 24.04/amd64 gateway and private node.
+The builder keeps its private work and later build/package subprocesses under
+`umask 077`, explicitly applies canonical output modes, and runs the mandatory
+Go suite in an isolated child shell with deterministic `umask 022`;
+a test failure stops before any v2 asset is published and cleans the private
+temporary work directory.
 Supply the gateway public IPv4 manually. Verify healthy role/status output,
 gateway-node control, restricted transport, the assigned `telegram` preset,
 the five-year RSA-2048/SHA-256 IP-SAN certificate, and default-off logging.

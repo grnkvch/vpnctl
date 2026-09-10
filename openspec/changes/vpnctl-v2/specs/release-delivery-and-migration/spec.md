@@ -22,6 +22,17 @@ The official curl installer and every local bundle consumer SHALL verify canonic
 - **WHEN** an operator obtains both a release artifact and its checksum metadata from a channel whose publisher identity is not trusted
 - **THEN** vpnctl documents that checksum verification alone does not authenticate the publisher and does not claim that the artifact is authentic
 
+### Requirement: Isolated release-builder verification environment
+The release builder SHALL retain restrictive `umask 077` for builder-owned temporary paths and later build/package subprocesses, while the output writer SHALL apply the canonical release-asset modes explicitly. Mandatory Go verification SHALL run in a child environment with deterministic `umask 022`, and that verification mask MUST NOT leak into later phases. A failed verification SHALL stop before building or publishing any v2 release asset and SHALL remove only the builder-owned temporary work directory.
+
+#### Scenario: Test permission behavior is independent of artifact mask
+- **WHEN** the release builder runs tests whose temporary directories depend on the process umask
+- **THEN** those tests observe `umask 022`, later build and packaging commands observe `umask 077`, and published assets receive their canonical explicit modes
+
+#### Scenario: Mandatory verification fails
+- **WHEN** the mandatory Go test command returns a failure
+- **THEN** the builder returns failure without publishing a standalone binary, bundle, or checksum metadata and leaves no partial private work directory
+
 ### Requirement: Manual gateway-first updates
 `vpnctl update`, `vpnctl update <version>`, and `vpnctl update rollback` SHALL be manual operations; no background update check, beta/nightly channel, or automatic remote-node update SHALL exist. An update SHALL verify all artifacts, show version and state-migration diff, fleet compatibility, affected services, expected interruption, and rollback capability before confirmed mutation. Updates SHALL proceed gateway before nodes.
 

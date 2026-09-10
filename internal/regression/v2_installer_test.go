@@ -235,6 +235,164 @@ func TestV2ReleaseScriptBuildsOnlyTheThreeChecksumGovernedAssets(t *testing.T) {
 	}
 }
 
+func TestV2ReleaseScriptIsolatesTestUmaskAndCleansFailedVerification(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful phase boundaries", func(t *testing.T) {
+		root, calls, output, err := runReleaseBuilderFixture(t, false)
+		if err != nil {
+			t.Fatalf("release builder failed: %v\n%s", err, output)
+		}
+		if calls != "test 0022\nbuild 0077\nrun 0077\n" {
+			t.Fatalf("release builder phase umasks:\n%s", calls)
+		}
+		for _, name := range []string{
+			lifecycle.ReleaseBinaryAsset,
+			lifecycle.ReleaseBundleAsset,
+			lifecycle.ReleaseChecksumsAsset,
+		} {
+			if _, err := os.Stat(filepath.Join(root, "dist", name)); err != nil {
+				t.Fatalf("published asset %s: %v", name, err)
+			}
+		}
+		assertNoReleaseBuilderWorkDirectory(t, root)
+	})
+
+	t.Run("failed verification", func(t *testing.T) {
+		root, calls, output, err := runReleaseBuilderFixture(t, true)
+		if err == nil {
+			t.Fatalf("release builder unexpectedly accepted failed tests:\n%s", output)
+		}
+		if calls != "test 0022\n" {
+			t.Fatalf("commands after failed verification or wrong umask:\n%s", calls)
+		}
+		for _, name := range []string{
+			lifecycle.ReleaseBinaryAsset,
+			lifecycle.ReleaseBundleAsset,
+			lifecycle.ReleaseChecksumsAsset,
+		} {
+			if _, err := os.Stat(filepath.Join(root, "dist", name)); !os.IsNotExist(err) {
+				t.Fatalf("failed verification published %s: %v", name, err)
+			}
+		}
+		assertNoReleaseBuilderWorkDirectory(t, root)
+	})
+}
+
+func runReleaseBuilderFixture(t *testing.T, failTests bool) (string, string, string, error) {
+	t.Helper()
+	repository := t.TempDir()
+	for _, directory := range []string{"scripts", "dist", "shim", "providers"} {
+		if err := os.Mkdir(filepath.Join(repository, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	releaseScript, err := os.ReadFile(filepath.Join("..", "..", "scripts", "release.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "scripts", "release.sh"), releaseScript, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"mihomo.gz", "frp.tar.gz"} {
+		if err := os.WriteFile(filepath.Join(repository, "providers", name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	shim := `#!/bin/sh
+set -eu
+phase="${1:-}"
+mask=$(umask)
+printf '%s %s\n' "$phase" "$mask" >>"$VPNCTL_RELEASE_TEST_CALLS"
+case "$phase:$mask" in
+	test:0022|build:0077|run:0077) ;;
+	*) exit 91 ;;
+esac
+case "$phase" in
+	test)
+		[ "${VPNCTL_RELEASE_TEST_FAIL:-0}" = 0 ] || exit 23
+		;;
+	build)
+		output=""
+		while [ "$#" -gt 0 ]; do
+			if [ "$1" = "-o" ]; then
+				shift
+				output="$1"
+				break
+			fi
+			shift
+		done
+		[ -n "$output" ] || exit 92
+		printf '#!/bin/sh\n' >"$output"
+		chmod 0700 "$output"
+		;;
+	run)
+		output=""
+		while [ "$#" -gt 0 ]; do
+			if [ "$1" = "-output-dir" ]; then
+				shift
+				output="$1"
+				break
+			fi
+			shift
+		done
+		[ -n "$output" ] || exit 93
+		printf 'binary\n' >"$output/vpnctl-linux-amd64"
+		printf 'bundle\n' >"$output/vpnctl-v2-linux-amd64.bundle"
+		printf 'checksums\n' >"$output/release-checksums.txt"
+		;;
+	*) exit 94 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(repository, "shim", "go"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	callsPath := filepath.Join(repository, "calls.log")
+	command := exec.Command("sh", filepath.Join(repository, "scripts", "release.sh"), "v2.0.0")
+	command.Dir = repository
+	environment := make([]string, 0, len(os.Environ())+5)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "PATH=") ||
+			strings.HasPrefix(entry, "VPNCTL_MIHOMO_ARCHIVE=") ||
+			strings.HasPrefix(entry, "VPNCTL_FRP_ARCHIVE=") ||
+			strings.HasPrefix(entry, "VPNCTL_RELEASE_TEST_CALLS=") ||
+			strings.HasPrefix(entry, "VPNCTL_RELEASE_TEST_FAIL=") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment,
+		"PATH="+filepath.Join(repository, "shim")+":"+os.Getenv("PATH"),
+		"VPNCTL_MIHOMO_ARCHIVE="+filepath.Join(repository, "providers", "mihomo.gz"),
+		"VPNCTL_FRP_ARCHIVE="+filepath.Join(repository, "providers", "frp.tar.gz"),
+		"VPNCTL_RELEASE_TEST_CALLS="+callsPath,
+	)
+	if failTests {
+		environment = append(environment, "VPNCTL_RELEASE_TEST_FAIL=1")
+	}
+	command.Env = environment
+	combined, commandErr := command.CombinedOutput()
+	calls, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatalf("read release builder calls: %v", err)
+	}
+	return repository, string(calls), string(combined), commandErr
+}
+
+func assertNoReleaseBuilderWorkDirectory(t *testing.T, repository string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(repository, "dist", ".vpnctl-release.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("release builder retained private work directories: %v", matches)
+	}
+}
+
 type installerFixture struct {
 	assetDir  string
 	shimDir   string

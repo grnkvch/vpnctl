@@ -11,7 +11,7 @@ vpnctl v1 решает только одноузловой personal WireGuard VP
 - Добавить два подготовленных транспорта — WireGuard `standard` и DPI-resistant `restricted` — с только ручным выбором, test/switch flows и отсутствием fail-direct.
 - Добавить managed IP-only HTTPS ingress на `443/TCP` и multiplexed reverse tunnel от gateway к явно опубликованным HTTP applications private nodes.
 - Добавить transactional desired-state operations, passive status, active doctor, drift repair, lockout watchdog, temporary opt-in logging, encrypted gateway backup/restore и explicit uninstall/purge semantics.
-- Добавить checksummed pinned self-contained release bundle, gateway-first manual updates with rollback, one-time migration from v1 и acceptance/resource gates для Ubuntu 24.04 amd64 на 1 vCPU/512 MB/10 GB.
+- Добавить checksummed pinned self-contained release bundle, изолировать deterministic test environment release builder от его restrictive work/build umask, gateway-first manual updates with rollback, one-time migration from v1 и acceptance/resource gates для Ubuntu 24.04 amd64 на 1 vCPU/512 MB/10 GB.
 - Явно не включать mesh/failover, node-to-node networking, automatic transport switching, process/container-scoped policy, public management API/Web UI, generic ingress, full IPv6, domain/ACME, URL/subscription/QR delivery и node cloning/portable backup.
 
 ## Capabilities

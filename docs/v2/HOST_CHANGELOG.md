@@ -2,6 +2,14 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-10 — release-builder umask isolation
+
+### Source-only correction; failed local release left no partial assets
+
+- The operator's local `scripts/release.sh v2.0.0` attempt exposed that the builder's private global `umask 077` leaked into `go test ./...`; nginx activation tests correctly rejected temporary runtime directories created as mode `0700` instead of their required safe `0755`. The command failed before build/publication. Read-only inspection confirmed that `dist/` contained no `vpnctl-linux-amd64`, `vpnctl-v2-linux-amd64.bundle`, `release-checksums.txt`, or retained `.vpnctl-release.*` work directory; the pre-existing v1 assets were unchanged.
+- The builder now runs only its mandatory Go verification in a child shell with deterministic `umask 022`. The parent retains `077` for its private work directory and later build/package subprocesses; the output writer continues to apply canonical asset modes explicitly. A fake-tool behavioral regression proves the exact `0022`/`0077` phase boundary, successful three-asset publication, fail-before-build behavior, and owner-scoped temporary-directory cleanup.
+- Validation passed the focused release-builder and traceability regressions, the original nginx activation tests under an outer `umask 077`, shell syntax, strict `vpnctl-v2` OpenSpec validation, and diff checks. The full uncached Go suite ran every package: all product and regression tests passed except the traceability test initially identifying the two newly added OpenSpec scenarios; after assigning both scenarios to task 16.13, the focused traceability rerun passed. No VM, package, service, network, credential, provider, deployed host, or prior evidence was changed. A task-scoped `/private/tmp/vpnctl-release-umask-go-cache` was used only as an ordinary disposable build cache and removed after validation. Source rollback is one revert of the isolated correction commit; no host rollback remains.
+
 ## 2026-09-09 13:31–14:06 +03 — owner-scoped recovery and partial ingress cleanup correction
 
 ### Exact disposable Gateway fixture residue removed; both fixtures stopped

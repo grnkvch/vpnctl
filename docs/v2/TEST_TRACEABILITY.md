@@ -112,6 +112,8 @@ fixture snapshot and inspecting Gateway and Node concurrently.
 | `release-delivery-and-migration` | Checksummed self-contained release bundle | Offline-transferred bundle | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Installer verification boundary | Bundle checksum mismatch | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Installer verification boundary | Artifact and checksum metadata share an untrusted channel | unit, integration, documentation, manual-compatibility | 14.1, 14.3, 15.4, 16.10-16.11 |
+| `release-delivery-and-migration` | Isolated release-builder verification environment | Test permission behavior is independent of artifact mask | integration | 16.13 |
+| `release-delivery-and-migration` | Isolated release-builder verification environment | Mandatory verification fails | integration | 16.13 |
 | `release-delivery-and-migration` | Manual gateway-first updates | Latest stable update | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Update isolation and rollback | Updated component fails health check | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Update availability expectations | Controller-only compatible update | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |

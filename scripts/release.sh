@@ -34,7 +34,10 @@ output="$work_dir/output"
 mkdir -m 0700 "$output"
 
 cd "$root_dir"
-go test ./...
+(
+	umask 022
+	go test ./...
+)
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 	-trimpath \
 	-buildvcs=false \
