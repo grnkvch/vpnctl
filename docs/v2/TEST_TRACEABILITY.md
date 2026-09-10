@@ -111,6 +111,7 @@ fixture snapshot and inspecting Gateway and Node concurrently.
 | `personal-client-management` | Export delivery boundary | Successful export output | unit, integration, e2e, manual-compatibility | 1.1, 7.7-7.12, 16.1, 16.4-16.5, 16.11 |
 | `release-delivery-and-migration` | Checksummed self-contained release bundle | Offline-transferred bundle | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
 | `release-delivery-and-migration` | Installer verification boundary | Bundle checksum mismatch | unit, integration, e2e, manual-compatibility | 1.1, 14.1-14.12, 15.1-15.6, 16.8-16.11 |
+| `release-delivery-and-migration` | Installer verification boundary | Provider archive cannot produce both role installations | unit, integration | 16.14 |
 | `release-delivery-and-migration` | Installer verification boundary | Artifact and checksum metadata share an untrusted channel | unit, integration, documentation, manual-compatibility | 14.1, 14.3, 15.4, 16.10-16.11 |
 | `release-delivery-and-migration` | Isolated release-builder verification environment | Test permission behavior is independent of artifact mask | integration | 16.13 |
 | `release-delivery-and-migration` | Isolated release-builder verification environment | Mandatory verification fails | integration | 16.13 |

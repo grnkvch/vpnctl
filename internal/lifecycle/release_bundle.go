@@ -227,6 +227,35 @@ func (installer *ReleaseBundleInstaller) Inspect(ctx context.Context, bundlePath
 	return cloneReleaseManifest(manifest), nil
 }
 
+// InspectInstallable verifies the complete bundle and prepares the exact
+// gateway and node install candidates in a private staging directory. It does
+// not inspect or mutate any system install target. Release publication and v1
+// migration planning use this stronger boundary so provider archive defects
+// fail before public assets or maintenance state exist.
+func (installer *ReleaseBundleInstaller) InspectInstallable(ctx context.Context, bundlePath string) (ReleaseManifest, error) {
+	if ctx == nil {
+		return ReleaseManifest{}, fmt.Errorf("context is required")
+	}
+	if installer == nil {
+		return ReleaseManifest{}, fmt.Errorf("release bundle installer is incomplete")
+	}
+	staged, err := installer.stage(ctx, bundlePath)
+	if err != nil {
+		return ReleaseManifest{}, err
+	}
+	defer os.RemoveAll(staged.root)
+	for _, role := range []model.Role{model.RoleGateway, model.RoleNode} {
+		candidates, err := installer.prepareCandidates(ctx, staged, role)
+		if err != nil {
+			return ReleaseManifest{}, err
+		}
+		if err := validateReleaseCandidateSources(candidates); err != nil {
+			return ReleaseManifest{}, err
+		}
+	}
+	return cloneReleaseManifest(staged.manifest), nil
+}
+
 func (installer *ReleaseBundleInstaller) open(bundlePath string) (*os.File, ReleaseManifest, error) {
 	if !filepath.IsAbs(bundlePath) || filepath.Clean(bundlePath) != bundlePath {
 		return nil, ReleaseManifest{}, releaseBundleInvalid("bundle path must be clean and absolute")
@@ -361,7 +390,7 @@ func (installer *ReleaseBundleInstaller) prepareCandidates(ctx context.Context, 
 		case "vpnctl":
 			result = append(result, releaseInstallCandidate{target: filepath.Join(installer.root, strings.TrimPrefix(linuxplatform.DefaultVPNCTLBinaryPath, "/")), source: source})
 		case transport.RestrictedProviderName:
-			extracted := filepath.Join(staged.root, "mihomo")
+			extracted := filepath.Join(staged.root, string(role)+"-mihomo")
 			if err := extractReleaseGzipBinary(source, extracted); err != nil {
 				return nil, err
 			}
@@ -372,7 +401,7 @@ func (installer *ReleaseBundleInstaller) prepareCandidates(ctx context.Context, 
 			if role == model.RoleGateway {
 				binary, target = "frps", tunnel.FRPServerBinaryRelativePath
 			}
-			extracted := filepath.Join(staged.root, binary)
+			extracted := filepath.Join(staged.root, string(role)+"-"+binary)
 			if err := extractReleaseFRPBinary(source, extracted, binary); err != nil {
 				return nil, err
 			}
@@ -409,11 +438,10 @@ func (installer *ReleaseBundleInstaller) ensureTargetDirectories(candidates []re
 }
 
 func preflightReleaseCandidates(candidates []releaseInstallCandidate) error {
+	if err := validateReleaseCandidateSources(candidates); err != nil {
+		return err
+	}
 	for _, candidate := range candidates {
-		sourceInfo, err := os.Lstat(candidate.source)
-		if err != nil || sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.Mode().IsRegular() || sourceInfo.Size() <= 0 {
-			return releaseBundleInvalid("staged component is unavailable")
-		}
 		info, err := os.Lstat(candidate.target)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -424,6 +452,16 @@ func preflightReleaseCandidates(candidates []releaseInstallCandidate) error {
 		equal, err := equalReleaseFiles(candidate.target, candidate.source)
 		if err != nil || !equal || info.Mode().Perm() != 0o755 {
 			return fmt.Errorf("%w: target %s differs from selected bundle", ErrReleaseInstallConflict, candidate.target)
+		}
+	}
+	return nil
+}
+
+func validateReleaseCandidateSources(candidates []releaseInstallCandidate) error {
+	for _, candidate := range candidates {
+		sourceInfo, err := os.Lstat(candidate.source)
+		if err != nil || sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.Mode().IsRegular() || sourceInfo.Size() <= 0 {
+			return releaseBundleInvalid("staged component is unavailable")
 		}
 	}
 	return nil
@@ -565,7 +603,7 @@ func extractReleaseFRPBinary(archivePath, target, binaryName string) error {
 			return releaseBundleInvalid("frp archive framing is invalid")
 		}
 		total += header.Size
-		if path.Clean(header.Name) != header.Name || strings.HasPrefix(header.Name, "/") || strings.HasPrefix(header.Name, "../") || strings.Contains(header.Name, "\\") {
+		if !validReleaseTarPath(header) {
 			_ = compressed.Close()
 			_ = os.Remove(target)
 			return releaseBundleInvalid("frp archive path is invalid")
@@ -609,6 +647,19 @@ func extractReleaseFRPBinary(archivePath, target, binaryName string) error {
 		return releaseBundleInvalid("frp archive has trailing data")
 	}
 	return nil
+}
+
+func validReleaseTarPath(header *tar.Header) bool {
+	if header == nil || header.Name == "" || strings.HasPrefix(header.Name, "/") || strings.Contains(header.Name, "\\") {
+		return false
+	}
+	canonical := header.Name
+	if header.Typeflag == tar.TypeDir {
+		canonical = strings.TrimSuffix(canonical, "/")
+	} else if strings.HasSuffix(canonical, "/") {
+		return false
+	}
+	return canonical != "" && canonical != "." && canonical != ".." && path.Clean(canonical) == canonical && !strings.HasPrefix(canonical, "../")
 }
 
 func releaseAPTPackagesForRole(manifest ReleaseManifest, role model.Role) []APTPackageCompatibility {

@@ -237,6 +237,9 @@ func TestSystemV1MigrationSetsUpGatewayRoleFromVerifiedBundleIdempotently(t *tes
 	if err != nil || !reflect.DeepEqual(verified, manifest) {
 		t.Fatalf("verified bundle = %+v, err=%v", verified, err)
 	}
+	if installer.installabilityInspections != 1 || installer.manifestInspections != 0 {
+		t.Fatalf("migration bundle inspections: installability=%d manifest-only=%d", installer.installabilityInspections, installer.manifestInspections)
+	}
 	stageRoot := filepath.Join(v1MigrationRealTempDir(t), "v2-stage")
 	if _, err := driver.EnsureConvertedStage(context.Background(), V1ConversionInput{
 		Inspection: &inspection, StageRoot: stageRoot, PublicIPv4: "8.8.8.8", SSHPort: 22,
@@ -357,12 +360,20 @@ func (v1MigrationSnapshotRunner) Run(_ context.Context, command linuxplatform.Pr
 }
 
 type v1MigrationBundleInstallerStub struct {
-	manifest     ReleaseManifest
-	installCalls int
-	role         model.Role
+	manifest                  ReleaseManifest
+	installCalls              int
+	manifestInspections       int
+	installabilityInspections int
+	role                      model.Role
 }
 
 func (installer *v1MigrationBundleInstallerStub) Inspect(context.Context, string) (ReleaseManifest, error) {
+	installer.manifestInspections++
+	return cloneReleaseManifest(installer.manifest), nil
+}
+
+func (installer *v1MigrationBundleInstallerStub) InspectInstallable(context.Context, string) (ReleaseManifest, error) {
+	installer.installabilityInspections++
 	return cloneReleaseManifest(installer.manifest), nil
 }
 

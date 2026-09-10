@@ -33,7 +33,10 @@ Validation precedes installation:
 3. Compare an explicitly observed host to Ubuntu `24.04`/`amd64`.
 4. Stream-hash every artifact and compare its exact byte size and SHA-256 to
    the manifest before role selection or installation.
-5. Return role-filtered Ubuntu package compatibility records to init/update
+5. In the maintainer release verifier and v1 migration plan, privately stage
+   and prepare both gateway and node install candidates, including exact
+   provider archive extraction, without touching a system install target.
+6. Return role-filtered Ubuntu package compatibility records to init/update
    preflight. Bundle installation itself never invokes apt.
 
 Artifact paths are canonical relative slash paths: absolute paths,

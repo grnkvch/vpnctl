@@ -52,6 +52,10 @@ go run ./cmd/vpnctl-release \
 	-frp "$VPNCTL_FRP_ARCHIVE" \
 	-output-dir "$output"
 
+go run ./cmd/vpnctl-release-verify \
+	-assets "$output" \
+	-version "$version" >/dev/null
+
 for asset in vpnctl-linux-amd64 vpnctl-v2-linux-amd64.bundle release-checksums.txt; do
 	mv -f "$output/$asset" "$dist_dir/$asset"
 done

@@ -284,6 +284,11 @@ func testReleaseFRPArchive(t *testing.T, frpc, frps []byte) []byte {
 	gzipWriter.Header.OS = 255
 	tarWriter := tar.NewWriter(gzipWriter)
 	root := "frp_0.69.0_linux_amd64/"
+	if err := tarWriter.WriteHeader(&tar.Header{
+		Name: root, Mode: 0o755, ModTime: time.Unix(0, 0).UTC(), Typeflag: tar.TypeDir, Format: tar.FormatUSTAR,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, entry := range []struct {
 		name    string
 		content []byte
@@ -303,6 +308,38 @@ func testReleaseFRPArchive(t *testing.T, frpc, frps []byte) []byte {
 		t.Fatal(err)
 	}
 	return compressed.Bytes()
+}
+
+func TestReleaseTarPathAllowsOnlyCanonicalDirectorySuffix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		header *tar.Header
+		valid  bool
+	}{
+		{name: "official directory", header: &tar.Header{Name: "frp_0.69.0_linux_amd64/", Typeflag: tar.TypeDir}, valid: true},
+		{name: "directory without suffix", header: &tar.Header{Name: "frp_0.69.0_linux_amd64", Typeflag: tar.TypeDir}, valid: true},
+		{name: "regular binary", header: &tar.Header{Name: "frp_0.69.0_linux_amd64/frps", Typeflag: tar.TypeReg}, valid: true},
+		{name: "regular trailing suffix", header: &tar.Header{Name: "frp_0.69.0_linux_amd64/frps/", Typeflag: tar.TypeReg}, valid: false},
+		{name: "root", header: &tar.Header{Name: "/", Typeflag: tar.TypeDir}, valid: false},
+		{name: "dot", header: &tar.Header{Name: "./", Typeflag: tar.TypeDir}, valid: false},
+		{name: "parent", header: &tar.Header{Name: "..", Typeflag: tar.TypeDir}, valid: false},
+		{name: "double suffix", header: &tar.Header{Name: "frp_0.69.0_linux_amd64//", Typeflag: tar.TypeDir}, valid: false},
+		{name: "traversal", header: &tar.Header{Name: "frp_0.69.0_linux_amd64/../escape", Typeflag: tar.TypeReg}, valid: false},
+		{name: "parent traversal", header: &tar.Header{Name: "../frps", Typeflag: tar.TypeReg}, valid: false},
+		{name: "absolute", header: &tar.Header{Name: "/tmp/frps", Typeflag: tar.TypeReg}, valid: false},
+		{name: "backslash", header: &tar.Header{Name: `frp_0.69.0_linux_amd64\frps`, Typeflag: tar.TypeReg}, valid: false},
+		{name: "nil", header: nil, valid: false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validReleaseTarPath(test.header); got != test.valid {
+				t.Fatalf("validReleaseTarPath() = %t, want %t", got, test.valid)
+			}
+		})
+	}
 }
 
 func testReleaseGzip(t *testing.T, content []byte) []byte {

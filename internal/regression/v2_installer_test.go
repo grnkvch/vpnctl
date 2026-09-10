@@ -221,7 +221,7 @@ func TestV2ReleaseScriptBuildsOnlyTheThreeChecksumGovernedAssets(t *testing.T) {
 	source := string(script)
 	for _, required := range []string{
 		"VPNCTL_MIHOMO_ARCHIVE", "VPNCTL_FRP_ARCHIVE",
-		"-buildvcs=false", "go run ./cmd/vpnctl-release", lifecycle.ReleaseBinaryAsset,
+		"-buildvcs=false", "go run ./cmd/vpnctl-release", "go run ./cmd/vpnctl-release-verify", lifecycle.ReleaseBinaryAsset,
 		lifecycle.ReleaseBundleAsset, lifecycle.ReleaseChecksumsAsset,
 	} {
 		if !strings.Contains(source, required) {
@@ -239,11 +239,11 @@ func TestV2ReleaseScriptIsolatesTestUmaskAndCleansFailedVerification(t *testing.
 	t.Parallel()
 
 	t.Run("successful phase boundaries", func(t *testing.T) {
-		root, calls, output, err := runReleaseBuilderFixture(t, false)
+		root, calls, output, err := runReleaseBuilderFixture(t, "")
 		if err != nil {
 			t.Fatalf("release builder failed: %v\n%s", err, output)
 		}
-		if calls != "test 0022\nbuild 0077\nrun 0077\n" {
+		if calls != "test 0022\nbuild 0077\nrun 0077\nverify 0077\n" {
 			t.Fatalf("release builder phase umasks:\n%s", calls)
 		}
 		for _, name := range []string{
@@ -259,7 +259,7 @@ func TestV2ReleaseScriptIsolatesTestUmaskAndCleansFailedVerification(t *testing.
 	})
 
 	t.Run("failed verification", func(t *testing.T) {
-		root, calls, output, err := runReleaseBuilderFixture(t, true)
+		root, calls, output, err := runReleaseBuilderFixture(t, "test")
 		if err == nil {
 			t.Fatalf("release builder unexpectedly accepted failed tests:\n%s", output)
 		}
@@ -277,9 +277,29 @@ func TestV2ReleaseScriptIsolatesTestUmaskAndCleansFailedVerification(t *testing.
 		}
 		assertNoReleaseBuilderWorkDirectory(t, root)
 	})
+
+	t.Run("failed bundle installability", func(t *testing.T) {
+		root, calls, output, err := runReleaseBuilderFixture(t, "verify")
+		if err == nil {
+			t.Fatalf("release builder published a non-installable bundle:\n%s", output)
+		}
+		if calls != "test 0022\nbuild 0077\nrun 0077\nverify 0077\n" {
+			t.Fatalf("unexpected commands around failed bundle verification:\n%s", calls)
+		}
+		for _, name := range []string{
+			lifecycle.ReleaseBinaryAsset,
+			lifecycle.ReleaseBundleAsset,
+			lifecycle.ReleaseChecksumsAsset,
+		} {
+			if _, err := os.Stat(filepath.Join(root, "dist", name)); !os.IsNotExist(err) {
+				t.Fatalf("failed bundle verification published %s: %v", name, err)
+			}
+		}
+		assertNoReleaseBuilderWorkDirectory(t, root)
+	})
 }
 
-func runReleaseBuilderFixture(t *testing.T, failTests bool) (string, string, string, error) {
+func runReleaseBuilderFixture(t *testing.T, failPhase string) (string, string, string, error) {
 	t.Helper()
 	repository := t.TempDir()
 	for _, directory := range []string{"scripts", "dist", "shim", "providers"} {
@@ -304,17 +324,19 @@ func runReleaseBuilderFixture(t *testing.T, failTests bool) (string, string, str
 	shim := `#!/bin/sh
 set -eu
 phase="${1:-}"
+if [ "$phase" = run ] && [ "${2:-}" = ./cmd/vpnctl-release-verify ]; then
+	phase=verify
+fi
 mask=$(umask)
 printf '%s %s\n' "$phase" "$mask" >>"$VPNCTL_RELEASE_TEST_CALLS"
 case "$phase:$mask" in
-	test:0022|build:0077|run:0077) ;;
-	*) exit 91 ;;
+test:0022|build:0077|run:0077|verify:0077) ;;
+*) exit 91 ;;
 esac
+[ "${VPNCTL_RELEASE_TEST_FAIL:-}" != "$phase" ] || exit 23
 case "$phase" in
-	test)
-		[ "${VPNCTL_RELEASE_TEST_FAIL:-0}" = 0 ] || exit 23
-		;;
-	build)
+test) ;;
+build)
 		output=""
 		while [ "$#" -gt 0 ]; do
 			if [ "$1" = "-o" ]; then
@@ -341,9 +363,24 @@ case "$phase" in
 		[ -n "$output" ] || exit 93
 		printf 'binary\n' >"$output/vpnctl-linux-amd64"
 		printf 'bundle\n' >"$output/vpnctl-v2-linux-amd64.bundle"
-		printf 'checksums\n' >"$output/release-checksums.txt"
-		;;
-	*) exit 94 ;;
+	printf 'checksums\n' >"$output/release-checksums.txt"
+	;;
+verify)
+	assets=""
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-assets" ]; then
+			shift
+			assets="$1"
+			break
+		fi
+		shift
+	done
+	[ -n "$assets" ] || exit 95
+	[ -f "$assets/vpnctl-linux-amd64" ] || exit 96
+	[ -f "$assets/vpnctl-v2-linux-amd64.bundle" ] || exit 96
+	[ -f "$assets/release-checksums.txt" ] || exit 96
+	;;
+*) exit 94 ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(repository, "shim", "go"), []byte(shim), 0o700); err != nil {
@@ -370,8 +407,8 @@ esac
 		"VPNCTL_FRP_ARCHIVE="+filepath.Join(repository, "providers", "frp.tar.gz"),
 		"VPNCTL_RELEASE_TEST_CALLS="+callsPath,
 	)
-	if failTests {
-		environment = append(environment, "VPNCTL_RELEASE_TEST_FAIL=1")
+	if failPhase != "" {
+		environment = append(environment, "VPNCTL_RELEASE_TEST_FAIL="+failPhase)
 	}
 	command.Env = environment
 	combined, commandErr := command.CombinedOutput()

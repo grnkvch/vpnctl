@@ -48,6 +48,7 @@ type v1MigrationHandshakeSelector interface {
 
 type v1MigrationBundleInstaller interface {
 	Inspect(context.Context, string) (ReleaseManifest, error)
+	InspectInstallable(context.Context, string) (ReleaseManifest, error)
 	InstallV1Migration(context.Context, string, model.Role, string, string) (ReleaseBundleInstallResult, error)
 	PreflightV1MigrationRemoval(context.Context, string, model.Role, string, string) (ReleaseManifest, error)
 	RemoveV1MigrationComponents(context.Context, string, model.Role, string, string) (ReleaseManifest, error)
@@ -127,7 +128,7 @@ func (driver *SystemV1MigrationDriver) VerifyBundle(ctx context.Context, bundleP
 	if driver == nil || driver.bundles == nil {
 		return ReleaseManifest{}, fmt.Errorf("system v1 migration driver is incomplete")
 	}
-	manifest, err := driver.bundles.Inspect(ctx, bundlePath)
+	manifest, err := driver.bundles.InspectInstallable(ctx, bundlePath)
 	if err != nil {
 		return ReleaseManifest{}, err
 	}

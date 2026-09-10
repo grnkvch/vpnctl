@@ -102,7 +102,7 @@ func TestReleaseBuilderWithPinnedProviderArchives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := installer.Inspect(context.Background(), filepath.Join(output, lifecycle.ReleaseBundleAsset))
+	manifest, err := installer.InspectInstallable(context.Background(), filepath.Join(output, lifecycle.ReleaseBundleAsset))
 	if err != nil || manifest.ComponentManifest.VPNCTLVersion != "v2.0.0-test" {
 		t.Fatalf("inspect built bundle version=%q err=%v", manifest.ComponentManifest.VPNCTLVersion, err)
 	}

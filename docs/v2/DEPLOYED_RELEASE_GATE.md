@@ -360,7 +360,9 @@ The release asset directory must contain exactly the three outputs of `scripts/r
 the canonical checksum metadata, binary and bundle sizes/digests, the complete
 manifest and every bundled artifact, Ubuntu 24.04/amd64,
 backward-reversible migration, the requested version, and that the standalone
-vpnctl binary matches the bundle record. It rejects a detached signature or any
+vpnctl binary matches the bundle record. It also prepares the exact gateway and
+node install candidates in private temporary roots, exercising both provider
+archive extraction paths without installing onto the host. It rejects a detached signature or any
 other fourth asset. It
 also requires the Telegram certificate digest to equal the deployed certificate
 digest and every automated/manual boolean to be true.

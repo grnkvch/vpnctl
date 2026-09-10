@@ -113,7 +113,7 @@ func verifyReleaseAssetsWithContract(
 	if err != nil {
 		return releaseVerificationResult{}, errors.New("release bundle verifier is unavailable")
 	}
-	manifest, err := installer.Inspect(context.Background(), filepath.Join(directory, lifecycle.ReleaseBundleAsset))
+	manifest, err := installer.InspectInstallable(context.Background(), filepath.Join(directory, lifecycle.ReleaseBundleAsset))
 	if err != nil || manifest.ComponentManifest.VPNCTLVersion != expectedVersion || !manifest.ComponentManifest.MigrationReversible {
 		return releaseVerificationResult{}, errors.New("release bundle manifest is invalid")
 	}

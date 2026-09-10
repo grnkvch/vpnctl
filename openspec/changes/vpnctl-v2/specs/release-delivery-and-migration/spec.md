@@ -18,6 +18,10 @@ The official curl installer and every local bundle consumer SHALL verify canonic
 - **WHEN** the downloaded or copied release bundle does not match the size or SHA-256 recorded in canonical release metadata, or an internal artifact does not match the bundle manifest
 - **THEN** installation or update stops before replacing any installed component
 
+#### Scenario: Provider archive cannot produce both role installations
+- **WHEN** a checksummed bundle contains a provider archive whose framing or canonical paths cannot produce the required gateway and node binaries
+- **THEN** release publication and v1 migration planning fail before publishing release assets, creating a maintenance snapshot, or stopping v1 services
+
 #### Scenario: Artifact and checksum metadata share an untrusted channel
 - **WHEN** an operator obtains both a release artifact and its checksum metadata from a channel whose publisher identity is not trusted
 - **THEN** vpnctl documents that checksum verification alone does not authenticate the publisher and does not claim that the artifact is authentic
