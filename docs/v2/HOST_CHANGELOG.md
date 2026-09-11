@@ -2,6 +2,38 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-11 — passive status resource-ID and initial-tunnel correction
+
+### Source-only product correction after the disposable migration rehearsal
+
+- The isolated manual v1-to-v2 rehearsal completed migration and real retained
+  client traffic, but `vpnctl status --json` returned an internal error. A
+  temporary diagnostic binary identified the rejected human-table cell; no
+  production host or retained release evidence was used or changed here.
+- A focused regression reproduced the exact unsafe value before correction:
+  runtime and drift problems copied `resourceOrder`, an internal sort/map key
+  containing NUL separators, into the public problem ID. Status now projects
+  the established `component/kind/id` form while retaining the NUL-delimited
+  key only for internal ordering.
+- The rehearsal also exercised the documented initial Gateway state in which
+  `vpnctl-tunnel-server.service` is enabled but condition-skipped until an
+  active private Node exists. Passive status now represents a loaded/inactive
+  tunnel unit as healthy, optional, and inactive only while the Gateway has no
+  active Node. A paired regression proves the same inactive unit remains a
+  mandatory degraded problem once an active Node exists.
+- Focused red/green tests, complete `internal/operations` and `internal/cli`
+  packages, status JSON Schema regression, race detection for both changed
+  packages, `go vet` for both packages, diff checks, and strict validation of
+  OpenSpec change `vpnctl-v2` passed. The first sandboxed complete CLI package
+  run was non-authoritative only because local TCP/Unix bind was denied; its
+  identical loopback-enabled rerun passed.
+- No Lima VM, deployed host, service, network, firewall, package, credential,
+  release artifact, old evidence, or migration branch changed. The existing
+  migration rehearsal already removed its disposable VM, and both v2 fixtures
+  remained stopped. Source rollback is one revert of the eventual isolated
+  product commit; final bundle construction and a new disposable rehearsal are
+  separate later steps.
+
 ## 2026-09-11 — one-time migrator removed from the product source line
 
 ### Source-only separation; operational implementation will remain versioned

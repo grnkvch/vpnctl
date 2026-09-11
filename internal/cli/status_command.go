@@ -184,7 +184,15 @@ func passiveStatusFromUnits(state model.State, observation controller.Observatio
 		if name == "vpnctl-controller.service" {
 			continue
 		}
-		resources = append(resources, passiveUnitStatus(state, operations.PassiveStatusDataPlane, statusUnitComponent(name), name, units[name]))
+		unit := units[name]
+		resource := passiveUnitStatus(state, operations.PassiveStatusDataPlane, statusUnitComponent(name), name, unit)
+		if initialGatewayTunnelExpectedInactive(state, name, unit) {
+			resource.Condition = operations.PassiveHealthy
+			resource.Mandatory = false
+			resource.Active = false
+			resource.Code = "unit_inactive_expected"
+		}
+		resources = append(resources, resource)
 	}
 	for _, transportState := range state.Transports {
 		if transportState.State != model.TransportActive && transportState.State != model.TransportDegraded {
@@ -199,6 +207,19 @@ func passiveStatusFromUnits(state model.State, observation controller.Observatio
 		resources = append(resources, resource)
 	}
 	return operations.PassiveStatusSnapshot{Resources: resources}
+}
+
+func initialGatewayTunnelExpectedInactive(state model.State, name string, unit controller.UnitObservation) bool {
+	if state.Host.Role != model.RoleGateway || name != "vpnctl-tunnel-server.service" ||
+		unit.LoadState != "loaded" || unit.ActiveState != "inactive" {
+		return false
+	}
+	for _, node := range state.Nodes {
+		if node.Lifecycle == model.LifecycleActive {
+			return false
+		}
+	}
+	return true
 }
 
 func passiveControlStatus(state model.State, units map[string]controller.UnitObservation) operations.PassiveStatusResource {

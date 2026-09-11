@@ -108,6 +108,63 @@ func TestPassiveStatusMapsGatewayUnitsWithoutNetworkProbes(t *testing.T) {
 	}
 }
 
+func TestPassiveStatusTreatsInitialGatewayTunnelAsExpectedInactive(t *testing.T) {
+	t.Parallel()
+	state := model.State{
+		Generation: 1,
+		Host:       model.Host{Role: model.RoleGateway},
+		Components: model.ComponentManifest{VPNCTLVersion: "v2.0.0"},
+	}
+	observation := activeRoleUnitObservation(state.Host.Role)
+	for index := range observation.Units {
+		if observation.Units[index].Name == "vpnctl-tunnel-server.service" {
+			observation.Units[index].ActiveState = "inactive"
+			observation.Units[index].SubState = "dead"
+		}
+	}
+
+	snapshot := passiveStatusFromUnits(state, observation)
+	for _, resource := range snapshot.Resources {
+		if resource.Resource.ID != "vpnctl-tunnel-server.service" {
+			continue
+		}
+		if resource.Condition != operations.PassiveHealthy || resource.Mandatory || resource.Active || resource.Code != "unit_inactive_expected" {
+			t.Fatalf("initial tunnel status = %+v", resource)
+		}
+		return
+	}
+	t.Fatal("initial gateway tunnel status is missing")
+}
+
+func TestPassiveStatusRequiresGatewayTunnelForActiveNode(t *testing.T) {
+	t.Parallel()
+	state := model.State{
+		Generation: 2,
+		Host:       model.Host{Role: model.RoleGateway},
+		Components: model.ComponentManifest{VPNCTLVersion: "v2.0.0"},
+		Nodes:      []model.Node{{Lifecycle: model.LifecycleActive}},
+	}
+	observation := activeRoleUnitObservation(state.Host.Role)
+	for index := range observation.Units {
+		if observation.Units[index].Name == "vpnctl-tunnel-server.service" {
+			observation.Units[index].ActiveState = "inactive"
+			observation.Units[index].SubState = "dead"
+		}
+	}
+
+	snapshot := passiveStatusFromUnits(state, observation)
+	for _, resource := range snapshot.Resources {
+		if resource.Resource.ID != "vpnctl-tunnel-server.service" {
+			continue
+		}
+		if resource.Condition != operations.PassiveDegraded || !resource.Mandatory || !resource.Active || resource.Code != "unit_not_active" {
+			t.Fatalf("joined gateway tunnel status = %+v", resource)
+		}
+		return
+	}
+	t.Fatal("joined gateway tunnel status is missing")
+}
+
 func TestPassiveStatusMapsJoinedNodeGatewayToSelectedTransportProcess(t *testing.T) {
 	t.Parallel()
 	state := model.State{

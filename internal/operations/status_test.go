@@ -120,6 +120,18 @@ func TestStatusCollectorMapsDriftAndRuntimeFailuresWithStablePrecedence(t *testi
 	if report.Category != StatusCategoryUnavailable || report.Overall != StatusOverallDegraded || len(report.Problems) != 2 {
 		t.Fatalf("runtime+drift status = %+v", report)
 	}
+	wantProblemIDs := map[string]string{
+		"owned_modified":         "routing/network/table-inet-vpnctl",
+		"routing_process_absent": "routing/unit/vpnctl-routing.service",
+	}
+	for _, problem := range report.Problems {
+		if want, exists := wantProblemIDs[problem.Code]; exists && problem.ID != want {
+			t.Fatalf("problem %s ID = %q, want %q", problem.Code, problem.ID, want)
+		}
+		if strings.ContainsAny(problem.ID, "\x00\t\r\n") {
+			t.Fatalf("problem %s ID is not output-safe: %q", problem.Code, problem.ID)
+		}
+	}
 }
 
 func TestStatusCollectorInvalidStateStopsBeforeConvergenceAndPassiveObservation(t *testing.T) {

@@ -341,7 +341,7 @@ func (collector *StatusCollector) Collect(ctx context.Context) (StatusReport, er
 			for _, resource := range report.Runtime {
 				if resource.Condition != PassiveHealthy && (resource.Mandatory || resource.Active) {
 					addStatusProblem(&report, StatusProblem{
-						Kind: string(resource.Class), ID: resourceOrder(resource.Resource),
+						Kind: string(resource.Class), ID: statusResourceID(resource.Resource),
 						Condition: resource.Condition, Code: resource.Code,
 					})
 				}
@@ -431,7 +431,7 @@ func projectConvergence(report *StatusReport, plan ConvergencePlan) {
 			ExpectedSHA256: drift.ExpectedSHA256, ActualSHA256: drift.ActualSHA256,
 		})
 		addStatusProblem(report, StatusProblem{
-			Kind: "drift", ID: resourceOrder(drift.Resource), Condition: PassiveDegraded,
+			Kind: "drift", ID: statusResourceID(drift.Resource), Condition: PassiveDegraded,
 			Code: "owned_" + string(drift.Kind),
 		})
 	}
@@ -720,6 +720,14 @@ func addStatusProblem(report *StatusReport, problem StatusProblem) {
 		}
 	}
 	report.Problems = append(report.Problems, problem)
+}
+
+// statusResourceID is the stable public projection of a managed resource key.
+// resourceOrder deliberately contains NUL separators and is only safe for
+// internal map and sort keys; status values must remain renderable as both JSON
+// and a single-line human table cell.
+func statusResourceID(resource ManagedResourceKey) string {
+	return resource.Component + "/" + string(resource.Kind) + "/" + resource.ID
 }
 
 func canonicalPassiveStatus(snapshot PassiveStatusSnapshot) (PassiveStatusSnapshot, error) {
