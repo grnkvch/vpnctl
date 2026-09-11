@@ -228,7 +228,7 @@ func TestV2ReleaseScriptBuildsOnlyTheThreeChecksumGovernedAssets(t *testing.T) {
 			t.Errorf("v2 release script omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"curl ", "wget ", "go install ", "VPNCTL_RELEASE_SIGNING_KEY", "release-checksums.txt.sig", "-signing-key"} {
+	for _, forbidden := range []string{"curl ", "wget ", "go install ", "VPNCTL_RELEASE_SIGNING_KEY", "release-checksums.txt.sig", "-signing-key", "vpnctl-v1-migrate"} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("v2 release script unexpectedly fetches with %q", forbidden)
 		}
@@ -254,6 +254,13 @@ func TestV2ReleaseScriptIsolatesTestUmaskAndCleansFailedVerification(t *testing.
 			if _, err := os.Stat(filepath.Join(root, "dist", name)); err != nil {
 				t.Fatalf("published asset %s: %v", name, err)
 			}
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "dist"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 3 {
+			t.Fatalf("release builder published a non-canonical asset set: %v", entries)
 		}
 		assertNoReleaseBuilderWorkDirectory(t, root)
 	})

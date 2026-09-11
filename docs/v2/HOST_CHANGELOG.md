@@ -2,6 +2,15 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-11 — one-time migrator removed from the product source line
+
+### Source-only separation; operational implementation will remain versioned
+
+- Removed the standalone `vpnctl-v1-migrate` command, wrapper, migration-only lifecycle implementation/tests, and native migration fixture from the maintained v2 product tree. Replaced the executable product-tree runbook with a short pointer to the separately versioned `ops/v1-to-v2-migration` operation. The product migration behavior requirement, shared v2 runtime, legacy compatibility regression fixtures, and normal three-asset release contract remain.
+- Added explicit release-verifier and release-builder regressions proving that a standalone migrator is rejected as a fourth v2 release asset. `scripts/release.sh` still performs its autonomous `go test ./...` verification and publishes only the existing binary, bundle, and checksum metadata.
+- Validation passed the focused release verifier/builder tests, cleaned lifecycle/platform packages, the complete sequential `go test -p 1 ./...` suite including the 266.845-second regression package, `go vet ./...`, Bash syntax for every tracked shell script, requirement traceability, diff checks, and strict validation of both relevant OpenSpec changes. A preliminary parallel package run produced one unrelated CLI coordination failure; the established sequential suite passed every package and is the authoritative result.
+- No Lima command, VM, deployed Gateway, network, service, package, credential, release artifact, or retained evidence changed. The exact migration implementation remains reachable at pre-extraction commit `b207de3` until it is reintroduced on the operational descendant of the clean product base. Source rollback is a revert of the eventual product-separation commit.
+
 ## 2026-09-11 — resumable Gateway first-install nftables correction
 
 ### Source-only correction; production failure and rollback evidence retained

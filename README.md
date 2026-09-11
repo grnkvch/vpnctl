@@ -103,5 +103,7 @@ and three-asset flow are documented in
 [`docs/v2/RELEASE_BUNDLE.md`](docs/v2/RELEASE_BUNDLE.md) and
 [`docs/v2/RELEASE_MANIFEST.md`](docs/v2/RELEASE_MANIFEST.md). The mandatory
 actual-service/Clash Mi/Telegram release procedure is
-[`docs/v2/DEPLOYED_RELEASE_GATE.md`](docs/v2/DEPLOYED_RELEASE_GATE.md). The preserved v1
-installer/release code exists only for migration and regression.
+[`docs/v2/DEPLOYED_RELEASE_GATE.md`](docs/v2/DEPLOYED_RELEASE_GATE.md). Legacy v1
+compatibility fixtures remain only for regression. The one-time migrator is
+versioned and qualified on its separate operational source line and is not part
+of the product tree or release asset set.

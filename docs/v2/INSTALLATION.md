@@ -101,5 +101,7 @@ apply. It installs vpnctl + Mihomo + `frps` for a gateway or vpnctl + Mihomo +
 `frpc` for a node and stores the component manifest in authoritative state. A
 bundle changed between plan and apply is rejected before role layout creation.
 
-The separate v1 maintenance workflow, including its explicit rollback and
-acceptance boundary, is documented in [`V1_MIGRATION.md`](V1_MIGRATION.md).
+The separately versioned v1 maintenance operation, including its qualification,
+rollback, acceptance, and retirement boundary, is documented in
+[`V1_MIGRATION.md`](V1_MIGRATION.md). Its executable is not a product release
+asset.

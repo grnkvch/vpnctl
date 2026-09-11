@@ -74,6 +74,15 @@ func TestReleaseVerifierRejectsTamperingVersionModesAndSymlinks(t *testing.T) {
 			t.Fatal("release with detached signature was not rejected as a non-three-asset release")
 		}
 	})
+	t.Run("unexpected standalone migrator", func(t *testing.T) {
+		directory := buildVerificationFixture(t)
+		if err := os.WriteFile(filepath.Join(directory, "vpnctl-v1-migrate"), []byte("one-time helper"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verifyFixtureReleaseAssets(directory, "v2.0.0"); err == nil {
+			t.Fatal("release with standalone migrator was not rejected as a non-three-asset release")
+		}
+	})
 }
 
 func TestProductionReleaseManifestContractRequiresEveryPinnedComponent(t *testing.T) {

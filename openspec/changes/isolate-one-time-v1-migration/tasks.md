@@ -7,9 +7,9 @@
 ## 2. Clean Product Source Line
 
 - [x] 2.1 Define and test the canonical migration-only path allowlist, including rejection of shared release/install/network/service paths; verify representative allowed and forbidden diffs are classified correctly.
-- [ ] 2.2 Remove the standalone migrator command, wrapper, migration-only lifecycle source/tests, native migration fixture, and executable migration runbook from the maintained product tree while retaining the v2 behavior requirement and a short archival-operation pointer; verify `rg` finds no buildable migrator in the product tree.
-- [ ] 2.3 Add a product release regression that accepts exactly the existing three canonical v2 assets and rejects a fourth migrator asset; verify release builder/verifier tests and `release.sh` contract tests pass without changing its autonomous `go test ./...` behavior.
-- [ ] 2.4 Run focused product tests, the complete Go suite, vet, shell syntax, traceability, and strict OpenSpec validation; verify the cleaned product tree remains releasable before fixing the product base commit `P`.
+- [x] 2.2 Remove the standalone migrator command, wrapper, migration-only lifecycle source/tests, native migration fixture, and executable migration runbook from the maintained product tree while retaining the v2 behavior requirement and a short archival-operation pointer; verify `rg` finds no buildable migrator in the product tree.
+- [x] 2.3 Add a product release regression that accepts exactly the existing three canonical v2 assets and rejects a fourth migrator asset; verify release builder/verifier tests and `release.sh` contract tests pass without changing its autonomous `go test ./...` behavior.
+- [x] 2.4 Run focused product tests, the complete Go suite, vet, shell syntax, traceability, and strict OpenSpec validation; verify the cleaned product tree remains releasable before fixing the product base commit `P`.
 
 ## 3. Operational Source Line
 

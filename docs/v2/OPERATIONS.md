@@ -385,14 +385,13 @@ sudo vpnctl purge --force
 
 ## One-time v1 migration
 
-Migration is a separate maintenance executable, not a permanent vpnctl
-command. Copy the checksum-verified v2 bundle and `vpnctl-v1-migrate` to the existing v1
-gateway, run the read-only plan, accept the maintenance window, and retain the
-rollback package until migrated clients have been checked. The exact resumable
-dry-run/apply/confirm/accept/rollback procedure is in
-[V1_MIGRATION.md](V1_MIGRATION.md). Downtime is explicitly allowed; a failed or
-unaccepted migration can restore the captured v1 binary, workspace,
-WireGuard/UFW/network files, and unit state.
+Migration remains a separate one-time operation, not a permanent vpnctl
+command or product release asset. Its executable runbook and qualification
+gate live on a versioned operational source line bound to the exact v2 product
+commit and bundle. [V1_MIGRATION.md](V1_MIGRATION.md) documents that boundary
+and the required evidence, retirement, and audit record. Downtime is explicitly
+allowed; the snapshot, watchdog, rollback, client validation, and acceptance
+guarantees are unchanged.
 
 ## Troubleshooting
 
