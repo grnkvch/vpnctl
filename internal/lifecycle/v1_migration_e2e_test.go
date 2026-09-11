@@ -383,7 +383,12 @@ type v1MigrationE2EProbeRunner struct {
 func (runner *v1MigrationE2EProbeRunner) Run(ctx context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
 	runner.calls = append(runner.calls, command)
 	switch command.Name {
-	case "nft", "sysctl":
+	case "nft":
+		if reflect.DeepEqual(command.Args, []string{"--json", "list", "tables"}) {
+			return linuxplatform.ProbeResult{Stdout: []byte(`{"nftables":[]}`)}, nil
+		}
+		return linuxplatform.ProbeResult{}, nil
+	case "sysctl":
 		return linuxplatform.ProbeResult{}, nil
 	default:
 		return runner.base.Run(ctx, command)

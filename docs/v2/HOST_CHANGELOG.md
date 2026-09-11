@@ -2,6 +2,16 @@
 
 This journal records development-host mutations made while implementing and validating vpnctl v2. Repository files and ordinary build caches under `/tmp` are excluded. Every entry names exact targets, conflict scope, verification, and rollback.
 
+## 2026-09-11 — resumable Gateway first-install nftables correction
+
+### Source-only correction; production failure and rollback evidence retained
+
+- The second real v1 migration attempt `mig-bb454b10f9b7cf7b` remains unchanged. It failed before network activation because the resumable Gateway path submitted `delete table inet vpnctl` to `nft --check` even though the watchdog snapshot had proved that the table was absent before migration. The operator completed the supported rollback and independently confirmed restored v1 client traffic before this source work began.
+- Added a focused fake-nft regression that makes deletion of an absent table fail with the observed `No such file or directory`. The test reproduced the failure before the correction and separately retained the interrupted-replay case where an already-created owned table must be atomically replaced.
+- `ActivateGatewayReplacingOwned` now inspects the current exact `inet/vpnctl` table through the existing bounded nftables snapshot parser after the caller has armed the watchdog. It submits a create-only batch on first activation and a delete-plus-create batch only when replay finds the table already present. Both paths still validate the exact complete batch before mutation; ordinary Gateway initialization, foreign tables, ownership bounds, rollback, and sysctl ordering are unchanged.
+- Focused platform tests passed after the correction. Complete `internal/platform/linux`, `internal/lifecycle`, and `internal/controller` packages also passed with loopback access; the first sandboxed package run was non-authoritative only because local TCP/Unix bind was denied, and it additionally identified the migration E2E fake that needed to report a valid empty nftables list for the new read-only probe.
+- No Lima command, VM, production host, network, service, package, credential, release artifact, or retained evidence was changed. `/private/tmp/vpnctl-migration-go-cache` is an ordinary disposable Go build cache and needs no rollback. Source rollback is a revert of the eventual shared correction commit.
+
 ## 2026-09-10 — official frp archive migration/installability correction
 
 ### Real Gateway failure retained; source correction in progress

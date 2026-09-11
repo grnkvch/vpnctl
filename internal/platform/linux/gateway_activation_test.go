@@ -64,7 +64,7 @@ func TestActivateGatewayStopsBeforeMutationWhenNFTCheckFails(t *testing.T) {
 func TestActivateGatewayReplacingOwnedUsesOneAtomicReplayBatch(t *testing.T) {
 	t.Parallel()
 
-	runner := &recordingGatewayActivationRunner{}
+	runner := &recordingGatewayActivationRunner{ownedTablePresent: true}
 	manager, err := NewNetworkManager(runner)
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +85,30 @@ func TestActivateGatewayReplacingOwnedUsesOneAtomicReplayBatch(t *testing.T) {
 	}
 }
 
+func TestActivateGatewayReplacingOwnedCreatesWhenOwnedTableIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingGatewayActivationRunner{failDeleteOfAbsent: true}
+	manager, err := NewNetworkManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := RenderGatewayFirewall(GatewayFirewallInput{
+		ExternalInterface: "eth0", SSHPort: 22,
+		ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ActivateGatewayReplacingOwned(context.Background(), artifact); err != nil {
+		t.Fatalf("first activation with an absent owned table failed: %v", err)
+	}
+	if len(runner.stdins) != 2 || strings.Contains(string(runner.stdins[0]), "delete table inet vpnctl") ||
+		string(runner.stdins[0]) != string(runner.stdins[1]) {
+		t.Fatalf("first activation did not use one create-only batch: %q", runner.stdins)
+	}
+}
+
 func TestGatewayInitNetworkScopeMatchesCandidate(t *testing.T) {
 	t.Parallel()
 
@@ -99,9 +123,11 @@ func TestGatewayInitNetworkScopeMatchesCandidate(t *testing.T) {
 }
 
 type recordingGatewayActivationRunner struct {
-	calls    []string
-	stdins   [][]byte
-	failCall string
+	calls              []string
+	stdins             [][]byte
+	failCall           string
+	ownedTablePresent  bool
+	failDeleteOfAbsent bool
 }
 
 func (runner *recordingGatewayActivationRunner) Run(_ context.Context, command ProbeCommand) (ProbeResult, error) {
@@ -112,6 +138,19 @@ func (runner *recordingGatewayActivationRunner) Run(_ context.Context, command P
 	runner.calls = append(runner.calls, call)
 	if len(command.Stdin) != 0 {
 		runner.stdins = append(runner.stdins, append([]byte(nil), command.Stdin...))
+	}
+	if call == "nft --json list tables" {
+		if runner.ownedTablePresent {
+			return ProbeResult{Stdout: []byte(`{"nftables":[{"table":{"family":"inet","name":"vpnctl"}}]}`)}, nil
+		}
+		return ProbeResult{Stdout: []byte(`{"nftables":[]}`)}, nil
+	}
+	if call == "nft --stateless -nn list table inet vpnctl" {
+		return ProbeResult{Stdout: []byte("table inet vpnctl {\n}\n")}, nil
+	}
+	if call == "nft --check --file -" && runner.failDeleteOfAbsent && !runner.ownedTablePresent &&
+		strings.HasPrefix(string(command.Stdin), "delete table inet vpnctl\n") {
+		return ProbeResult{ExitCode: 1, Stderr: []byte("No such file or directory")}, nil
 	}
 	if call == runner.failCall {
 		return ProbeResult{ExitCode: 1, Stderr: []byte("synthetic failure")}, nil

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "product_branch": "feat/vpnctl-v2",
+  "operational_branch": "ops/v1-to-v2-migration",
+  "v1_release_ref": "0.1.0",
+  "fixture_name": "vpnctl-v1-migration",
+  "allowed_changes": {
+    "prefixes": [
+      "cmd/vpnctl-v1-migrate/",
+      "docs/operations/v1-migration/",
+      "openspec/changes/isolate-one-time-v1-migration/",
+      "test/v1migration/",
+      "test/v2lab/migration/"
+    ],
+    "globs": [
+      "internal/lifecycle/testdata/v1_*",
+      "internal/lifecycle/v1_*.go",
+      "internal/regression/v1migration_*.go"
+    ],
+    "exact": [
+      "docs/v2/HOST_CHANGELOG.md",
+      "docs/v2/TEST_TRACEABILITY.md",
+      "scripts/migrate-v1-to-v2.sh",
+      "scripts/v1migration-gate.sh"
+    ]
+  },
+  "forbidden_examples": [
+    "cmd/vpnctl/main.go",
+    "internal/lifecycle/release_bundle.go",
+    "internal/platform/linux/gateway_activation.go",
+    "scripts/release.sh"
+  ]
+}

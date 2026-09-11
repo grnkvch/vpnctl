@@ -32,9 +32,9 @@ func (manager *NetworkManager) ActivateGateway(ctx context.Context, firewall Gat
 
 // ActivateGatewayReplacingOwned is reserved for a resumable operation which
 // has already proved through its watchdog snapshot that inet/vpnctl was absent
-// before the operation. It permits replay after process interruption between
-// nftables activation and the durable phase marker without touching any
-// foreign table.
+// before the operation. It creates the table on the first attempt and replaces
+// it only when an interrupted attempt has already installed it, without
+// touching any foreign table.
 func (manager *NetworkManager) ActivateGatewayReplacingOwned(ctx context.Context, firewall GatewayFirewallArtifact) error {
 	return manager.activateGateway(ctx, firewall, true)
 }
@@ -46,7 +46,15 @@ func (manager *NetworkManager) activateGateway(ctx context.Context, firewall Gat
 	if manager == nil || manager.runner == nil {
 		return fmt.Errorf("network manager is incomplete")
 	}
-	batch, err := firewall.Transaction(replaceOwned)
+	replaceCurrent := false
+	if replaceOwned {
+		current, err := manager.snapshotNFTables(ctx)
+		if err != nil {
+			return fmt.Errorf("inspect resumable gateway firewall: %w", err)
+		}
+		replaceCurrent = current.Present
+	}
+	batch, err := firewall.Transaction(replaceCurrent)
 	if err != nil {
 		return fmt.Errorf("build gateway firewall transaction: %w", err)
 	}
