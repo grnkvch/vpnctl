@@ -104,6 +104,12 @@ application request queue: gateway/expose connection overflow is rejected with
 carried to the client instead of spilling a request or response body to a temp
 file.
 
+The reserved enrollment location has a fixed 45-second upstream read/send
+budget shared with the loopback handler and Node response-header wait. User
+expose routes retain their own configured timeout and cannot alter this control
+plane budget. Shorter TLS and request-admission limits plus the existing
+connection/rate caps still bound public resource use.
+
 Before an upstream response starts, an nginx/tunnel `502` is internally
 translated to a fixed no-store JSON `503`, while a proxy timeout produces the
 same fixed form with `504`. The named handlers are internal `return` locations
@@ -166,6 +172,37 @@ trees remain and normal idempotence is disabled: the sole inactive newer tree
 is a recovery snapshot, and only an explicit retry of that same generation and
 hash may reconcile it. Stale staging entries, multiple inactive generations,
 or a different requested candidate fail closed for later reconciliation.
+
+## Baseline service bootstrap
+
+Gateway init activates this provider before any user expose exists. It renders
+an empty-expose generation containing the IP-only certificate and reserved
+namespace, and owns only the narrow systemd drop-in
+`/etc/systemd/system/nginx.service.d/vpnctl.conf`. That drop-in starts the
+Ubuntu nginx binary against the managed `current` tree and the separate
+`/run/vpnctl-ingress` runtime. Unknown content at the drop-in or managed tree is
+a conflict; vpnctl does not adopt the distro default configuration.
+
+During a missing-package bootstrap the distro nginx unit is masked so package
+scripts cannot claim public ports with default configuration. After the owned
+drop-in and validated tree are ready, init restores the intended mask state,
+enables/starts nginx, and verifies the compatible runtime, TCP 443, IP-only TLS,
+reserved health response, enrollment route, and loopback upstream. Only then
+can init report success. Repeated init with the same authoritative identity is
+idempotent; an incomplete committed bootstrap reuses that identity and repairs
+the missing serving edge.
+
+Passive readiness compares the active immutable tree with the current semantic
+ingress inputs rendered at that tree's retained provenance generation. Invite,
+logging, backup, and other metadata-only state generations therefore do not
+force an nginx reload or report false drift. A newer tree provenance or any
+semantic change to public identity, reserved routes, certificate, or exposes
+still fails readiness until the owned tree is reconciled.
+
+`vpnctl uninstall` removes the exact owned drop-in, generated tree and runtime
+state but leaves the ordinary Ubuntu nginx package installed. It never removes
+foreign service configuration or package dependencies merely because vpnctl
+once required them.
 
 ## Reserved public namespace
 

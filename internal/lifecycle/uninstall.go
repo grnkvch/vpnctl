@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 )
@@ -43,6 +44,7 @@ type UninstallHostPlan struct {
 	DNSRestorationRequired bool
 	NetworkRestoreRequired bool
 	ManagedSwapOwned       bool
+	NginxService           ingress.NginxServiceRemovalPlan
 }
 
 func (plan UninstallHostPlan) Validate(role model.Role) error {
@@ -66,6 +68,13 @@ func (plan UninstallHostPlan) Validate(role model.Role) error {
 	}
 	if role == model.RoleGateway && plan.DNSRestorationRequired {
 		return fmt.Errorf("%w: gateway cannot request node DNS restoration", ErrUninstallRuntimePlan)
+	}
+	if role == model.RoleGateway {
+		if err := plan.NginxService.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrUninstallRuntimePlan, err)
+		}
+	} else if plan.NginxService != (ingress.NginxServiceRemovalPlan{}) {
+		return fmt.Errorf("%w: node cannot remove gateway nginx state", ErrUninstallRuntimePlan)
 	}
 	if (plan.BinaryPath == "") != (plan.BinarySHA256 == "") || plan.BinarySHA256 != "" && !validReleaseSHA256(plan.BinarySHA256) {
 		return fmt.Errorf("%w: binary path and SHA-256 must form a valid pair", ErrUninstallRuntimePlan)

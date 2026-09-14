@@ -72,9 +72,11 @@ ssh root@SERVER \
 ```
 
 The local directory and every consumed asset must be regular and non-symlink.
-This path is self-contained for vpnctl-managed binaries. Later role
-initialization can still need configured Ubuntu repositories for apt-provided
-packages.
+This path is self-contained for vpnctl-managed binaries. Role initialization
+uses the configured Ubuntu repositories for only the APT packages declared for
+that role by the verified bundle. It resolves and installs an exact compatible
+version; it does not run a general upgrade, autoremove unrelated packages, or
+install Gateway-only nginx resources on a Node.
 
 ## Standard layout and failure behavior
 
@@ -100,6 +102,16 @@ artifact without mutation during planning, then repeats verification during
 apply. It installs vpnctl + Mihomo + `frps` for a gateway or vpnctl + Mihomo +
 `frpc` for a node and stores the component manifest in authoritative state. A
 bundle changed between plan and apply is rejected before role layout creation.
+
+The same init transaction installs missing role-selected Ubuntu packages from
+the bundle's compatibility records. Gateway init temporarily prevents the
+distro nginx unit from starting with its default configuration, publishes the
+vpnctl-owned service drop-in and baseline immutable ingress tree, then enables
+and starts nginx. Success means the empty-expose Gateway already serves its
+IP-only certificate and reserved health/enrollment namespace on TCP 443. APT,
+version, ownership, activation, listener, or health failures are visible init
+failures; rerunning init against its own incomplete authoritative state repairs
+only that same bootstrap instead of creating a new identity.
 
 The separately versioned v1 maintenance operation, including its qualification,
 rollback, acceptance, and retirement boundary, is documented in

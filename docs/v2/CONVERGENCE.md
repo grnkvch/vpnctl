@@ -64,6 +64,21 @@ Intentional pending work keeps the success exit category. Drift adds a
 `review_drift` action pointing to `vpnctl repair`; it does not cause planning
 itself to mutate or repair anything.
 
+On a Gateway, the public planner additionally merges the shared bootstrap
+readiness projection into this effective drift view. That projection covers
+manifest-declared packages, the owned nginx drop-in and active tree, nginx
+runtime/service expectations, TCP 443 and the loopback enrollment listener.
+These resources deliberately do not enter the generic applied-material bundle:
+restoring them requires package-manager, immutable-tree, service and health
+transactions rather than the generic file/unit executor. Confirmed repair
+selects the dedicated Gateway bootstrap adapter for those readiness entries.
+That adapter, and committed network-watchdog recovery, run in the confirmed short-lived root CLI under a shared
+cross-process mutation lock; the resident controller retains no package-manager
+or system-wide ingress write privileges. The approved plan and generation are
+revalidated after the lock is acquired.
+Thus `plan` is complete without falsely claiming that a package or serving tree
+is generic reconstructable material.
+
 ## Persisted snapshot boundary
 
 The production read boundary is the root-only regular file

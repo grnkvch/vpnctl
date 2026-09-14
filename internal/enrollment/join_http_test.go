@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -65,8 +66,61 @@ func TestHTTPSNodeJoinExchangerRejectsWrongManagedCertificateBeforeRequest(t *te
 	body, _ := output.NewSecretString(`{"join":true}`)
 	defer body.Destroy()
 	result, err := exchanger.Exchange(context.Background(), "https://203.0.113.10"+InviteEnrollmentPath, &body)
-	if err == nil || result.CommitPossible || called || !strings.Contains(err.Error(), "managed IP-only profile") {
+	if !errors.Is(err, ErrPublicEnrollmentUnavailable) || result.CommitPossible || called || !strings.Contains(err.Error(), "managed IP-only profile") {
 		t.Fatalf("wrong-certificate result = %+v, error=%v, called=%t", result, err, called)
+	}
+}
+
+func TestHTTPSNodeJoinExchangerClassifiesTransportAndGatewayAvailability(t *testing.T) {
+	t.Run("dial failure", func(t *testing.T) {
+		exchanger, err := NewHTTPSNodeJoinExchanger(time.Second, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		exchanger.dialContext = func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("private dial canary")
+		}
+		body, _ := output.NewSecretString(`{"join":true}`)
+		defer body.Destroy()
+		result, err := exchanger.Exchange(context.Background(), "https://203.0.113.10"+InviteEnrollmentPath, &body)
+		if !errors.Is(err, ErrPublicEnrollmentUnavailable) || result.CommitPossible {
+			t.Fatalf("dial failure = %+v, %v", result, err)
+		}
+	})
+
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			now := time.Now().UTC().Truncate(time.Second)
+			server := newPublicEnrollmentTLSServer(t, "203.0.113.10", now, func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(status)
+			})
+			defer server.Close()
+			exchanger, _ := NewHTTPSNodeJoinExchanger(time.Second, func() time.Time { return now })
+			exchanger.dialContext = mappedEnrollmentDialer(t, server.Listener.Addr().String())
+			body, _ := output.NewSecretString(`{"join":true}`)
+			defer body.Destroy()
+			result, err := exchanger.Exchange(context.Background(), "https://203.0.113.10"+InviteEnrollmentPath, &body)
+			if !errors.Is(err, ErrPublicEnrollmentUnavailable) || result.CommitPossible {
+				t.Fatalf("status %d = %+v, %v", status, result, err)
+			}
+		})
+	}
+}
+
+func TestHTTPSNodeJoinExchangerKeepsRejectedInviteDistinctFromAvailability(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	server := newPublicEnrollmentTLSServer(t, "203.0.113.10", now, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNotFound)
+	})
+	defer server.Close()
+	exchanger, _ := NewHTTPSNodeJoinExchanger(time.Second, func() time.Time { return now })
+	exchanger.dialContext = mappedEnrollmentDialer(t, server.Listener.Addr().String())
+	body, _ := output.NewSecretString(`{"join":true}`)
+	defer body.Destroy()
+	result, err := exchanger.Exchange(context.Background(), "https://203.0.113.10"+InviteEnrollmentPath, &body)
+	if !errors.Is(err, ErrPublicEnrollmentRejected) || errors.Is(err, ErrPublicEnrollmentUnavailable) || result.CommitPossible {
+		t.Fatalf("rejected invite = %+v, %v", result, err)
 	}
 }
 

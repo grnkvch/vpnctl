@@ -30,7 +30,7 @@ const (
 	NginxEnrollmentLoopbackPort     = 19092
 	NginxEnrollmentUpstream         = "127.0.0.1:19092"
 	NginxEnrollmentMaximumBodyBytes = 64 * 1024
-	NginxEnrollmentTimeoutSeconds   = 5
+	NginxEnrollmentTimeoutSeconds   = 45
 	nginxSharedZoneBytes            = 64 * 1024
 	nginxEnrollmentZoneBytes        = 64 * 1024
 	nginxMaximumTreeBytes           = 32 * 1024 * 1024
@@ -527,3 +527,8 @@ func hasExactNginxVersion(output string) bool {
 	}
 	return false
 }
+
+// HasExactNginxVersion accepts the pinned runtime only as a complete output
+// token. Read-only readiness checks share this parser with candidate
+// validation so a version prefix cannot be mistaken for compatibility.
+func HasExactNginxVersion(output string) bool { return hasExactNginxVersion(output) }

@@ -60,6 +60,27 @@ func TestInitialGatewayRoleConvergenceSnapshotCoversExactServiceSet(t *testing.T
 	}
 }
 
+func TestInitialGatewayConvergenceKeepsBootstrapResourcesOutOfGenericRepairMaterial(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := InitialGatewayRoleConvergenceSnapshot(1, initialGatewayConvergenceRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Packages, the distro-owned nginx unit and the retained-generation tree
+	// require their dedicated lifecycle transactions. Publishing them into the
+	// generic role archive would let generic repair treat a package-owned unit
+	// or a symlinked tree descriptor as an ordinary restorable file. The CLI
+	// plan merges the shared readiness projection into its effective view and
+	// committed Gateway repair dispatches these resources to the dedicated
+	// package/ingress adapters instead.
+	for _, resource := range snapshot.Applied.Resources {
+		if resource.Key.Component == "ingress" || resource.Key.Component == "package" {
+			t.Fatalf("bootstrap resource leaked into generic convergence material: %+v", resource.Key)
+		}
+	}
+}
+
 func TestActiveGatewayRoleConvergenceSnapshotIncludesTunnelGeneration(t *testing.T) {
 	t.Parallel()
 

@@ -85,8 +85,8 @@ The request envelope contains schema version 1, purpose, the one-time token, a
 canonical unpadded-base64url 128-bit node nonce, and one bounded JSON object.
 The token is immediately wrapped in the non-serializable secret type and is
 never logged or returned. Requests inherit the control-plane ceilings: 64 KiB
-body, 8 KiB headers, JSON depth 32, five-second handler deadline, and at most 16
-concurrent sessions. The public response is at most 256 KiB and always carries
+body, 8 KiB headers, JSON depth 32, a 45-second first-join response budget, and
+at most 16 concurrent sessions. The public response is at most 256 KiB and always carries
 `Cache-Control: no-store`; nginx supplies the edge read/header/idle bounds and
 rate enforcement when the reserved routes are integrated in section 12.
 
@@ -184,6 +184,29 @@ explicit repair/recovery workflow instead of being destructively deleted.
 Pre-commit validation and readiness failures are definitive and roll back the
 fresh node credentials immediately.
 
+The first-join public request has one fixed 45-second response budget across
+the Node HTTP client, nginx reserved enrollment proxy, loopback server, and
+Gateway handler. TCP/TLS admission and request header/body reads retain their
+shorter bounds, so this does not create an unbounded public session. The larger
+response budget exists because the Gateway synchronously stages and verifies
+its complete service boundary on the supported minimum host. If the Node has
+written the request but cannot prove the result before the budget expires, it
+keeps attempt credentials and reports an uncertain outcome; it must not assume
+that the invite was unconsumed.
+
+Because systemd `Type=simple` may report a process started before its
+WireGuard identity and listeners are observable, Gateway candidate readiness
+retries the complete unchanged health report every 100 milliseconds for at
+most 20 seconds inside the 45-second request. A persistent failure restores the
+prior runtime and produces the same fixed `503 unavailable` as other readiness
+outages; it is not reported as an invalid invite.
+
+These Gateway-side `wg` and `ip` observations execute inside the resident
+controller, whose systemd address-family sandbox therefore permits exactly
+IPv4, Unix sockets, and netlink. Netlink is needed to inspect the kernel
+WireGuard/interface state; it does not grant IPv6, APT/dpkg, nginx-tree, or
+system-unit mutation authority.
+
 After the node commits the signed assignment, one deterministic compiler
 materializes that generation into the complete local service boundary. It
 renders route-neutral WireGuard, policy-mode Mihomo, the independent kernel
@@ -203,6 +226,13 @@ mapping response is insufficient. A post-commit activation failure preserves
 state, credentials, generated artifacts, and any installed guard, reports
 `join_activation_pending`, and requires explicit local repair rather than
 reusing the consumed invite.
+
+All four Node units declare the same private systemd runtime directory, so
+`/run/vpnctl` is recreated after reboot before namespace restrictions are
+applied. During post-commit activation, vpnctl retries the current unit's start
+and active observation every 100 milliseconds for no more than 20 seconds
+before advancing. This handles a transient WireGuard/routing-guard ordering
+race; an exhausted retry remains activation-pending and fail-closed.
 
 ## Joined-node behavior and gateway inspection
 

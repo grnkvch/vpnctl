@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,6 +174,17 @@ func TestPublicEnrollmentHandlerBoundsRequestsAndPreparedResponses(t *testing.T)
 			}
 			assertInviteStillActive(t, fixture)
 		})
+	}
+}
+
+func TestPublicEnrollmentJoinReadinessFailureIsUnavailable(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	(&PublicEnrollmentHandler{}).writeCoordinatorError(
+		recorder,
+		fmt.Errorf("prepare candidate: %w", ErrJoinNotReady),
+	)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != `{"error":"unavailable"}` {
+		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

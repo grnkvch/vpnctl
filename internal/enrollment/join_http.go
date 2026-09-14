@@ -20,7 +20,10 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/output"
 )
 
-const PublicEnrollmentClientTimeout = 15 * time.Second
+const (
+	PublicEnrollmentTransactionTimeout = 45 * time.Second
+	PublicEnrollmentClientTimeout      = PublicEnrollmentTransactionTimeout
+)
 
 // HTTPSNodeJoinExchanger performs one bounded bootstrap request. The public
 // ingress certificate is intentionally not a stable trust anchor: it rotates
@@ -91,7 +94,7 @@ func (exchanger *HTTPSNodeJoinExchanger) Exchange(
 				},
 			},
 			ForceAttemptHTTP2: false, DisableKeepAlives: true, DisableCompression: true,
-			TLSHandshakeTimeout: control.RPCReadBodyTimeout, ResponseHeaderTimeout: control.RPCWriteTimeout,
+			TLSHandshakeTimeout: control.RPCReadBodyTimeout, ResponseHeaderTimeout: exchanger.timeout,
 			MaxResponseHeaderBytes: control.RPCMaximumHeaderBytes,
 			DialContext:            exchanger.dialContext,
 		}
@@ -105,12 +108,17 @@ func (exchanger *HTTPSNodeJoinExchanger) Exchange(
 		response, err := client.Do(request)
 		if err != nil {
 			result.CommitPossible = wroteRequest
-			return fmt.Errorf("perform public enrollment request: %w", err)
+			return errors.Join(ErrPublicEnrollmentUnavailable, fmt.Errorf("perform public enrollment request: %w", err))
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
 			result.CommitPossible = false
-			return fmt.Errorf("public enrollment was rejected")
+			switch response.StatusCode {
+			case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+				return ErrPublicEnrollmentUnavailable
+			default:
+				return ErrPublicEnrollmentRejected
+			}
 		}
 		result.CommitPossible = true
 		if response.ProtoMajor != 1 || response.ProtoMinor != 1 || response.TLS == nil ||

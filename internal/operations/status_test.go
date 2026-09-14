@@ -58,7 +58,7 @@ func TestStatusCollectorKeepsWarningsAndPendingSuccessfulAndLeaksNoSecrets(t *te
 		report.Counts["expiring_certificates"] != 1 || report.Counts["pending_changes"] != 1 || report.Counts["drift"] != 0 {
 		t.Fatalf("status counts = %+v", report.Counts)
 	}
-	if len(report.Components) != 2 || report.Components[0].Name != "mihomo" || report.Components[1].SHA256 == "" || len(report.Runtime) != 2 {
+	if len(report.Components) != 2 || report.Components[0].Name != "mihomo" || report.Components[1].SHA256 == "" || len(report.Runtime) != 3 {
 		t.Fatalf("component/runtime status = %+v / %+v", report.Components, report.Runtime)
 	}
 	encoded, err := json.Marshal(report)
@@ -76,10 +76,35 @@ func TestStatusCollectorKeepsWarningsAndPendingSuccessfulAndLeaksNoSecrets(t *te
 	if !reflect.DeepEqual(stateSource.state, before) {
 		t.Fatal("status observer mutated authoritative state through its input")
 	}
-	if stateSource.reads != 1 || stateSource.writes != 0 || plannerSource.reads != 1 || plannerSource.writes != 0 ||
+	if stateSource.reads != 2 || stateSource.writes != 0 || plannerSource.reads != 1 || plannerSource.writes != 0 ||
 		discovery.reads != 1 || discovery.mutations != 0 || observer.reads != 1 || observer.syntheticDNS != 0 ||
 		observer.syntheticHTTP != 0 || observer.webhookCalls != 0 || observer.mutations != 0 {
 		t.Fatalf("passive audit = state %+v convergence %+v discovery %+v observer %+v", stateSource, plannerSource, discovery, observer)
+	}
+}
+
+func TestStatusCollectorAcceptsOlderCleanMaterialGenerationAfterMetadataOnlyMutation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	state := statusGatewayState(t, now)
+	key := ManagedResourceKey{Component: "control", Kind: ManagedResourceState, ID: "fleet"}
+	manifest := convergenceManifest(t, state.Generation-1, []ManagedResource{
+		resource(key, "same", ConvergenceImpactNone, ConvergenceImpactNone),
+	})
+	planner := statusPlanner(t, ConvergenceSnapshot{
+		Desired: manifest, Applied: manifest, Pending: []PendingOperation{},
+	}, observationsFromResources(manifest.Resources))
+	collector := statusCollectorFixture(t, state, now, planner, healthyPassiveStatus())
+
+	report, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasStatusProblem(report.Problems, "status_generation_changed") ||
+		hasStatusNotice(report.RequiredActions, "refresh_status") ||
+		report.Generation != state.Generation || report.DesiredGeneration != state.Generation-1 {
+		t.Fatalf("metadata-only generation was treated as a status race: %+v", report)
 	}
 }
 
@@ -253,6 +278,37 @@ func TestStatusCollectorTreatsExpiredCertificateAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestGatewayStatusCannotBeHealthyWithoutMandatoryNginxReadiness(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	state := statusGatewayState(t, now)
+	components := state.Components.Components
+	state.Components.Components = []model.ComponentPin{
+		components[0],
+		{
+			Name: "nginx", Version: "1.24.0-2ubuntu7.17", Source: "ubuntu-24.04-noble-updates",
+			Capabilities: []string{"http-1", "http-2", "streaming-proxy"},
+		},
+		components[1],
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	collector := statusCollectorWithMatchingConvergence(t, state, now)
+	observer := collector.observer.(*auditedPassiveStatusObserver)
+	observer.snapshot.Resources = observer.snapshot.Resources[:2]
+	report, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Overall == StatusOverallHealthy || report.Category != StatusCategoryUnavailable ||
+		!hasStatusProblem(report.Problems, "nginx_status_missing") ||
+		!hasStatusNotice(report.RequiredActions, "repair_gateway_ingress") {
+		t.Fatalf("gateway without nginx readiness was reported healthy: %+v", report)
+	}
+}
+
 const (
 	statusSecretHashCanary      = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	statusPrivateRefCanary      = "private-key:status-secret-canary"
@@ -332,6 +388,11 @@ func healthyPassiveStatus() PassiveStatusSnapshot {
 			Class: PassiveStatusDataPlane, Resource: ManagedResourceKey{Component: "routing", Kind: ManagedResourceUnit, ID: "vpnctl-routing.service"},
 			Condition: PassiveHealthy, Mandatory: true, Active: true, Version: "v1.19.30",
 			Generation: 8, RuntimeSHA256: ManagedFingerprint([]byte("routing-runtime")), Code: "process_ready",
+		},
+		{
+			Class: PassiveStatusDataPlane, Resource: ManagedResourceKey{Component: "ingress", Kind: ManagedResourceUnit, ID: "nginx.service"},
+			Condition: PassiveHealthy, Mandatory: true, Active: true, Version: "1.24.0",
+			Generation: 8, RuntimeSHA256: ManagedFingerprint([]byte("nginx-runtime")), Code: "nginx_service_active",
 		},
 	}}
 }

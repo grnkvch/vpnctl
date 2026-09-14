@@ -11,12 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
+	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 func TestUpdaterPlansLatestStableAndAppliesOnlyLocalComponentsWithHealth(t *testing.T) {
 	fixture := newUpdaterFixture(t, model.RoleGateway, "new")
+	ingressBefore := writeUpdateIngressServingFixture(t, fixture.root)
 	plan, err := fixture.updater.Plan(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +51,7 @@ func TestUpdaterPlansLatestStableAndAppliesOnlyLocalComponentsWithHealth(t *test
 		t.Fatalf("post-update state=%+v saves=%d remote=%d", fixture.state.state, fixture.state.saves, fixture.host.remoteUpdates)
 	}
 	assertUpdateInstalledFiles(t, fixture.root, fixture.targetInstalled, fixture.targetAssets)
+	assertUpdateIngressServingFixture(t, fixture.root, ingressBefore)
 }
 
 func TestUpdaterHealthFailureRollsBackFilesAndLeavesStateUntouched(t *testing.T) {
@@ -428,6 +432,69 @@ type updaterFixture struct {
 	targetAssets    map[string][]byte
 	targetInstalled map[string][]byte
 	snapshots       *FilesystemUpdateSnapshotStore
+}
+
+type updateIngressServingIdentity struct {
+	linkTarget string
+	artifacts  map[string][]byte
+}
+
+func writeUpdateIngressServingFixture(t *testing.T, root string) updateIngressServingIdentity {
+	t.Helper()
+	paths, err := store.NewPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := ingress.NginxGeneratedRoot(paths)
+	candidate, err := ingress.RenderNginxConfig(ingress.NginxRenderRequest{
+		StateGeneration: 3, PublicIPv4: "203.0.113.10",
+		CertificatePath:  filepath.Join(paths.SecretsDir, "public-ingress.crt"),
+		PrivateKeyPath:   filepath.Join(paths.SecretsDir, "public-ingress.key"),
+		RuntimeDirectory: ingress.NginxRuntimeDirectory(paths), Limits: ingress.DefaultGatewayHardLimits(),
+		Exposes: []model.Expose{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkTarget := filepath.Join(ingress.NginxGenerationsDirectory, "g3-"+candidate.ConfigHash())
+	generation := filepath.Join(generated, linkTarget)
+	if err := os.MkdirAll(generation, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := make(map[string][]byte, len(candidate.Artifacts()))
+	for _, artifact := range candidate.Artifacts() {
+		path := filepath.Join(generation, filepath.FromSlash(artifact.RelativePath()))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := artifact.Bytes()
+		if err := os.WriteFile(path, content, artifact.Mode()); err != nil {
+			t.Fatal(err)
+		}
+		artifacts[artifact.RelativePath()] = content
+	}
+	if err := os.Symlink(linkTarget, ingress.NginxActiveRoot(paths)); err != nil {
+		t.Fatal(err)
+	}
+	return updateIngressServingIdentity{linkTarget: linkTarget, artifacts: artifacts}
+}
+
+func assertUpdateIngressServingFixture(t *testing.T, root string, before updateIngressServingIdentity) {
+	t.Helper()
+	paths, err := store.NewPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(ingress.NginxActiveRoot(paths))
+	if err != nil || target != before.linkTarget {
+		t.Fatalf("update changed serving ingress link: target=%q err=%v", target, err)
+	}
+	for relative, want := range before.artifacts {
+		content, err := os.ReadFile(filepath.Join(ingress.NginxGeneratedRoot(paths), target, filepath.FromSlash(relative)))
+		if err != nil || !reflect.DeepEqual(content, want) {
+			t.Fatalf("update changed serving ingress artifact %s: content=%q err=%v", relative, content, err)
+		}
+	}
 }
 
 func newUpdaterFixture(t *testing.T, role model.Role, targetMarker string) updaterFixture {

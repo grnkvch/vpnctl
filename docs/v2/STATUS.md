@@ -7,6 +7,16 @@ not a health probe or convergence trigger. It combines three read-only inputs:
 2. the strict `desired ↔ applied` / `applied ↔ observed` convergence plan;
 3. cached and local process metadata from a passive runtime observer.
 
+For a Gateway, the read-only inputs also include one shared bootstrap readiness
+projection: compatible manifest-declared package versions, the exact owned
+nginx drop-in, active immutable ingress tree/hash, nginx load/enable/active and
+runtime-version state, the TCP 443 listener, and the loopback enrollment
+listener. This inspection does not refresh APT, start a unit, open an HTTP/TLS
+connection, or repair anything. Missing or drifted mandatory ingress therefore
+makes status degraded even when the controller and WireGuard data plane remain
+healthy. The stable action is `repair_gateway_ingress`, beginning with
+`sudo vpnctl repair --dry-run`.
+
 The observer interface has no probe or mutation operation. Implementations may
 read cached readiness, process state, versions, generations, and configuration
 hashes, but must not open network connections, issue DNS requests, invoke a
@@ -75,11 +85,19 @@ status. Certificate and backup warnings include the role-correct manual command;
 public certificate rotation still requires external webhook re-registration as
 documented by the rotation workflow.
 
+Passive readiness cannot prove that public TLS routing works through the
+external edge. `vpnctl doctor ingress` remains the active bounded check for the
+public-IP certificate and reserved health path and separately checks that the
+loopback enrollment upstream is reachable.
+
 ## Snapshot consistency
 
 The collector gives the observer an isolated validated state copy. It reports
 missing control, joined-node gateway, selected-transport, or active data-plane
 metadata as unavailable instead of silently assuming health. If authoritative
-state changes between its state and convergence reads, status reports the
-generation mismatch and asks the operator to run status again; it does not
-retry a mutation or synthesize traffic.
+state changes during collection, a second authoritative-state read detects the
+race and status asks the operator to run it again; it does not retry a mutation
+or synthesize traffic. Convergence material may legitimately retain an older
+generation after invite, logging, backup, or another metadata-only mutation,
+so generation inequality alone is not drift when the material and semantic
+readiness projections are otherwise clean.

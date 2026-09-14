@@ -56,7 +56,11 @@ func executePlan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return emitPlanCommandFailure(emitter, output.CategoryInternal, "planner_unavailable", "vpnctl could not construct the convergence planner")
 	}
-	result, err := planRun(context.Background(), role, planner)
+	reader, err := composeSystemConvergencePlanReader(paths, role, planner)
+	if err != nil {
+		return emitPlanCommandFailure(emitter, output.CategoryInternal, "planner_unavailable", "vpnctl could not construct the convergence planner")
+	}
+	result, err := planRun(context.Background(), role, reader)
 	if err != nil {
 		category, code, message := classifyPlanCommandError(err)
 		return emitPlanCommandFailure(emitter, category, code, message)

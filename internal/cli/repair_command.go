@@ -9,6 +9,8 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -176,6 +178,11 @@ func classifyRepairCommandError(err error) (output.ExitCategory, string, string)
 		errors.Is(err, store.ErrStateConflict), errors.Is(err, operations.ErrConvergenceSnapshotConflict), errors.Is(err, operations.ErrRepairConflict), errors.Is(err, controller.ErrGatewayRepairWatchdogActive),
 		errors.Is(err, controller.ErrGatewayRepairNetworkState):
 		return output.CategoryConflict, "repair_plan_stale", "the committed generation changed after repair preview"
+	case errors.Is(err, controller.ErrGatewayBootstrapRepairConflict), errors.Is(err, lifecycle.ErrRolePackageConflict),
+		errors.Is(err, ingress.ErrNginxServiceConflict), errors.Is(err, ingress.ErrNginxTreeConflict), errors.Is(err, ingress.ErrNginxTreeDrift):
+		return output.CategoryConflict, "gateway_bootstrap_conflict", "gateway package or ingress ownership conflicts with the committed bootstrap"
+	case errors.Is(err, lifecycle.ErrRolePackageUnavailable):
+		return output.CategoryUnavailable, "gateway_package_unavailable", "the declared gateway package cannot be acquired or the package manager is busy"
 	case errors.Is(err, ErrCommittedGatewayRepairUnavailable), errors.Is(err, operations.ErrRepairGatewayUnavailable):
 		return output.CategoryUnavailable, "gateway_controller_unavailable", "repair requires the authoritative gateway control service"
 	case errors.Is(err, ErrCommittedGatewayRepairUncertain):

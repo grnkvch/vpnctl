@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -23,6 +24,8 @@ func TestSystemGatewayJoinReadinessPublishesAndRetainsCommittedCandidate(t *test
 	defer fixture.destroy()
 	ensureJoinFixtureFRPComponent(fixture)
 	paths, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	runner.failStandardPublicKeyChecks = 1
+	readiness.readinessTimeout = time.Second
 	late.target = readiness
 
 	result, err := fixture.workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"})
@@ -52,6 +55,9 @@ func TestSystemGatewayJoinReadinessPublishesAndRetainsCommittedCandidate(t *test
 		{"restart", "vpnctl-tunnel-server.service"},
 	}) {
 		t.Fatalf("candidate restart sequence was not observed: %v", runner.systemctl)
+	}
+	if runner.standardPublicKeyChecks < 2 {
+		t.Fatalf("standard readiness checks = %d, want a transient retry", runner.standardPublicKeyChecks)
 	}
 	if convergence.stages != 1 || convergence.commits != 1 || convergence.rollbacks != 0 || convergence.generation != 3 || len(convergence.request.Configs) != 12 {
 		t.Fatalf("gateway convergence transaction = %+v", convergence)
@@ -216,6 +222,8 @@ func newGatewayJoinReadinessFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	readiness.readinessTimeout = time.Nanosecond
+	readiness.retryInterval = time.Nanosecond
 	return paths, runner, readiness, convergence
 }
 
@@ -230,9 +238,11 @@ func ensureJoinFixtureFRPComponent(fixture *joinFixture) {
 }
 
 type gatewayJoinReadinessProbeRunner struct {
-	systemctl        [][]string
-	failTunnelHealth bool
-	peerPublicKey    string
+	systemctl                   [][]string
+	failTunnelHealth            bool
+	peerPublicKey               string
+	failStandardPublicKeyChecks int
+	standardPublicKeyChecks     int
 }
 
 func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
@@ -246,6 +256,11 @@ func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command li
 	key := command.Name + " " + strings.Join(command.Args, " ")
 	switch key {
 	case "wg show vpnctl-wg public-key":
+		runner.standardPublicKeyChecks++
+		if runner.failStandardPublicKeyChecks > 0 {
+			runner.failStandardPublicKeyChecks--
+			return linuxplatform.ProbeResult{Stdout: []byte(testNodeWireGuardPublic() + "\n")}, nil
+		}
 		return linuxplatform.ProbeResult{Stdout: []byte(joinGatewayWireGuardPublic() + "\n")}, nil
 	case "wg show vpnctl-wg listen-port":
 		return linuxplatform.ProbeResult{Stdout: []byte("51820\n")}, nil

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
@@ -39,7 +40,7 @@ func (observer *SystemUnitObserver) Observe(ctx context.Context, state model.Sta
 	defer cancel()
 
 	observation := Observation{Units: []UnitObservation{}, Issues: []string{}}
-	for _, name := range linuxplatform.RoleUnitNames(state.Host.Role) {
+	for _, name := range systemObservedUnitNames(state.Host.Role) {
 		unit := UnitObservation{Name: name}
 		result, err := observer.runner.Run(bounded, linuxplatform.ProbeCommand{
 			Name: "systemctl",
@@ -65,6 +66,18 @@ func (observer *SystemUnitObserver) Observe(ctx context.Context, state model.Sta
 	sort.Slice(observation.Units, func(i, j int) bool { return observation.Units[i].Name < observation.Units[j].Name })
 	sort.Strings(observation.Issues)
 	return observation, nil
+}
+
+// systemObservedUnitNames contains passive runtime dependencies in addition
+// to vpnctl-owned role units. nginx.service is package-owned, but it is a
+// mandatory Gateway postcondition and therefore must never disappear from
+// status merely because it is not named vpnctl-*.
+func systemObservedUnitNames(role model.Role) []string {
+	names := linuxplatform.RoleUnitNames(role)
+	if role == model.RoleGateway {
+		names = append(names, ingress.NginxServiceUnit)
+	}
+	return names
 }
 
 func parseSystemdProperties(data []byte) (map[string]string, error) {

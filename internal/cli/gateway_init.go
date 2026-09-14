@@ -286,6 +286,7 @@ func gatewayInitOutput(plan lifecycle.GatewayInitPlan, applied lifecycle.Gateway
 			"selected": plan.ManagedSwapSelected, "file_path": linuxplatform.ManagedSwapLogicalPath,
 			"size_bytes": linuxplatform.ManagedSwapSizeBytes,
 		},
+		"packages": initPackagePlanOutput(plan.Packages),
 	})
 	if plan.HostID != "" {
 		result.ResourceIDs["host_id"] = plan.HostID
@@ -306,6 +307,7 @@ func gatewayInitOutput(plan lifecycle.GatewayInitPlan, applied lifecycle.Gateway
 			Code: "managed_swap_capacity_unknown", Message: "Managed swap was not offered because memory or free-disk capacity could not be verified.",
 		})
 	}
+	addInitPackageHumanTable(&result, plan.Packages)
 	return result
 }
 
@@ -361,8 +363,10 @@ func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 		return output.CategoryUnavailable, "init_convergence_pending", "gateway state and services committed but convergence metadata is pending; run vpnctl repair"
 	case errors.Is(err, lifecycle.ErrGatewayRoleConflict), errors.Is(err, lifecycle.ErrGatewayInitConflict),
 		errors.Is(err, lifecycle.ErrGatewayLayoutConflict), errors.Is(err, linuxplatform.ErrGatewayPreflightConflict),
-		errors.Is(err, linuxplatform.ErrManagedSwapConflict):
+		errors.Is(err, linuxplatform.ErrManagedSwapConflict), errors.Is(err, lifecycle.ErrRolePackageConflict):
 		return output.CategoryConflict, "init_conflict", err.Error()
+	case errors.Is(err, lifecycle.ErrRolePackageUnavailable), errors.Is(err, lifecycle.ErrRolePackageResidue):
+		return output.CategoryUnavailable, "package_bootstrap_unavailable", "required Gateway packages could not be installed or restored; inspect the package transaction journal and retry init"
 	case errors.Is(err, linuxplatform.ErrUnsupportedHost), errors.Is(err, linuxplatform.ErrInvalidGatewayNetwork),
 		errors.Is(err, linuxplatform.ErrSSHPortUnverified), errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrConsentDeclined),
 		errors.Is(err, ErrPromptInput), errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags),
@@ -373,6 +377,43 @@ func classifyGatewayInitError(err error) (output.ExitCategory, string, string) {
 	default:
 		return output.CategoryInternal, "init_internal_error", "vpnctl could not initialize the gateway"
 	}
+}
+
+func initPackagePlanOutput(plan lifecycle.RolePackagePlan) output.SafeList {
+	items := make(output.SafeList, 0, len(plan.Packages))
+	for _, item := range plan.Packages {
+		row := output.SafeObject{
+			"component": item.Component, "package": item.Package, "source": item.Source,
+			"minimum_version": item.MinimumVersion, "maximum_version_exclusive": item.MaximumVersionExclusive,
+			"action": string(item.Action),
+		}
+		if item.InstalledVersion != "" {
+			row["installed_version"] = item.InstalledVersion
+		}
+		if item.CandidateVersion != "" {
+			row["candidate_version"] = item.CandidateVersion
+		}
+		items = append(items, row)
+	}
+	return items
+}
+
+func addInitPackageHumanTable(result *output.Result, plan lifecycle.RolePackagePlan) {
+	rows := make([][]string, 0, len(plan.Packages))
+	for _, item := range plan.Packages {
+		current, target := item.InstalledVersion, item.CandidateVersion
+		if current == "" {
+			current = "absent"
+		}
+		if target == "" {
+			target = item.InstalledVersion
+		}
+		rows = append(rows, []string{item.Component, item.Package, string(item.Action), current, target})
+	}
+	// RolePackagePlan validation already bounds every cell to manifest/package
+	// metadata and single-line dpkg versions, so this static projection cannot
+	// fail for a valid init/repair result.
+	_ = result.AddHumanTable("packages", []string{"component", "package", "action", "current", "target"}, rows)
 }
 
 func emitGatewayInitFailure(emitter *ResultEmitter, category output.ExitCategory, warningCode, warningMessage string) int {

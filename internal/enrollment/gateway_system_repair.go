@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -17,6 +18,11 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/transport"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
+)
+
+const (
+	gatewayRepairReadinessTimeout = 20 * time.Second
+	gatewayRepairRetryInterval    = 100 * time.Millisecond
 )
 
 // SystemGatewayRepairCandidate retains rendered secrets only in memory. Its
@@ -37,6 +43,9 @@ type SystemGatewayRepairRuntime struct {
 	runner     linuxplatform.ProbeRunner
 	keyRunner  wireguard.Runner
 	binaryPath string
+
+	readinessTimeout time.Duration
+	retryInterval    time.Duration
 }
 
 func NewSystemGatewayRepairRuntime(
@@ -225,6 +234,36 @@ func (runtime *SystemGatewayRepairRuntime) Apply(ctx context.Context, candidate 
 }
 
 func (runtime *SystemGatewayRepairRuntime) verify(ctx context.Context, candidate *SystemGatewayRepairCandidate) error {
+	timeout := runtime.readinessTimeout
+	if timeout <= 0 {
+		timeout = gatewayRepairReadinessTimeout
+	}
+	interval := runtime.retryInterval
+	if interval <= 0 {
+		interval = gatewayRepairRetryInterval
+	}
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var last error
+	for {
+		if err := runtime.verifyOnce(bounded, candidate); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-bounded.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return errors.Join(last, bounded.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (runtime *SystemGatewayRepairRuntime) verifyOnce(ctx context.Context, candidate *SystemGatewayRepairCandidate) error {
 	for _, unit := range []string{"vpnctl-controller.service", "vpnctl-standard.service", "vpnctl-restricted.service", "vpnctl-dns.service"} {
 		probe, err := runtime.runner.Run(ctx, linuxplatform.ProbeCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", unit}})
 		if err != nil || probe.ExitCode != 0 {

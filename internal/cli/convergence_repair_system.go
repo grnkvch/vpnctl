@@ -448,6 +448,29 @@ func systemConvergenceRepairEligible(ctx context.Context, paths store.Paths, rol
 	if err != nil || validateRepairAuthority(current, modelRole, nodeID) != nil {
 		return false
 	}
+	// Generic convergence repair owns only archived vpnctl role material. A
+	// Gateway bootstrap gap needs the committed repair contract, which also
+	// binds packages, nginx ownership, listener readiness, and the initial
+	// network watchdog. Publishing convergence before operator confirmation
+	// must not hide a rolled-back initial firewall transaction.
+	if modelRole == model.RoleGateway {
+		watchdogs, watchdogErr := operations.NewWatchdogStore(paths)
+		if watchdogErr != nil {
+			return false
+		}
+		confirmed, watchdogErr := gatewayNetworkBaselineConfirmed(watchdogs)
+		if watchdogErr != nil || !confirmed {
+			return false
+		}
+		readiness, readinessErr := newSystemGatewayBootstrapStatusObserver(paths)
+		if readinessErr != nil {
+			return false
+		}
+		report, readinessErr := readiness.Inspect(ctx, current)
+		if readinessErr != nil || !report.Ready {
+			return false
+		}
+	}
 	_, source, material, _, _, err := buildSystemRepairPlanning(paths, modelRole, nodeID)
 	if err != nil {
 		return false
@@ -462,6 +485,38 @@ func systemConvergenceRepairEligible(ctx context.Context, paths store.Paths, rol
 	}
 	retained.Destroy()
 	return true
+}
+
+type gatewayNetworkConfirmationStore interface {
+	TransactionIDs() ([]string, error)
+	Status(string) (operations.WatchdogTransactionStatus, error)
+}
+
+func gatewayNetworkBaselineConfirmed(watchdogs gatewayNetworkConfirmationStore) (bool, error) {
+	if watchdogs == nil {
+		return false, fmt.Errorf("gateway watchdog store is required")
+	}
+	ids, err := watchdogs.TransactionIDs()
+	if err != nil {
+		return false, err
+	}
+	confirmed := false
+	for _, id := range ids {
+		status, err := watchdogs.Status(id)
+		if err != nil {
+			return false, err
+		}
+		switch status {
+		case operations.WatchdogStatusCommitted:
+			confirmed = true
+		case operations.WatchdogStatusRolledBack:
+		case operations.WatchdogStatusArmed, operations.WatchdogStatusActive:
+			return false, nil
+		default:
+			return false, fmt.Errorf("gateway watchdog status is invalid")
+		}
+	}
+	return confirmed, nil
 }
 
 var (

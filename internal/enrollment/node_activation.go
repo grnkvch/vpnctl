@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -16,6 +17,11 @@ import (
 )
 
 var ErrNodeActivationPending = errors.New("joined node service activation is pending")
+
+const (
+	nodeActivationUnitTimeout       = 20 * time.Second
+	nodeActivationUnitRetryInterval = 100 * time.Millisecond
+)
 
 var nodeActivationOrder = []string{
 	"vpnctl-standard.service",
@@ -37,10 +43,12 @@ type NodeConfigurationReadinessChecker interface {
 // later failure it deliberately leaves an already installed routing guard in
 // place; ordinary compensation must never reopen selected traffic to direct.
 type NodeConfigurationActivator struct {
-	binaryPath string
-	roles      NodeConfigurationRoleInstaller
-	runner     linuxplatform.ProbeRunner
-	readiness  NodeConfigurationReadinessChecker
+	binaryPath  string
+	roles       NodeConfigurationRoleInstaller
+	runner      linuxplatform.ProbeRunner
+	readiness   NodeConfigurationReadinessChecker
+	unitTimeout time.Duration
+	retryWait   func(context.Context, time.Duration) error
 }
 
 func NewNodeConfigurationActivator(
@@ -55,7 +63,10 @@ func NewNodeConfigurationActivator(
 	if _, err := linuxplatform.RenderNodeRoleInstallation(binaryPath); err != nil {
 		return nil, err
 	}
-	return &NodeConfigurationActivator{binaryPath: binaryPath, roles: roles, runner: runner, readiness: readiness}, nil
+	return &NodeConfigurationActivator{
+		binaryPath: binaryPath, roles: roles, runner: runner, readiness: readiness,
+		unitTimeout: nodeActivationUnitTimeout, retryWait: waitNodeActivationRetry,
+	}, nil
 }
 
 func (activator *NodeConfigurationActivator) Activate(ctx context.Context, configuration NodeConfiguration) error {
@@ -81,10 +92,7 @@ func (activator *NodeConfigurationActivator) Activate(ctx context.Context, confi
 		return fmt.Errorf("publish joined node service generation: %w", err)
 	}
 	for _, unit := range nodeActivationOrder {
-		if err := activator.systemctl(ctx, "start", unit); err != nil {
-			return errors.Join(ErrNodeActivationPending, err)
-		}
-		if err := activator.systemctl(ctx, "is-active", "--quiet", unit); err != nil {
+		if err := activator.activateUnit(ctx, unit); err != nil {
 			return errors.Join(ErrNodeActivationPending, err)
 		}
 	}
@@ -92,6 +100,43 @@ func (activator *NodeConfigurationActivator) Activate(ctx context.Context, confi
 		return errors.Join(ErrNodeActivationPending, fmt.Errorf("verify joined node service generation: %w", err))
 	}
 	return nil
+}
+
+func (activator *NodeConfigurationActivator) activateUnit(ctx context.Context, unit string) error {
+	if activator.unitTimeout <= 0 || activator.retryWait == nil {
+		return fmt.Errorf("node activation retry contract is invalid")
+	}
+	unitContext, cancel := context.WithTimeout(ctx, activator.unitTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		if err := activator.systemctl(unitContext, "start", unit); err == nil {
+			if err = activator.systemctl(unitContext, "is-active", "--quiet", unit); err == nil {
+				return nil
+			} else {
+				lastErr = err
+			}
+		} else {
+			lastErr = err
+		}
+		if err := activator.retryWait(unitContext, nodeActivationUnitRetryInterval); err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+			return fmt.Errorf("activate %s within %s: %w", unit, activator.unitTimeout, lastErr)
+		}
+	}
+}
+
+func waitNodeActivationRetry(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (activator *NodeConfigurationActivator) systemctl(ctx context.Context, arguments ...string) error {

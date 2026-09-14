@@ -99,6 +99,58 @@ func TestGatewayInitOutputWithUnknownSwapCapacityIsValid(t *testing.T) {
 	}
 }
 
+func TestInitOutputsPackagePreviewAndClassifiesBootstrapFailures(t *testing.T) {
+	t.Parallel()
+
+	packages := lifecycle.RolePackagePlan{
+		SchemaVersion: lifecycle.RolePackagePlanSchemaVersion, Role: model.RoleGateway,
+		ManifestSHA256: strings.Repeat("a", 64),
+		Packages: []lifecycle.RolePackagePlanItem{{
+			Component: "nginx", Package: "nginx", Source: "ubuntu-24.04-noble-updates",
+			MinimumVersion: "1.24.0-2ubuntu7.17", MaximumVersionExclusive: "1.24.1",
+			CandidateVersion: "1.24.0-2ubuntu7.17", Action: lifecycle.RolePackageInstall,
+		}},
+	}
+	result := gatewayInitOutput(lifecycle.GatewayInitPlan{
+		Changed: true, HostID: gatewayCLIHostID, Packages: packages,
+		Network: linuxplatform.GatewayNetworkPlan{
+			PublicIPv4: "8.8.8.8", ClientCIDR: model.DefaultClientCIDR,
+			NodeCIDR: model.DefaultNodeCIDR, ExternalInterface: "eth0",
+		},
+		SSH:           linuxplatform.SSHPortPlan{Port: 22},
+		HandshakeHost: model.HandshakeHost{SchemaVersion: model.ResourceSchemaVersion, ListVersion: 1, CandidateID: "microsoft", Hostname: "www.microsoft.com", SelectedAt: time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)},
+	}, lifecycle.GatewayInitResult{}, false)
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := result.Data["packages"].(output.SafeList)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("package preview = %#v", result.Data["packages"])
+	}
+	row, ok := rows[0].(output.SafeObject)
+	if !ok || row["package"] != "nginx" || row["candidate_version"] != "1.24.0-2ubuntu7.17" || row["action"] != "install" {
+		t.Fatalf("package preview row = %#v", rows[0])
+	}
+	var human strings.Builder
+	if err := output.RenderHuman(&human, result); err != nil || !strings.Contains(human.String(), "package=nginx") || !strings.Contains(human.String(), "action=install") {
+		t.Fatalf("human package preview = %q, %v", human.String(), err)
+	}
+	for _, test := range []struct {
+		err      error
+		category output.ExitCategory
+		code     string
+	}{
+		{err: lifecycle.ErrRolePackageConflict, category: output.CategoryConflict, code: "init_conflict"},
+		{err: lifecycle.ErrRolePackageUnavailable, category: output.CategoryUnavailable, code: "package_bootstrap_unavailable"},
+		{err: lifecycle.ErrRolePackageResidue, category: output.CategoryUnavailable, code: "package_bootstrap_unavailable"},
+	} {
+		category, code, message := classifyGatewayInitError(test.err)
+		if category != test.category || code != test.code || strings.ContainsAny(message, "\r\n\x00") {
+			t.Fatalf("classification for %v = %s/%s/%q", test.err, category, code, message)
+		}
+	}
+}
+
 func TestExecuteGatewayInitDryRunDoesNotApplyOrRequestTTY(t *testing.T) {
 	initializer := &recordingGatewayInitializer{}
 	restore := stubGatewayInitCommand(t, initializer, RoleUninitialized, "1.1.1.1 54321 8.8.8.8 2222")

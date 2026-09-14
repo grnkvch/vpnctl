@@ -55,7 +55,7 @@ func (server *PublicEnrollmentServer) Serve(ctx context.Context, listener net.Li
 		Handler:           server.handler,
 		ReadHeaderTimeout: control.RPCReadHeaderTimeout,
 		ReadTimeout:       control.RPCReadBodyTimeout,
-		WriteTimeout:      control.RPCWriteTimeout,
+		WriteTimeout:      PublicEnrollmentTransactionTimeout,
 		IdleTimeout:       control.RPCIdleTimeout,
 		MaxHeaderBytes:    control.RPCMaximumHeaderBytes,
 		ErrorLog:          log.New(io.Discard, "", 0),

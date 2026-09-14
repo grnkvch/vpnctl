@@ -229,6 +229,7 @@ func classifyJoinError(err error) (output.ExitCategory, string, string) {
 	case errors.Is(err, enrollment.ErrNodeAlreadyJoined), errors.Is(err, enrollment.ErrJoinConflict), errors.Is(err, store.ErrStateConflict):
 		return output.CategoryConflict, "join_conflict", singleLineGatewayInitMessage(err.Error())
 	case errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrPromptInput),
+		errors.Is(err, enrollment.ErrPublicEnrollmentRejected),
 		errors.Is(err, enrollment.ErrInviteTokenInvalid), errors.Is(err, enrollment.ErrInviteExpired),
 		errors.Is(err, enrollment.ErrInviteCancelled), errors.Is(err, enrollment.ErrInviteConsumed):
 		return output.CategoryValidation, "join_validation", singleLineGatewayInitMessage(err.Error())
@@ -245,6 +246,12 @@ func emitJoinFailure(emitter *ResultEmitter, category output.ExitCategory, warni
 		result.RequiresAction = append(result.RequiresAction, output.Action{
 			Code: "repair_node_services", Message: "Reconcile the committed node service generation after resolving the reported host issue.",
 			Command: "vpnctl repair",
+		})
+	}
+	if warningCode == "join_unavailable" {
+		result.RequiresAction = append(result.RequiresAction, output.Action{
+			Code:    "check_gateway_ingress",
+			Message: "On the Gateway, run vpnctl status and vpnctl doctor ingress before retrying join.",
 		})
 	}
 	code, err := emitter.Emit(result)

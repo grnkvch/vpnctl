@@ -9,7 +9,24 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 )
+
+func TestPublicEnrollmentTimeoutBudgetCoversGatewayCandidateActivation(t *testing.T) {
+	if PublicEnrollmentTransactionTimeout != PublicEnrollmentClientTimeout {
+		t.Fatalf("public enrollment transaction/client timeout differs: transaction=%s client=%s",
+			PublicEnrollmentTransactionTimeout, PublicEnrollmentClientTimeout)
+	}
+	if PublicEnrollmentTransactionTimeout != time.Duration(ingress.NginxEnrollmentTimeoutSeconds)*time.Second {
+		t.Fatalf("public enrollment timeout boundary differs: transaction=%s client=%s nginx=%ds",
+			PublicEnrollmentTransactionTimeout, PublicEnrollmentClientTimeout, ingress.NginxEnrollmentTimeoutSeconds)
+	}
+	if PublicEnrollmentTransactionTimeout <= control.RPCWriteTimeout || PublicEnrollmentTransactionTimeout > time.Minute {
+		t.Fatalf("public enrollment transaction timeout = %s", PublicEnrollmentTransactionTimeout)
+	}
+}
 
 func TestPublicEnrollmentServerServesOnlyLoopbackAndStopsWithContext(t *testing.T) {
 	server, err := NewPublicEnrollmentServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

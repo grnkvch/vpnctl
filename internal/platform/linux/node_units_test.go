@@ -32,6 +32,13 @@ func TestRenderNodeRoleInstallationStagesOnlyNodeUnits(t *testing.T) {
 		if !strings.Contains(content, "Restart=on-failure") {
 			t.Fatalf("unit %s does not have the long-running restart contract", unit.Name)
 		}
+		for _, required := range []string{
+			"RuntimeDirectory=vpnctl\n", "RuntimeDirectoryMode=0700\n", "RuntimeDirectoryPreserve=yes\n",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("unit %s lacks reboot-safe runtime directory contract %q:\n%s", unit.Name, required, content)
+			}
+		}
 		if name := unit.Name; name == "vpnctl-routing-guard.service" {
 			for _, required := range []string{
 				"Type=oneshot", "RemainAfterExit=yes", "Before=vpnctl-routing.service", "After=network-online.target vpnctl-standard.service",

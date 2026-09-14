@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 )
@@ -230,7 +231,7 @@ type recordingUninstallRuntime struct {
 }
 
 func newRecordingUninstallRuntime(role model.Role) *recordingUninstallRuntime {
-	return &recordingUninstallRuntime{plan: UninstallHostPlan{
+	runtime := &recordingUninstallRuntime{plan: UninstallHostPlan{
 		StateGeneration: 1,
 		Units:           []string{"vpnctl-standard.service"}, GeneratedPaths: []string{"/etc/vpnctl/generated/" + string(role)},
 		AuxiliaryUnits: []string{},
@@ -242,6 +243,10 @@ func newRecordingUninstallRuntime(role model.Role) *recordingUninstallRuntime {
 		StateGeneration: 1, ConfigDir: "/etc/vpnctl", StateDir: "/var/lib/vpnctl",
 		BackupsDir: "/var/lib/vpnctl/backups", BackupArchives: 1,
 	}}
+	if role == model.RoleGateway {
+		runtime.plan.NginxService = ingress.NginxServiceRemovalPlan{DropInPath: "/etc/systemd/system/nginx.service.d/vpnctl.conf"}
+	}
+	return runtime
 }
 
 func (runtime *recordingUninstallRuntime) Inspect(_ context.Context, state model.State) (UninstallHostPlan, error) {

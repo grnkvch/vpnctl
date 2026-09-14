@@ -79,6 +79,10 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create public ingress certificate provisioner: %w", err)
 	}
+	baselineIngress, err := ingress.NewSystemNginxBaselineManager(paths)
+	if err != nil {
+		return nil, fmt.Errorf("create baseline gateway ingress manager: %w", err)
+	}
 	handshakeHosts, err := transport.NewBundledHandshakeHostSelector()
 	if err != nil {
 		return nil, fmt.Errorf("create gateway handshake-host selector: %w", err)
@@ -99,15 +103,27 @@ func NewSystemGatewayInitializer(paths store.Paths, snapshot linuxplatform.HostS
 	if err != nil {
 		return nil, fmt.Errorf("create gateway convergence publisher: %w", err)
 	}
+	packages, err := lifecycle.NewSystemRolePackageManager(paths.Root, linuxplatform.OSProbeRunner{})
+	if err != nil {
+		return nil, fmt.Errorf("create gateway package manager: %w", err)
+	}
+	rediscover, err := linuxplatform.NewDiscoverer(paths.Root)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway post-package discoverer: %w", err)
+	}
+	readiness, err := lifecycle.NewGatewayBootstrapReadinessInspector(paths, packages, linuxplatform.OSProbeRunner{})
+	if err != nil {
+		return nil, fmt.Errorf("create gateway bootstrap readiness inspector: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
 	}
 	return lifecycle.NewGatewayInitializer(lifecycle.GatewayInitRuntime{
-		Paths: paths, Snapshot: snapshot, Release: release, BinaryPath: binary,
+		Paths: paths, Snapshot: snapshot, Release: release, Packages: packages, Rediscover: rediscover, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, WatchdogUnits: watchdogUnits,
 		Watchdog: gatewayInitWatchdogAdapter{watchdog: watchdog}, Network: linuxplatform.NewOSNetworkManager(), Swap: managedSwap, Identity: identity,
-		PublicCertificate: publicCertificate,
-		HandshakeHosts:    handshakeHosts, Transports: listeners, Convergence: convergence,
+		PublicCertificate: publicCertificate, Ingress: baselineIngress, Readiness: readiness,
+		HandshakeHosts: handshakeHosts, Transports: listeners, Convergence: convergence,
 	})
 }

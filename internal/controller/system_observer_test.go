@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 )
@@ -19,7 +20,7 @@ func TestSystemUnitObserverUsesOnlyPassiveSystemctlShow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNames := linuxplatform.RoleUnitNames(model.RoleGateway)
+	wantNames := append(linuxplatform.RoleUnitNames(model.RoleGateway), ingress.NginxServiceUnit)
 	if len(runner.commands) != len(wantNames) || len(observed.Units) != len(wantNames) {
 		t.Fatalf("commands/units = %d/%d, want %d", len(runner.commands), len(observed.Units), len(wantNames))
 	}

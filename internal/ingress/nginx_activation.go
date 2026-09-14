@@ -389,6 +389,24 @@ type nginxGeneration struct {
 	root       string
 }
 
+// NginxActiveTreeIdentity is the non-secret, read-only identity of the
+// currently published immutable nginx generation.
+type NginxActiveTreeIdentity struct {
+	Generation uint64
+	ConfigHash string
+}
+
+// InspectNginxActiveTree validates the complete current symlink and generation
+// tree before returning its stable identity. Missing state is reported with
+// present=false; foreign or malformed state fails closed as drift.
+func InspectNginxActiveTree(paths store.Paths) (NginxActiveTreeIdentity, bool, error) {
+	generation, present, err := inspectCurrentNginxTree(paths)
+	if err != nil || !present {
+		return NginxActiveTreeIdentity{}, present, err
+	}
+	return NginxActiveTreeIdentity{Generation: generation.generation, ConfigHash: generation.hash}, true, nil
+}
+
 func newNginxGeneration(paths store.Paths, generation uint64, hash string) (nginxGeneration, error) {
 	name := fmt.Sprintf("g%d-%s", generation, hash)
 	parsedGeneration, parsedHash, err := parseNginxGenerationName(name)

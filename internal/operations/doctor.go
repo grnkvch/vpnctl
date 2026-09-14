@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/tunnel"
 )
@@ -675,6 +676,12 @@ func planDoctorIngress(state model.State) ([]DoctorProbeRequest, []DoctorCheck, 
 			Scope: DoctorScopeIngress, Name: "ingress.reserved_health.https", Kind: DoctorProbeIngressHealth, Protocol: DoctorProtocolHTTPS,
 			ResourceKind: "ingress", ResourceID: "reserved_health", Endpoint: endpoint, HealthPath: model.ReservedHealthPath,
 		},
+	}
+	if state.Host.Role == model.RoleGateway {
+		requests = append(requests, DoctorProbeRequest{
+			Scope: DoctorScopeIngress, Name: "ingress.enrollment.loopback", Kind: DoctorProbeLocalUpstream, Protocol: DoctorProtocolTCP,
+			ResourceKind: "ingress", ResourceID: "enrollment_loopback", Endpoint: net.JoinHostPort("127.0.0.1", strconv.Itoa(ingress.NginxEnrollmentLoopbackPort)),
+		})
 	}
 	for _, expose := range activeDoctorExposes(state) {
 		if state.Host.Role == model.RoleGateway {

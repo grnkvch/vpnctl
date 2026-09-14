@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
+	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -172,6 +173,76 @@ func TestInitReleaseFailurePrecedesPersistentLayoutAndState(t *testing.T) {
 	})
 }
 
+func TestInitRediscoveryMustPassFullCapabilitiesBeforeStateMutation(t *testing.T) {
+	t.Parallel()
+
+	manifest, _ := releaseManifestFixture()
+	for _, role := range []model.Role{model.RoleGateway, model.RoleNode} {
+		role := role
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+			release := &recordingInitReleaseSource{manifest: manifest}
+			if role == model.RoleGateway {
+				harness := newGatewayInitHarnessWithRelease(t, release)
+				plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+				if err != nil {
+					t.Fatal(err)
+				}
+				harness.rediscover.snapshot.Capabilities.NFTables = linuxplatform.Capability{Available: false, Detail: "still absent"}
+				if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, linuxplatform.ErrUnsupportedHost) {
+					t.Fatalf("post-package Gateway capability error = %v", err)
+				}
+				if harness.packages.rollbackCalls != 1 || harness.state.saveCalls != 0 {
+					t.Fatalf("Gateway post-package failure crossed state boundary: rollback=%d state=%d", harness.packages.rollbackCalls, harness.state.saveCalls)
+				}
+				return
+			}
+			harness := newNodeInitHarnessWithRelease(t, release)
+			plan, err := harness.initializer.Plan(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			harness.rediscover.snapshot.Capabilities.NFTables = linuxplatform.Capability{Available: false, Detail: "still absent"}
+			if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, linuxplatform.ErrUnsupportedHost) {
+				t.Fatalf("post-package Node capability error = %v", err)
+			}
+			if harness.packages.rollbackCalls != 1 || harness.state.saveCalls != 0 {
+				t.Fatalf("Node post-package failure crossed state boundary: rollback=%d state=%d", harness.packages.rollbackCalls, harness.state.saveCalls)
+			}
+		})
+	}
+}
+
+func TestNodeInitCommitsRolePackagesBeforeRecoverableConvergenceFailure(t *testing.T) {
+	t.Parallel()
+	manifest, _ := releaseManifestFixture()
+	harness := newNodeInitHarnessWithRelease(t, &recordingInitReleaseSource{manifest: manifest})
+	harness.convergence.err = errors.New("synthetic convergence failure")
+	plan, err := harness.initializer.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, ErrNodeInitConvergencePending) {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if harness.packages.commitCalls != 1 || harness.packages.rollbackCalls != 0 || harness.state.saveCalls != 1 {
+		t.Fatalf("committed Node package boundary = commits:%d rollbacks:%d state:%d", harness.packages.commitCalls, harness.packages.rollbackCalls, harness.state.saveCalls)
+	}
+	packageCommit := -1
+	convergencePublish := -1
+	for index, event := range harness.events.values {
+		switch event {
+		case "packages-commit":
+			packageCommit = index
+		case "convergence-publish":
+			convergencePublish = index
+		}
+	}
+	if packageCommit < 0 || convergencePublish < 0 || packageCommit > convergencePublish {
+		t.Fatalf("Node package transaction was not closed before convergence publication: %v", harness.events.values)
+	}
+}
+
 type recordingInitReleaseSource struct {
 	manifest        ReleaseManifest
 	installManifest ReleaseManifest
@@ -200,5 +271,7 @@ func (source *recordingInitReleaseSource) Install(_ context.Context, role model.
 	if manifest.SchemaVersion == 0 {
 		manifest = source.manifest
 	}
-	return ReleaseBundleInstallResult{Manifest: cloneReleaseManifest(manifest)}, nil
+	return ReleaseBundleInstallResult{
+		Manifest: cloneReleaseManifest(manifest), RequiredAPTPackages: releaseAPTPackagesForRole(manifest, role),
+	}, nil
 }

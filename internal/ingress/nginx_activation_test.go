@@ -175,6 +175,59 @@ func TestNginxActivationSameContentAdvancesGenerationWithoutReload(t *testing.T)
 	}
 }
 
+func TestNginxSharedBaselineSurvivesExposeRevokeAndRestore(t *testing.T) {
+	t.Parallel()
+	manager, paths, _, reloader := nginxActivationFixture(t)
+
+	baseline := nginxActivationCandidate(t, paths, 1, 0)
+	exposed := nginxActivationCandidate(t, paths, 2, 1)
+
+	revokedRequest := nginxRenderFixture()
+	revokedRequest.StateGeneration = 3
+	revokedRequest.RuntimeDirectory = NginxRuntimeDirectory(paths)
+	revokedRequest.CertificatePath = filepath.Join(paths.StateDir, "secrets", "ingress.crt")
+	revokedRequest.PrivateKeyPath = filepath.Join(paths.StateDir, "secrets", "ingress.key")
+	revokedRequest.Exposes = []model.Expose{
+		nginxExposeFixture(nginxTestExposeA, "/first", model.RouteExact, 20000, model.ExposeDisabled),
+	}
+	revoked, err := RenderNginxConfig(revokedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := nginxActivationCandidate(t, paths, 4, 1)
+
+	if baseline.ConfigHash() != revoked.ConfigHash() {
+		t.Fatal("revoking the last expose did not restore the shared baseline identity")
+	}
+	if exposed.ConfigHash() != restored.ConfigHash() {
+		t.Fatal("restoring an expose did not reproduce its serving identity")
+	}
+
+	for index, candidate := range []NginxCandidate{baseline, exposed, revoked, restored} {
+		routes := nginxArtifactContents(candidate)[NginxRoutesConfigPath]
+		for _, path := range []string{model.ReservedEnrollmentPath, model.ReservedRecoveryPath, model.ReservedHealthPath} {
+			if strings.Count(routes, `location = "`+path+`" {`) != 1 {
+				t.Fatalf("lifecycle candidate %d does not retain reserved route %s:\n%s", index, path, routes)
+			}
+		}
+		userRoutePresent := strings.Contains(routes, `location = "/first" {`)
+		if want := index == 1 || index == 3; userRoutePresent != want {
+			t.Fatalf("lifecycle candidate %d user route present=%t, want %t", index, userRoutePresent, want)
+		}
+		result, applyErr := manager.Apply(context.Background(), candidate)
+		if applyErr != nil {
+			t.Fatalf("apply lifecycle candidate %d: %v", index, applyErr)
+		}
+		active, present, inspectErr := InspectNginxActiveTree(paths)
+		if inspectErr != nil || !present || active.Generation != candidate.StateGeneration() || active.ConfigHash != candidate.ConfigHash() {
+			t.Fatalf("lifecycle candidate %d active=%+v present=%t err=%v result=%+v", index, active, present, inspectErr, result)
+		}
+	}
+	if len(reloader.calls) != 3 {
+		t.Fatalf("expose/revoke/restore reloads = %v", reloader.calls)
+	}
+}
+
 func TestNginxActivationInvalidParserAndValidationMutationPreserveCurrent(t *testing.T) {
 	t.Parallel()
 	for name, configure := range map[string]func(*nginxActivationProbe){

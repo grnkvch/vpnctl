@@ -43,11 +43,19 @@ func TestRenderGatewayRoleInstallationUsesOnlyGatewayUnits(t *testing.T) {
 		if unit.Name == "vpnctl-controller.service" {
 			for _, required := range []string{
 				"RuntimeDirectory=vpnctl", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=yes", "UMask=0077", "TimeoutStopSec=30s",
-				"RestrictAddressFamilies=AF_INET AF_UNIX", "ReadWritePaths=/etc/vpnctl/generated/gateway",
+				"\nRestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK\n", "ReadWritePaths=/etc/vpnctl/generated/gateway",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("controller unit missing %q", required)
 				}
+			}
+			for _, forbidden := range []string{"/var/lib/apt", "/var/lib/dpkg", "/etc/apt", "/etc/nginx", "/etc/systemd/system"} {
+				if strings.Contains(content, "ReadWritePaths="+forbidden) {
+					t.Errorf("controller unit grants package/bootstrap write access to %q", forbidden)
+				}
+			}
+			if strings.Contains(content, "RestrictAddressFamilies=AF_INET AF_INET6") {
+				t.Error("controller unit unexpectedly grants AF_INET6")
 			}
 		}
 		if unit.Name == "vpnctl-restricted.service" {

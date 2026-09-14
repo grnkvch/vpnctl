@@ -54,6 +54,7 @@ func TestNodeConfigurationActivatorRetainsGuardAfterLaterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	activator.unitTimeout = time.Nanosecond
 	err = activator.Activate(context.Background(), configuration)
 	if !errors.Is(err, ErrNodeActivationPending) {
 		t.Fatalf("Activate() error = %v", err)
@@ -62,6 +63,27 @@ func TestNodeConfigurationActivatorRetainsGuardAfterLaterFailure(t *testing.T) {
 	if !strings.Contains(joined, "start vpnctl-routing-guard.service") || strings.Contains(joined, "start vpnctl-tunnel-client.service") ||
 		strings.Contains(joined, "stop ") || strings.Contains(joined, "disable ") {
 		t.Fatalf("failure compensation reopened or advanced boundary: %s", joined)
+	}
+}
+
+func TestNodeConfigurationActivatorRetriesTransientSystemdStartFailure(t *testing.T) {
+	configuration := compiledNodeActivationFixture(t)
+	runner := &nodeActivationRunner{failOnce: map[string]int{"start vpnctl-routing-guard.service": 1}}
+	activator, err := NewNodeConfigurationActivator(
+		"/usr/local/bin/vpnctl", &nodeActivationInstaller{}, runner, &nodeActivationReadiness{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activator.retryWait = func(context.Context, time.Duration) error { return nil }
+	if err := activator.Activate(context.Background(), configuration); err != nil {
+		t.Fatalf("Activate() transient failure = %v", err)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	if strings.Count(joined, "start vpnctl-routing-guard.service") != 2 ||
+		!strings.Contains(joined, "start vpnctl-routing.service") ||
+		!strings.Contains(joined, "start vpnctl-tunnel-client.service") {
+		t.Fatalf("transient activation did not resume in order:\n%s", joined)
 	}
 }
 
@@ -113,13 +135,18 @@ func (installer *nodeActivationInstaller) Apply(_ context.Context, request linux
 }
 
 type nodeActivationRunner struct {
-	calls []string
-	fail  string
+	calls    []string
+	fail     string
+	failOnce map[string]int
 }
 
 func (runner *nodeActivationRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
 	joined := strings.Join(command.Args, " ")
 	runner.calls = append(runner.calls, joined)
+	if runner.failOnce[joined] > 0 {
+		runner.failOnce[joined]--
+		return linuxplatform.ProbeResult{ExitCode: 1}, nil
+	}
 	if joined == runner.fail {
 		return linuxplatform.ProbeResult{ExitCode: 1}, nil
 	}

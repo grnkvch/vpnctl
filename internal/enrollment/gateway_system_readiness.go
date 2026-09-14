@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -23,6 +24,11 @@ import (
 )
 
 const maximumGatewayJoinSnapshotBytes = 8 << 20
+
+const (
+	gatewayJoinReadinessTimeout       = 20 * time.Second
+	gatewayJoinReadinessRetryInterval = 100 * time.Millisecond
+)
 
 type GatewayJoinConvergencePreparation interface {
 	Commit()
@@ -46,6 +52,9 @@ type SystemGatewayJoinReadiness struct {
 	convergence GatewayJoinConvergencePreparer
 	mutationMu  *sync.Mutex
 	binaryPath  string
+
+	readinessTimeout time.Duration
+	retryInterval    time.Duration
 }
 
 func NewSystemGatewayJoinReadiness(
@@ -160,7 +169,7 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 	if err := readiness.restartCandidateServices(ctx); err != nil {
 		return rollback(err)
 	}
-	report, err := readiness.checkCandidate(ctx, candidate)
+	report, err := readiness.checkCandidateUntilReady(ctx, candidate)
 	if err != nil {
 		return rollback(err)
 	}
@@ -175,6 +184,39 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 	preparation.report = report
 	locked = false
 	return preparation, nil
+}
+
+func (readiness *SystemGatewayJoinReadiness) checkCandidateUntilReady(
+	ctx context.Context,
+	candidate GatewayJoinCandidate,
+) (JoinReadinessReport, error) {
+	timeout := readiness.readinessTimeout
+	if timeout <= 0 {
+		timeout = gatewayJoinReadinessTimeout
+	}
+	interval := readiness.retryInterval
+	if interval <= 0 {
+		interval = gatewayJoinReadinessRetryInterval
+	}
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var last error
+	for {
+		report, err := readiness.checkCandidate(bounded, candidate)
+		if err == nil {
+			return report, nil
+		}
+		last = err
+		timer := time.NewTimer(interval)
+		select {
+		case <-bounded.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return JoinReadinessReport{}, errors.Join(last, bounded.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (readiness *SystemGatewayJoinReadiness) renderCandidate(
@@ -314,7 +356,10 @@ func (readiness *SystemGatewayJoinReadiness) checkCandidate(
 		PeerAllowedIPs: []string{candidate.Node.OverlayIPv4 + "/32"}, RequireHandshake: false,
 	})
 	if err != nil || standardHealth.Condition != transport.HealthHealthy {
-		return JoinReadinessReport{}, errors.Join(fmt.Errorf("candidate gateway standard transport is not healthy"), err)
+		return JoinReadinessReport{}, errors.Join(
+			fmt.Errorf("candidate gateway standard transport is not healthy: %s", standardHealth.Code),
+			err,
+		)
 	}
 	restrictedObserver, err := transport.NewRestrictedGatewayHealthObserver(readiness.runner)
 	if err != nil {

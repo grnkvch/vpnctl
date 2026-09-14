@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
@@ -96,7 +97,7 @@ func TestPassiveStatusMapsGatewayUnitsWithoutNetworkProbes(t *testing.T) {
 	observation := activeRoleUnitObservation(state.Host.Role)
 	snapshot := passiveStatusFromUnits(state, observation)
 
-	if len(snapshot.Resources) != len(linuxplatform.RoleUnitNames(model.RoleGateway))+1 {
+	if len(snapshot.Resources) != len(linuxplatform.RoleUnitNames(model.RoleGateway))+2 {
 		t.Fatalf("resources = %+v", snapshot.Resources)
 	}
 	assertPassiveResource(t, snapshot, operations.PassiveStatusConnectivity, "control", operations.PassiveHealthy)
@@ -221,6 +222,11 @@ func activeRoleUnitObservation(role model.Role) controller.Observation {
 	for _, name := range linuxplatform.RoleUnitNames(role) {
 		result.Units = append(result.Units, controller.UnitObservation{
 			Name: name, LoadState: "loaded", ActiveState: "active", SubState: "running",
+		})
+	}
+	if role == model.RoleGateway {
+		result.Units = append(result.Units, controller.UnitObservation{
+			Name: ingress.NginxServiceUnit, LoadState: "loaded", ActiveState: "active", SubState: "running",
 		})
 	}
 	return result

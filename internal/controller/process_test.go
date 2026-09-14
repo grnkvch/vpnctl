@@ -224,6 +224,27 @@ func TestControllerRuntimeOnlyMutationPreservesAuthoritativeGeneration(t *testin
 	}
 }
 
+func TestControllerRejectsMutationWhilePrivilegedBootstrapOwnsSharedLock(t *testing.T) {
+	paths, persisted := controllerTestState(t, model.RoleGateway)
+	dispatcher := &runtimeOnlyTestDispatcher{}
+	server, err := NewController(ControllerRuntime{Paths: paths, State: persisted, Observer: &recordingObserver{}, Dispatcher: dispatcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := AcquireGatewayMutationLock(context.Background(), paths.RuntimeDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	response := server.mutateResponse(control.LocalRequest{
+		SchemaVersion: control.LocalSchemaVersion, Method: control.LocalMutate,
+		Operation: "repair.gateway", ExpectedGeneration: 1, Payload: json.RawMessage(`{}`),
+	})
+	if response.OK || response.ErrorCode != "mutation_busy" || dispatcher.applies != 0 {
+		t.Fatalf("locked mutation response/applies = %+v/%d", response, dispatcher.applies)
+	}
+}
+
 func TestControllerGracefulStopWaitsForAcceptedMutation(t *testing.T) {
 	paths, stateStore := controllerTestState(t, model.RoleGateway)
 	dispatcher := &blockingMutationDispatcher{started: make(chan struct{}), release: make(chan struct{})}

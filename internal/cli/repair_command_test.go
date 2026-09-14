@@ -10,7 +10,10 @@ import (
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
 	"github.com/vgrinkevich/vpnctl/internal/enrollment"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
+	"github.com/vgrinkevich/vpnctl/internal/output"
 	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
@@ -181,6 +184,25 @@ func TestRepairCommandClassifiesGenerationBoundRepairConflict(t *testing.T) {
 	category, code, _ := classifyRepairCommandError(operations.ErrRepairConflict)
 	if category != "conflict" || code != "repair_plan_stale" {
 		t.Fatalf("repair conflict classification = %s/%s", category, code)
+	}
+}
+
+func TestRepairCommandClassifiesGatewayBootstrapFailures(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		err      error
+		category output.ExitCategory
+		code     string
+	}{
+		{err: controller.ErrGatewayBootstrapRepairConflict, category: output.CategoryConflict, code: "gateway_bootstrap_conflict"},
+		{err: lifecycle.ErrRolePackageConflict, category: output.CategoryConflict, code: "gateway_bootstrap_conflict"},
+		{err: ingress.ErrNginxServiceConflict, category: output.CategoryConflict, code: "gateway_bootstrap_conflict"},
+		{err: lifecycle.ErrRolePackageUnavailable, category: output.CategoryUnavailable, code: "gateway_package_unavailable"},
+	} {
+		category, code, _ := classifyRepairCommandError(test.err)
+		if category != test.category || code != test.code {
+			t.Fatalf("classify(%v) = %s/%s", test.err, category, code)
+		}
 	}
 }
 

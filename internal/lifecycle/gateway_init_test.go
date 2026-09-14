@@ -23,6 +23,14 @@ import (
 	"github.com/vgrinkevich/vpnctl/internal/wireguard"
 )
 
+func initialGatewayState(hostID string, initializedAt time.Time, network linuxplatform.GatewayNetworkPlan, sshPort int, manifest model.ComponentManifest, selected model.HandshakeHost) model.State {
+	state, err := buildInitialGatewayState(hostID, initializedAt, network, sshPort, manifest, selected)
+	if err != nil {
+		panic(err)
+	}
+	return state
+}
+
 func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	t.Parallel()
 
@@ -73,7 +81,7 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	if !result.Changed || result.HostID != gatewayTestHostID || result.TransactionID != "fw-ABC123" {
 		t.Fatalf("Apply() result = %+v", result)
 	}
-	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-mark"}
+	wantEvents := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "ingress-apply", "network-activate", "convergence-publish", "watchdog-mark", "ingress-commit"}
 	if !reflect.DeepEqual(harness.events.values, wantEvents) {
 		t.Fatalf("apply events = %v, want %v", harness.events.values, wantEvents)
 	}
@@ -145,6 +153,33 @@ func TestGatewayInitAppliesOnceAndSecondIdenticalInitHasNoEffect(t *testing.T) {
 	}
 	if content, err := os.ReadFile(presetFiles["anthropic"].Path); err != nil || !reflect.DeepEqual(content, anthropicBefore) {
 		t.Fatalf("repeat init changed untouched anthropic source: %q, %v", content, err)
+	}
+}
+
+func TestGatewayInitRetrySubtractsOnlyAuthoritativelyOwnedFixedNetwork(t *testing.T) {
+	t.Parallel()
+	harness := newGatewayInitHarness(t)
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	harness.initializer.runtime.Snapshot.Listeners = append(harness.initializer.runtime.Snapshot.Listeners,
+		linuxplatform.Listener{Protocol: "tcp", Address: "0.0.0.0", Port: linuxplatform.GatewayHTTPSTCPPort, Process: `users:(("nginx",pid=10,fd=3))`},
+		linuxplatform.Listener{Protocol: "tcp", Address: "0.0.0.0", Port: linuxplatform.GatewayRestrictedTCPPort, Process: `users:(("mihomo",pid=11,fd=4))`},
+		linuxplatform.Listener{Protocol: "udp", Address: "0.0.0.0", Port: linuxplatform.GatewayWireGuardUDPPort},
+	)
+	harness.initializer.runtime.Snapshot.NFTablesTables = append(harness.initializer.runtime.Snapshot.NFTablesTables,
+		linuxplatform.NFTablesTable{Family: linuxplatform.GatewayFirewallFamily, Name: linuxplatform.GatewayFirewallTable})
+
+	retry, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatalf("repeat init rejected its authoritative fixed network: %v", err)
+	}
+	if !retry.AlreadyInitialized || retry.Changed {
+		t.Fatalf("repeat plan = %+v", retry)
 	}
 }
 
@@ -227,7 +262,7 @@ func TestGatewayInitNetworkFailureRequestsImmediateWatchdogRollback(t *testing.T
 	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "synthetic activation failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "ingress-apply", "network-activate", "watchdog-rollback", "ingress-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
 	}
@@ -256,11 +291,11 @@ func TestGatewayInitConvergenceFailureLeavesCommittedStateRepairable(t *testing.
 		!strings.Contains(err.Error(), "synthetic convergence publication failure") {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "convergence-publish", "watchdog-rollback"}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "ingress-apply", "network-activate", "convergence-publish", "watchdog-rollback", "ingress-rollback"}
 	if !reflect.DeepEqual(harness.events.values, want) {
 		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
 	}
-	if harness.state.saveCalls != 1 || harness.roles.applyCalls != 1 || harness.convergence.calls != 1 || harness.network.calls != 0 {
+	if harness.state.saveCalls != 1 || harness.roles.applyCalls != 1 || harness.convergence.calls != 1 || harness.network.calls != 1 {
 		t.Fatalf("convergence boundary calls: state=%d roles=%d convergence=%d network=%d", harness.state.saveCalls, harness.roles.applyCalls, harness.convergence.calls, harness.network.calls)
 	}
 	if harness.watchdog.rollbackID != "fw-ABC123" || harness.identity.rollbackCalls != 0 || harness.publicCertificate.rollbackCalls != 0 {
@@ -311,6 +346,31 @@ func TestGatewayInitPublicCertificateFailureRollsBackControlIdentityBeforeWatchd
 	}
 }
 
+func TestGatewayInitWatchdogUnitFailureRollsBackPreStatePackagesAndIdentities(t *testing.T) {
+	t.Parallel()
+	manifest, _ := releaseManifestFixture()
+	harness := newGatewayInitHarnessWithRelease(t, &recordingInitReleaseSource{manifest: manifest})
+	harness.watchdogUnits.err = errors.New("synthetic watchdog unit failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "watchdog unit failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	for _, required := range []string{"packages-apply", "identity-provision", "watchdog-units-apply", "identity-rollback", "packages-rollback"} {
+		if !containsString(harness.events.values, required) {
+			t.Errorf("pre-state compensation omitted %s from %v", required, harness.events.values)
+		}
+	}
+	if harness.state.saveCalls != 0 || harness.watchdog.armCalls != 0 || harness.packages.rollbackCalls != 1 ||
+		harness.identity.rollbackCalls != 1 || harness.publicCertificate.rollbackCalls != 1 {
+		t.Fatalf("watchdog unit failure crossed state boundary or missed rollback: state=%d watchdog=%d packages=%d identity=%d certificate=%d",
+			harness.state.saveCalls, harness.watchdog.armCalls, harness.packages.rollbackCalls, harness.identity.rollbackCalls, harness.publicCertificate.rollbackCalls)
+	}
+}
+
 func TestGatewayInitTransportProvisionFailureStopsBeforeStateAndServices(t *testing.T) {
 	t.Parallel()
 
@@ -333,6 +393,161 @@ func TestGatewayInitTransportProvisionFailureStopsBeforeStateAndServices(t *test
 	}
 }
 
+func TestGatewayInitIngressOwnershipConflictStopsBeforeIdentityAndMutation(t *testing.T) {
+	t.Parallel()
+	harness := newGatewayInitHarness(t)
+	harness.ingress.planErr = ingress.ErrNginxServiceConflict
+	if _, err := harness.initializer.Plan(context.Background(), validGatewayInitInput()); !errors.Is(err, ingress.ErrNginxServiceConflict) {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	assertNoGatewayInitMutation(t, harness)
+	if harness.idCalls != 0 {
+		t.Fatalf("ingress ownership conflict allocated %d identities", harness.idCalls)
+	}
+}
+
+func TestGatewayInitIngressFailureLeavesCommittedStateExplicitlyRepairable(t *testing.T) {
+	t.Parallel()
+	harness := newGatewayInitHarness(t)
+	harness.ingress.applyErr = errors.New("synthetic baseline HTTPS health failure")
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, ErrGatewayInitConvergencePending) || !strings.Contains(err.Error(), "baseline HTTPS health failure") {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "transport-provision", "state-save", "roles-apply", "ingress-apply", "watchdog-rollback"}
+	if !reflect.DeepEqual(harness.events.values, want) {
+		t.Fatalf("failure events = %v, want %v", harness.events.values, want)
+	}
+	state, err := harness.state.Load()
+	if err != nil || state.Generation != 1 || len(state.Clients) != 0 || len(state.Certificates) != 3 {
+		t.Fatalf("repairable committed state = %+v, %v", state, err)
+	}
+	if harness.ingress.commitCalls != 0 || harness.convergence.calls != 0 || harness.network.calls != 0 || harness.watchdog.markCalls != 0 {
+		t.Fatalf("failed ingress crossed readiness boundary: ingress commit=%d convergence=%d network=%d mark=%d", harness.ingress.commitCalls, harness.convergence.calls, harness.network.calls, harness.watchdog.markCalls)
+	}
+}
+
+func TestGatewayInitReadinessFailureCompensatesIngressNetworkAndPackages(t *testing.T) {
+	t.Parallel()
+	manifest, _ := releaseManifestFixture()
+	harness := newGatewayInitHarnessWithRelease(t, &recordingInitReleaseSource{manifest: manifest})
+	harness.readiness.ready = false
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, ErrGatewayInitConvergencePending) {
+		t.Fatalf("readiness failure = %v", err)
+	}
+	for _, required := range []string{"ingress-apply", "network-activate", "watchdog-rollback", "ingress-rollback", "packages-rollback"} {
+		if !containsString(harness.events.values, required) {
+			t.Errorf("readiness compensation omitted %s from %v", required, harness.events.values)
+		}
+	}
+	if harness.convergence.calls != 0 || harness.ingress.commitCalls != 0 || harness.packages.commitCalls != 0 {
+		t.Fatalf("readiness failure crossed commit: convergence=%d ingress=%d packages=%d", harness.convergence.calls, harness.ingress.commitCalls, harness.packages.commitCalls)
+	}
+}
+
+func TestGatewayInitWatchdogActivationFailureRetainsReversibleBootstrapBoundary(t *testing.T) {
+	t.Parallel()
+	manifest, _ := releaseManifestFixture()
+	harness := newGatewayInitHarnessWithRelease(t, &recordingInitReleaseSource{manifest: manifest})
+	failure := errors.New("synthetic watchdog activation failure")
+	harness.watchdog.markErr = failure
+	plan, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.events.values = nil
+	if _, err := harness.initializer.Apply(context.Background(), plan); !errors.Is(err, failure) {
+		t.Fatalf("watchdog activation failure = %v", err)
+	}
+	for _, required := range []string{"convergence-publish", "watchdog-mark", "watchdog-rollback", "ingress-rollback", "packages-rollback"} {
+		if !containsString(harness.events.values, required) {
+			t.Errorf("watchdog failure compensation omitted %s from %v", required, harness.events.values)
+		}
+	}
+	if harness.ingress.commitCalls != 0 || harness.packages.commitCalls != 0 {
+		t.Fatalf("watchdog failure crossed bootstrap commit: ingress=%d packages=%d", harness.ingress.commitCalls, harness.packages.commitCalls)
+	}
+}
+
+func TestGatewayInitRetryRepairsPersistedIncompleteBootstrapWithoutChangingIdentityOrClients(t *testing.T) {
+	t.Parallel()
+	manifest, _ := releaseManifestFixture()
+	release := &recordingInitReleaseSource{manifest: manifest}
+	harness := newGatewayInitHarnessWithRelease(t, release)
+	harness.ingress.applyErr = errors.New("synthetic first ingress failure")
+	first, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.initializer.Apply(context.Background(), first); !errors.Is(err, ErrGatewayInitConvergencePending) {
+		t.Fatalf("first Apply() error = %v", err)
+	}
+	before, err := harness.state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := model.Client{
+		SchemaVersion: model.ResourceSchemaVersion, ID: "aa000000-0000-4000-8000-000000000010",
+		Name: "preserved", Platform: "ios", Lifecycle: model.LifecycleActive, OverlayIPv4: "10.66.0.2",
+		CreatedAt: before.Host.InitializedAt, CredentialGeneration: 1, AssignedPresets: []string{}, ActiveTransport: model.TransportStandard,
+	}
+	before.Clients = append(before.Clients, client)
+	before.Transports = append(before.Transports, model.Transport{
+		SchemaVersion: model.ResourceSchemaVersion, OwnerKind: model.TargetClient, OwnerID: client.ID,
+		Kind: model.TransportStandard, State: model.TransportActive, Provider: "wireguard", Protocol: model.ProtocolUDP, Port: 51820,
+		CredentialGeneration: 1, CredentialRef: model.SecretRef("wireguard-key:" + client.ID + "-g1"),
+		PublicKey: "preserved-public-key", ConfigHash: strings.Repeat("b", 64),
+	})
+	expectedGeneration := before.Generation
+	before.Generation++
+	if err := harness.state.Save(expectedGeneration, before); err != nil {
+		t.Fatal(err)
+	}
+	before, _ = harness.state.Load()
+
+	harness.ingress.applyErr = nil
+	harness.readiness.ready = false
+	harness.readiness.readyAtCall = 3
+	retry, err := harness.initializer.Plan(context.Background(), validGatewayInitInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.AlreadyInitialized || !retry.Changed || retry.Readiness.Ready {
+		t.Fatalf("retry plan = changed:%t already:%t readiness:%+v", retry.Changed, retry.AlreadyInitialized, retry.Readiness)
+	}
+	identityCalls, certificateCalls, stateSaves := harness.identity.provisionCalls, harness.publicCertificate.provisionCalls, harness.state.saveCalls
+	harness.events.values = nil
+	result, err := harness.initializer.Apply(context.Background(), retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.HostID != before.Host.ID {
+		t.Fatalf("retry result = %+v", result)
+	}
+	after, err := harness.state.Load()
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("retry changed authoritative identity/client state: before=%+v after=%+v err=%v", before, after, err)
+	}
+	if harness.identity.provisionCalls != identityCalls || harness.publicCertificate.provisionCalls != certificateCalls || harness.state.saveCalls != stateSaves {
+		t.Fatalf("retry reprovisioned identity/state: identity=%d/%d certificate=%d/%d saves=%d/%d",
+			harness.identity.provisionCalls, identityCalls, harness.publicCertificate.provisionCalls, certificateCalls, harness.state.saveCalls, stateSaves)
+	}
+	for _, required := range []string{"packages-apply", "host-rediscover", "transport-provision", "roles-apply", "ingress-apply", "network-activate", "packages-commit", "ingress-commit", "convergence-publish", "watchdog-mark"} {
+		if !containsString(harness.events.values, required) {
+			t.Errorf("retry omitted %s from %v", required, harness.events.values)
+		}
+	}
+}
+
 func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 	t.Parallel()
 
@@ -352,7 +567,7 @@ func TestGatewayInitManagedSwapAcceptDeclineAndCapacityBranches(t *testing.T) {
 		if _, err := harness.initializer.Apply(context.Background(), plan); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
-		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "roles-apply", "convergence-publish", "network-activate", "watchdog-mark"}
+		want := []string{"state-load", "identity-provision", "watchdog-units-apply", "watchdog-arm", "swap-apply", "transport-provision", "state-save", "roles-apply", "ingress-apply", "network-activate", "convergence-publish", "watchdog-mark", "ingress-commit"}
 		if !reflect.DeepEqual(harness.events.values, want) {
 			t.Fatalf("accept events = %v, want %v", harness.events.values, want)
 		}
@@ -514,6 +729,7 @@ func TestGatewayInitConcreteInstallersWriteNoNodeUnits(t *testing.T) {
 		PublicCertificate: publicCertificate,
 		HandshakeHosts:    &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()},
 		Transports:        listenerProvisioner,
+		Ingress:           &recordingGatewayIngress{events: events, plan: ingress.NginxBaselinePlan{Service: ingress.NginxServicePlan{DropInPath: ingress.NginxServiceDropInPath(paths), Changed: true}}},
 		Convergence:       convergence,
 		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:         func() (string, error) { return gatewayTestHostID, nil },
@@ -731,7 +947,11 @@ type gatewayInitHarness struct {
 	publicCertificate *recordingGatewayPublicCertificate
 	handshakeHosts    *recordingGatewayHandshakeHosts
 	transports        *recordingGatewayTransports
+	ingress           *recordingGatewayIngress
 	convergence       *recordingGatewayInitConvergence
+	packages          *recordingInitPackages
+	rediscover        *recordingInitRediscoverer
+	readiness         *recordingGatewayInitReadiness
 	events            *gatewayInitEvents
 	idCalls           int
 }
@@ -766,14 +986,20 @@ func newGatewayInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *
 	publicCertificate := &recordingGatewayPublicCertificate{}
 	handshakeHosts := &recordingGatewayHandshakeHosts{selection: gatewayTestHandshakeHost()}
 	transports := &recordingGatewayTransports{events: events}
+	ingressManager := &recordingGatewayIngress{events: events, plan: ingress.NginxBaselinePlan{Service: ingress.NginxServicePlan{DropInPath: ingress.NginxServiceDropInPath(paths), Changed: true}}}
 	convergence := &recordingGatewayInitConvergence{events: events}
-	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, convergence: convergence, events: events}
+	packages := &recordingInitPackages{events: events}
+	rediscover := &recordingInitRediscoverer{snapshot: validGatewaySnapshot(), events: events}
+	readiness := &recordingGatewayInitReadiness{ready: true}
+	harness := &gatewayInitHarness{paths: paths, state: state, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, network: network, swap: swap, identity: identity, publicCertificate: publicCertificate, handshakeHosts: handshakeHosts, transports: transports, ingress: ingressManager, convergence: convergence, packages: packages, rediscover: rediscover, readiness: readiness, events: events}
 	runtime := GatewayInitRuntime{
-		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
+		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release, Packages: packages, Rediscover: rediscover,
 		State: state, Layout: layout, Roles: roles, WatchdogUnits: watchdogUnits, Watchdog: watchdog, Network: network, Swap: swap, Identity: identity,
 		PublicCertificate: publicCertificate,
 		HandshakeHosts:    handshakeHosts,
 		Transports:        transports,
+		Ingress:           ingressManager,
+		Readiness:         readiness,
 		Convergence:       convergence,
 		Now:               func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID:         func() (string, error) { harness.idCalls++; return gatewayTestHostID, nil },
@@ -784,6 +1010,109 @@ func newGatewayInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *
 	}
 	harness.initializer = initializer
 	return harness
+}
+
+type recordingGatewayInitReadiness struct {
+	ready       bool
+	readyAtCall int
+	calls       int
+	err         error
+}
+
+func (readiness *recordingGatewayInitReadiness) Inspect(_ context.Context, state model.State, _ ReleaseManifest) (GatewayBootstrapReadinessReport, error) {
+	readiness.calls++
+	if readiness.err != nil {
+		return GatewayBootstrapReadinessReport{}, readiness.err
+	}
+	ready := readiness.ready || readiness.readyAtCall > 0 && readiness.calls >= readiness.readyAtCall
+	report := GatewayBootstrapReadinessReport{
+		SchemaVersion: GatewayBootstrapReadinessSchemaVersion, Generation: state.Generation,
+		Ready: ready, CandidateSHA256: strings.Repeat("a", 64), Checks: []GatewayBootstrapReadinessCheck{},
+	}
+	if !ready {
+		report.Checks = append(report.Checks, GatewayBootstrapReadinessCheck{
+			Kind: "tree", ID: "/etc/vpnctl/generated/gateway/ingress/current",
+			Condition: GatewayReadinessMissing, Code: "nginx_tree_missing", ExpectedSHA256: strings.Repeat("a", 64),
+		})
+	}
+	return report, nil
+}
+
+type recordingInitRediscoverer struct {
+	snapshot linuxplatform.HostSnapshot
+	events   *gatewayInitEvents
+	calls    int
+	err      error
+}
+
+func (discoverer *recordingInitRediscoverer) Discover(context.Context) (linuxplatform.HostSnapshot, error) {
+	discoverer.calls++
+	if discoverer.events != nil {
+		discoverer.events.add("host-rediscover")
+	}
+	return discoverer.snapshot, discoverer.err
+}
+
+type recordingInitPackages struct {
+	events        *gatewayInitEvents
+	planCalls     int
+	applyCalls    int
+	commitCalls   int
+	rollbackCalls int
+	err           error
+}
+
+func (packages *recordingInitPackages) Plan(_ context.Context, manifest ReleaseManifest, role model.Role) (RolePackagePlan, error) {
+	packages.planCalls++
+	if packages.err != nil {
+		return RolePackagePlan{}, packages.err
+	}
+	digest, err := releaseManifestSHA256(manifest)
+	if err != nil {
+		return RolePackagePlan{}, err
+	}
+	plan := RolePackagePlan{SchemaVersion: RolePackagePlanSchemaVersion, Role: role, ManifestSHA256: digest, Packages: []RolePackagePlanItem{}}
+	for _, compatibility := range releaseAPTPackagesForRole(manifest, role) {
+		plan.Packages = append(plan.Packages, RolePackagePlanItem{
+			Component: compatibility.Component, Package: compatibility.Package, Source: compatibility.Source,
+			MinimumVersion: compatibility.MinimumVersion, MaximumVersionExclusive: compatibility.MaximumVersionExclusive,
+			CandidateVersion: compatibility.MinimumVersion, Action: RolePackageInstall,
+		})
+	}
+	return plan, plan.Validate()
+}
+
+func (packages *recordingInitPackages) Apply(_ context.Context, _ ReleaseManifest, plan RolePackagePlan) (RolePackageInstallation, error) {
+	packages.applyCalls++
+	if packages.events != nil {
+		packages.events.add("packages-apply")
+	}
+	if packages.err != nil {
+		return RolePackageInstallation{}, packages.err
+	}
+	installed := []string{}
+	for _, item := range plan.Packages {
+		if item.Action == RolePackageInstall {
+			installed = append(installed, item.Package)
+		}
+	}
+	return RolePackageInstallation{Changed: len(installed) != 0, TransactionID: "pkg-transaction", Installed: installed}, nil
+}
+
+func (packages *recordingInitPackages) Commit(context.Context, RolePackageInstallation) error {
+	packages.commitCalls++
+	if packages.events != nil {
+		packages.events.add("packages-commit")
+	}
+	return packages.err
+}
+
+func (packages *recordingInitPackages) Rollback(context.Context, RolePackageInstallation) error {
+	packages.rollbackCalls++
+	if packages.events != nil {
+		packages.events.add("packages-rollback")
+	}
+	return nil
 }
 
 type recordingGatewayInitConvergence struct {
@@ -895,8 +1224,21 @@ func assertInitialGatewayState(t *testing.T, stateStore GatewayInitStateStore) {
 	if state.DNS == nil || state.DNS.Scope != model.DNSUpstreamGateway || !reflect.DeepEqual(state.DNS.IPv4, model.DefaultGatewayDNSUpstreams()) {
 		t.Fatalf("initial gateway DNS state = %+v", state.DNS)
 	}
-	if state.Presets == nil || len(state.Presets) != 0 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
+	if state.Presets == nil || len(state.Presets) != 3 || len(state.Certificates) != 3 || state.EnrollmentIdentity == nil {
 		t.Fatalf("initial PKI state = presets:%v certificates:%v enrollment:%v", state.Presets, state.Certificates, state.EnrollmentIdentity)
+	}
+	templates, err := routing.BuiltinPresetTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, template := range templates {
+		want, compileErr := routing.CompilePresetSource(template.Source, state.Host.InitializedAt)
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		if !reflect.DeepEqual(state.Presets[index], want) {
+			t.Fatalf("initial built-in preset[%d] = %+v, want %+v", index, state.Presets[index], want)
+		}
 	}
 	if state.Certificates[0].Kind != model.CertificateControlCA || state.Certificates[1].Kind != model.CertificateControlServer || state.Certificates[2].Kind != model.CertificatePublicIngress || state.EnrollmentIdentity.Algorithm != "Ed25519" {
 		t.Fatalf("initial control identity metadata = certificates:%v enrollment:%v", state.Certificates, state.EnrollmentIdentity)
@@ -983,8 +1325,8 @@ func containsString(values []string, target string) bool {
 
 func assertNoGatewayInitMutation(t *testing.T, harness *gatewayInitHarness) {
 	t.Helper()
-	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 || harness.publicCertificate.provisionCalls != 0 || harness.transports.provisionCalls != 0 {
-		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d transports=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls, harness.transports.provisionCalls)
+	if harness.watchdog.armCalls != 0 || harness.network.calls != 0 || harness.roles.applyCalls != 0 || harness.watchdogUnits.applyCalls != 0 || harness.state.saveCalls != 0 || harness.swap.applyCalls != 0 || harness.identity.provisionCalls != 0 || harness.publicCertificate.provisionCalls != 0 || harness.transports.provisionCalls != 0 || harness.ingress.applyCalls != 0 {
+		t.Fatalf("unexpected mutation: watchdog=%d network=%d roles=%d watchdog_units=%d state=%d swap=%d identity=%d transports=%d ingress=%d", harness.watchdog.armCalls, harness.network.calls, harness.roles.applyCalls, harness.watchdogUnits.applyCalls, harness.state.saveCalls, harness.swap.applyCalls, harness.identity.provisionCalls, harness.transports.provisionCalls, harness.ingress.applyCalls)
 	}
 	for _, path := range []string{harness.paths.ConfigDir, harness.paths.StateDir, harness.paths.RuntimeDir} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -1002,6 +1344,44 @@ type recordingGatewayTransports struct {
 	provisionCalls int
 	rollbackCalls  int
 	err            error
+}
+
+type recordingGatewayIngress struct {
+	events        *gatewayInitEvents
+	plan          ingress.NginxBaselinePlan
+	applyCalls    int
+	commitCalls   int
+	rollbackCalls int
+	lastRequest   ingress.NginxBaselineRequest
+	applyErr      error
+	commitErr     error
+	planErr       error
+}
+
+func (manager *recordingGatewayIngress) Plan() (ingress.NginxBaselinePlan, error) {
+	return manager.plan, manager.planErr
+}
+
+func (manager *recordingGatewayIngress) Apply(_ context.Context, plan ingress.NginxBaselinePlan, request ingress.NginxBaselineRequest) (ingress.NginxBaselineResult, *ingress.NginxBaselineInstallation, error) {
+	manager.events.add("ingress-apply")
+	manager.applyCalls++
+	manager.lastRequest = request
+	if manager.applyErr != nil {
+		return ingress.NginxBaselineResult{}, nil, manager.applyErr
+	}
+	return ingress.NginxBaselineResult{Changed: plan.Service.Changed, ConfigHash: strings.Repeat("a", 64), DropInPath: plan.Service.DropInPath}, &ingress.NginxBaselineInstallation{}, nil
+}
+
+func (manager *recordingGatewayIngress) Commit(_ context.Context, _ *ingress.NginxBaselineInstallation) error {
+	manager.events.add("ingress-commit")
+	manager.commitCalls++
+	return manager.commitErr
+}
+
+func (manager *recordingGatewayIngress) Rollback(_ context.Context, _ *ingress.NginxBaselineInstallation) error {
+	manager.events.add("ingress-rollback")
+	manager.rollbackCalls++
+	return nil
 }
 
 func (value *recordingGatewayTransports) Provision(_ context.Context, _ model.State) (transport.GatewayListenerInstallation, error) {
@@ -1082,6 +1462,7 @@ type recordingWatchdogUnits struct {
 	events     *gatewayInitEvents
 	root       string
 	applyCalls int
+	err        error
 }
 
 func (units *recordingWatchdogUnits) Plan(binaryPath string) (linuxplatform.WatchdogUnitInstallationPlan, error) {
@@ -1099,6 +1480,9 @@ func (units *recordingWatchdogUnits) Plan(binaryPath string) (linuxplatform.Watc
 func (units *recordingWatchdogUnits) Apply(_ context.Context, plan linuxplatform.WatchdogUnitInstallationPlan) ([]string, error) {
 	units.events.add("watchdog-units-apply")
 	units.applyCalls++
+	if units.err != nil {
+		return nil, units.err
+	}
 	return append([]string(nil), plan.UnitFiles...), nil
 }
 
@@ -1108,6 +1492,7 @@ type recordingGatewayWatchdog struct {
 	markCalls  int
 	lastArm    GatewayInitWatchdogArm
 	rollbackID string
+	markErr    error
 }
 
 func (watchdog *recordingGatewayWatchdog) Arm(_ context.Context, input GatewayInitWatchdogArm) (GatewayInitWatchdogTransaction, error) {
@@ -1123,7 +1508,7 @@ func (watchdog *recordingGatewayWatchdog) MarkActivated(_ context.Context, id st
 	if id != "fw-ABC123" {
 		return errors.New("wrong transaction ID")
 	}
-	return nil
+	return watchdog.markErr
 }
 
 func (watchdog *recordingGatewayWatchdog) RollbackNow(_ context.Context, id string) error {

@@ -294,6 +294,8 @@ type nodeInitHarness struct {
 	state       *recordingNodeState
 	roles       *recordingGatewayRoles
 	convergence *recordingNodeInitConvergence
+	packages    *recordingInitPackages
+	rediscover  *recordingInitRediscoverer
 	events      *gatewayInitEvents
 	idCalls     int
 }
@@ -321,9 +323,11 @@ func newNodeInitHarnessWithRelease(t *testing.T, release InitReleaseSource) *nod
 	state := &recordingNodeState{store: stateStore, events: events}
 	roles := &recordingGatewayRoles{events: events, root: root}
 	convergence := &recordingNodeInitConvergence{events: events}
-	harness := &nodeInitHarness{paths: paths, state: state, roles: roles, convergence: convergence, events: events}
+	packages := &recordingInitPackages{events: events}
+	rediscover := &recordingInitRediscoverer{snapshot: validGatewaySnapshot(), events: events}
+	harness := &nodeInitHarness{paths: paths, state: state, roles: roles, convergence: convergence, packages: packages, rediscover: rediscover, events: events}
 	initializer, err := NewNodeInitializer(NodeInitRuntime{
-		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release,
+		Paths: paths, Snapshot: validGatewaySnapshot(), Manifest: gatewayTestManifest(), Release: release, Packages: packages, Rediscover: rediscover,
 		State: state, Layout: layout, Roles: roles, Convergence: convergence,
 		Now:       func() time.Time { return time.Date(2026, time.September, 2, 18, 0, 0, 0, time.UTC) },
 		NewHostID: func() (string, error) { harness.idCalls++; return nodeTestHostID, nil },

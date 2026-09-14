@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
 )
@@ -84,6 +87,63 @@ func TestConvergencePlanOutputPreservesEmptyArraysAndNoImpact(t *testing.T) {
 	}
 }
 
+func TestGatewayReadinessConvergencePlanTurnsMissingEdgeIntoRepairableDrift(t *testing.T) {
+	t.Parallel()
+
+	base := &recordingConvergencePlanReader{plan: operations.ConvergencePlan{
+		DesiredGeneration: 4, AppliedGeneration: 4, Impact: operations.ConvergenceImpactNone,
+		Changes: []operations.DesiredChange{}, Drift: []operations.OwnedDrift{},
+	}}
+	state := model.State{Generation: 4, Host: model.Host{Role: model.RoleGateway}}
+	readiness := &recordingGatewayPlanReadiness{report: lifecycle.GatewayBootstrapReadinessReport{
+		SchemaVersion: lifecycle.GatewayBootstrapReadinessSchemaVersion, Generation: 4, Ready: false,
+		CandidateSHA256: strings.Repeat("a", 64), Checks: []lifecycle.GatewayBootstrapReadinessCheck{
+			{Kind: "package", ID: "nginx", Condition: lifecycle.GatewayReadinessMissing, Code: "package_missing", Expected: "1.24..<1.25"},
+			{Kind: "listener", ID: "public_https", Condition: lifecycle.GatewayReadinessUnavailable, Code: "public_https_observation_unavailable", Expected: "0.0.0.0:443"},
+		},
+	}}
+	reader := &gatewayReadinessConvergencePlanReader{
+		base: base, state: staticGatewayPlanState{state: state}, readiness: readiness,
+	}
+	plan, err := reader.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.calls != 1 || readiness.calls != 1 || plan.Impact != operations.ConvergenceImpactAvailability || len(plan.Drift) != 2 {
+		t.Fatalf("gateway readiness plan = %+v; calls=%d/%d", plan, base.calls, readiness.calls)
+	}
+	if plan.Drift[0].Resource.Component != "ingress" || plan.Drift[0].Kind != operations.OwnedDriftModified ||
+		plan.Drift[1].Resource.Component != "package" || plan.Drift[1].Kind != operations.OwnedDriftMissing {
+		t.Fatalf("gateway readiness drift = %+v", plan.Drift)
+	}
+	result, err := ConvergencePlanOutput(plan)
+	if err != nil || result.Status != output.StatusPending || len(result.RequiresAction) != 1 || result.RequiresAction[0].Command != "vpnctl repair" {
+		t.Fatalf("gateway readiness output = %+v, %v", result, err)
+	}
+}
+
+func TestGatewayReadinessConvergencePlanPreservesHealthyEmptyDrift(t *testing.T) {
+	t.Parallel()
+	base := &recordingConvergencePlanReader{plan: operations.ConvergencePlan{
+		DesiredGeneration: 4, AppliedGeneration: 4, Impact: operations.ConvergenceImpactNone,
+		Changes: []operations.DesiredChange{}, Drift: []operations.OwnedDrift{},
+	}}
+	reader := &gatewayReadinessConvergencePlanReader{
+		base: base, state: staticGatewayPlanState{state: model.State{Generation: 4, Host: model.Host{Role: model.RoleGateway}}},
+		readiness: &recordingGatewayPlanReadiness{report: lifecycle.GatewayBootstrapReadinessReport{
+			SchemaVersion: lifecycle.GatewayBootstrapReadinessSchemaVersion, Generation: 4, Ready: true,
+			CandidateSHA256: strings.Repeat("a", 64), Checks: []lifecycle.GatewayBootstrapReadinessCheck{},
+		}},
+	}
+	plan, err := reader.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Changes == nil || plan.Drift == nil || len(plan.Changes) != 0 || len(plan.Drift) != 0 || plan.Impact != operations.ConvergenceImpactNone {
+		t.Fatalf("healthy Gateway plan = %+v", plan)
+	}
+}
+
 func TestConvergencePlanOutputRejectsInvalidAggregateImpact(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +183,24 @@ func TestRunConvergencePlanIsRoleGatedBeforePlanning(t *testing.T) {
 type recordingConvergencePlanReader struct {
 	plan  operations.ConvergencePlan
 	calls int
+}
+
+type staticGatewayPlanState struct {
+	state model.State
+	err   error
+}
+
+func (state staticGatewayPlanState) Load() (model.State, error) { return state.state, state.err }
+
+type recordingGatewayPlanReadiness struct {
+	report lifecycle.GatewayBootstrapReadinessReport
+	err    error
+	calls  int
+}
+
+func (readiness *recordingGatewayPlanReadiness) Inspect(context.Context, model.State) (lifecycle.GatewayBootstrapReadinessReport, error) {
+	readiness.calls++
+	return readiness.report, readiness.err
 }
 
 func (reader *recordingConvergencePlanReader) Plan(context.Context) (operations.ConvergencePlan, error) {

@@ -396,6 +396,38 @@ func TestRepeatedJoinOnJoinedNodeChangesNothingAndDirectsToTransportSwitch(t *te
 	}
 }
 
+func TestUnavailablePublicEnrollmentLeavesInviteAndNodeAtomic(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	runner := &joinWireGuardRunner{}
+	workflow, err := NewNodeJoinWorkflow(fixture.nodeState, fixture.nodeSecrets, unavailableJoinExchanger{}, NodeJoinRuntime{
+		Entropy: rand.Reader, Now: func() time.Time { return fixture.now.Add(time.Minute) },
+		NewNodeID: func() (string, error) { return joinTestNodeID, nil }, WireGuardRunner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeGateway, _ := fixture.gatewayState.Load()
+	beforeNode, _ := fixture.nodeState.Load()
+	if _, err := workflow.Join(context.Background(), fixture.token, model.TransportRestricted, []string{"telegram"}); !errors.Is(err, ErrPublicEnrollmentUnavailable) || errors.Is(err, ErrJoinUncertain) {
+		t.Fatalf("Join() error = %v", err)
+	}
+	afterGateway, _ := fixture.gatewayState.Load()
+	afterNode, _ := fixture.nodeState.Load()
+	if !reflect.DeepEqual(afterGateway, beforeGateway) || !reflect.DeepEqual(afterNode, beforeNode) || afterGateway.Invites[0].State != model.InviteActive {
+		t.Fatalf("unavailable join changed state: gateway=%+v node=%+v", afterGateway, afterNode)
+	}
+	references, err := NewNodeCredentialReferences(joinTestNodeID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range references.Values() {
+		if _, err := fixture.nodeSecrets.Get(reference); !errors.Is(err, store.ErrSecretNotFound) {
+			t.Fatalf("unavailable join retained credential %s: %v", reference, err)
+		}
+	}
+}
+
 func TestMultipleJoinedNodesRetainIsolatedIdentitiesAndResources(t *testing.T) {
 	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
 	defer fixture.destroy()
@@ -744,6 +776,12 @@ func joinGatewayWireGuardPublic() string {
 type handlerJoinExchanger struct {
 	handler http.Handler
 	calls   atomic.Uint64
+}
+
+type unavailableJoinExchanger struct{}
+
+func (unavailableJoinExchanger) Exchange(context.Context, string, *output.Secret) (NodeJoinExchangeResult, error) {
+	return NodeJoinExchangeResult{CommitPossible: false}, ErrPublicEnrollmentUnavailable
 }
 
 type tamperJoinExchanger struct {

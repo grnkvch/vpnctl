@@ -216,7 +216,8 @@ func TestNginxReservedRoutesPrecedeAndCannotBeShadowedByUserRoot(t *testing.T) {
 		"proxy_pass http://127.0.0.1:19092;",
 		"client_max_body_size 65536;",
 		"limit_req zone=vpnctl_enrollment burst=4 nodelay;",
-		"proxy_read_timeout 5s;",
+		"proxy_read_timeout 45s;",
+		"proxy_send_timeout 45s;",
 	} {
 		if !strings.Contains(routes, directive) {
 			t.Errorf("reserved route contract lacks %q:\n%s", directive, routes)

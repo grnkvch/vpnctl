@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/controller"
+	"github.com/vgrinkevich/vpnctl/internal/ingress"
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
@@ -135,7 +138,12 @@ type unitStatusObserver interface {
 }
 
 type systemPassiveStatusObserver struct {
-	units unitStatusObserver
+	units     unitStatusObserver
+	readiness gatewayBootstrapStatusObserver
+}
+
+type gatewayBootstrapStatusObserver interface {
+	Inspect(context.Context, model.State) (lifecycle.GatewayBootstrapReadinessReport, error)
 }
 
 func (observer systemPassiveStatusObserver) ReadPassiveStatus(ctx context.Context, state model.State) (operations.PassiveStatusSnapshot, error) {
@@ -143,7 +151,65 @@ func (observer systemPassiveStatusObserver) ReadPassiveStatus(ctx context.Contex
 	if err != nil {
 		return operations.PassiveStatusSnapshot{}, err
 	}
-	return passiveStatusFromUnits(state, observation), nil
+	snapshot := passiveStatusFromUnits(state, observation)
+	if state.Host.Role == model.RoleGateway && observer.readiness != nil {
+		filtered := snapshot.Resources[:0]
+		for _, resource := range snapshot.Resources {
+			if resource.Resource.Component == "ingress" && resource.Resource.ID == ingress.NginxServiceUnit {
+				continue
+			}
+			filtered = append(filtered, resource)
+		}
+		snapshot.Resources = filtered
+		report, readinessErr := observer.readiness.Inspect(ctx, state)
+		if readinessErr != nil {
+			snapshot.Resources = append(snapshot.Resources, operations.PassiveStatusResource{
+				Class:     operations.PassiveStatusDataPlane,
+				Resource:  operations.ManagedResourceKey{Component: "ingress", Kind: operations.ManagedResourceState, ID: "gateway-readiness"},
+				Condition: operations.PassiveUnavailable, Mandatory: true, Active: true,
+				Generation: state.Generation, Code: "gateway_readiness_unavailable",
+			})
+		} else {
+			snapshot.Resources = append(snapshot.Resources, gatewayReadinessStatusResources(report)...)
+		}
+	}
+	return snapshot, nil
+}
+
+type systemGatewayBootstrapStatusObserver struct {
+	paths     store.Paths
+	installer *lifecycle.ReleaseBundleInstaller
+	inspector *lifecycle.GatewayBootstrapReadinessInspector
+}
+
+func newSystemGatewayBootstrapStatusObserver(paths store.Paths) (*systemGatewayBootstrapStatusObserver, error) {
+	runner := linuxplatform.OSProbeRunner{}
+	packages, err := lifecycle.NewSystemRolePackageManager(paths.Root, runner)
+	if err != nil {
+		return nil, err
+	}
+	inspector, err := lifecycle.NewGatewayBootstrapReadinessInspector(paths, packages, runner)
+	if err != nil {
+		return nil, err
+	}
+	installer, err := lifecycle.NewReleaseBundleInstaller(paths.Root, lifecycle.ReleasePlatform{
+		OperatingSystem: "ubuntu", Version: "24.04", Architecture: "amd64",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &systemGatewayBootstrapStatusObserver{paths: paths, installer: installer, inspector: inspector}, nil
+}
+
+func (observer *systemGatewayBootstrapStatusObserver) Inspect(ctx context.Context, state model.State) (lifecycle.GatewayBootstrapReadinessReport, error) {
+	if observer == nil || observer.installer == nil || observer.inspector == nil {
+		return lifecycle.GatewayBootstrapReadinessReport{}, fmt.Errorf("gateway readiness observer is incomplete")
+	}
+	manifest, err := observer.installer.Inspect(ctx, filepath.Join(observer.paths.Root, strings.TrimPrefix(lifecycle.ReleaseInstalledBundlePath, "/")))
+	if err != nil {
+		return lifecycle.GatewayBootstrapReadinessReport{}, err
+	}
+	return observer.inspector.Inspect(ctx, state, manifest)
 }
 
 func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion string) (*operations.StatusCollector, error) {
@@ -163,10 +229,49 @@ func buildSystemStatusCollector(paths store.Paths, role HostRole, binaryVersion 
 	if err != nil {
 		return nil, err
 	}
+	passive := systemPassiveStatusObserver{units: unitObserver}
+	if modelRole == model.RoleGateway {
+		passive.readiness, err = newSystemGatewayBootstrapStatusObserver(paths)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return operations.NewStatusCollector(
 		modelRole, binaryVersion, time.Now, statusStateReader{state: stateStore}, planner,
-		systemPassiveStatusObserver{units: unitObserver},
+		passive,
 	)
+}
+
+func gatewayReadinessStatusResources(report lifecycle.GatewayBootstrapReadinessReport) []operations.PassiveStatusResource {
+	resources := make([]operations.PassiveStatusResource, 0, len(report.Checks))
+	for _, check := range report.Checks {
+		kind := operations.ManagedResourceState
+		component := "ingress"
+		switch check.Kind {
+		case "file", "tree":
+			kind = operations.ManagedResourceFile
+		case "unit":
+			kind = operations.ManagedResourceUnit
+		case "listener":
+			kind = operations.ManagedResourceNetwork
+		case "package":
+			component = "package"
+		}
+		condition := operations.PassiveHealthy
+		switch check.Condition {
+		case lifecycle.GatewayReadinessMissing, lifecycle.GatewayReadinessDrifted:
+			condition = operations.PassiveDegraded
+		case lifecycle.GatewayReadinessConflict, lifecycle.GatewayReadinessUnavailable:
+			condition = operations.PassiveUnavailable
+		}
+		resources = append(resources, operations.PassiveStatusResource{
+			Class:     operations.PassiveStatusDataPlane,
+			Resource:  operations.ManagedResourceKey{Component: component, Kind: kind, ID: check.ID},
+			Condition: condition, Mandatory: true, Active: true, Generation: report.Generation,
+			RuntimeSHA256: check.ObservedSHA256, Code: check.Code,
+		})
+	}
+	return resources
 }
 
 func passiveStatusFromUnits(state model.State, observation controller.Observation) operations.PassiveStatusSnapshot {
@@ -193,6 +298,11 @@ func passiveStatusFromUnits(state model.State, observation controller.Observatio
 			resource.Code = "unit_inactive_expected"
 		}
 		resources = append(resources, resource)
+	}
+	if state.Host.Role == model.RoleGateway {
+		resources = append(resources, passiveUnitStatus(
+			state, operations.PassiveStatusDataPlane, "ingress", ingress.NginxServiceUnit, units[ingress.NginxServiceUnit],
+		))
 	}
 	for _, transportState := range state.Transports {
 		if transportState.State != model.TransportActive && transportState.State != model.TransportDegraded {

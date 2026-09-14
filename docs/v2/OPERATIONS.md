@@ -53,6 +53,13 @@ unmanaged process on a reserved port, UFW/firewalld ownership, overlapping
 networks, an unverified SSH listener, or incompatible TUN/WireGuard resources
 before mutation.
 
+Init consumes the verified bundle's role-specific Ubuntu package contract.
+It may refresh APT metadata and install an exact compatible package version,
+but never performs a general OS upgrade. A successful Gateway init includes
+the vpnctl-owned nginx drop-in and immutable baseline tree, an active nginx
+runtime on TCP 443, and working reserved health/enrollment routes even when no
+user expose exists. These are mandatory postconditions, not later manual setup.
+
 ## Happy path A: gateway and personal devices
 
 Run initialization on the external-region VPS. The public IPv4 is mandatory
@@ -172,8 +179,10 @@ action. Other exposes remain serving.
 ## Presets, policy, and the classification boundary
 
 Gateway init creates editable `telegram`, `openai`, and `anthropic` selector
-documents under `/etc/vpnctl/presets.d/` only when absent. Operators may add or
-delete unassigned preset files. Source edits do not silently become effective:
+documents under `/etc/vpnctl/presets.d/` only when absent and commits matching
+generation-1 effective snapshots, so they are immediately available to the
+first client or Node. Operators may add or delete unassigned preset files.
+Source edits after initialization do not silently become effective:
 
 ```console vpnctl-doc-test id=preset.validate role=gateway
 sudo vpnctl preset validate
@@ -409,6 +418,8 @@ guarantees are unchanged.
 | Public request is `504` | The single upstream attempt exceeded its configured timeout. vpnctl does not replay the request. |
 | Certificate is expiring | Rotate it manually, retrieve the new public certificate, and re-register every affected external webhook. Control/node trust is independent. |
 | Gateway controller is down | Existing compatible data planes continue. Management returns unavailable and must not tear them down or silently mutate state. |
+| Node `join` reports `join_unavailable` | The invite has not been consumed and the Node remains unjoined. On the Gateway run `vpnctl status` and `vpnctl doctor ingress`, preview `vpnctl repair --dry-run` if mandatory ingress drift is reported, then retry the same still-valid invite. |
+| Gateway `status` reports `repair_gateway_ingress` | A mandatory package, owned nginx drop-in/tree, service/runtime, TCP 443 listener, or loopback enrollment listener is missing or drifted. Inspect `vpnctl plan`, then use confirmed `vpnctl repair`; foreign ownership remains a conflict. |
 
 Preview owned-drift repair before consenting:
 

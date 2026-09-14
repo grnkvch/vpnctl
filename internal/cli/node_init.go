@@ -197,10 +197,12 @@ func nodeInitOutput(plan lifecycle.NodeInitPlan, applied lifecycle.NodeInitResul
 	result := output.NewResult("init.node", output.StatusOK, output.CategorySuccess, output.SafeObject{
 		"changed": changed, "role": "node", "enrollment_status": enrollmentStatus,
 		"active_tunnel": plan.ActiveTunnel, "staged_units": append([]string(nil), units...),
+		"packages": initPackagePlanOutput(plan.Packages),
 	})
 	if plan.HostID != "" {
 		result.ResourceIDs["host_id"] = plan.HostID
 	}
+	addInitPackageHumanTable(&result, plan.Packages)
 	return result
 }
 
@@ -226,6 +228,10 @@ func classifyNodeInitError(err error) (output.ExitCategory, string, string) {
 		return output.CategoryUnavailable, "init_convergence_pending", "node initialization is committed but its convergence baseline is not ready; retry init --node"
 	case errors.Is(err, lifecycle.ErrNodeRoleConflict), errors.Is(err, lifecycle.ErrNodeLayoutConflict):
 		return output.CategoryConflict, "init_conflict", err.Error()
+	case errors.Is(err, lifecycle.ErrRolePackageConflict):
+		return output.CategoryConflict, "init_conflict", err.Error()
+	case errors.Is(err, lifecycle.ErrRolePackageUnavailable), errors.Is(err, lifecycle.ErrRolePackageResidue):
+		return output.CategoryUnavailable, "package_bootstrap_unavailable", "required Node packages could not be installed or restored; inspect the package transaction journal and retry init"
 	case errors.Is(err, linuxplatform.ErrUnsupportedHost), errors.Is(err, ErrInteractionRefused), errors.Is(err, ErrConsentDeclined),
 		errors.Is(err, ErrPromptInput), errors.Is(err, ErrUnsupportedRole), errors.Is(err, ErrMutationFlags):
 		return output.CategoryValidation, "init_validation", err.Error()

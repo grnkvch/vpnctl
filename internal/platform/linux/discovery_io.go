@@ -33,6 +33,7 @@ type ProbeCommand struct {
 	Name  string
 	Args  []string
 	Stdin []byte
+	Env   []string
 }
 
 type ProbeResult struct {
@@ -165,6 +166,15 @@ func (OSProbeRunner) Run(ctx context.Context, probe ProbeCommand) (ProbeResult, 
 	}
 	command := exec.CommandContext(ctx, probe.Name, probe.Args...)
 	command.Stdin = bytes.NewReader(probe.Stdin)
+	if len(probe.Env) != 0 {
+		for _, value := range probe.Env {
+			name, _, found := strings.Cut(value, "=")
+			if !found || name == "" || strings.ContainsAny(name, "\x00\r\n") || strings.ContainsAny(value, "\x00\r\n") {
+				return ProbeResult{}, fmt.Errorf("probe command environment is invalid")
+			}
+		}
+		command.Env = append(os.Environ(), probe.Env...)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout

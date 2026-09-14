@@ -26,6 +26,7 @@ type NodeInitPlan struct {
 	Units              []string
 	Enrolled           bool
 	ActiveTunnel       bool
+	Packages           RolePackagePlan
 
 	desiredState    model.State
 	releaseManifest ReleaseManifest
@@ -58,6 +59,8 @@ type NodeInitRuntime struct {
 	Snapshot    linuxplatform.HostSnapshot
 	Manifest    model.ComponentManifest
 	Release     InitReleaseSource
+	Packages    RolePackageManager
+	Rediscover  InitHostDiscoverer
 	BinaryPath  string
 	State       NodeInitStateStore
 	Layout      *NodeLayoutInstaller
@@ -72,7 +75,8 @@ type NodeInitializer struct {
 }
 
 func NewNodeInitializer(runtime NodeInitRuntime) (*NodeInitializer, error) {
-	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.Convergence == nil {
+	if runtime.State == nil || runtime.Layout == nil || runtime.Roles == nil || runtime.Convergence == nil ||
+		(runtime.Release != nil && (runtime.Packages == nil || runtime.Rediscover == nil)) {
 		return nil, fmt.Errorf("node initializer dependencies are incomplete")
 	}
 	if runtime.Now == nil {
@@ -107,11 +111,9 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	if snapshot.SchemaVersion != linuxplatform.HostSnapshotSchemaVersion {
 		return NodeInitPlan{}, fmt.Errorf("host snapshot schema must be %d", linuxplatform.HostSnapshotSchemaVersion)
 	}
-	if err := snapshot.ValidateMandatoryCapabilities(); err != nil {
-		return NodeInitPlan{}, err
-	}
 	manifest := initializer.runtime.Manifest
 	var releaseManifest ReleaseManifest
+	var packagePlan RolePackagePlan
 	if initializer.runtime.Release != nil {
 		verified, err := initializer.runtime.Release.Inspect(ctx)
 		if err != nil {
@@ -122,6 +124,13 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 		}
 		releaseManifest = verified
 		manifest = verified.ComponentManifest
+		packagePlan, err = initializer.runtime.Packages.Plan(ctx, verified, model.RoleNode)
+		if err != nil {
+			return NodeInitPlan{}, fmt.Errorf("plan node packages: %w", err)
+		}
+	}
+	if err := validatePrePackageCapabilities(snapshot, packagePlan); err != nil {
+		return NodeInitPlan{}, err
 	}
 
 	existing, loadErr := initializer.runtime.State.Load()
@@ -146,7 +155,7 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 		return NodeInitPlan{
 			AlreadyInitialized: true, HostID: existing.Host.ID, desiredState: existing, Units: []string{},
 			Enrolled: len(existing.Nodes) == 1, ActiveTunnel: nodeHasActiveTunnel(existing), releaseManifest: releaseManifest,
-			roleRequest: roleRequest,
+			roleRequest: roleRequest, Packages: packagePlan,
 		}, nil
 	}
 	if !errors.Is(loadErr, store.ErrStateNotFound) {
@@ -191,7 +200,7 @@ func (initializer *NodeInitializer) Plan(ctx context.Context) (NodeInitPlan, err
 	sort.Strings(units)
 	return NodeInitPlan{
 		Changed: true, HostID: hostID, Directories: directories, Units: units,
-		desiredState: desired, releaseManifest: releaseManifest, layout: layout, roleRequest: roleRequest,
+		desiredState: desired, releaseManifest: releaseManifest, layout: layout, roleRequest: roleRequest, Packages: packagePlan,
 	}, nil
 }
 
@@ -223,6 +232,7 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 		}
 		return NodeInitResult{}, fmt.Errorf("recheck authoritative state: %w", err)
 	}
+	var packageInstallation RolePackageInstallation
 	if plan.releaseManifest.SchemaVersion != 0 {
 		if initializer.runtime.Release == nil {
 			return NodeInitResult{}, fmt.Errorf("invalid node initialization release plan")
@@ -234,17 +244,46 @@ func (initializer *NodeInitializer) Apply(ctx context.Context, plan NodeInitPlan
 		if !reflect.DeepEqual(installed.Manifest, plan.releaseManifest) {
 			return NodeInitResult{}, fmt.Errorf("installed node release differs from the verified plan")
 		}
+		if !reflect.DeepEqual(installed.RequiredAPTPackages, releaseAPTPackagesForRole(plan.releaseManifest, model.RoleNode)) {
+			return NodeInitResult{}, fmt.Errorf("installed node package contract differs from the verified plan")
+		}
+		packageInstallation, err = initializer.runtime.Packages.Apply(ctx, plan.releaseManifest, plan.Packages)
+		if err != nil {
+			return NodeInitResult{}, fmt.Errorf("install node packages: %w", err)
+		}
+		postPackage, err := initializer.runtime.Rediscover.Discover(ctx)
+		if err != nil || postPackage.ValidateMandatoryCapabilities() != nil {
+			if err == nil {
+				err = postPackage.ValidateMandatoryCapabilities()
+			}
+			return NodeInitResult{}, errors.Join(fmt.Errorf("validate node after package installation: %w", err), initializer.runtime.Packages.Rollback(context.Background(), packageInstallation))
+		}
+	}
+	rollbackPackages := func(applyErr error) (NodeInitResult, error) {
+		if packageInstallation.TransactionID == "" {
+			return NodeInitResult{}, applyErr
+		}
+		return NodeInitResult{}, errors.Join(applyErr, initializer.runtime.Packages.Rollback(context.Background(), packageInstallation))
 	}
 	if _, err := initializer.runtime.Layout.Apply(plan.layout); err != nil {
-		return NodeInitResult{}, fmt.Errorf("apply node layout: %w", err)
+		return rollbackPackages(fmt.Errorf("apply node layout: %w", err))
 	}
 	// Node units are deliberately staged before the role becomes authoritative;
 	// their readiness conditions and disabled state make this non-activating.
 	if _, err := initializer.runtime.Roles.Apply(ctx, plan.roleRequest); err != nil {
-		return NodeInitResult{}, fmt.Errorf("install staged node services: %w", err)
+		return rollbackPackages(fmt.Errorf("install staged node services: %w", err))
 	}
 	if err := initializer.runtime.State.Save(0, plan.desiredState); err != nil {
-		return NodeInitResult{}, fmt.Errorf("persist initial node state: %w", err)
+		return rollbackPackages(fmt.Errorf("persist initial node state: %w", err))
+	}
+	// Once authoritative Node state is durable, its verified role packages are
+	// part of that committed bootstrap boundary. Close the package transaction
+	// before convergence publication so a retry of a failed metadata publish
+	// cannot leave an unjoined Node with an orphaned package journal.
+	if packageInstallation.TransactionID != "" {
+		if err := initializer.runtime.Packages.Commit(ctx, packageInstallation); err != nil {
+			return NodeInitResult{}, errors.Join(ErrNodeInitConvergencePending, err)
+		}
 	}
 	if err := initializer.runtime.Convergence.PublishNodeInitialization(ctx, plan.desiredState.Generation, plan.roleRequest); err != nil {
 		return NodeInitResult{}, errors.Join(ErrNodeInitConvergencePending, err)

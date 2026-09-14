@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -101,6 +103,33 @@ func TestSystemNodeJoinerActivatesOnlyCommittedLocalGeneration(t *testing.T) {
 	category, code, message := classifyJoinError(err)
 	if category != output.CategoryUnavailable || code != "join_activation_pending" || !strings.Contains(message, "join is committed") {
 		t.Fatalf("pending classification = %s %s %q", category, code, message)
+	}
+}
+
+func TestJoinUnavailableIsSafeActionableAndDistinctFromRejection(t *testing.T) {
+	t.Parallel()
+	category, code, message := classifyJoinError(errors.Join(enrollment.ErrPublicEnrollmentUnavailable, errors.New("private endpoint canary")))
+	if category != output.CategoryUnavailable || code != "join_unavailable" || strings.Contains(message, "canary") {
+		t.Fatalf("unavailable classification = %s %s %q", category, code, message)
+	}
+	var stdout, stderr bytes.Buffer
+	emitter, err := NewResultEmitter(&stdout, &stderr, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit := emitJoinFailure(emitter, category, code, message); exit != ExitUnavailable {
+		t.Fatalf("exit = %d, output=%s error=%s", exit, stdout.String(), stderr.String())
+	}
+	var result output.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.RequiresAction) != 1 || result.RequiresAction[0].Code != "check_gateway_ingress" || result.Data["changed"] != false {
+		t.Fatalf("unavailable result = %+v", result)
+	}
+	category, code, _ = classifyJoinError(enrollment.ErrPublicEnrollmentRejected)
+	if category != output.CategoryValidation || code != "join_validation" {
+		t.Fatalf("rejected classification = %s %s", category, code)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgrinkevich/vpnctl/internal/control"
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -69,11 +71,17 @@ func TestGatewayRepairApplyUsesReviewedOrderAndReturnsConfirmation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if prepared.Timeout != gatewayRepairApplyTimeout || prepared.Timeout >= control.LocalMaximumMutationTimeout {
+		t.Fatalf("gateway repair timeout = %s, want bounded controller timeout below %s", prepared.Timeout, control.LocalMaximumMutationTimeout)
+	}
 	fixture.events.values = nil
 	if err := prepared.Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{"watchdog-units", "roles", "convergence-inactive", "watchdog-arm", "network", "watchdog-activated"}
+	wantEvents := []string{
+		"bootstrap-prepare", "watchdog-units", "roles", "bootstrap-activate", "watchdog-arm", "network",
+		"bootstrap-verify", "convergence-inactive", "watchdog-activated", "bootstrap-commit",
+	}
 	if !reflect.DeepEqual(fixture.events.values, wantEvents) {
 		t.Fatalf("gateway repair apply events = %v, want %v", fixture.events.values, wantEvents)
 	}
@@ -134,6 +142,57 @@ func TestGatewayRepairRefusesPendingWatchdog(t *testing.T) {
 	}
 }
 
+func TestGatewayRepairCompensatesNetworkAndBootstrapAfterLateFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*gatewayRepairFixture, error)
+	}{
+		{name: "bootstrap verification", configure: func(fixture *gatewayRepairFixture, failure error) {
+			fixture.bootstrap.verifyErr = failure
+		}},
+		{name: "convergence publication", configure: func(fixture *gatewayRepairFixture, failure error) {
+			fixture.convergence.err = failure
+		}},
+		{name: "bootstrap commit", configure: func(fixture *gatewayRepairFixture, failure error) {
+			fixture.bootstrap.commitErr = failure
+		}},
+		{name: "watchdog activation", configure: func(fixture *gatewayRepairFixture, failure error) {
+			fixture.watchdog.markErr = failure
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := gatewayRepairTestState(t)
+			fixture := newGatewayRepairFixture(t, state)
+			failure := errors.New("injected late failure")
+			test.configure(fixture, failure)
+			plan, err := fixture.dispatcher.Plan(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := json.Marshal(GatewayRepairPayload{Plan: plan})
+			prepared, err := fixture.dispatcher.Prepare(context.Background(), state, GatewayRepairOperation, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.events.values = nil
+			if err := prepared.Apply(context.Background()); !errors.Is(err, failure) {
+				t.Fatalf("late failure = %v", err)
+			}
+			if fixture.watchdog.rollbacks != 1 {
+				t.Fatalf("watchdog rollbacks = %d; events=%v", fixture.watchdog.rollbacks, fixture.events.values)
+			}
+			if got := fixture.events.values[len(fixture.events.values)-1]; got != "bootstrap-rollback" {
+				t.Fatalf("last compensation = %q; events=%v", got, fixture.events.values)
+			}
+		})
+	}
+}
+
 func gatewayRepairTestState(t *testing.T) model.State {
 	t.Helper()
 	_, stateStore := controllerTestState(t, model.RoleGateway)
@@ -156,6 +215,8 @@ type gatewayRepairFixture struct {
 	watchdog      *fakeGatewayRepairWatchdog
 	status        *fakeGatewayRepairWatchdogStore
 	network       *fakeGatewayRepairNetwork
+	bootstrap     *fakeGatewayBootstrapRepair
+	convergence   *fakeGatewayRepairConvergence
 	events        *gatewayRepairEvents
 }
 
@@ -180,13 +241,57 @@ func newGatewayRepairFixture(t *testing.T, state model.State) *gatewayRepairFixt
 	watchdog := &fakeGatewayRepairWatchdog{events: events, network: initial}
 	network := &fakeGatewayRepairNetwork{events: events}
 	convergence := &fakeGatewayRepairConvergence{events: events}
+	bootstrap := &fakeGatewayBootstrapRepair{events: events, generation: state.Generation}
 	dispatcher, err := newGatewayRepairDispatcher(
-		roles, convergence, watchdogUnits, watchdog, status, network, linuxplatform.DefaultVPNCTLBinaryPath,
+		roles, convergence, watchdogUnits, watchdog, status, network, bootstrap, linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &gatewayRepairFixture{dispatcher: dispatcher, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, status: status, network: network, events: events}
+	return &gatewayRepairFixture{dispatcher: dispatcher, roles: roles, watchdogUnits: watchdogUnits, watchdog: watchdog, status: status, network: network, bootstrap: bootstrap, convergence: convergence, events: events}
+}
+
+type fakeGatewayBootstrapRepair struct {
+	events     *gatewayRepairEvents
+	generation uint64
+	verifyErr  error
+	commitErr  error
+}
+
+func (bootstrap *fakeGatewayBootstrapRepair) Plan(context.Context, model.State) (GatewayBootstrapRepairPlan, error) {
+	return GatewayBootstrapRepairPlan{
+		SchemaVersion: GatewayBootstrapRepairPlanSchemaVersion, Generation: bootstrap.generation,
+		PackagePlan: lifecycle.RolePackagePlan{
+			SchemaVersion: lifecycle.RolePackagePlanSchemaVersion, Role: model.RoleGateway,
+			ManifestSHA256: strings.Repeat("d", 64), Packages: []lifecycle.RolePackagePlanItem{},
+		},
+		IngressCandidateSHA256: strings.Repeat("a", 64), DropInSHA256: strings.Repeat("b", 64),
+		ReadinessSHA256: strings.Repeat("c", 64),
+	}, nil
+}
+
+func (bootstrap *fakeGatewayBootstrapRepair) Prepare(_ context.Context, _ model.State, _ GatewayBootstrapRepairPlan) (gatewayBootstrapRepairPreparation, error) {
+	bootstrap.events.values = append(bootstrap.events.values, "bootstrap-prepare")
+	return &fakeGatewayBootstrapPreparation{runtime: bootstrap}, nil
+}
+
+type fakeGatewayBootstrapPreparation struct{ runtime *fakeGatewayBootstrapRepair }
+
+func (preparation *fakeGatewayBootstrapPreparation) Activate(context.Context) error {
+	preparation.runtime.events.values = append(preparation.runtime.events.values, "bootstrap-activate")
+	return nil
+}
+func (preparation *fakeGatewayBootstrapPreparation) Verify(context.Context) error {
+	preparation.runtime.events.values = append(preparation.runtime.events.values, "bootstrap-verify")
+	return preparation.runtime.verifyErr
+}
+func (preparation *fakeGatewayBootstrapPreparation) Commit(context.Context) error {
+	preparation.runtime.events.values = append(preparation.runtime.events.values, "bootstrap-commit")
+	return preparation.runtime.commitErr
+}
+func (preparation *fakeGatewayBootstrapPreparation) Rollback(context.Context) error {
+	preparation.runtime.events.values = append(preparation.runtime.events.values, "bootstrap-rollback")
+	return nil
 }
 
 type gatewayRepairEvents struct{ values []string }
@@ -231,15 +336,18 @@ func (roles *fakeGatewayRepairRoles) Apply(context.Context, gatewayRepairRoleCan
 	return nil
 }
 
-type fakeGatewayRepairConvergence struct{ events *gatewayRepairEvents }
+type fakeGatewayRepairConvergence struct {
+	events *gatewayRepairEvents
+	err    error
+}
 
 func (publisher *fakeGatewayRepairConvergence) PublishActiveGatewayGeneration(context.Context, uint64, linuxplatform.RoleInstallationRequest) error {
 	publisher.events.values = append(publisher.events.values, "convergence-active")
-	return nil
+	return publisher.err
 }
 func (publisher *fakeGatewayRepairConvergence) PublishInactiveGatewayGeneration(context.Context, uint64, linuxplatform.RoleInstallationRequest) error {
 	publisher.events.values = append(publisher.events.values, "convergence-inactive")
-	return nil
+	return publisher.err
 }
 
 type fakeGatewayRepairWatchdogUnits struct {
@@ -262,6 +370,7 @@ type fakeGatewayRepairWatchdog struct {
 	network   linuxplatform.NetworkSnapshot
 	arms      int
 	rollbacks int
+	markErr   error
 }
 
 func (watchdog *fakeGatewayRepairWatchdog) Arm(context.Context, operations.WatchdogArmInput) (operations.WatchdogTransaction, error) {
@@ -271,7 +380,7 @@ func (watchdog *fakeGatewayRepairWatchdog) Arm(context.Context, operations.Watch
 }
 func (watchdog *fakeGatewayRepairWatchdog) MarkActivated(context.Context, string) error {
 	watchdog.events.values = append(watchdog.events.values, "watchdog-activated")
-	return nil
+	return watchdog.markErr
 }
 func (watchdog *fakeGatewayRepairWatchdog) RollbackNow(context.Context, string) error {
 	watchdog.rollbacks++

@@ -36,11 +36,11 @@ func TestDoctorGatewayDefaultPlanIsRoleAwareActiveOnlyAndPathSafe(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Overall != StatusOverallHealthy || report.Scope != DoctorScopeDefault || len(report.Checks) != 16 || source.reads != 1 || source.writes != 0 {
+	if report.Overall != StatusOverallHealthy || report.Scope != DoctorScopeDefault || len(report.Checks) != 17 || source.reads != 1 || source.writes != 0 {
 		t.Fatalf("gateway doctor report = %+v; source=%+v", report, source)
 	}
 	requests := runner.Requests()
-	if len(requests) != 15 {
+	if len(requests) != 16 {
 		t.Fatalf("gateway requests/checks = %d/%d", len(requests), len(report.Checks))
 	}
 	seenIDs := map[string]struct{}{}
@@ -71,6 +71,32 @@ func TestDoctorGatewayDefaultPlanIsRoleAwareActiveOnlyAndPathSafe(t *testing.T) 
 	}
 	if runner.switches != 0 || runner.applies != 0 || runner.repairs != 0 || runner.webhooks != 0 {
 		t.Fatalf("doctor invoked a mutation/provider action: %+v", runner)
+	}
+}
+
+func TestDoctorIngressDistinguishesMissingPublicEdgeFromHealthyEnrollmentLoopback(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	runner := &recordingDoctorRunner{failName: "ingress.public.tls"}
+	doctor, err := NewDoctor(model.RoleGateway, &auditedStatusStateSource{state: doctorGatewayState(t, now)}, runner, DoctorLimits{}, fixedDoctorRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := doctor.Run(context.Background(), DoctorScopeIngress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicFailed, loopbackPassed := false, false
+	for _, check := range report.Checks {
+		if check.Name == "ingress.public.tls" && check.Status == DoctorCheckFailed {
+			publicFailed = true
+		}
+		if check.Name == "ingress.enrollment.loopback" && check.Status == DoctorCheckPassed {
+			loopbackPassed = true
+		}
+	}
+	if report.Overall != StatusOverallDegraded || !publicFailed || !loopbackPassed {
+		t.Fatalf("ingress boundary report = %+v", report)
 	}
 }
 

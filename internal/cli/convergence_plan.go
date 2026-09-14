@@ -3,13 +3,132 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
+	"github.com/vgrinkevich/vpnctl/internal/model"
 	"github.com/vgrinkevich/vpnctl/internal/operations"
 	"github.com/vgrinkevich/vpnctl/internal/output"
+	"github.com/vgrinkevich/vpnctl/internal/store"
 )
 
 type ConvergencePlanReader interface {
 	Plan(context.Context) (operations.ConvergencePlan, error)
+}
+
+type gatewayReadinessConvergencePlanReader struct {
+	base      ConvergencePlanReader
+	state     gatewayConvergencePlanStateReader
+	readiness gatewayBootstrapStatusObserver
+}
+
+type gatewayConvergencePlanStateReader interface {
+	Load() (model.State, error)
+}
+
+func composeSystemConvergencePlanReader(paths store.Paths, role HostRole, base ConvergencePlanReader) (ConvergencePlanReader, error) {
+	if base == nil {
+		return nil, fmt.Errorf("convergence planner is required")
+	}
+	if role != RoleGateway {
+		return base, nil
+	}
+	state, err := store.NewStateStore(paths)
+	if err != nil {
+		return nil, err
+	}
+	readiness, err := newSystemGatewayBootstrapStatusObserver(paths)
+	if err != nil {
+		return nil, err
+	}
+	return &gatewayReadinessConvergencePlanReader{base: base, state: state, readiness: readiness}, nil
+}
+
+func (reader *gatewayReadinessConvergencePlanReader) Plan(ctx context.Context) (operations.ConvergencePlan, error) {
+	if ctx == nil || reader == nil || reader.base == nil || reader.state == nil || reader.readiness == nil {
+		return operations.ConvergencePlan{}, fmt.Errorf("gateway readiness convergence planner is incomplete")
+	}
+	plan, err := reader.base.Plan(ctx)
+	if err != nil {
+		return operations.ConvergencePlan{}, err
+	}
+	state, err := reader.state.Load()
+	if err != nil {
+		return operations.ConvergencePlan{}, err
+	}
+	if state.Host.Role != model.RoleGateway || state.Generation != plan.DesiredGeneration {
+		return operations.ConvergencePlan{}, operations.ErrConvergencePlanInvalid
+	}
+	report, err := reader.readiness.Inspect(ctx, state)
+	if err != nil {
+		return operations.ConvergencePlan{}, err
+	}
+	plan.Drift = mergeGatewayReadinessDrift(plan.Drift, report)
+	if len(plan.Drift) != 0 && plan.Impact == operations.ConvergenceImpactNone {
+		plan.Impact = operations.ConvergenceImpactAvailability
+	}
+	if err := plan.Validate(); err != nil {
+		return operations.ConvergencePlan{}, fmt.Errorf("%w: gateway readiness: %v", operations.ErrConvergencePlanInvalid, err)
+	}
+	return plan, nil
+}
+
+func mergeGatewayReadinessDrift(existing []operations.OwnedDrift, report lifecycle.GatewayBootstrapReadinessReport) []operations.OwnedDrift {
+	// ConvergencePlan requires present empty arrays. Preserve that contract when
+	// a healthy readiness projection has nothing to append.
+	result := append(make([]operations.OwnedDrift, 0, len(existing)), existing...)
+	seen := make(map[string]struct{}, len(result))
+	for _, item := range result {
+		seen[gatewayReadinessResourceOrder(item.Resource)] = struct{}{}
+	}
+	for _, check := range report.Checks {
+		if check.Condition == lifecycle.GatewayReadinessHealthy {
+			continue
+		}
+		kind := operations.ManagedResourceState
+		component := "ingress"
+		switch check.Kind {
+		case "file", "tree":
+			kind = operations.ManagedResourceFile
+		case "unit":
+			kind = operations.ManagedResourceUnit
+		case "listener":
+			kind = operations.ManagedResourceNetwork
+		case "package":
+			component = "package"
+		}
+		resource := operations.ManagedResourceKey{Component: component, Kind: kind, ID: check.ID}
+		key := gatewayReadinessResourceOrder(resource)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		expected := check.ExpectedSHA256
+		if expected == "" {
+			expected = operations.ManagedFingerprint([]byte(strings.Join([]string{"gateway-readiness-v1", check.Kind, check.ID, check.Expected, check.Code}, "\x00")))
+		}
+		drift := operations.OwnedDrift{
+			Resource: resource, Kind: operations.OwnedDriftMissing,
+			Impact: operations.ConvergenceImpactAvailability, ExpectedSHA256: expected,
+		}
+		if check.Condition != lifecycle.GatewayReadinessMissing {
+			drift.Kind = operations.OwnedDriftModified
+			drift.ActualSHA256 = check.ObservedSHA256
+			if drift.ActualSHA256 == "" || drift.ActualSHA256 == expected {
+				drift.ActualSHA256 = operations.ManagedFingerprint([]byte(strings.Join([]string{"gateway-readiness-v1", string(check.Condition), check.Code, check.Observed}, "\x00")))
+			}
+		}
+		result = append(result, drift)
+		seen[key] = struct{}{}
+	}
+	sort.Slice(result, func(left, right int) bool {
+		return gatewayReadinessResourceOrder(result[left].Resource) < gatewayReadinessResourceOrder(result[right].Resource)
+	})
+	return result
+}
+
+func gatewayReadinessResourceOrder(key operations.ManagedResourceKey) string {
+	return key.Component + "\x00" + string(key.Kind) + "\x00" + key.ID
 }
 
 // RunConvergencePlan applies the public role gate and performs only the
@@ -82,7 +201,7 @@ func ConvergencePlanOutput(plan operations.ConvergencePlan) (output.Result, erro
 		drift = append(drift, entry)
 	}
 	status := output.StatusOK
-	if len(changes) != 0 {
+	if len(changes) != 0 || len(drift) != 0 {
 		status = output.StatusPending
 	}
 	result := output.NewResult("plan", status, output.CategorySuccess, output.SafeObject{

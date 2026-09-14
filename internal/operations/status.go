@@ -305,7 +305,8 @@ func (collector *StatusCollector) Collect(ctx context.Context) (StatusReport, er
 		})
 	} else {
 		projectConvergence(&report, convergence)
-		if report.Generation != convergence.DesiredGeneration {
+		latest, latestErr := collector.state.ReadStatusState(ctx)
+		if latestErr != nil || latest.Generation != report.Generation {
 			addStatusProblem(&report, StatusProblem{
 				Kind: "snapshot", ID: "authoritative", Condition: PassiveUnavailable, Code: "status_generation_changed",
 			})
@@ -344,6 +345,9 @@ func (collector *StatusCollector) Collect(ctx context.Context) (StatusReport, er
 						Kind: string(resource.Class), ID: statusResourceID(resource.Resource),
 						Condition: resource.Condition, Code: resource.Code,
 					})
+					if collector.role == model.RoleGateway && resource.Resource.Component == "ingress" {
+						addGatewayIngressRepairAction(&report, resource.Resource.ID)
+					}
 				}
 			}
 		}
@@ -620,6 +624,7 @@ func ensurePassiveCoverage(report *StatusReport, state model.State) {
 	hasControl := false
 	hasGateway := state.Host.Role != model.RoleNode || !nodeHasGatewayTrust(state)
 	hasDataPlane := false
+	hasGatewayIngress := state.Host.Role != model.RoleGateway
 	observedTransports := make(map[string]struct{})
 	for _, item := range report.Runtime {
 		if item.Class == PassiveStatusConnectivity && item.Resource.ID == "control" && item.Mandatory && item.Active {
@@ -630,6 +635,9 @@ func ensurePassiveCoverage(report *StatusReport, state model.State) {
 		}
 		if item.Class == PassiveStatusDataPlane && item.Active {
 			hasDataPlane = true
+		}
+		if item.Resource.Component == "ingress" && item.Resource.ID == "nginx.service" && item.Mandatory && item.Active {
+			hasGatewayIngress = true
 		}
 		if item.Class == PassiveStatusActiveTransport && item.Active {
 			observedTransports[item.Resource.ID] = struct{}{}
@@ -644,6 +652,10 @@ func ensurePassiveCoverage(report *StatusReport, state model.State) {
 	if !hasDataPlane {
 		addMissingPassiveResource(report, "data_plane", "active", "data_plane_status_missing")
 	}
+	if !hasGatewayIngress {
+		addStatusProblem(report, StatusProblem{Kind: "data_plane", ID: "ingress/unit/nginx.service", Condition: PassiveUnavailable, Code: "nginx_status_missing"})
+		addGatewayIngressRepairAction(report, "nginx.service")
+	}
 	for _, transport := range state.Transports {
 		if transport.State != model.TransportActive && transport.State != model.TransportDegraded {
 			continue
@@ -653,6 +665,18 @@ func ensurePassiveCoverage(report *StatusReport, state model.State) {
 			addMissingPassiveResource(report, "active_transport", id, "transport_status_missing")
 		}
 	}
+}
+
+func addGatewayIngressRepairAction(report *StatusReport, resourceID string) {
+	for _, action := range report.RequiredActions {
+		if action.Code == "repair_gateway_ingress" {
+			return
+		}
+	}
+	report.RequiredActions = append(report.RequiredActions, StatusNotice{
+		Code: "repair_gateway_ingress", Message: "Preview and repair the mandatory Gateway HTTPS ingress.",
+		Command: "sudo vpnctl repair --dry-run", ResourceKind: "ingress", ResourceID: resourceID,
+	})
 }
 
 func addMissingPassiveResource(report *StatusReport, kind, id, code string) {

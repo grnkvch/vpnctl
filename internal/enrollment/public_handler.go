@@ -213,7 +213,7 @@ func (handler *PublicEnrollmentHandler) ServeHTTP(writer http.ResponseWriter, re
 		Payload: append(json.RawMessage(nil), wireRequest.Payload...), token: &token,
 	}
 	defer clear(handlerRequest.Payload)
-	handlerContext, cancel := context.WithTimeout(request.Context(), control.RPCWriteTimeout)
+	handlerContext, cancel := context.WithTimeout(request.Context(), PublicEnrollmentTransactionTimeout)
 	defer cancel()
 	transaction, err := handler.coordinator.PreparePublicEnrollment(handlerContext, handlerRequest)
 	if err != nil || transaction == nil {
@@ -323,7 +323,8 @@ func (handler *PublicEnrollmentHandler) newNonce() ([EnrollmentNonceBytes]byte, 
 }
 
 func (handler *PublicEnrollmentHandler) writeCoordinatorError(writer http.ResponseWriter, err error) {
-	if errors.Is(err, ErrPublicEnrollmentUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, ErrPublicEnrollmentUnavailable) || errors.Is(err, ErrJoinNotReady) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		writePublicEnrollmentError(writer, http.StatusServiceUnavailable, "unavailable")
 		return
 	}

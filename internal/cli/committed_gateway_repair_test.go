@@ -8,9 +8,11 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/controller"
+	"github.com/vgrinkevich/vpnctl/internal/lifecycle"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/routing"
@@ -82,10 +84,11 @@ func TestCommittedGatewayRepairRejectsModifiedPublicPreview(t *testing.T) {
 func TestSystemCommittedGatewayRepairSendsExactPlanAndValidatesResponse(t *testing.T) {
 	t.Parallel()
 
-	plan := committedGatewayRepairTestPlan(true)
+	plan := committedGatewayRepairTestPlan(false)
 	state := &mutableCommittedGatewayRepairState{state: model.State{Generation: plan.Generation, Host: model.Host{Role: model.RoleGateway, ID: plan.HostID}}}
 	callCount := 0
-	repair, err := newSystemCommittedGatewayRepair(state, staticCommittedGatewayRepairPlanner{plan: plan}, "/run/vpnctl/control.sock", func(_ context.Context, socket string, request control.LocalRequest) (control.LocalResponse, error) {
+	dispatcher := staticCommittedGatewayRepairDispatcher{plan: plan}
+	repair, err := newSystemCommittedGatewayRepair(state, dispatcher, dispatcher, "/run/vpnctl", "/run/vpnctl/control.sock", func(_ context.Context, socket string, request control.LocalRequest) (control.LocalResponse, error) {
 		callCount++
 		if socket != "/run/vpnctl/control.sock" || request.Method != control.LocalMutate || request.Operation != controller.GatewayRepairOperation || request.ExpectedGeneration != plan.Generation {
 			t.Fatalf("gateway repair local request = %s / %+v", socket, request)
@@ -94,14 +97,14 @@ func TestSystemCommittedGatewayRepairSendsExactPlanAndValidatesResponse(t *testi
 		if err := control.DecodeRPCPayload(request.Payload, &payload); err != nil || !reflect.DeepEqual(payload.Plan, plan) {
 			t.Fatalf("gateway repair payload = %+v, %v", payload, err)
 		}
-		data, _ := json.Marshal(controller.GatewayRepairData{Changed: true, NetworkActivationRequired: true, TransactionID: "fw-7K3M2P"})
+		data, _ := json.Marshal(controller.GatewayRepairData{Changed: true})
 		return control.LocalResponse{SchemaVersion: control.LocalSchemaVersion, OK: true, Generation: plan.Generation, Data: data}, nil
-	})
+	}, func(context.Context, string, bool) (func(), error) { return func() {}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := repair.Repair(context.Background(), plan)
-	if err != nil || callCount != 1 || result.TransactionID != "fw-7K3M2P" {
+	if err != nil || callCount != 1 || result.TransactionID != "" || result.NetworkActivationRequired {
 		t.Fatalf("system gateway repair = %+v, %v; calls=%d", result, err, callCount)
 	}
 
@@ -123,6 +126,47 @@ func TestSystemCommittedGatewayRepairSendsExactPlanAndValidatesResponse(t *testi
 	}
 }
 
+func TestSystemCommittedGatewayBootstrapRepairRunsInShortLivedCLIUnderSharedLock(t *testing.T) {
+	t.Parallel()
+
+	plan := committedGatewayRepairTestPlan(true)
+	plan.Bootstrap.Required = true
+	state := &mutableCommittedGatewayRepairState{state: model.State{Generation: plan.Generation, Host: model.Host{Role: model.RoleGateway, ID: plan.HostID}}}
+	events := []string{}
+	dispatcher := &recordingLocalGatewayRepairDispatcher{
+		plan: plan, state: state.state, events: &events,
+		result: controller.GatewayRepairData{Changed: true, NetworkActivationRequired: true, TransactionID: "fw-7K3M2P"},
+	}
+	controllerCalls := 0
+	repair, err := newSystemCommittedGatewayRepair(
+		state, dispatcher, dispatcher, "/run/vpnctl", "/run/vpnctl/control.sock",
+		func(context.Context, string, control.LocalRequest) (control.LocalResponse, error) {
+			controllerCalls++
+			return control.LocalResponse{}, nil
+		},
+		func(_ context.Context, runtimeDirectory string, wait bool) (func(), error) {
+			if runtimeDirectory != "/run/vpnctl" || !wait {
+				t.Fatalf("bootstrap lock request = %q wait=%t", runtimeDirectory, wait)
+			}
+			events = append(events, "lock")
+			return func() { events = append(events, "unlock") }, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := repair.Repair(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TransactionID != "fw-7K3M2P" || controllerCalls != 0 {
+		t.Fatalf("local bootstrap result/controller calls = %+v/%d", result, controllerCalls)
+	}
+	if want := []string{"lock", "prepare", "apply", "result", "unlock"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("local bootstrap events = %v, want %v", events, want)
+	}
+}
+
 func committedGatewayRepairTestPlan(network bool) controller.GatewayRepairPlan {
 	services := linuxplatform.RoleUnitNames(model.RoleGateway)
 	sort.Strings(services)
@@ -138,6 +182,15 @@ func committedGatewayRepairTestPlan(network bool) controller.GatewayRepairPlan {
 		SchemaVersion: controller.GatewayRepairPlanSchemaVersion, Generation: 7,
 		HostID: "78000000-0000-4000-8000-000000000001", Services: services, Artifacts: artifacts,
 		NetworkActivationRequired: network,
+		Bootstrap: controller.GatewayBootstrapRepairPlan{
+			SchemaVersion: controller.GatewayBootstrapRepairPlanSchemaVersion, Generation: 7,
+			PackagePlan: lifecycle.RolePackagePlan{
+				SchemaVersion: lifecycle.RolePackagePlanSchemaVersion, Role: model.RoleGateway,
+				ManifestSHA256: strings.Repeat("d", 64), Packages: []lifecycle.RolePackagePlanItem{},
+			},
+			IngressCandidateSHA256: strings.Repeat("a", 64), DropInSHA256: strings.Repeat("b", 64),
+			ReadinessSHA256: strings.Repeat("c", 64),
+		},
 	}
 	if network {
 		plan.Artifacts = append(plan.Artifacts,
@@ -160,6 +213,53 @@ type recordingCommittedGatewayRepairOperator struct {
 	planCalls   int
 	repairCalls int
 	events      *[]string
+}
+
+type staticCommittedGatewayRepairDispatcher struct {
+	plan controller.GatewayRepairPlan
+}
+
+func (dispatcher staticCommittedGatewayRepairDispatcher) Plan(context.Context, model.State) (controller.GatewayRepairPlan, error) {
+	return dispatcher.plan, nil
+}
+
+func (staticCommittedGatewayRepairDispatcher) Prepare(context.Context, model.State, string, json.RawMessage) (controller.PreparedMutation, error) {
+	return controller.PreparedMutation{}, errors.New("unexpected local repair")
+}
+
+type recordingLocalGatewayRepairDispatcher struct {
+	plan   controller.GatewayRepairPlan
+	state  model.State
+	result controller.GatewayRepairData
+	events *[]string
+}
+
+func (dispatcher *recordingLocalGatewayRepairDispatcher) Plan(context.Context, model.State) (controller.GatewayRepairPlan, error) {
+	return dispatcher.plan, nil
+}
+
+func (dispatcher *recordingLocalGatewayRepairDispatcher) Prepare(_ context.Context, state model.State, operation string, payload json.RawMessage) (controller.PreparedMutation, error) {
+	if !reflect.DeepEqual(state, dispatcher.state) || operation != controller.GatewayRepairOperation {
+		return controller.PreparedMutation{}, errors.New("unexpected local repair input")
+	}
+	var request controller.GatewayRepairPayload
+	if err := control.DecodeRPCPayload(payload, &request); err != nil || !reflect.DeepEqual(request.Plan, dispatcher.plan) {
+		return controller.PreparedMutation{}, errors.New("unexpected local repair payload")
+	}
+	*dispatcher.events = append(*dispatcher.events, "prepare")
+	return controller.PreparedMutation{
+		Candidate: state, Changed: true, RuntimeOnly: true, Timeout: 45 * time.Second,
+		Apply: func(context.Context) error {
+			*dispatcher.events = append(*dispatcher.events, "apply")
+			return nil
+		},
+		Rollback: func(context.Context) error { return nil },
+		Result: func() json.RawMessage {
+			*dispatcher.events = append(*dispatcher.events, "result")
+			encoded, _ := json.Marshal(dispatcher.result)
+			return encoded
+		},
+	}, nil
 }
 
 func (operator *recordingCommittedGatewayRepairOperator) Plan(context.Context) (controller.GatewayRepairPlan, error) {

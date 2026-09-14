@@ -236,6 +236,14 @@ func (controller *Controller) mutateResponse(request control.LocalRequest) contr
 	}
 	controller.mutationMu.Lock()
 	defer controller.mutationMu.Unlock()
+	releaseMutation, err := AcquireGatewayMutationLock(context.Background(), controller.runtime.Paths.RuntimeDir, false)
+	if err != nil {
+		if errors.Is(err, ErrGatewayMutationBusy) {
+			return localFailure("mutation_busy", "another gateway mutation is active")
+		}
+		return localFailure("mutation_lock_unavailable", "gateway mutation lock is unavailable")
+	}
+	defer releaseMutation()
 
 	state, err := controller.runtime.State.Load()
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,6 +130,50 @@ func TestGenericRepairBoundaryKeepsPendingIntentSeparateFromApplied(t *testing.T
 	if !genericRepairBoundaryEligible(state, snapshot) {
 		t.Fatal("locally retained pending operation incorrectly selected committed recovery")
 	}
+}
+
+func TestGatewayNetworkBaselineRequiresCompletedWatchdogBeforeGenericRepair(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		statuses []operations.WatchdogTransactionStatus
+		want     bool
+	}{
+		{name: "no transaction"},
+		{name: "rolled back", statuses: []operations.WatchdogTransactionStatus{operations.WatchdogStatusRolledBack}},
+		{name: "committed", statuses: []operations.WatchdogTransactionStatus{operations.WatchdogStatusCommitted}, want: true},
+		{name: "later active blocks", statuses: []operations.WatchdogTransactionStatus{operations.WatchdogStatusCommitted, operations.WatchdogStatusActive}},
+		{name: "committed with old rollback", statuses: []operations.WatchdogTransactionStatus{operations.WatchdogStatusRolledBack, operations.WatchdogStatusCommitted}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			watchdogs := staticGatewayNetworkConfirmationStore{statuses: test.statuses}
+			got, err := gatewayNetworkBaselineConfirmed(watchdogs)
+			if err != nil || got != test.want {
+				t.Fatalf("gateway network baseline = %t, %v; want %t", got, err, test.want)
+			}
+		})
+	}
+}
+
+type staticGatewayNetworkConfirmationStore struct {
+	statuses []operations.WatchdogTransactionStatus
+}
+
+func (store staticGatewayNetworkConfirmationStore) TransactionIDs() ([]string, error) {
+	ids := make([]string, len(store.statuses))
+	for index := range ids {
+		ids[index] = fmt.Sprintf("fw-%06d", index)
+	}
+	return ids, nil
+}
+
+func (store staticGatewayNetworkConfirmationStore) Status(id string) (operations.WatchdogTransactionStatus, error) {
+	for index := range store.statuses {
+		if id == fmt.Sprintf("fw-%06d", index) {
+			return store.statuses[index], nil
+		}
+	}
+	return "", errors.New("unknown transaction")
 }
 
 func TestFileRepairTransactionSerializesAndRejectsUnsafeLock(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 
 const (
 	GatewayRepairOperation         = "repair.gateway"
-	GatewayRepairPlanSchemaVersion = 1
+	GatewayRepairPlanSchemaVersion = 2
 	gatewayRepairApplyTimeout      = 45 * time.Second
 )
 
@@ -48,15 +48,16 @@ type GatewayRepairArtifact struct {
 // and rendered artifact hashes. It never contains rendered configuration or
 // credential bytes.
 type GatewayRepairPlan struct {
-	SchemaVersion             int                     `json:"schema_version"`
-	Generation                uint64                  `json:"generation"`
-	HostID                    string                  `json:"host_id"`
-	TunnelActive              bool                    `json:"tunnel_active"`
-	NetworkActivationRequired bool                    `json:"network_activation_required"`
-	Services                  []string                `json:"services"`
-	Artifacts                 []GatewayRepairArtifact `json:"artifacts"`
-	FirewallSHA256            string                  `json:"firewall_sha256,omitempty"`
-	InitialNetworkSHA256      string                  `json:"initial_network_sha256,omitempty"`
+	SchemaVersion             int                        `json:"schema_version"`
+	Generation                uint64                     `json:"generation"`
+	HostID                    string                     `json:"host_id"`
+	TunnelActive              bool                       `json:"tunnel_active"`
+	NetworkActivationRequired bool                       `json:"network_activation_required"`
+	Services                  []string                   `json:"services"`
+	Artifacts                 []GatewayRepairArtifact    `json:"artifacts"`
+	FirewallSHA256            string                     `json:"firewall_sha256,omitempty"`
+	InitialNetworkSHA256      string                     `json:"initial_network_sha256,omitempty"`
+	Bootstrap                 GatewayBootstrapRepairPlan `json:"bootstrap"`
 }
 
 type GatewayRepairPayload struct {
@@ -70,13 +71,22 @@ type GatewayRepairData struct {
 }
 
 func (plan GatewayRepairPlan) Validate() error {
-	if plan.SchemaVersion != GatewayRepairPlanSchemaVersion || plan.Generation == 0 || plan.HostID == "" {
-		return ErrGatewayRepairInvalid
+	if plan.SchemaVersion != GatewayRepairPlanSchemaVersion {
+		return fmt.Errorf("%w: schema_version must be %d", ErrGatewayRepairInvalid, GatewayRepairPlanSchemaVersion)
+	}
+	if plan.Generation == 0 || plan.HostID == "" {
+		return fmt.Errorf("%w: generation and host_id are required", ErrGatewayRepairInvalid)
+	}
+	if err := plan.Bootstrap.Validate(); err != nil {
+		return fmt.Errorf("%w: bootstrap: %v", ErrGatewayRepairInvalid, err)
+	}
+	if plan.Bootstrap.Generation != plan.Generation {
+		return fmt.Errorf("%w: bootstrap generation differs from repair generation", ErrGatewayRepairInvalid)
 	}
 	wantServices := linuxplatform.RoleUnitNames(model.RoleGateway)
 	sort.Strings(wantServices)
 	if !reflect.DeepEqual(plan.Services, wantServices) {
-		return ErrGatewayRepairInvalid
+		return fmt.Errorf("%w: service set is invalid", ErrGatewayRepairInvalid)
 	}
 	wantArtifacts := make(map[string]struct{}, len(wantServices)+12)
 	for _, name := range wantServices {
@@ -93,25 +103,31 @@ func (plan GatewayRepairPlan) Validate() error {
 		wantArtifacts[gatewayRepairArtifactKey("watchdog_unit", linuxplatform.WatchdogServiceUnitName)] = struct{}{}
 		wantArtifacts[gatewayRepairArtifactKey("watchdog_unit", linuxplatform.WatchdogTimerUnitName)] = struct{}{}
 		if !validGatewayRepairHash(plan.FirewallSHA256) || !validGatewayRepairHash(plan.InitialNetworkSHA256) {
-			return ErrGatewayRepairInvalid
+			return fmt.Errorf("%w: network activation hashes are invalid", ErrGatewayRepairInvalid)
 		}
 	} else if plan.FirewallSHA256 != "" || plan.InitialNetworkSHA256 != "" {
-		return ErrGatewayRepairInvalid
+		return fmt.Errorf("%w: inactive network plan contains activation hashes", ErrGatewayRepairInvalid)
 	}
 	if len(plan.Artifacts) != len(wantArtifacts) {
-		return ErrGatewayRepairInvalid
+		return fmt.Errorf("%w: artifact count is %d, want %d", ErrGatewayRepairInvalid, len(plan.Artifacts), len(wantArtifacts))
 	}
 	previous := ""
 	for _, artifact := range plan.Artifacts {
 		key := gatewayRepairArtifactKey(artifact.Kind, artifact.Name)
-		if _, ok := wantArtifacts[key]; !ok || !validGatewayRepairHash(artifact.SHA256) || key <= previous {
-			return ErrGatewayRepairInvalid
+		if _, ok := wantArtifacts[key]; !ok {
+			return fmt.Errorf("%w: artifact %s/%s is unexpected or duplicated", ErrGatewayRepairInvalid, artifact.Kind, artifact.Name)
+		}
+		if !validGatewayRepairHash(artifact.SHA256) {
+			return fmt.Errorf("%w: artifact %s/%s hash is invalid", ErrGatewayRepairInvalid, artifact.Kind, artifact.Name)
+		}
+		if key <= previous {
+			return fmt.Errorf("%w: artifacts are not strictly sorted", ErrGatewayRepairInvalid)
 		}
 		delete(wantArtifacts, key)
 		previous = key
 	}
 	if len(wantArtifacts) != 0 {
-		return ErrGatewayRepairInvalid
+		return fmt.Errorf("%w: required artifacts are missing", ErrGatewayRepairInvalid)
 	}
 	return nil
 }
@@ -161,6 +177,7 @@ type GatewayRepairDispatcher struct {
 	watchdog      gatewayRepairWatchdog
 	watchdogStore gatewayRepairWatchdogStore
 	network       gatewayRepairNetwork
+	bootstrap     gatewayBootstrapRepairRuntime
 	binaryPath    string
 }
 
@@ -171,14 +188,15 @@ func newGatewayRepairDispatcher(
 	watchdog gatewayRepairWatchdog,
 	watchdogStore gatewayRepairWatchdogStore,
 	network gatewayRepairNetwork,
+	bootstrap gatewayBootstrapRepairRuntime,
 	binaryPath string,
 ) (*GatewayRepairDispatcher, error) {
-	if roles == nil || convergence == nil || watchdogUnits == nil || watchdog == nil || watchdogStore == nil || network == nil || binaryPath == "" {
+	if roles == nil || convergence == nil || watchdogUnits == nil || watchdog == nil || watchdogStore == nil || network == nil || bootstrap == nil || binaryPath == "" {
 		return nil, fmt.Errorf("gateway repair dependencies are incomplete")
 	}
 	return &GatewayRepairDispatcher{
 		roles: roles, convergence: convergence, watchdogUnits: watchdogUnits,
-		watchdog: watchdog, watchdogStore: watchdogStore, network: network, binaryPath: binaryPath,
+		watchdog: watchdog, watchdogStore: watchdogStore, network: network, bootstrap: bootstrap, binaryPath: binaryPath,
 	}, nil
 }
 
@@ -215,9 +233,13 @@ func NewSystemGatewayRepairDispatcher(paths store.Paths) (*GatewayRepairDispatch
 	if err != nil {
 		return nil, err
 	}
+	bootstrap, err := newSystemGatewayBootstrapRepair(paths)
+	if err != nil {
+		return nil, err
+	}
 	return newGatewayRepairDispatcher(
 		systemGatewayRepairRoleRuntime{runtime: roles}, convergence, watchdogUnits, watchdog,
-		watchdogStore, linuxplatform.NewOSNetworkManager(), linuxplatform.DefaultVPNCTLBinaryPath,
+		watchdogStore, linuxplatform.NewOSNetworkManager(), bootstrap, linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 }
 
@@ -261,7 +283,7 @@ func (dispatcher *GatewayRepairDispatcher) Prepare(ctx context.Context, state mo
 		Timeout:     gatewayRepairApplyTimeout,
 		Apply: func(applyContext context.Context) error {
 			defer candidate.Destroy()
-			result, err = dispatcher.apply(applyContext, state, candidate, watchdogPlan, initialNetwork)
+			result, err = dispatcher.apply(applyContext, state, candidate, fresh.Bootstrap, watchdogPlan, initialNetwork)
 			return err
 		},
 		Rollback: func(context.Context) error { return nil },
@@ -298,6 +320,10 @@ func (dispatcher *GatewayRepairDispatcher) compile(
 	services := linuxplatform.RoleUnitNames(model.RoleGateway)
 	sort.Strings(services)
 	artifacts := gatewayRepairRoleArtifacts(request)
+	bootstrap, err := dispatcher.bootstrap.Plan(ctx, state)
+	if err != nil {
+		return fail(err)
+	}
 	networkRequired, initialNetwork, err := dispatcher.networkRequirement()
 	if err != nil {
 		return fail(err)
@@ -305,7 +331,7 @@ func (dispatcher *GatewayRepairDispatcher) compile(
 	plan := GatewayRepairPlan{
 		SchemaVersion: GatewayRepairPlanSchemaVersion, Generation: state.Generation, HostID: state.Host.ID,
 		TunnelActive: candidate.TunnelActive(), NetworkActivationRequired: networkRequired,
-		Services: services, Artifacts: artifacts,
+		Services: services, Artifacts: artifacts, Bootstrap: bootstrap,
 	}
 	var watchdogPlan linuxplatform.WatchdogUnitInstallationPlan
 	if networkRequired {
@@ -371,6 +397,7 @@ func (dispatcher *GatewayRepairDispatcher) apply(
 	ctx context.Context,
 	state model.State,
 	candidate gatewayRepairRoleCandidate,
+	bootstrapPlan GatewayBootstrapRepairPlan,
 	watchdogPlan linuxplatform.WatchdogUnitInstallationPlan,
 	initialNetwork linuxplatform.NetworkSnapshot,
 ) (GatewayRepairData, error) {
@@ -378,55 +405,81 @@ func (dispatcher *GatewayRepairDispatcher) apply(
 	if candidate == nil || candidate.Generation() != state.Generation {
 		return result, ErrGatewayRepairStale
 	}
+	bootstrap, err := dispatcher.bootstrap.Prepare(ctx, state, bootstrapPlan)
+	if err != nil {
+		return result, fmt.Errorf("prepare Gateway bootstrap repair: %w", err)
+	}
+	bootstrapFinished := false
+	rollbackBootstrap := func(cause error) (GatewayRepairData, error) {
+		if bootstrapFinished {
+			return result, cause
+		}
+		return result, errors.Join(cause, bootstrap.Rollback(context.Background()))
+	}
 	if len(watchdogPlan.Units) != 0 {
 		if _, err := dispatcher.watchdogUnits.Apply(ctx, watchdogPlan); err != nil {
-			return result, fmt.Errorf("repair gateway watchdog units: %w", err)
+			return rollbackBootstrap(fmt.Errorf("repair gateway watchdog units: %w", err))
 		}
 	}
 	if err := dispatcher.roles.Apply(ctx, candidate); err != nil {
-		return result, fmt.Errorf("repair committed gateway services: %w", err)
+		return rollbackBootstrap(fmt.Errorf("repair committed gateway services: %w", err))
+	}
+	if err := bootstrap.Activate(ctx); err != nil {
+		return rollbackBootstrap(err)
 	}
 	request := candidate.RoleRequest()
 	defer clearGatewayRepairRoleRequest(&request)
-	var err error
+	var transaction operations.WatchdogTransaction
+	rollbackAll := func(cause error) (GatewayRepairData, error) {
+		if transaction.ID != "" {
+			rollbackContext, cancel := context.WithTimeout(context.Background(), control.LocalTimeout)
+			defer cancel()
+			cause = errors.Join(cause, dispatcher.watchdog.RollbackNow(rollbackContext, transaction.ID))
+		}
+		return rollbackBootstrap(cause)
+	}
+	if len(watchdogPlan.Units) != 0 {
+		result.NetworkActivationRequired = true
+		transaction, err = dispatcher.watchdog.Arm(ctx, operations.WatchdogArmInput{
+			AllowedSSHPort: state.Host.SSHPort, NetworkScope: linuxplatform.GatewayInitNetworkScope(),
+		})
+		if err != nil {
+			return rollbackBootstrap(fmt.Errorf("arm gateway repair watchdog: %w", err))
+		}
+		if !reflect.DeepEqual(transaction.Network, initialNetwork) {
+			return rollbackAll(ErrGatewayRepairNetworkState)
+		}
+		firewall, err := gatewayRepairFirewall(state)
+		if err != nil {
+			return rollbackAll(err)
+		}
+		if err := dispatcher.network.ActivateGateway(ctx, firewall); err != nil {
+			return rollbackAll(fmt.Errorf("activate repaired gateway network: %w", err))
+		}
+	}
+	if err := bootstrap.Verify(ctx); err != nil {
+		return rollbackAll(fmt.Errorf("verify repaired Gateway bootstrap: %w", err))
+	}
 	if candidate.TunnelActive() {
 		err = dispatcher.convergence.PublishActiveGatewayGeneration(ctx, state.Generation, request)
 	} else {
 		err = dispatcher.convergence.PublishInactiveGatewayGeneration(ctx, state.Generation, request)
 	}
 	if err != nil {
-		return result, fmt.Errorf("publish repaired gateway convergence: %w", err)
+		return rollbackAll(fmt.Errorf("publish repaired gateway convergence: %w", err))
 	}
-	if len(watchdogPlan.Units) == 0 {
-		return result, nil
+	if transaction.ID != "" {
+		if err := dispatcher.watchdog.MarkActivated(ctx, transaction.ID); err != nil {
+			return rollbackAll(fmt.Errorf("mark repaired gateway network active: %w", err))
+		}
 	}
-	result.NetworkActivationRequired = true
-	transaction, err := dispatcher.watchdog.Arm(ctx, operations.WatchdogArmInput{
-		AllowedSSHPort: state.Host.SSHPort,
-		NetworkScope:   linuxplatform.GatewayInitNetworkScope(),
-	})
-	if err != nil {
-		return result, fmt.Errorf("arm gateway repair watchdog: %w", err)
+	if err := bootstrap.Commit(ctx); err != nil {
+		return rollbackAll(fmt.Errorf("commit Gateway bootstrap repair: %w", err))
 	}
-	failNetwork := func(cause error) (GatewayRepairData, error) {
-		rollbackContext, cancel := context.WithTimeout(context.Background(), control.LocalTimeout)
-		defer cancel()
-		return result, errors.Join(cause, dispatcher.watchdog.RollbackNow(rollbackContext, transaction.ID))
+	bootstrapFinished = true
+	if transaction.ID != "" {
+		result.TransactionID = transaction.ID
 	}
-	if !reflect.DeepEqual(transaction.Network, initialNetwork) {
-		return failNetwork(ErrGatewayRepairNetworkState)
-	}
-	firewall, err := gatewayRepairFirewall(state)
-	if err != nil {
-		return failNetwork(err)
-	}
-	if err := dispatcher.network.ActivateGateway(ctx, firewall); err != nil {
-		return failNetwork(fmt.Errorf("activate repaired gateway network: %w", err))
-	}
-	if err := dispatcher.watchdog.MarkActivated(ctx, transaction.ID); err != nil {
-		return failNetwork(fmt.Errorf("mark repaired gateway network active: %w", err))
-	}
-	result.TransactionID = transaction.ID
 	return result, nil
 }
 

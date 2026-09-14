@@ -73,6 +73,20 @@ func TestSystemGatewayUninstallRestoresOriginalNetworkAndPreservesRecoveryState(
 	if err := os.WriteFile(filepath.Join(nginxRoot, "sentinel.conf"), []byte("managed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	nginxDropIn := ingress.NginxServiceDropInPath(paths)
+	if err := os.MkdirAll(filepath.Dir(nginxDropIn), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nginxDropIn, ingress.RenderNginxServiceDropIn(paths), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	distroNginx := filepath.Join(root, ingress.NginxBinaryRelativePath)
+	if err := os.MkdirAll(filepath.Dir(distroNginx), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(distroNginx, []byte("ubuntu nginx package\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	watchdog, _ := linuxplatform.NewWatchdogUnitInstaller(root, runner)
 	watchdogInstall, _ := watchdog.Plan(linuxplatform.DefaultVPNCTLBinaryPath)
 	if _, err := watchdog.Apply(context.Background(), watchdogInstall); err != nil {
@@ -106,6 +120,14 @@ func TestSystemGatewayUninstallRestoresOriginalNetworkAndPreservesRecoveryState(
 			t.Fatalf("gateway runtime component remains %s: %v", relative, err)
 		}
 	}
+	for _, path := range []string{nginxRoot, nginxDropIn} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("gateway owned ingress remains %s: %v", path, err)
+		}
+	}
+	if content, err := os.ReadFile(distroNginx); err != nil || string(content) != "ubuntu nginx package\n" {
+		t.Fatalf("gateway uninstall removed or changed the Ubuntu nginx package binary: content=%q err=%v", content, err)
+	}
 	for _, path := range []string{
 		paths.StateFile, bundle, filepath.Join(paths.PresetsDir, "telegram.yaml"), filepath.Join(paths.SecretsDir, "sentinel"),
 		filepath.Join(paths.ExportsDir, "sentinel"), filepath.Join(paths.BackupsDir, "sentinel"),
@@ -115,6 +137,9 @@ func TestSystemGatewayUninstallRestoresOriginalNetworkAndPreservesRecoveryState(
 		}
 	}
 	joined := strings.Join(runner.calls[callStart:], "\n")
+	if strings.Contains(joined, "apt-get") || strings.Contains(joined, "apt ") || strings.Contains(joined, "dpkg") {
+		t.Fatalf("gateway uninstall attempted to remove Ubuntu package dependencies:\n%s", joined)
+	}
 	for _, required := range []string{
 		"systemctl stop vpnctl-watchdog@fw-ABC123.timer",
 		"systemctl stop vpnctl-controller.service", "systemctl stop nginx.service",

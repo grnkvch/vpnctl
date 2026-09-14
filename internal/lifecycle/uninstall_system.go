@@ -111,10 +111,22 @@ func (runtime *SystemUninstallRuntime) Inspect(ctx context.Context, state model.
 		plan.GeneratedPaths = append(plan.GeneratedPaths, rolePlan.GeneratedRoleDir)
 	}
 	if state.Host.Role == model.RoleGateway {
+		nginxService, err := ingress.NewNginxServiceManager(runtime.paths, runtime.runner)
+		if err != nil {
+			return UninstallHostPlan{}, err
+		}
+		plan.NginxService, err = nginxService.PlanRemoval()
+		if err != nil {
+			return UninstallHostPlan{}, err
+		}
 		if present, err := validateOwnedUninstallTree(ingress.NginxGeneratedRoot(runtime.paths), false); err != nil {
 			return UninstallHostPlan{}, err
 		} else if present {
-			plan.AuxiliaryUnits = append(plan.AuxiliaryUnits, "nginx.service")
+			plan.GeneratedPaths = append(plan.GeneratedPaths, ingress.NginxGeneratedRoot(runtime.paths))
+			plan.AuxiliaryUnits = append(plan.AuxiliaryUnits, ingress.NginxServiceUnit)
+		}
+		if plan.NginxService.Present && len(plan.AuxiliaryUnits) == 0 {
+			plan.AuxiliaryUnits = append(plan.AuxiliaryUnits, ingress.NginxServiceUnit)
 		}
 	}
 	for _, path := range runtimePathsForRole(runtime.paths, state.Host.Role) {
@@ -272,6 +284,15 @@ func (runtime *SystemUninstallRuntime) RemoveManagedRuntime(ctx context.Context,
 		return err
 	}
 	if state.Host.Role == model.RoleGateway {
+		nginxService, err := ingress.NewNginxServiceManager(runtime.paths, runtime.runner)
+		if err != nil {
+			return err
+		}
+		if err := nginxService.RemoveStopped(ctx, plan.NginxService); err != nil {
+			return err
+		}
+	}
+	if state.Host.Role == model.RoleGateway {
 		watchdogPlan, err := runtime.watchdog.PlanRemoval(runtime.binaryPath)
 		if err != nil {
 			return err
@@ -286,6 +307,17 @@ func (runtime *SystemUninstallRuntime) RemoveManagedRuntime(ctx context.Context,
 		}
 		if err := os.RemoveAll(path); err != nil {
 			return err
+		}
+	}
+	for _, path := range plan.GeneratedPaths {
+		present, err := validateOwnedUninstallTree(path, false)
+		if err != nil {
+			return err
+		}
+		if present {
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
 		}
 	}
 	components, binary, binarySHA256, err := runtime.installedReleaseFiles(ctx, state)

@@ -40,12 +40,20 @@ func NewSystemNodeInitializer(paths store.Paths, snapshot linuxplatform.HostSnap
 	if err != nil {
 		return nil, fmt.Errorf("create node convergence publisher: %w", err)
 	}
+	packages, err := lifecycle.NewSystemRolePackageManager(paths.Root, linuxplatform.OSProbeRunner{})
+	if err != nil {
+		return nil, fmt.Errorf("create node package manager: %w", err)
+	}
+	rediscover, err := linuxplatform.NewDiscoverer(paths.Root)
+	if err != nil {
+		return nil, fmt.Errorf("create node post-package discoverer: %w", err)
+	}
 	binary := binaryPath
 	if binary == "" {
 		binary = linuxplatform.DefaultVPNCTLBinaryPath
 	}
 	return lifecycle.NewNodeInitializer(lifecycle.NodeInitRuntime{
-		Paths: paths, Snapshot: snapshot, Release: release, BinaryPath: binary,
+		Paths: paths, Snapshot: snapshot, Release: release, Packages: packages, Rediscover: rediscover, BinaryPath: binary,
 		State: stateStore, Layout: layout, Roles: roleInstaller, Convergence: convergence,
 	})
 }

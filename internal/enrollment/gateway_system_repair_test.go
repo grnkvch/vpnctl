@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
@@ -160,10 +161,25 @@ func TestSystemGatewayRepairVerifyRejectsUnexpectedWireGuardPeer(t *testing.T) {
 	defer fixture.destroy()
 	state, _ := fixture.gatewayState.Load()
 	runner := &gatewayRepairApplyRunner{allowedIPs: testNodeWireGuardPublic() + "\t10.67.0.2/32\n"}
-	runtime := &SystemGatewayRepairRuntime{runner: runner}
+	runtime := &SystemGatewayRepairRuntime{runner: runner, readinessTimeout: time.Nanosecond, retryInterval: time.Nanosecond}
 	candidate := &SystemGatewayRepairCandidate{state: state, gatewayWireGuardKey: joinGatewayWireGuardPublic()}
 	if err := runtime.verify(context.Background(), candidate); err == nil || !strings.Contains(err.Error(), "peer set") {
 		t.Fatalf("unexpected WireGuard peer verify error = %v", err)
+	}
+}
+
+func TestSystemGatewayRepairVerifyRetriesTransientRuntimeReadiness(t *testing.T) {
+	fixture := newJoinFixture(t, joinReadinessChecker{report: healthyJoinReadiness()})
+	defer fixture.destroy()
+	state, _ := fixture.gatewayState.Load()
+	runner := &gatewayRepairApplyRunner{publicKeys: []string{testNodeWireGuardPublic(), joinGatewayWireGuardPublic()}}
+	runtime := &SystemGatewayRepairRuntime{runner: runner, readinessTimeout: time.Second, retryInterval: time.Nanosecond}
+	candidate := &SystemGatewayRepairCandidate{state: state, gatewayWireGuardKey: joinGatewayWireGuardPublic()}
+	if err := runtime.verify(context.Background(), candidate); err != nil {
+		t.Fatalf("transient gateway readiness error = %v", err)
+	}
+	if runner.publicKeyReads != 2 {
+		t.Fatalf("gateway public-key reads = %d, want 2", runner.publicKeyReads)
 	}
 }
 
@@ -172,6 +188,8 @@ type gatewayRepairApplyRunner struct {
 	systemctl                  [][]string
 	tunnelStartSawMarkerAbsent bool
 	allowedIPs                 string
+	publicKeys                 []string
+	publicKeyReads             int
 }
 
 func (runner *gatewayRepairApplyRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
@@ -190,7 +208,12 @@ func (runner *gatewayRepairApplyRunner) Run(_ context.Context, command linuxplat
 	key := command.Name + " " + strings.Join(command.Args, " ")
 	switch key {
 	case "wg show vpnctl-wg public-key":
-		return linuxplatform.ProbeResult{Stdout: []byte(joinGatewayWireGuardPublic() + "\n")}, nil
+		key := joinGatewayWireGuardPublic()
+		if runner.publicKeyReads < len(runner.publicKeys) {
+			key = runner.publicKeys[runner.publicKeyReads]
+		}
+		runner.publicKeyReads++
+		return linuxplatform.ProbeResult{Stdout: []byte(key + "\n")}, nil
 	case "wg show vpnctl-wg listen-port":
 		return linuxplatform.ProbeResult{Stdout: []byte("51820\n")}, nil
 	case "ip -4 -o address show dev vpnctl-wg":
