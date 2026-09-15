@@ -48,3 +48,26 @@ limactl create --tty=false --name=vpnctl-v2-node test/v2lab/lima-node.yaml
 This one-time replacement discards only the disposable test Node disk; it does not touch Gateway or any similarly named instance. The new instance remains stopped after `create`; the release gate installs and verifies the exact `vpnctl-v2-lab-report` and `vpnctl-v2-lab-fault` helpers on both fixtures during the next shared startup. The capacity harness never edits or resizes either VM during a run. Record the exact precondition, replacement, verification, and rollback in `docs/v2/HOST_CHANGELOG.md`.
 
 Use `./scripts/v2lab.sh shell gateway` or `shell node` for an interactive guest shell, `down` to stop both persistent fixtures, and explicit `destroy` to delete them. Generated evidence is intentionally untracked; accepted spike results are summarized in versioned ADRs and the pinned [v2 component/limit manifest](COMPONENT_LIMITS.v1.json).
+
+## Focused Gateway enrollment check
+
+After both exact fixtures are owner-clean and stopped, run the narrow bootstrap
+and enrollment check against an already assembled, locally verified candidate:
+
+```bash
+./scripts/v2gateway-enrollment-e2e.sh verify /absolute/path/to/release-assets
+```
+
+The asset directory must contain exactly `vpnctl-linux-amd64`,
+`vpnctl-v2-linux-amd64.bundle`, and `release-checksums.txt`. The entrypoint runs
+the maintainer verifier, starts only the fixed pair, proves clean no-nginx
+Gateway bootstrap, one public Node join, a selected request, and repair after an
+explicit nginx-stop fault. Invite material is handled only by a guest-local PTY
+adapter and root-only runtime files; it is never written to host evidence.
+
+Cleanup uses the public Node-first/Gateway-second purge boundary, removes only
+the entrypoint's marked fixture paths and TEST-NET resources, restores UFW and
+the initial nginx-package baseline, and returns both VMs to `Stopped`. A failed
+run retains only bounded redacted status facts under
+`artifacts/v2lab/gateway-enrollment-e2e/`. This check has no resume, capacity,
+migration, release-stage registry, publication, or production-host behavior.

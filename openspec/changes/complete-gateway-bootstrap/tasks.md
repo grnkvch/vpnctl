@@ -61,8 +61,8 @@
 
 ## 8. Add one narrow automated enrollment check
 
-- [ ] 8.1 Add a single focused Gateway-enrollment E2E entrypoint for the fixed existing Lima topology and actual candidate binary/bundle, covering clean no-nginx bootstrap/join plus missing-ingress repair; verify its contract explicitly excludes resume, fingerprints, capacity, migration, and release-stage registry integration.
-- [ ] 8.2 Implement owner/image/resource/stopped-state preflight, root-only transient invite handling, bounded diagnostics, owner-scoped cleanup, and restoration of the fixtures' initial stopped state; verify cleanup and secret-redaction behavior with fast orchestration tests before invoking Lima.
+- [x] 8.1 Add a single focused Gateway-enrollment E2E entrypoint for the fixed existing Lima topology and actual candidate binary/bundle, covering clean no-nginx bootstrap/join plus missing-ingress repair; verify its contract explicitly excludes resume, fingerprints, capacity, migration, and release-stage registry integration.
+- [x] 8.2 Implement owner/image/resource/stopped-state preflight, root-only transient invite handling, bounded diagnostics, owner-scoped cleanup, and restoration of the fixtures' initial stopped state; verify cleanup and secret-redaction behavior with fast orchestration tests before invoking Lima.
 - [ ] 8.3 Run the focused E2E against the same frozen source commit used in both manual scenarios; verify both modes pass and a failed mode remains in the focused loop rather than triggering any general release gate.
 
 ## 9. Freeze and validate the final candidate once
