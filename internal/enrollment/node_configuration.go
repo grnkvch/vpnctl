@@ -185,7 +185,7 @@ func (compiler *NodeConfigurationCompiler) Compile(ctx context.Context, state mo
 	if err != nil {
 		return NodeConfiguration{}, err
 	}
-	directRoute, err := deriveNodeDirectRoute(snapshot)
+	directRoute, err := deriveNodeDirectRoute(snapshot, trust.PublicIPv4)
 	if err != nil {
 		return NodeConfiguration{}, err
 	}
@@ -314,43 +314,70 @@ func nodeConfigurationComponent(manifest model.ComponentManifest, name string) (
 	return result, nil
 }
 
-// deriveNodeDirectRoute selects the route Linux actually prefers. Equal-cost
-// defaults with different next hops are rejected rather than guessed.
-func deriveNodeDirectRoute(snapshot linuxplatform.HostSnapshot) (routing.NodeRoutingDirectRoute, error) {
+// deriveNodeDirectRoute selects the main-table route Linux actually prefers for
+// the public Gateway endpoint. A unique longest-prefix match wins before
+// metric, so an existing host route is retained instead of being replaced by
+// the default next hop inside vpnctl's recovery table.
+func deriveNodeDirectRoute(snapshot linuxplatform.HostSnapshot, gatewayIPv4 string) (routing.NodeRoutingDirectRoute, error) {
+	endpoint, err := netip.ParseAddr(gatewayIPv4)
+	if err != nil || !endpoint.Is4() || !endpoint.IsGlobalUnicast() || endpoint.IsLoopback() || endpoint.String() != gatewayIPv4 {
+		return routing.NodeRoutingDirectRoute{}, fmt.Errorf("node recovery gateway endpoint must be a canonical non-loopback unicast IPv4 address")
+	}
 	type routeKey struct{ device, gateway string }
+	bestPrefixBits := -1
 	minimumMetric := 0
 	haveMetric := false
 	candidates := make(map[routeKey]struct{})
 	for _, route := range snapshot.Routes {
-		if route.Family != "ipv4" || route.Destination != "default" || (route.Table != "main" && route.Table != "254") || route.Device == "" ||
-			route.Type == "unreachable" || route.Type == "blackhole" || route.Type == "prohibit" {
+		if route.Family != "ipv4" || (route.Table != "main" && route.Table != "254") || route.Device == "" ||
+			(route.Type != "" && route.Type != "unicast") {
 			continue
 		}
-		if !haveMetric || route.Metric < minimumMetric {
-			minimumMetric, haveMetric = route.Metric, true
+		prefix, valid := nodeRecoveryRoutePrefix(route.Destination)
+		if !valid || !prefix.Contains(endpoint) {
+			continue
+		}
+		bits := prefix.Bits()
+		if bits > bestPrefixBits || bits == bestPrefixBits && (!haveMetric || route.Metric < minimumMetric) {
+			bestPrefixBits, minimumMetric, haveMetric = bits, route.Metric, true
 			candidates = map[routeKey]struct{}{{device: route.Device, gateway: route.Gateway}: {}}
 			continue
 		}
-		if route.Metric == minimumMetric {
+		if bits == bestPrefixBits && route.Metric == minimumMetric {
 			candidates[routeKey{device: route.Device, gateway: route.Gateway}] = struct{}{}
 		}
 	}
 	if len(candidates) == 0 {
-		return routing.NodeRoutingDirectRoute{}, fmt.Errorf("no usable IPv4 main-table default route was found for node recovery traffic")
+		return routing.NodeRoutingDirectRoute{}, fmt.Errorf("no usable IPv4 main-table route was found for the node recovery Gateway endpoint")
 	}
 	if len(candidates) != 1 {
-		return routing.NodeRoutingDirectRoute{}, fmt.Errorf("multiple equal-priority IPv4 default routes were found for node recovery traffic")
+		return routing.NodeRoutingDirectRoute{}, fmt.Errorf("multiple equal-priority IPv4 main-table routes match the node recovery Gateway endpoint")
 	}
 	for candidate := range candidates {
 		if candidate.gateway != "" {
 			gateway, err := netip.ParseAddr(candidate.gateway)
 			if err != nil || !gateway.Is4() || !gateway.IsGlobalUnicast() || gateway.IsLoopback() || gateway.String() != candidate.gateway {
-				return routing.NodeRoutingDirectRoute{}, fmt.Errorf("node recovery default route has an invalid IPv4 next hop")
+				return routing.NodeRoutingDirectRoute{}, fmt.Errorf("node recovery route has an invalid IPv4 next hop")
 			}
 		}
 		return routing.NodeRoutingDirectRoute{Interface: candidate.device, GatewayIPv4: candidate.gateway}, nil
 	}
 	panic("unreachable")
+}
+
+func nodeRecoveryRoutePrefix(destination string) (netip.Prefix, bool) {
+	if destination == "default" {
+		return netip.PrefixFrom(netip.IPv4Unspecified(), 0), true
+	}
+	prefix, err := netip.ParsePrefix(destination)
+	if err == nil && prefix.Addr().Is4() {
+		return prefix.Masked(), true
+	}
+	address, err := netip.ParseAddr(destination)
+	if err != nil || !address.Is4() {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(address, address.BitLen()), true
 }
 
 func contentSHA256(content []byte) string {

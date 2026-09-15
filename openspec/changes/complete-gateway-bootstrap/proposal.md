@@ -36,6 +36,9 @@ passing component and release gates.
 - Include the candidate active-identity firewall in the same pre-commit join
   transaction as Gateway services and convergence metadata, retaining an exact
   owned-table rollback until the invite and Node commit together.
+- Preserve the actual most-specific main-table path to the public Gateway
+  endpoint when the joined Node installs its recovery route, instead of
+  replacing an explicit host route with the default next hop.
 - Prove both fresh bootstrap and incomplete-candidate recovery manually on the
   existing Lima pair before adding one focused Gateway-enrollment E2E check.
 - Keep migration implementation, capacity policy, release-gate orchestration,

@@ -52,6 +52,7 @@ func TestNodeConfigurationCompilerRendersCompleteJoinedServiceBoundary(t *testin
 			configuration, err := compiler.Compile(context.Background(), state, linuxplatform.HostSnapshot{Routes: []linuxplatform.Route{
 				{Family: "ipv4", Destination: "default", Gateway: "192.0.2.1", Device: "ens3", Table: "main", Metric: 100},
 				{Family: "ipv4", Destination: "default", Gateway: "198.51.100.1", Device: "ens4", Table: "254", Metric: 200},
+				{Family: "ipv4", Destination: "203.0.113.10/32", Gateway: "192.0.2.9", Device: "ens5", Table: "main", Metric: 300},
 			}})
 			if err != nil {
 				t.Fatalf("Compile() error = %v", err)
@@ -102,7 +103,7 @@ func TestNodeConfigurationCompilerRendersCompleteJoinedServiceBoundary(t *testin
 			if err := json.Unmarshal(files[routing.NodeRoutingGuardConfigFileName], &guard); err != nil || guard.Validate() != nil {
 				t.Fatalf("guard config = %+v, decode=%v validate=%v", guard, err, guard.Validate())
 			}
-			if guard.DirectRoute.Interface != "ens3" || guard.DirectRoute.GatewayIPv4 != "192.0.2.1" || guard.ActiveTransport != activeTransport ||
+			if guard.DirectRoute.Interface != "ens5" || guard.DirectRoute.GatewayIPv4 != "192.0.2.9" || guard.ActiveTransport != activeTransport ||
 				!reflect.DeepEqual(guard.RecoveryPorts, []routing.NodeRoutingRecoveryPort{
 					{Protocol: routing.NodeRoutingTCP, Port: 443},
 					{Protocol: routing.NodeRoutingTCP, Port: 8443},
@@ -162,26 +163,45 @@ func TestNodeConfigurationCompilerRejectsTunnelTrustSubstitution(t *testing.T) {
 	}
 }
 
-func TestDeriveNodeDirectRouteUsesUniqueBestMainDefault(t *testing.T) {
+func TestDeriveNodeDirectRouteUsesUniqueBestMainRouteToGateway(t *testing.T) {
 	for _, test := range []struct {
 		name     string
+		gateway  string
 		routes   []linuxplatform.Route
 		want     routing.NodeRoutingDirectRoute
 		wantCode string
 	}{
-		{name: "missing", routes: []linuxplatform.Route{{Family: "ipv4", Destination: "default", Device: "eth0", Table: "100"}}, wantCode: "no usable"},
-		{name: "equal cost ambiguity", routes: []linuxplatform.Route{
+		{name: "invalid endpoint", gateway: "private.example", wantCode: "canonical"},
+		{name: "missing", gateway: "203.0.113.10", routes: []linuxplatform.Route{{Family: "ipv4", Destination: "default", Device: "eth0", Table: "100"}}, wantCode: "no usable"},
+		{name: "equal cost ambiguity", gateway: "203.0.113.10", routes: []linuxplatform.Route{
 			{Family: "ipv4", Destination: "default", Device: "eth0", Table: "main", Metric: 10},
 			{Family: "ipv4", Destination: "default", Device: "eth1", Table: "254", Metric: 10},
 		}, wantCode: "multiple equal-priority"},
-		{name: "best metric", routes: []linuxplatform.Route{
+		{name: "equal specific ambiguity", gateway: "203.0.113.10", routes: []linuxplatform.Route{
+			{Family: "ipv4", Destination: "203.0.113.10/32", Gateway: "192.0.2.2", Device: "eth0", Table: "main", Metric: 10},
+			{Family: "ipv4", Destination: "203.0.113.10", Gateway: "192.0.2.3", Device: "eth1", Table: "254", Metric: 10},
+		}, wantCode: "multiple equal-priority"},
+		{name: "invalid specific next hop", gateway: "203.0.113.10", routes: []linuxplatform.Route{
+			{Family: "ipv4", Destination: "default", Gateway: "192.0.2.1", Device: "eth0", Table: "main", Metric: 10},
+			{Family: "ipv4", Destination: "203.0.113.10/32", Gateway: "::1", Device: "eth1", Table: "main", Metric: 20},
+		}, wantCode: "invalid IPv4 next hop"},
+		{name: "best default metric", gateway: "203.0.113.10", routes: []linuxplatform.Route{
 			{Family: "ipv4", Destination: "default", Gateway: "198.51.100.1", Device: "eth1", Table: "main", Metric: 20},
 			{Family: "ipv4", Destination: "default", Gateway: "192.0.2.1", Device: "eth0", Table: "254", Metric: 10},
 			{Family: "ipv4", Destination: "default", Device: "reject0", Table: "main", Type: "blackhole", Metric: 1},
 		}, want: routing.NodeRoutingDirectRoute{Interface: "eth0", GatewayIPv4: "192.0.2.1"}},
+		{name: "specific gateway route precedes default metric", gateway: "203.0.113.10", routes: []linuxplatform.Route{
+			{Family: "ipv4", Destination: "default", Gateway: "192.0.2.1", Device: "eth0", Table: "main", Metric: 10},
+			{Family: "ipv4", Destination: "203.0.113.0/24", Gateway: "192.0.2.2", Device: "eth1", Table: "main", Metric: 50},
+			{Family: "ipv4", Destination: "203.0.113.10", Gateway: "192.0.2.3", Device: "eth2", Table: "main", Metric: 100},
+		}, want: routing.NodeRoutingDirectRoute{Interface: "eth2", GatewayIPv4: "192.0.2.3"}},
+		{name: "unrelated specific route ignored", gateway: "203.0.113.10", routes: []linuxplatform.Route{
+			{Family: "ipv4", Destination: "default", Gateway: "192.0.2.1", Device: "eth0", Table: "main", Metric: 10},
+			{Family: "ipv4", Destination: "198.51.100.0/24", Gateway: "192.0.2.2", Device: "eth1", Table: "main", Metric: 1},
+		}, want: routing.NodeRoutingDirectRoute{Interface: "eth0", GatewayIPv4: "192.0.2.1"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := deriveNodeDirectRoute(linuxplatform.HostSnapshot{Routes: test.routes})
+			got, err := deriveNodeDirectRoute(linuxplatform.HostSnapshot{Routes: test.routes}, test.gateway)
 			if test.wantCode != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantCode) {
 					t.Fatalf("deriveNodeDirectRoute() = %+v, %v", got, err)

@@ -240,6 +240,14 @@ transient WireGuard/routing-guard ordering race without skipping the failed
 unit; exhaustion retains the existing activation-pending, fail-closed result
 instead of claiming a successful join.
 
+The recovery-table route for the public Gateway endpoint is derived from the
+unique route Linux would use in the unmodified main table. Longest-prefix match
+precedes metric, with the best default used only when no more-specific route
+matches. The compiler copies that route's interface and next hop into the owned
+table; equal-priority ambiguity or an invalid next hop fails before local
+activation. This keeps ordinary Internet deployments unchanged while
+preserving an explicit host route in isolated or multi-uplink environments.
+
 ### 6. Recover the one old candidate with a narrow prerequisite, then normal flows
 
 The old candidate's updater already compares component pins and file SHA values,

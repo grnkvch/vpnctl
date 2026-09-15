@@ -164,6 +164,10 @@ shared private runtime directory through systemd and the local activator SHALL
 retry the current unit's start/readiness for no more than 20 seconds before
 advancing. Exhaustion MUST retain activation-pending semantics and MUST NOT
 disable the fail-closed routing boundary.
+The Node recovery table SHALL preserve the unique most-specific usable
+main-table route to the public Gateway IPv4 endpoint, using the unique
+best-metric default only as a fallback. Equal-priority ambiguity or an invalid
+next hop MUST fail before local activation rather than guessing a route.
 
 #### Scenario: Gateway public HTTPS edge is absent
 - **WHEN** an initialized Node attempts join with a valid unexpired invite but the Gateway TCP 443 enrollment edge cannot be reached
@@ -188,6 +192,10 @@ disable the fail-closed routing boundary.
 #### Scenario: Node runtime or routing guard is transiently unavailable
 - **WHEN** a joined Node boots without a pre-existing `/run/vpnctl` directory or the routing guard's first start races the WireGuard interface
 - **THEN** systemd recreates the private runtime directory, activation retries that same unit within the fixed bound, and success is reported only after every required Node unit is active
+
+#### Scenario: Public Gateway has an explicit host route
+- **WHEN** the Node main table contains both a default route and a more-specific route to the public Gateway endpoint
+- **THEN** the recovery table copies the more-specific route's interface and next hop so the active transport remains reachable after the routing guard starts
 
 ### Requirement: Focused acceptance precedes the full release gate
 The final candidate SHALL first pass fast focused tests, then manual fresh and
