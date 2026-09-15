@@ -177,6 +177,10 @@ The Node recovery table SHALL preserve the unique most-specific usable
 main-table route to the public Gateway IPv4 endpoint, using the unique
 best-metric default only as a fallback. Equal-priority ambiguity or an invalid
 next hop MUST fail before local activation rather than guessing a route.
+When Linux reports an owned IPv4 host-route destination as a bare address, the
+snapshot boundary SHALL normalize it to the exact `/32` prefix before
+validation and restoration. Malformed, IPv6, or cross-family destinations MUST
+remain invalid and MUST NOT broaden the owner-scoped cleanup surface.
 
 #### Scenario: Gateway public HTTPS edge is absent
 - **WHEN** an initialized Node attempts join with a valid unexpired invite but the Gateway TCP 443 enrollment edge cannot be reached
@@ -213,6 +217,10 @@ next hop MUST fail before local activation rather than guessing a route.
 #### Scenario: Public Gateway has an explicit host route
 - **WHEN** the Node main table contains both a default route and a more-specific route to the public Gateway endpoint
 - **THEN** the recovery table copies the more-specific route's interface and next hop so the active transport remains reachable after the routing guard starts
+
+#### Scenario: Owner-scoped cleanup snapshots a Linux host route
+- **WHEN** Linux JSON route output represents the owned Gateway endpoint route as a bare IPv4 address
+- **THEN** the snapshot retains it as the exact `/32` route and uninstall or purge can validate and restore it without accepting malformed or non-IPv4 input
 
 ### Requirement: Focused acceptance precedes the full release gate
 The final candidate SHALL first pass fast focused tests, then manual fresh and

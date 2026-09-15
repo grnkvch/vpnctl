@@ -46,6 +46,9 @@ passing component and release gates.
 - Bind FRP client readiness to exactly one matching `frpc` control connection
   rather than to exclusive use of the Gateway endpoint by every local process,
   because selected Mihomo traffic may legitimately share that destination.
+- Normalize Linux JSON IPv4 host-route destinations to their exact `/32` prefix
+  before retaining the Node routing-guard snapshot, so owner-scoped cleanup can
+  restore the explicit Gateway endpoint route instead of rejecting it.
 - Prove both fresh bootstrap and incomplete-candidate recovery manually on the
   existing Lima pair before adding one focused Gateway-enrollment E2E check.
 - Keep migration implementation, capacity policy, release-gate orchestration,

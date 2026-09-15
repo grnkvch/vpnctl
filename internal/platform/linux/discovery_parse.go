@@ -208,6 +208,8 @@ func parseRoutes(data []byte, family string) ([]Route, error) {
 		destination := entry.Destination
 		if destination == "" {
 			destination = "default"
+		} else if address, parseErr := netip.ParseAddr(destination); parseErr == nil && family == "ipv4" && address.Is4() {
+			destination = netip.PrefixFrom(address, 32).String()
 		}
 		routes = append(routes, Route{
 			Family: family, Destination: destination, Gateway: entry.Gateway, Device: entry.Device,

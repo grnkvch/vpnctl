@@ -24,7 +24,7 @@ func TestNetworkManagerSnapshotsOnlyOwnedResources(t *testing.T) {
 			Stdout: []byte(`[{"dst":"default","table":20001,"protocol":"static","type":"unreachable","metric":42760}]`),
 		},
 		watchdogCommandKey("ip", "-json", "-4", "route", "show", "table", "20002"): {
-			Stdout: []byte(`[{"dst":"default","gateway":"10.67.0.1","dev":"vpnctl-wg","table":20002,"protocol":"static"}]`),
+			Stdout: []byte(`[{"dst":"203.0.113.10","gateway":"192.0.2.1","dev":"eth0","table":20002,"protocol":"static"},{"dst":"default","gateway":"10.67.0.1","dev":"vpnctl-wg","table":20002,"protocol":"static"}]`),
 		},
 		watchdogCommandKey("ip", "-json", "-4", "route", "show", "table", "20003"): {
 			Stdout: []byte(`[{"dst":"default","table":20003,"protocol":"static","type":"unreachable","metric":42760},{"dst":"10.67.0.1/32","dev":"vpnctl-wg","table":20003,"protocol":"static"}]`),
@@ -52,8 +52,17 @@ func TestNetworkManagerSnapshotsOnlyOwnedResources(t *testing.T) {
 	if !snapshot.NFTables.Present || strings.Contains(snapshot.NFTables.Definition, "foreign") {
 		t.Fatalf("unexpected nftables snapshot: %+v", snapshot.NFTables)
 	}
-	if len(snapshot.Routes) != 4 || len(snapshot.PolicyRules) != 2 || len(snapshot.Sysctls) != 2 {
+	if len(snapshot.Routes) != 5 || len(snapshot.PolicyRules) != 2 || len(snapshot.Sysctls) != 2 {
 		t.Fatalf("unexpected owned snapshot: %+v", snapshot)
+	}
+	foundHostRoute := false
+	for _, route := range snapshot.Routes {
+		if route.Table == "20002" && route.Destination == "203.0.113.10/32" && route.Gateway == "192.0.2.1" && route.Device == "eth0" {
+			foundHostRoute = true
+		}
+	}
+	if !foundHostRoute {
+		t.Fatalf("host route was not normalized to /32: %+v", snapshot.Routes)
 	}
 	if snapshot.PolicyRules[0].Priority != 10000 || snapshot.PolicyRules[0].FWMark != "0x03000000" ||
 		snapshot.PolicyRules[1].Priority != 10030 || snapshot.PolicyRules[1].FWMark != "0x05000000" {
@@ -63,6 +72,36 @@ func TestNetworkManagerSnapshotsOnlyOwnedResources(t *testing.T) {
 		"net.ipv4.conf.all.src_valid_mark", "net.ipv4.ip_forward",
 	}) {
 		t.Fatalf("sysctls are not deterministic: %v", got)
+	}
+}
+
+func TestParseRoutesNormalizesOnlyMatchingFamilyHostDestinations(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		family      string
+		destination string
+		want        string
+		wantValid   bool
+	}{
+		{name: "ipv4", family: "ipv4", destination: "203.0.113.10", want: "203.0.113.10/32", wantValid: true},
+		{name: "ipv6 remains outside v2 ownership", family: "ipv6", destination: "2001:db8::10", want: "2001:db8::10", wantValid: false},
+		{name: "wrong family", family: "ipv4", destination: "2001:db8::10", want: "2001:db8::10", wantValid: false},
+		{name: "malformed", family: "ipv4", destination: "not-an-address", want: "not-an-address", wantValid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			routes, err := parseRoutes([]byte(`[{"dst":"`+test.destination+`","table":20002}]`), test.family)
+			if err != nil || len(routes) != 1 {
+				t.Fatalf("parseRoutes() = %+v, %v", routes, err)
+			}
+			if routes[0].Destination != test.want {
+				t.Fatalf("destination = %q, want %q", routes[0].Destination, test.want)
+			}
+			if err := validateOwnedRoute(routes[0]); (err == nil) != test.wantValid {
+				t.Fatalf("validateOwnedRoute() error = %v, want valid %t", err, test.wantValid)
+			}
+		})
 	}
 }
 

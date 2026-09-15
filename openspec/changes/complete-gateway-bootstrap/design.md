@@ -262,6 +262,12 @@ matches. The compiler copies that route's interface and next hop into the owned
 table; equal-priority ambiguity or an invalid next hop fails before local
 activation. This keeps ordinary Internet deployments unchanged while
 preserving an explicit host route in isolated or multi-uplink environments.
+Linux JSON route output represents an IPv4 host route as a bare address even
+when vpnctl installed it with `/32`. Snapshot parsing canonicalizes only a bare
+IPv4 address reported in the IPv4 family to the exact `/32` prefix; malformed,
+IPv6 and cross-family values remain invalid for this v2 ownership scope. This
+lets owner-scoped uninstall/purge restore the retained route without broadening
+route ownership.
 
 ### 6. Recover the one old candidate with a narrow prerequisite, then normal flows
 
