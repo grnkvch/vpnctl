@@ -81,19 +81,18 @@ func (prober *FRPClientConnectionProber) observe(ctx context.Context, endpoint s
 	if result.ExitCode != 0 {
 		return false, nil
 	}
-	lines := []string{}
+	matches := 0
 	for _, raw := range strings.Split(string(result.Stdout), "\n") {
-		if line := strings.TrimSpace(raw); line != "" {
-			lines = append(lines, line)
+		line := strings.TrimSpace(raw)
+		if line == "" || !strings.Contains(line, `users:(("frpc",pid=`) {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if field == endpoint {
+				matches++
+				break
+			}
 		}
 	}
-	if len(lines) != 1 || !strings.Contains(lines[0], `users:(("frpc",pid=`) {
-		return false, nil
-	}
-	for _, field := range strings.Fields(lines[0]) {
-		if field == endpoint {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matches == 1, nil
 }

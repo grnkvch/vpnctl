@@ -20,7 +20,10 @@ func TestFRPClientConnectionProberRequiresOneExactPinnedProcessConnection(t *tes
 	runner := &frpConnectionRunner{results: []linuxplatform.ProbeResult{
 		{},
 		{Stdout: []byte("0 0 10.67.0.2:45000 10.67.0.1:17000 users:((\"other\",pid=4,fd=3))\n")},
-		{Stdout: []byte("0 0 10.67.0.2:45000 10.67.0.1:17000 users:((\"frpc\",pid=8,fd=3))\n")},
+		{Stdout: []byte(
+			"0 0 10.67.0.2:45000 10.67.0.1:17000 users:((\"other\",pid=4,fd=3))\n" +
+				"0 0 10.67.0.2:45001 10.67.0.1:17000 users:((\"frpc\",pid=8,fd=3))\n",
+		)},
 	}}
 	prober, err := newFRPClientConnectionProber(runner, 100*time.Millisecond, time.Millisecond)
 	if err != nil {

@@ -43,6 +43,9 @@ passing component and release gates.
   the fixed 20-second activation window before publishing active convergence,
   so a transient post-start race does not leave healthy services compared
   against the staged inactive baseline.
+- Bind FRP client readiness to exactly one matching `frpc` control connection
+  rather than to exclusive use of the Gateway endpoint by every local process,
+  because selected Mihomo traffic may legitimately share that destination.
 - Prove both fresh bootstrap and incomplete-candidate recovery manually on the
   existing Lima pair before adding one focused Gateway-enrollment E2E check.
 - Keep migration implementation, capacity policy, release-gate orchestration,

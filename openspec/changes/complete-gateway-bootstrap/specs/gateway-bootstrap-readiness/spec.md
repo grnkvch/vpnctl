@@ -169,6 +169,10 @@ Node routing and FRP readiness contract for no more than the same fixed
 20-second bound before publishing the active convergence generation. A failed
 or exhausted check MUST retain activation-pending semantics and MUST NOT
 publish an active baseline for an unverified runtime.
+FRP client readiness SHALL require exactly one established connection from the
+expected `frpc` process to the candidate Gateway endpoint. Endpoint connections
+owned by other processes MUST be ignored; zero or multiple matching `frpc`
+connections MUST remain unhealthy.
 The Node recovery table SHALL preserve the unique most-specific usable
 main-table route to the public Gateway IPv4 endpoint, using the unique
 best-metric default only as a fallback. Equal-priority ambiguity or an invalid
@@ -201,6 +205,10 @@ next hop MUST fail before local activation rather than guessing a route.
 #### Scenario: Active Node services precede complete readiness
 - **WHEN** all joined Node units report active but the first complete routing or FRP readiness observation is not yet healthy
 - **THEN** activation retries the complete readiness contract inside the fixed 20-second bound and publishes active convergence only after an exact healthy result
+
+#### Scenario: Selected transit shares the FRP endpoint
+- **WHEN** one healthy `frpc` control connection and one or more non-frpc transit connections target the same Gateway endpoint
+- **THEN** FRP readiness counts only the single matching `frpc` connection and does not reject the Node because unrelated processes share the destination
 
 #### Scenario: Public Gateway has an explicit host route
 - **WHEN** the Node main table contains both a default route and a more-specific route to the public Gateway endpoint

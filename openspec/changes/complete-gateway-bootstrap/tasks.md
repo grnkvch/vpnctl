@@ -41,6 +41,7 @@
 - [x] 5.9 Include the candidate active-identity firewall in the pre-commit Gateway join transaction; verify it atomically replaces only the existing owned table, is retained on commit, and restores the exact prior table on readiness, convergence, or state failure.
 - [x] 5.10 Preserve the unique most-specific main-table route to the public Gateway endpoint when compiling the Node recovery table, with the best default only as fallback; verify explicit host-route selection and ambiguous/invalid fail-closed behavior.
 - [x] 5.11 Retry the complete unchanged joined-Node routing and FRP readiness contract inside the fixed 20-second activation bound before publishing active convergence; verify a transient post-start failure converges while persistent failure retains activation-pending and fail-closed state.
+- [x] 5.12 Scope FRP client connection cardinality to matching `frpc` process lines at the exact Gateway endpoint; verify unrelated Mihomo/transit sessions are ignored while zero or multiple frpc matches remain unhealthy.
 
 ## 6. Complete the no-VM verification checkpoint
 

@@ -248,6 +248,13 @@ the bound expires, authoritative Node assignment and the fail-closed runtime
 remain intact, active convergence is not published, and repair remains the
 explicit recovery path.
 
+The FRP connection observer filters the endpoint-scoped `ss` result by the
+expected `frpc` process identity before applying its cardinality check. Exactly
+one matching frpc control connection is required. Zero or multiple matching
+frpc connections remain unhealthy, while connections from Mihomo or another
+process to the same endpoint neither prove nor invalidate FRP readiness. This
+prevents selected transit traffic from creating a permanent false negative.
+
 The recovery-table route for the public Gateway endpoint is derived from the
 unique route Linux would use in the unmodified main table. Longest-prefix match
 precedes metric, with the best default used only when no more-specific route
