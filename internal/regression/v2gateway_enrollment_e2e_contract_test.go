@@ -37,6 +37,7 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 		"pty_secret.py\" invite", "pty_secret.py\" join",
 		"systemctl stop nginx", "vpnctl repair --yes --json",
 		"wg show vpnctl-wg transfer",
+		`jq -r '.resource_ids.transaction_id // ""'`,
 		"ControlMaster=no", "ControlPath=none", "ControlPersist=no",
 		"apt-get remove --purge --yes nginx", "systemctl start ufw",
 		"selected request did not move WireGuard counters",
@@ -51,6 +52,7 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 		"--resume", "git tag", "git push", "curl.*Authorization",
 		`systemctl list-unit-files --no-legend 'vpnctl*.service'`,
 		"wg show vpnctl0 transfer",
+		`jq -er '.resource_ids.transaction_id // empty'`,
 	} {
 		if strings.Contains(script, forbidden) {
 			t.Errorf("gateway enrollment E2E contains forbidden expansion %q", forbidden)

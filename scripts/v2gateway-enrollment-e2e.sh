@@ -283,7 +283,7 @@ prepare_network() {
 
 confirm_from_fresh_session() {
   local source_json=$1 output_json=$2 transaction_id
-  transaction_id=$(jq -er '.resource_ids.transaction_id // empty' "$source_json")
+  transaction_id=$(jq -r '.resource_ids.transaction_id // ""' "$source_json")
   if [ -z "$transaction_id" ]; then
     jq -n '{schema_version:1,status:"not-required"}' > "$output_json"
     chmod 0600 "$output_json"
@@ -395,12 +395,17 @@ repair_missing_ingress() {
     echo "public ingress remained available after the explicit fault" >&2
     exit 3
   fi
-  set +e
-  guest "$gateway_instance" sudo /usr/local/bin/vpnctl status --all --json > "$run_root/fault-gateway-status.json"
-  local status_code=$?
-  guest "$gateway_instance" sudo /usr/local/bin/vpnctl plan --json > "$run_root/fault-gateway-plan.json"
-  local plan_code=$?
-  set -e
+  local status_code=0 plan_code=0
+  if guest "$gateway_instance" sudo /usr/local/bin/vpnctl status --all --json > "$run_root/fault-gateway-status.json"; then
+    status_code=0
+  else
+    status_code=$?
+  fi
+  if guest "$gateway_instance" sudo /usr/local/bin/vpnctl plan --json > "$run_root/fault-gateway-plan.json"; then
+    plan_code=0
+  else
+    plan_code=$?
+  fi
   chmod 0600 "$run_root/fault-gateway-status.json" "$run_root/fault-gateway-plan.json"
   [ "$status_code" -ne 0 ] || {
     echo "passive status unexpectedly exited successfully during ingress fault" >&2
