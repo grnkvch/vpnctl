@@ -496,7 +496,10 @@ func planDoctorProbesWithOptions(state model.State, scope DoctorScope, runID str
 		checks = append(checks, skipped...)
 	}
 	if include(DoctorScopeTunnel) {
-		planned, skipped := planDoctorTunnel(state)
+		planned, skipped, err := planDoctorTunnel(state)
+		if err != nil {
+			return nil, nil, err
+		}
 		requests = append(requests, planned...)
 		checks = append(checks, skipped...)
 	}
@@ -618,12 +621,16 @@ func planDoctorTransports(state model.State) ([]DoctorProbeRequest, []DoctorChec
 	return requests, nil
 }
 
-func planDoctorTunnel(state model.State) ([]DoctorProbeRequest, []DoctorCheck) {
+func planDoctorTunnel(state model.State) ([]DoctorProbeRequest, []DoctorCheck, error) {
 	requests := []DoctorProbeRequest{}
 	if state.Host.Role == model.RoleGateway {
+		gatewayOverlay, err := doctorGatewayAddress(state.Host.NodeCIDR)
+		if err != nil {
+			return nil, nil, err
+		}
 		requests = append(requests, DoctorProbeRequest{
 			Scope: DoctorScopeTunnel, Name: "tunnel.server.tcp", Kind: DoctorProbeTunnelSession, Protocol: DoctorProtocolTCP,
-			ResourceKind: "tunnel", ResourceID: "server", Endpoint: net.JoinHostPort("127.0.0.1", strconv.Itoa(tunnel.FRPServerPort)),
+			ResourceKind: "tunnel", ResourceID: "server", Endpoint: net.JoinHostPort(gatewayOverlay, strconv.Itoa(tunnel.FRPServerPort)),
 		})
 	} else if node, ok := localDoctorNode(state); ok {
 		requests = append(requests, DoctorProbeRequest{
@@ -635,7 +642,7 @@ func planDoctorTunnel(state model.State) ([]DoctorProbeRequest, []DoctorCheck) {
 			Name: "tunnel.session", Scope: DoctorScopeTunnel, Kind: DoctorProbeTunnelSession, Protocol: DoctorProtocolTCP,
 			ResourceKind: "tunnel", ResourceID: "session", Status: DoctorCheckSkipped, Code: "node_not_joined",
 			Detail: "The private node is not joined, so no multiplexed tunnel session exists.",
-		}}
+		}}, nil
 	}
 	for _, expose := range activeDoctorExposes(state) {
 		endpoint := net.JoinHostPort("127.0.0.1", strconv.Itoa(expose.TunnelPort))
@@ -647,7 +654,7 @@ func planDoctorTunnel(state model.State) ([]DoctorProbeRequest, []DoctorCheck) {
 			ResourceKind: "expose", ResourceID: expose.ID, Endpoint: endpoint,
 		})
 	}
-	return requests, nil
+	return requests, nil, nil
 }
 
 func planDoctorIngress(state model.State) ([]DoctorProbeRequest, []DoctorCheck, error) {

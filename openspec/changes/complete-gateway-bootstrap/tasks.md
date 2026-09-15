@@ -44,6 +44,7 @@
 - [x] 5.12 Scope FRP client connection cardinality to matching `frpc` process lines at the exact Gateway endpoint; verify unrelated Mihomo/transit sessions are ignored while zero or multiple frpc matches remain unhealthy.
 - [x] 5.13 Normalize bare IPv4 host-route destinations from Linux JSON snapshots to exact `/32` prefixes; verify owner-scoped Node cleanup retains the route while malformed, IPv6 and cross-family destinations remain rejected.
 - [x] 5.14 During Node cleanup, omit only the retained rp-filter sysctl for a positively absent product WireGuard interface; verify host/underlay values remain mandatory and ambiguous interface probes fail closed.
+- [x] 5.15 Make Gateway `doctor tunnel` probe the configured FRPS overlay listener instead of loopback; verify a non-default Node CIDR resolves to its first usable address and no unrelated local listener can produce the result.
 
 ## 6. Complete the no-VM verification checkpoint
 

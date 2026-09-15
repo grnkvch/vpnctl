@@ -7240,3 +7240,139 @@ This journal records development-host mutations made while implementing and vali
 - Final postconditions pass on both fresh guests: vpnctl binary/config/state/runtime/units/table/rules/staging/secrets and APT activity are absent; UFW is enabled/active; nginx, TCP/443, TEST-NET fixtures and product swap are absent; `nginx-common`, lab swap and ordinary underlay remain. Both exact QEMU/x86_64 fixtures were gracefully stopped and now report `Stopped` with Gateway 1 vCPU/512 MiB/10 GiB and Node 4 vCPU/2 GiB/10 GiB. Explicit manual result for `complete-gateway-bootstrap` task 7.2 is **passed** against frozen commit `375e4a4…`; no production, unrelated VM, release gate, capacity, migration, Docker CI, release publication or historical evidence was touched.
 - All diagnostic/build artifacts below exact host root `/private/tmp/vpnctl-v2-gateway-bootstrap-20260915` were created for this completed task and are now superseded by the recorded commits, deterministic hashes and redacted journal result. Positively inventory the root, then delete only that exact real non-symlink directory tree; recovery is deterministic rebuild from frozen commit, versioned templates and pinned provider archives. Verify the exact root absent afterwards. Do not touch any other `/private/tmp` entry.
 - Validated that exact cleanup target as a real mode-`0700` directory owned by the current host user, removed only `/private/tmp/vpnctl-v2-gateway-bootstrap-20260915`, and verified it absent. Approximately task-local candidate inputs/assets, diagnostic helpers and Go caches were discarded; they are recoverable by deterministic rebuild. No repository file, other temporary root, VM disk or evidence directory was deleted.
+
+### Planned unpublished-candidate recovery rehearsal
+
+- OpenSpec task 7.3 will use only the stopped disposable Lima fixtures
+  `vpnctl-v2-gateway` and `vpnctl-v2-node`; production VPS, SSH credentials,
+  unrelated VMs, immutable release-gate evidence, public releases and tags are
+  outside scope. The Gateway remains the 1-vCPU/512-MiB/10-GiB product boundary
+  and the Node remains the 4-vCPU/2-GiB supporting fixture.
+- The incomplete candidate identity is frozen to product commit
+  `04606fd1c24e78749ef6039e3cb430a7d68f4f4e`, installed binary SHA-256
+  `9c1503321ccafcc9126fbf2c9913323ebc9b00469f29726917f753e46dc26fd9`,
+  bundle SHA-256
+  `6537daba4ca4f4f773ae517b4b3b0bd2ec2ebc06a4302c580d7da3c6ddfb6e1e`,
+  and checksum-metadata SHA-256
+  `fa70e3e7a3fa95ab66395af75918e0fa9f61cb42b2d86309cb8325a710257132`.
+  Existing local `dist/` bytes are read-only inputs and will not be overwritten.
+- Create only the private host root
+  `/private/tmp/vpnctl-v2-gateway-recovery-20260915` for a deterministic build
+  of the frozen final source, redacted manual results and an isolated HTTPS
+  release fixture. Guest staging, synthetic WireGuard-client material, local
+  test CA, release-server state and TEST-NET addressing use unique task-owned
+  paths/markers. Tokens, token hashes, private keys, authorization headers and
+  secret configuration must never enter host output, tracked files or retained
+  logs.
+- Rehearse the exact sequence: install and initialize the old candidate without
+  nginx, create one retained personal WireGuard client and prove live traffic;
+  require the old hashes and absent-ingress/package/listener baseline; install
+  only the exact predeclared compatible nginx candidate while masked and leave
+  it inactive/disabled; exercise the old binary's normal HTTPS same-version
+  manifest/SHA update to the final candidate; run and confirm public repair;
+  then prove final hashes, client identity/traffic continuity, public Node join,
+  selected traffic, readiness, audit distinction and update reversal boundary.
+- Bounded cleanup is Node purge followed by forced Gateway purge using the
+  matching final candidate, removal of only task-owned staging/CA/hosts/release
+  fixture/client namespace and TEST-NET resources after identity checks,
+  removal of only experiment-installed `nginx` without `autoremove`, restoration
+  of the fixtures' UFW/package baseline, deletion of the exact private host root
+  after preserving redacted results, and graceful stop of only the two named
+  fixtures. No VM disk is recreated for this rehearsal.
+- Both named fixtures started from the stopped owner-clean task-7.2 boundary and
+  reached Lima `READY`. Read-only preflight confirmed the expected QEMU/amd64
+  identities and resource profiles, Ubuntu 24.04, idle package managers,
+  enabled/active UFW, absent vpnctl role state and binary, absent TCP/443
+  listeners, and no prior task path below guest `/tmp`. Gateway underlay is
+  `192.168.104.1`; Node underlay is `192.168.104.3`. The Gateway retains only
+  the task-7.2 dependency package `nginx-common 1.24.0-2ubuntu7.18`; the `nginx`
+  package itself is uninstalled. This retained dependency is not a product
+  runtime or ingress owner and will remain an explicitly recorded fixture
+  baseline.
+- The compatible repository candidate was fixed before the recovery mutation as
+  exact nginx version `1.24.0-2ubuntu7.18`. The frozen final source rebuilt
+  deterministically and passed the standalone verifier with binary SHA-256
+  `eb4894dc582bbad4f4c889d501d190018e05a9e2d5cc49cd2d20814aff827105`,
+  bundle SHA-256
+  `bcc9ba7b0f9fca5d8e25bed95d8ea7f91bc1ed984478c60f34c582b79878c10e`,
+  and checksum-metadata SHA-256
+  `648b23b64550b654ee955a3c07c4bcb916626514525a3eb4ef8b05df345ff684`.
+  An initial bundle-assembly invocation rejected relative provider paths before
+  producing an asset; the immediate retry used the same already-built binary
+  and absolute checksum-pinned provider paths. No VM changed during either host
+  build step.
+- The old Gateway init first reached watchdog `fw-XSE4QC`, but a reused Lima
+  control connection was correctly rejected as not-new and the later direct
+  SSH retry arrived after expiry; the watchdog restored networking. The old
+  candidate could not rediscover that rolled-back network from its generic
+  repair/convergence metadata, so its still-clientless state was removed by one
+  public typed Gateway purge and the exact old candidate was reinstalled. A
+  second init returned `fw-TGKXQY`, which was confirmed on the first direct
+  `ControlMaster=no` SSH session. This is retained as watchdog rejection and
+  rollback evidence, not hidden or counted as the successful initialization.
+- One old-candidate client named `recovery-client` was committed at stable
+  overlay address `10.66.0.2` and exported through its default root-only
+  WireGuard delivery path. The old candidate reconciles listener configs but
+  does not republish identity firewall sets after post-init `client add`; the
+  production migration instead rendered its already existing clients during
+  network activation. To reproduce that exact production runtime shape rather
+  than test the unrelated old add defect, the fixture inserted only
+  `10.66.0.2` into the two managed active client/overlay sets. A task-owned Node
+  namespace then completed a real WireGuard handshake, Gateway DNS lookup and
+  internet ping with non-zero aggregate transfer counters. No key or profile
+  content/hash was emitted.
+- The guarded prerequisite script is SHA-256
+  `4347c0e037cf5ca77d21654a34f0c30a34e66b94945f63b627e1f560c359239c`.
+  It verified all three old release hashes, exact Gateway/client shape, absent
+  nginx/runtime/tree/TCP-443 and explicit confirmation before mutation; after
+  refreshing metadata it installed only requested nginx
+  `1.24.0-2ubuntu7.18` with no recommendations. The service remained
+  masked/inactive and no managed ingress or listener appeared. Its root-only
+  guest journal records the old identity, after-state and exact package/unmask
+  reversal without secrets.
+- A task-owned Node HTTPS fixture served only the three verified final assets
+  at the normal GitHub release path using an ephemeral local CA and suppressed
+  request logging. The Gateway temporarily trusted only that CA and mapped only
+  `github.com` to the Node after preserving `/etc/hosts`. TLS plus checksum
+  metadata verification passed. The old binary's public
+  `vpnctl update v2.0.0` plan recognized the unchanged version but different
+  vpnctl file SHA, and apply replaced the release atomically. Final installed
+  hashes are exact `eb4894dc…`/`bcc9ba7b…`/`648b23b…`; the other component
+  bytes were unchanged. Confirmed public repair then published and health-
+  checked baseline nginx ingress. Gateway validate/plan and ingress doctor
+  passed, public health returned 204, the retained profile remained byte-
+  identical inside the secret boundary, and real client DNS/internet traffic
+  continued with increasing aggregate counters. A read-only update rollback
+  plan identifies the exact same-version old snapshot and remains available;
+  it was not executed.
+- The release fixture, private keys, CA trust, host mapping and synthetic client
+  namespace were then removed by exact owner-scoped cleanup; `/etc/hosts`, Node
+  UFW and Node `ip_forward=0` were restored. The final verified candidate was
+  staged on the now-clean Node and normal Node init completed unjoined. The
+  first invite helper successfully issued `inv-55B3DD`, but rejected its own
+  safe result because it expected a nonexistent generic `changed` field; the
+  invite token was consequently lost and the active invite was explicitly
+  cancelled. A corrected helper issued `inv-HSYLDJ`; public join returned the
+  product result `join_unavailable` before commit, with the invite still active,
+  the Node still generation 1/unjoined, disabled services, zero credential
+  files and no transient secret file. Gateway ingress/status remain healthy.
+- To expose only the otherwise hidden internal readiness cause, build one
+  disposable diagnostic binary from exact current source with a single stderr
+  line at the public coordinator failure boundary. Its SHA-256 is
+  `72d9e59778c4c648087b55b40265ca9d0f27c156cc513432eb98a0bae263e37d`.
+  Before installation preserve the exact final binary, verify both hashes,
+  cancel only the now-secretless active invite, replace/restart only the
+  Gateway controller binary, issue one final secret-safe diagnostic invite and
+  retain only the sanitized readiness error. Immediately restore exact final
+  binary SHA-256 `eb4894dc…`, restart the controller, and remove the diagnostic
+  upload/log. This development-only probe is not release evidence and does not
+  change authoritative product state except the explicit invite audit entries.
+### 2026-09-15 — disposable recovery rehearsal: public join result and diagnostic rollback
+
+- Scope: `vpnctl-v2-gateway` and `vpnctl-v2-node` only; no production host was accessed.
+- The previously planned temporary diagnostic controller binary was found active on the Gateway with SHA-256 `72d9e59778c4c648087b55b40265ca9d0f27c156cc513432eb98a0bae263e37d`; the exact verified candidate binary remained backed up at `/tmp/vpnctl-final-before-diagnostic` with SHA-256 `eb4894dc582bbad4f4c889d501d190018e05a9e2d5cc49cd2d20814aff827105`.
+- Created one disposable invite (`inv-Y3TSTI`), transferred its token directly from Gateway memory-backed runtime storage to the Node without persisting it on the host, and removed the token from both VMs through the registered helper cleanup paths. No token, token hash, credential, authorization header, or secret configuration was recorded.
+- The public join completed successfully: the Gateway consumed the invite and registered one active Node; the Node committed generation 2 and activated the standard transport, routing, routing guard, and tunnel client. The Node reports only the known passive `control_status_not_observed` condition while all required units are active.
+- No diagnostic preparation error was emitted because the join succeeded. Planned reversal: restore the exact verified candidate binary from `/tmp/vpnctl-final-before-diagnostic`, restart only `vpnctl-controller.service`, verify its SHA-256 and active state, then delete the temporary backup.
+- The exact verified candidate binary was restored successfully with SHA-256 `eb4894dc582bbad4f4c889d501d190018e05a9e2d5cc49cd2d20814aff827105`; `vpnctl-controller.service` is active and the diagnostic backup/upload are absent.
+- Final read-only checks found one product diagnostic defect without changing VM state: Gateway FRPS correctly listens on `10.67.0.1:17000` with one established `frpc` session, Node transport/tunnel doctors pass, but Gateway `doctor tunnel` probed unused `127.0.0.1:17000`. A focused regression failed on that exact endpoint before the source correction and passed after deriving the listener from the configured Node CIDR. The complete operations package, targeted race run, targeted vet, diff check, and strict `complete-gateway-bootstrap` OpenSpec validation passed. No VM was recreated and no already successful recovery phase was repeated.

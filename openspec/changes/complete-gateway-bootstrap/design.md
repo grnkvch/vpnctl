@@ -220,6 +220,10 @@ covers `Type=simple` process activation preceding WireGuard/listener readiness
 without relaxing any health invariant. Exhaustion rolls back the exact staged
 candidate and returns the non-oracular fixed `503 unavailable`, not a `404`
 credential rejection.
+The Gateway tunnel doctor derives the FRPS listener from the configured Node
+overlay CIDR, matching the tunnel compiler and readiness observer. It does not
+probe loopback because FRPS intentionally binds only the first usable overlay
+address.
 
 The candidate transaction also renders the Gateway identity firewall from the
 same candidate state and atomically replaces only the already-owned

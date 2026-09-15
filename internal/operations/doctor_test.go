@@ -74,6 +74,33 @@ func TestDoctorGatewayDefaultPlanIsRoleAwareActiveOnlyAndPathSafe(t *testing.T) 
 	}
 }
 
+func TestDoctorGatewayTunnelProbesConfiguredOverlayListener(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	state := doctorGatewayState(t, now)
+	state.Host.NodeCIDR = "10.45.0.0/24"
+	state.Nodes[0].OverlayIPv4 = "10.45.0.2"
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	requests, _, err := planDoctorTunnel(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range requests {
+		if request.Name != "tunnel.server.tcp" {
+			continue
+		}
+		if request.Endpoint != "10.45.0.1:17000" {
+			t.Fatalf("gateway tunnel doctor endpoint = %q, want configured overlay listener", request.Endpoint)
+		}
+		return
+	}
+	t.Fatal("gateway tunnel server probe is missing")
+}
+
 func TestDoctorIngressDistinguishesMissingPublicEdgeFromHealthyEnrollmentLoopback(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)

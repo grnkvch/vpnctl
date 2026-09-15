@@ -173,6 +173,9 @@ FRP client readiness SHALL require exactly one established connection from the
 expected `frpc` process to the candidate Gateway endpoint. Endpoint connections
 owned by other processes MUST be ignored; zero or multiple matching `frpc`
 connections MUST remain unhealthy.
+Gateway `doctor tunnel` SHALL actively probe the FRPS listener at the first
+usable address of the configured Node overlay CIDR. It MUST NOT substitute a
+loopback endpoint that the generated FRPS configuration does not own.
 The Node recovery table SHALL preserve the unique most-specific usable
 main-table route to the public Gateway IPv4 endpoint, using the unique
 best-metric default only as a fallback. Equal-priority ambiguity or an invalid
@@ -218,6 +221,10 @@ MUST fail closed.
 #### Scenario: Selected transit shares the FRP endpoint
 - **WHEN** one healthy `frpc` control connection and one or more non-frpc transit connections target the same Gateway endpoint
 - **THEN** FRP readiness counts only the single matching `frpc` connection and does not reject the Node because unrelated processes share the destination
+
+#### Scenario: Gateway tunnel doctor follows the configured overlay
+- **WHEN** a Gateway uses a valid non-default Node overlay CIDR and its FRPS service is active
+- **THEN** `doctor tunnel` probes TCP 17000 at that CIDR's first usable address rather than an unrelated loopback listener
 
 #### Scenario: Public Gateway has an explicit host route
 - **WHEN** the Node main table contains both a default route and a more-specific route to the public Gateway endpoint
