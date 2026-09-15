@@ -113,6 +113,27 @@ version, ownership, activation, listener, or health failures are visible init
 failures; rerunning init against its own incomplete authoritative state repairs
 only that same bootstrap instead of creating a new identity.
 
+Installation success proves only the three release files above. It does not
+claim that a role has been initialized or that its network path is healthy.
+After `init` and any returned new-session watchdog confirmation, use the
+following boundaries in order:
+
+```text
+sudo vpnctl status --all       # passive; no network probe or mutation
+sudo vpnctl plan               # read-only desired/applied/observed comparison
+sudo vpnctl doctor ingress     # active bounded Gateway probe
+sudo vpnctl repair --dry-run   # read-only repair preview, only when plan shows drift
+sudo vpnctl repair             # explicit confirmed mutation
+```
+
+A repair that changes the network can return a new transaction ID and still
+requires `vpnctl confirm <transaction-id>` from a genuinely new SSH session.
+There is no permanent bootstrap-recovery or offline-update command. The one
+unpublished incomplete `v2.0.0` candidate has a separately hash-bound,
+one-time maintainer procedure in
+[`RELEASE_RECOVERY_PLAN.md`](RELEASE_RECOVERY_PLAN.md); it is not part of a
+normal installation and must not be generalized to another host or artifact.
+
 The separately versioned v1 maintenance operation, including its qualification,
 rollback, acceptance, and retirement boundary, is documented in
 [`V1_MIGRATION.md`](V1_MIGRATION.md). Its executable is not a product release

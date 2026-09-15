@@ -82,3 +82,10 @@ protocol, status, stable code, and elapsed milliseconds. Endpoints and paths
 are absent. Any failed check makes the command `degraded` with the stable
 `unavailable` exit category; passed and not-applicable skipped checks remain
 successful. Adapter error strings are never copied into the result.
+
+A degraded doctor result is evidence for diagnosis, not authorization to
+mutate. Compare it with passive `vpnctl status --all` and read-only
+`vpnctl plan`; if the plan reports owned drift, preview and explicitly confirm
+`vpnctl repair`, then repeat the same narrow doctor scope. vpnctl never repairs,
+switches transport, or invokes a candidate-specific recovery procedure merely
+because an active probe failed.

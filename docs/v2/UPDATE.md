@@ -27,6 +27,15 @@ binary with the bundle's vpnctl artifact. The complete target is staged before
 role-local selection begins. Publisher identity relies on the HTTPS release
 channel in v2.0; checksum metadata is not a cryptographic publisher signature.
 
+The updater compares the verified manifest and component/file SHA-256 values,
+not only the version string. This allowed the single already deployed,
+unpublished incomplete `v2.0.0` candidate to transition to corrected
+`v2.0.0` bytes during its rehearsed recovery. It does not make a published tag
+mutable: ordinary releases still identify immutable three-asset sets, and a
+same-version difference outside that recorded candidate is a stop-and-review
+condition for the operator. There is no local-bundle/offline-update flag and no
+permanent recovery subcommand.
+
 ## Gateway-first order
 
 The operator updates the gateway first, then connects to each private node over

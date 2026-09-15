@@ -20,6 +20,20 @@ scripts/v2deployed-release-gate.sh status <absolute-evidence-directory>
 scripts/v2deployed-release-gate.sh finalize <absolute-evidence-directory> <absolute-release-assets-directory>
 ```
 
+Before creating this general release evidence, the same product source and
+candidate bytes must pass the deliberately separate focused enrollment check:
+
+```text
+scripts/v2gateway-enrollment-e2e.sh verify <absolute-release-assets-directory>
+```
+
+That development check proves clean no-nginx Gateway bootstrap, public Node
+join, selected traffic and missing-ingress repair on the fixed stopped Lima
+pair. It is not a release-gate stage, cannot resume, does not write or satisfy
+`automated.json`, and never runs capacity or migration. If it fails, remain in
+that focused loop; do not create a new general evidence directory merely to
+debug its immediate cause.
+
 `prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
 server. `run-fast` executes the host-only checks without resolving, inspecting,
 or invoking `limactl`; it also removes the private VM timing/session variables

@@ -7428,3 +7428,18 @@ This journal records development-host mutations made while implementing and vali
 - Successful cleanup projections report data and binary purge for Node then Gateway. Final script assertions verified task/product paths, services, processes, nftables, interfaces, listeners, TEST-NET resources, nginx and secret runtime absent; UFW, lab swap and the recorded `nginx-common` baseline were restored. Both exact QEMU/x86_64 fixtures are now `Stopped` at 1 vCPU/512 MiB/10 GiB and 4 vCPU/2 GiB/10 GiB with the pinned image. A scan of the passing run found no invite value/hash, private-key PEM, authorization header or token field. The unrelated VM warning remained read-only; production and all general gates were untouched.
 - The exact host build root `/private/tmp/vpnctl-v2-gateway-enrollment-e2e-20260915.IPM8d9` is a real current-user mode-`0700` directory of approximately 389 MiB containing only the reproducible source export, Go cache, candidate input/assets and verifier result recorded above. Remove only this exact tree now and verify it absent; retain every focused failed/passing artifact directory unchanged.
 - Removed only `/private/tmp/vpnctl-v2-gateway-enrollment-e2e-20260915.IPM8d9` after the recorded ownership/mode/realpath checks and verified it absent. Candidate bytes remain reproducible from `c23bf3d…`, pinned provider archives and the recorded public SHA-256 values. No focused run artifact, repository file, VM disk or other temporary root was removed.
+## 2026-09-15 — final Gateway-bootstrap operator-documentation boundary
+
+- Before the final source verification, update only the tracked v2 installation,
+  update, recovery, repair, status, doctor, operations, and release-gate
+  documentation. The examples explicitly separate passive status/read-only
+  planning, bounded active doctor probes, and previewed/confirmed repair.
+- Record the one-time unpublished-candidate recovery as commit/hash/version/
+  package-bound maintainer work, not a shipped command, offline update path, or
+  reusable operational capability. Preserve the exact previously verified
+  candidate hashes and state that production recovery has not been executed.
+- Add a no-VM regression contract for those documentation boundaries. This
+  repository-only step does not start or alter Lima, contact a real VPS, install
+  packages, bind listeners, modify firewall/routing, or create credentials.
+  Repository rollback is the documentation checkpoint commit; no host rollback
+  is required.

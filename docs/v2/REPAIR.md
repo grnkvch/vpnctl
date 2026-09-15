@@ -76,6 +76,22 @@ derivation, and role resolution. Any changed generation, pending set,
 observation, ownership result, hash, impact, or scope makes the preview stale
 before mutation.
 
+The operator sequence is intentionally explicit:
+
+```text
+sudo vpnctl status --all       # passive observation
+sudo vpnctl plan               # read-only drift/intent separation
+sudo vpnctl repair --dry-run   # read-only exact repair preview
+sudo vpnctl repair             # confirmed mutation
+sudo vpnctl doctor ingress     # active bounded post-repair probe on a Gateway
+```
+
+If repair returns a firewall transaction, its exact
+`vpnctl confirm <transaction-id>` action from a new SSH session is an
+additional safety gate; repair consent does not replace it. Do not use
+`doctor` as a repair command or treat a clean passive `status` as proof of
+external reachability.
+
 ## Role and execution boundaries
 
 Gateway repair accepts only gateway-local actions. A private node accepts only
@@ -187,3 +203,11 @@ oldest retained pre-vpnctl snapshot. The result then requires
 `vpnctl confirm <transaction-id>` from a new SSH session; `--yes` cannot satisfy
 that independent gate. A pending watchdog blocks repair, and a lost controller
 response is reported as outcome-uncertain rather than safe to retry blindly.
+
+This committed-generation adapter is the complete permanent public recovery
+surface. The one-time prerequisite used to escape the already deployed
+unpublished candidate's missing-nginx bootstrap boundary is an external,
+commit/hash/version/package-bound maintainer runbook. It is not shipped as a
+vpnctl command, is not reusable for a different candidate, and is retired after
+that deployment reaches the final verified assets and passes application-level
+acceptance.

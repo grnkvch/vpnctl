@@ -67,7 +67,7 @@
 
 ## 9. Freeze and validate the final candidate once
 
-- [ ] 9.1 Update release, recovery, installation, readiness, repair, and troubleshooting documentation, including the one-time unpublished-candidate recovery boundary; verify examples distinguish passive status, active doctor, confirmed repair, and the absence of any permanent recovery command.
+- [x] 9.1 Update release, recovery, installation, readiness, repair, and troubleshooting documentation, including the one-time unpublished-candidate recovery boundary; verify examples distinguish passive status, active doctor, confirmed repair, and the absence of any permanent recovery command.
 - [ ] 9.2 Re-run the complete source verification on the frozen commit and inspect the full diff for package, service, state, secret, and rollback boundaries; verify the commit is pushed before creating new release evidence.
 - [ ] 9.3 Run the existing fast and resumable VM release gates once for that exact frozen commit, leaving capacity as an explicit on-demand measurement; verify automated aggregation accepts no failed/invalid mandatory stage and preserves all attempt evidence.
 - [ ] 9.4 Prepare but do not execute the production handoff: exact final `v2.0.0` hashes, guarded nginx prerequisite, normal same-version update, confirmed repair, fresh invite/join, Telegram API/webhook verification, rollback points, and migration-artifact cleanup; verify each host-changing command is journaled and will be presented to the operator one line at a time.

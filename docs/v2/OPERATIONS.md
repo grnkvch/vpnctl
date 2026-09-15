@@ -420,12 +420,19 @@ guarantees are unchanged.
 | Gateway controller is down | Existing compatible data planes continue. Management returns unavailable and must not tear them down or silently mutate state. |
 | Node `join` reports `join_unavailable` | The invite has not been consumed and the Node remains unjoined. On the Gateway run `vpnctl status` and `vpnctl doctor ingress`, preview `vpnctl repair --dry-run` if mandatory ingress drift is reported, then retry the same still-valid invite. |
 | Gateway `status` reports `repair_gateway_ingress` | A mandatory package, owned nginx drop-in/tree, service/runtime, TCP 443 listener, or loopback enrollment listener is missing or drifted. Inspect `vpnctl plan`, then use confirmed `vpnctl repair`; foreign ownership remains a conflict. |
+| An unpublished old `v2.0.0` candidate has no nginx | Do not invent a generic recovery command or copy a new binary over the controller. Use only the candidate-specific commit/hash/package-bound maintainer handoff, then normal same-version update and confirmed repair. This one-time path is not valid for another installation. |
 
 Preview owned-drift repair before consenting:
 
 ```console vpnctl-doc-test id=repair role=gateway
 sudo vpnctl repair --dry-run
 ```
+
+The roles are distinct: `status` is passive, `doctor` actively probes but never
+mutates, and `repair` changes only the reviewed vpnctl-owned drift after
+confirmation. A repair result may additionally require a new-session firewall
+confirmation. vpnctl has no permanent `recover gateway`, offline repair, or
+automatic startup-repair command.
 
 ## Explicit v2.0 limits
 

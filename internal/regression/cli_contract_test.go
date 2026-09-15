@@ -233,6 +233,46 @@ func TestV2OperatorGuideCommandsExecuteAndStayInsideReleaseScope(t *testing.T) {
 	}
 }
 
+func TestV2GatewayBootstrapOperationalDocumentationContract(t *testing.T) {
+	t.Parallel()
+
+	repositoryRoot := filepath.Join("..", "..")
+	required := map[string][]string{
+		"INSTALLATION.md": {
+			"sudo vpnctl status --all", "sudo vpnctl doctor ingress",
+			"sudo vpnctl repair --dry-run", "There is no permanent bootstrap-recovery",
+		},
+		"UPDATE.md": {
+			"same-version difference outside that recorded candidate is a stop-and-review",
+			"local-bundle/offline-update flag", "permanent recovery subcommand",
+		},
+		"REPAIR.md": {
+			"The operator sequence is intentionally explicit", "confirmed mutation",
+			"not shipped as a", "not reusable for a different candidate",
+		},
+		"STATUS.md": {
+			"passive snapshot", "Neither status nor plan proves the public edge",
+		},
+		"DOCTOR.md": {
+			"evidence for diagnosis, not authorization", "never repairs",
+		},
+		"OPERATIONS.md": {
+			"The roles are distinct: `status` is passive", "vpnctl has no permanent `recover gateway`",
+		},
+		"DEPLOYED_RELEASE_GATE.md": {
+			"scripts/v2gateway-enrollment-e2e.sh verify", "It is not a release-gate stage",
+		},
+	}
+	for name, fragments := range required {
+		contents := readContractFile(t, filepath.Join(repositoryRoot, "docs", "v2", name))
+		for _, fragment := range fragments {
+			if !strings.Contains(contents, fragment) {
+				t.Errorf("%s is missing bootstrap operations boundary %q", name, fragment)
+			}
+		}
+	}
+}
+
 func TestRootReadmeDoesNotAdvertiseLegacyOrBacklogCommandsAsV2(t *testing.T) {
 	t.Parallel()
 

@@ -1,9 +1,11 @@
 # План завершения релиза vpnctl v2
 
-Статус: решения зафиксированы; реализация OpenSpec change
-`complete-gateway-bootstrap` выполняется. Транзакционный package/bootstrap,
-базовый nginx ingress, общая readiness-модель, repair и диагностика join уже
-реализованы локально; до VM-проверок должен стать зелёным no-VM checkpoint.
+Статус на 2026-09-15: продуктовая часть OpenSpec change
+`complete-gateway-bootstrap`, два ручных Lima-сценария и узкий автоматический
+Gateway-enrollment E2E прошли. Первый публичный `v2.0.0` ещё не собран и не
+опубликован; recovery на production не выполнялся. Следующая граница — один
+замороженный source commit, полный source verification и только затем отдельно
+разрешённые существующие release gates.
 
 ## 1. Завершение миграции v1 → v2
 
@@ -49,45 +51,59 @@
 
 ### A. Быстрый цикл без VM
 
-- Исправление ограничивается установкой role-specific APT-пакетов, начальной
+- **Выполнено.** Исправление ограничено установкой role-specific APT-пакетов, начальной
   активацией nginx ingress, покрытием nginx в `status`/`plan`/`repair`, recovery
   уже установленного неполного кандидата и корректной диагностикой `join`.
-- Разработка ведётся через целевые Go unit/contract tests. Общий release gate,
+- Разработка велась через целевые Go unit/contract tests. Общий release gate,
   capacity и Lima на каждой итерации не запускаются.
 
 ### B. Узкий happy path на существующих Lima VM
 
-- Без создания новой инфраструктуры вручную проверяется реальный путь от чистого
+- **PASS.** Без создания новой инфраструктуры вручную проверен реальный путь от чистого
   Gateway без nginx до `init --gateway`, работающего HTTPS на TCP 443, invite и
   публичного `join` свежего Node.
-- После join проверяются transport и один сквозной запрос, затем выполняется
+- После join прошли transport и один сквозной запрос, затем выполнены
   owner-scoped очистка и восстановление исходного остановленного состояния VM.
-- Сначала сценарий должен пройти вручную; универсальный gate заранее не строится.
+- Результат и точные candidate SHA-256 записаны в OpenSpec manual results и host
+  changelog без секретных данных.
 
 ### C. Recovery неполного кандидата
 
-- На тестовой VM воспроизводится состояние production: Gateway v2 уже
+- **PASS на disposable Lima; production не изменялся.** На тестовой VM воспроизведено состояние production: Gateway v2 уже
   инициализирован, WireGuard-клиенты существуют, nginx отсутствует, версия
   остаётся `v2.0.0`.
-- Проверяется предусмотренный recovery/update-путь с сохранением работы клиентов,
+- Проверен предусмотренный hash-bound prerequisite → same-version update →
+  confirmed repair путь с сохранением работы клиентов,
   восстановлением nginx и последующим успешным Node join. Production не является
   средой разработки или первичной отладки.
+- Финальный проверенный в этом сценарии candidate из product commit
+  `c23bf3dcf595e8c237ee49d9b98fd940a5ca6095`: binary
+  `76aed6c6d96b31ca2e07ed568d457913fc1b3e05f0be741923281f1a4e373160`,
+  bundle `d0cef3c7add4d35c5730c088b4802c914dcbb597b66ebba31879e0234d257372`,
+  checksum metadata
+  `d7e8d20e3f3d0775fd84cdc278b70d3b72d483422f66bb125a8958b399f714d7`.
 
 ### D. Минимальная автоматизация
 
-- Только после успешных ручных happy-path и recovery-сценариев их критическая
-  часть закрепляется одним focused E2E-тестом.
+- **PASS.** После успешных ручных happy-path и recovery-сценариев их критическая
+  часть закреплена одним `scripts/v2gateway-enrollment-e2e.sh`.
+- Скрипт проверяет clean no-nginx init/join/selected request и deliberate
+  missing-ingress repair, затем очищает только owner-validated ресурсы и
+  возвращает обе фиксированные VM в `Stopped`.
 - В это изменение не входят новый универсальный оркестратор, новая evidence или
   fingerprint-инфраструктура, migration gate, capacity gate и дополнительная
   топология VM.
 
 ### E. Единственный полный предрелизный цикл
 
-- После стабилизации и фиксации commit выполняются целевые тесты, полный Go
-  test/race/vet, focused Gateway-enrollment E2E, существующие fast и VM gates.
-- VM gate запускается один раз и продолжает использовать resume. Capacity
+- После фиксации документации выполняются целевые тесты, полный Go
+  test/race/vet и проверка полного diff на одном source commit. Этот commit
+  должен быть запушен до создания нового release evidence.
+- Существующие fast и VM gates запускаются один раз только после отдельного
+  разрешения; при позднем сбое используется resume. Capacity
   остаётся отдельным on-demand измерением и не блокирует релиз.
-- Только после этого собираются финальные assets `v2.0.0`.
+- Только после mandatory gates, реального Gateway/Node и Telegram/Clash Mi
+  acceptance собираются и публикуются финальные assets `v2.0.0`.
 
 Стоп-правило: необходимость новой сложной инфраструктуры или дополнительной
 VM-топологии сначала обсуждается отдельно. Ошибки подготовки APT/Lima не являются

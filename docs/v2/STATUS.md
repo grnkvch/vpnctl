@@ -101,3 +101,11 @@ or synthesize traffic. Convergence material may legitimately retain an older
 generation after invite, logging, backup, or another metadata-only mutation,
 so generation inequality alone is not drift when the material and semantic
 readiness projections are otherwise clean.
+
+For operational triage, start with `vpnctl status --all`; it is always the
+passive snapshot. Use `vpnctl plan` to separate intentional pending work from
+owned drift. Run the narrowest `vpnctl doctor <scope>` only when an active
+network check is needed, and run `vpnctl repair --dry-run`/confirmed
+`vpnctl repair` only when the plan identifies repairable vpnctl-owned drift.
+Neither status nor plan proves the public edge by sending traffic, and neither
+may repair it implicitly.
