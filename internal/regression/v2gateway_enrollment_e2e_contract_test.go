@@ -33,6 +33,7 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 		"purge_role \"$node_instance\" purge-node",
 		"purge_role \"$gateway_instance\" purge-gateway",
 		"vpnctl init --gateway", "vpnctl init --node",
+		`systemctl list-unit-files --no-legend --no-pager`, `awk '$1 ~ /^vpnctl.*[.]service$/`,
 		"pty_secret.py\" invite", "pty_secret.py\" join",
 		"systemctl stop nginx", "vpnctl repair --yes --json",
 		"ControlMaster=no", "ControlPath=none", "ControlPersist=no",
@@ -47,6 +48,7 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 	for _, forbidden := range []string{
 		"v2deployed-release-gate", "v2capacity-e2e", "v1-migrate",
 		"--resume", "git tag", "git push", "curl.*Authorization",
+		`systemctl list-unit-files --no-legend 'vpnctl*.service'`,
 	} {
 		if strings.Contains(script, forbidden) {
 			t.Errorf("gateway enrollment E2E contains forbidden expansion %q", forbidden)

@@ -153,7 +153,8 @@ assert_guest_clean() {
       exit 3
     }
   done
-  unit_count=$(guest "$instance" systemctl list-unit-files --no-legend 'vpnctl*.service' 2>/dev/null | wc -l | tr -d ' ')
+  unit_count=$(guest "$instance" systemctl list-unit-files --no-legend --no-pager |
+    awk '$1 ~ /^vpnctl.*[.]service$/ { count++ } END { print count + 0 }')
   [ "$unit_count" = 0 ] || {
     echo "owned product units exist before E2E on $instance: count=$unit_count" >&2
     return 3
@@ -503,7 +504,8 @@ assert_final_clean() {
     ! guest "$instance" sudo nft list table inet vpnctl >/dev/null 2>&1
     ! guest "$instance" ip link show vpnctl-wg >/dev/null 2>&1
     ! guest "$instance" ip link show vpnctl0 >/dev/null 2>&1
-    unit_count=$(guest "$instance" systemctl list-unit-files --no-legend 'vpnctl*.service' 2>/dev/null | wc -l | tr -d ' ')
+    unit_count=$(guest "$instance" systemctl list-unit-files --no-legend --no-pager |
+      awk '$1 ~ /^vpnctl.*[.]service$/ { count++ } END { print count + 0 }')
     [ "$unit_count" = 0 ]
     process_count=$(guest "$instance" sh -c '{ pgrep -x frps || true; pgrep -x frpc || true; pgrep -x mihomo || true; } | wc -l')
     [ "$(printf '%s' "$process_count" | tr -d ' ')" = 0 ]
