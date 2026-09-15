@@ -57,7 +57,7 @@ func (reader *gatewayReadinessConvergencePlanReader) Plan(ctx context.Context) (
 	if err != nil {
 		return operations.ConvergencePlan{}, err
 	}
-	if state.Host.Role != model.RoleGateway || state.Generation != plan.DesiredGeneration {
+	if state.Host.Role != model.RoleGateway || !gatewayReadinessPlanMatchesState(state, plan) {
 		return operations.ConvergencePlan{}, operations.ErrConvergencePlanInvalid
 	}
 	report, err := reader.readiness.Inspect(ctx, state)
@@ -72,6 +72,24 @@ func (reader *gatewayReadinessConvergencePlanReader) Plan(ctx context.Context) (
 		return operations.ConvergencePlan{}, fmt.Errorf("%w: gateway readiness: %v", operations.ErrConvergencePlanInvalid, err)
 	}
 	return plan, nil
+}
+
+func gatewayReadinessPlanMatchesState(state model.State, plan operations.ConvergencePlan) bool {
+	if state.Generation < plan.DesiredGeneration {
+		return false
+	}
+	if state.Generation == plan.DesiredGeneration {
+		return true
+	}
+	if plan.DesiredGeneration != plan.AppliedGeneration || len(plan.Changes) != 0 {
+		return false
+	}
+	for _, operation := range state.Operations {
+		if operation.State != model.OperationCompleted && operation.State != model.OperationFailed {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeGatewayReadinessDrift(existing []operations.OwnedDrift, report lifecycle.GatewayBootstrapReadinessReport) []operations.OwnedDrift {

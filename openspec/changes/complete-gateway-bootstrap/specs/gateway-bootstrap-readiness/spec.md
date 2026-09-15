@@ -73,8 +73,10 @@ generation is older than authoritative state SHALL remain ready only when
 rendering the current semantic ingress inputs at that retained generation
 produces its exact tree hash. A newer provenance or changed semantic input MUST
 remain drift. Status SHALL detect collection races by rereading authoritative
-state, not by requiring convergence material generation to equal a later
-metadata-only state generation.
+state. Status and plan MUST NOT require a clean equal desired/applied
+convergence baseline to equal a later metadata-only state generation, but plan
+MUST reject future material, a pending desired difference, or a non-terminal
+authoritative operation across that generation gap.
 
 #### Scenario: nginx was removed after initialization
 - **WHEN** a Gateway has valid authoritative state but its nginx package/unit and public listener are absent

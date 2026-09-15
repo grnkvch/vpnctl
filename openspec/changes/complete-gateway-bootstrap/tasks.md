@@ -45,6 +45,7 @@
 - [x] 5.13 Normalize bare IPv4 host-route destinations from Linux JSON snapshots to exact `/32` prefixes; verify owner-scoped Node cleanup retains the route while malformed, IPv6 and cross-family destinations remain rejected.
 - [x] 5.14 During Node cleanup, omit only the retained rp-filter sysctl for a positively absent product WireGuard interface; verify host/underlay values remain mandatory and ambiguous interface probes fail closed.
 - [x] 5.15 Make Gateway `doctor tunnel` probe the configured FRPS overlay listener instead of loopback; verify a non-default Node CIDR resolves to its first usable address and no unrelated local listener can produce the result.
+- [x] 5.16 Let Gateway plan accept a clean older convergence baseline after a completed metadata-only update while retaining generation fail-closed behavior; verify future material, desired changes, and non-terminal operations remain invalid.
 
 ## 6. Complete the no-VM verification checkpoint
 

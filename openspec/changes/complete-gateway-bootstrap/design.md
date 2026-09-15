@@ -165,7 +165,12 @@ newer active provenance or a semantic input change (for example public IP,
 certificate, reserved route, or expose changes) remains drift. Passive status
 detects a concurrent collection race by rereading authoritative state after
 planning instead of equating authoritative and convergence generations, since
-clean material may legitimately predate metadata-only state.
+clean material may legitimately predate metadata-only state. The Gateway plan
+wrapper applies the same generation model: an older desired and applied
+baseline is accepted only when those generations are equal, there is no desired
+resource change, and every authoritative operation is terminal. Future
+material, a pending desired difference, or any non-terminal operation continues
+to fail closed.
 Package-manager and system-wide ingress mutation is deliberately not executed
 by the resident controller: its systemd sandbox retains no APT, dpkg, nginx or
 system-unit write access.

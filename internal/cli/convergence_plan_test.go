@@ -144,6 +144,84 @@ func TestGatewayReadinessConvergencePlanPreservesHealthyEmptyDrift(t *testing.T)
 	}
 }
 
+func TestGatewayReadinessConvergencePlanAcceptsOlderCleanMaterialAfterCompletedUpdate(t *testing.T) {
+	t.Parallel()
+	base := &recordingConvergencePlanReader{plan: operations.ConvergencePlan{
+		DesiredGeneration: 4, AppliedGeneration: 4, Impact: operations.ConvergenceImpactNone,
+		Changes: []operations.DesiredChange{}, Drift: []operations.OwnedDrift{},
+	}}
+	reader := &gatewayReadinessConvergencePlanReader{
+		base: base, state: staticGatewayPlanState{state: model.State{
+			Generation: 7,
+			Host:       model.Host{Role: model.RoleGateway},
+			Operations: []model.Operation{{State: model.OperationCompleted}},
+		}},
+		readiness: &recordingGatewayPlanReadiness{report: lifecycle.GatewayBootstrapReadinessReport{
+			SchemaVersion: lifecycle.GatewayBootstrapReadinessSchemaVersion, Generation: 7, Ready: true,
+			CandidateSHA256: strings.Repeat("a", 64), Checks: []lifecycle.GatewayBootstrapReadinessCheck{},
+		}},
+	}
+	plan, err := reader.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DesiredGeneration != 4 || plan.AppliedGeneration != 4 || len(plan.Changes) != 0 || len(plan.Drift) != 0 {
+		t.Fatalf("metadata-only Gateway plan = %+v", plan)
+	}
+}
+
+func TestGatewayReadinessConvergencePlanRejectsOlderMaterialDuringOperation(t *testing.T) {
+	t.Parallel()
+	base := &recordingConvergencePlanReader{plan: operations.ConvergencePlan{
+		DesiredGeneration: 4, AppliedGeneration: 4, Impact: operations.ConvergenceImpactNone,
+		Changes: []operations.DesiredChange{}, Drift: []operations.OwnedDrift{},
+	}}
+	reader := &gatewayReadinessConvergencePlanReader{
+		base: base, state: staticGatewayPlanState{state: model.State{
+			Generation: 5,
+			Host:       model.Host{Role: model.RoleGateway},
+			Operations: []model.Operation{{State: model.OperationActive}},
+		}},
+		readiness: &recordingGatewayPlanReadiness{report: lifecycle.GatewayBootstrapReadinessReport{
+			SchemaVersion: lifecycle.GatewayBootstrapReadinessSchemaVersion, Generation: 5, Ready: true,
+			CandidateSHA256: strings.Repeat("a", 64), Checks: []lifecycle.GatewayBootstrapReadinessCheck{},
+		}},
+	}
+	if _, err := reader.Plan(context.Background()); !errors.Is(err, operations.ErrConvergencePlanInvalid) {
+		t.Fatalf("active operation with older material error = %v", err)
+	}
+}
+
+func TestGatewayReadinessPlanGenerationGapRejectsFutureAndDesiredChange(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		state model.State
+		plan  operations.ConvergencePlan
+	}{
+		{
+			name:  "future material",
+			state: model.State{Generation: 3},
+			plan:  operations.ConvergencePlan{DesiredGeneration: 4, AppliedGeneration: 4},
+		},
+		{
+			name:  "older pending desired change",
+			state: model.State{Generation: 6},
+			plan: operations.ConvergencePlan{
+				DesiredGeneration: 5, AppliedGeneration: 4,
+				Changes: []operations.DesiredChange{{}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if gatewayReadinessPlanMatchesState(test.state, test.plan) {
+				t.Fatal("unsafe generation gap was accepted")
+			}
+		})
+	}
+}
+
 func TestConvergencePlanOutputRejectsInvalidAggregateImpact(t *testing.T) {
 	t.Parallel()
 
