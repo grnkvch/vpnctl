@@ -43,6 +43,7 @@
 - [x] 5.11 Retry the complete unchanged joined-Node routing and FRP readiness contract inside the fixed 20-second activation bound before publishing active convergence; verify a transient post-start failure converges while persistent failure retains activation-pending and fail-closed state.
 - [x] 5.12 Scope FRP client connection cardinality to matching `frpc` process lines at the exact Gateway endpoint; verify unrelated Mihomo/transit sessions are ignored while zero or multiple frpc matches remain unhealthy.
 - [x] 5.13 Normalize bare IPv4 host-route destinations from Linux JSON snapshots to exact `/32` prefixes; verify owner-scoped Node cleanup retains the route while malformed, IPv6 and cross-family destinations remain rejected.
+- [x] 5.14 During Node cleanup, omit only the retained rp-filter sysctl for a positively absent product WireGuard interface; verify host/underlay values remain mandatory and ambiguous interface probes fail closed.
 
 ## 6. Complete the no-VM verification checkpoint
 

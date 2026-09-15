@@ -49,6 +49,9 @@ passing component and release gates.
 - Normalize Linux JSON IPv4 host-route destinations to their exact `/32` prefix
   before retaining the Node routing-guard snapshot, so owner-scoped cleanup can
   restore the explicit Gateway endpoint route instead of rejecting it.
+- Let Node cleanup omit only the retained rp-filter sysctl for the exact
+  product WireGuard interface after that interface is confirmed absent, while
+  continuing to restore every host-level and underlay-interface value.
 - Prove both fresh bootstrap and incomplete-candidate recovery manually on the
   existing Lima pair before adding one focused Gateway-enrollment E2E check.
 - Keep migration implementation, capacity policy, release-gate orchestration,

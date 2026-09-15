@@ -206,6 +206,12 @@ func (manager *NodeRoutingGuardManager) inspectRestore(ctx context.Context) (lin
 	if err != nil {
 		return linuxplatform.NetworkSnapshot{}, false, err
 	}
+	if present {
+		original, err = manager.prepareRestoreSnapshot(ctx, original)
+		if err != nil {
+			return linuxplatform.NetworkSnapshot{}, false, err
+		}
+	}
 	scope := linuxplatform.OwnedNetworkScope{}
 	if present {
 		scope.Sysctls = originalSysctlNames(original)
@@ -221,6 +227,40 @@ func (manager *NodeRoutingGuardManager) inspectRestore(ctx context.Context) (lin
 		return linuxplatform.NetworkSnapshot{}, false, fmt.Errorf("refusing node routing restoration without an original network snapshot")
 	}
 	return original, present, nil
+}
+
+func (manager *NodeRoutingGuardManager) prepareRestoreSnapshot(ctx context.Context, original linuxplatform.NetworkSnapshot) (linuxplatform.NetworkSnapshot, error) {
+	const standardRPFilter = "net.ipv4.conf." + NodeRoutingStandardInterface + ".rp_filter"
+	found := false
+	for _, sysctl := range original.Sysctls {
+		found = found || sysctl.Name == standardRPFilter
+	}
+	if !found {
+		return original, nil
+	}
+	command := linuxplatform.ProbeCommand{Name: "ip", Args: []string{"-o", "link", "show", "dev", NodeRoutingStandardInterface}}
+	result, err := manager.runner.Run(ctx, command)
+	if err != nil {
+		if ctx.Err() != nil {
+			return linuxplatform.NetworkSnapshot{}, ctx.Err()
+		}
+		return linuxplatform.NetworkSnapshot{}, fmt.Errorf("inspect product WireGuard interface before restoration: %w", err)
+	}
+	if result.ExitCode == 0 {
+		return original, nil
+	}
+	detail := strings.ToLower(string(result.Stderr) + "\n" + string(result.Stdout))
+	if !strings.Contains(detail, "does not exist") {
+		return linuxplatform.NetworkSnapshot{}, commandResultError("inspect product WireGuard interface before restoration", result)
+	}
+	filtered := original
+	filtered.Sysctls = make([]linuxplatform.SysctlSnapshot, 0, len(original.Sysctls)-1)
+	for _, sysctl := range original.Sysctls {
+		if sysctl.Name != standardRPFilter {
+			filtered.Sysctls = append(filtered.Sysctls, sysctl)
+		}
+	}
+	return filtered, nil
 }
 
 func originalSysctlNames(snapshot linuxplatform.NetworkSnapshot) []string {

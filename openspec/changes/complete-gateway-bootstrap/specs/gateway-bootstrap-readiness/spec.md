@@ -181,6 +181,11 @@ When Linux reports an owned IPv4 host-route destination as a bare address, the
 snapshot boundary SHALL normalize it to the exact `/32` prefix before
 validation and restoration. Malformed, IPv6, or cross-family destinations MUST
 remain invalid and MUST NOT broaden the owner-scoped cleanup surface.
+After Node services stop for owner-scoped cleanup, restoration SHALL omit the
+retained rp-filter value only for the exact product WireGuard interface when
+that interface is positively absent. Host-level and underlay-interface sysctls
+MUST still be restored, and an unavailable or ambiguous interface observation
+MUST fail closed.
 
 #### Scenario: Gateway public HTTPS edge is absent
 - **WHEN** an initialized Node attempts join with a valid unexpired invite but the Gateway TCP 443 enrollment edge cannot be reached
@@ -221,6 +226,10 @@ remain invalid and MUST NOT broaden the owner-scoped cleanup surface.
 #### Scenario: Owner-scoped cleanup snapshots a Linux host route
 - **WHEN** Linux JSON route output represents the owned Gateway endpoint route as a bare IPv4 address
 - **THEN** the snapshot retains it as the exact `/32` route and uninstall or purge can validate and restore it without accepting malformed or non-IPv4 input
+
+#### Scenario: Product WireGuard interface ends before network restoration
+- **WHEN** owner-scoped Node cleanup stops the standard transport and positively observes that `vpnctl-wg` no longer exists
+- **THEN** restoration omits only that interface's retained rp-filter value, restores every host and underlay value, and does not fail on a kernel path removed with the product interface
 
 ### Requirement: Focused acceptance precedes the full release gate
 The final candidate SHALL first pass fast focused tests, then manual fresh and

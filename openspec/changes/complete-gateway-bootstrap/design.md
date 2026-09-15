@@ -269,6 +269,14 @@ IPv6 and cross-family values remain invalid for this v2 ownership scope. This
 lets owner-scoped uninstall/purge restore the retained route without broadening
 route ownership.
 
+Node cleanup deliberately stops the standard transport before it removes the
+fail-closed routing boundary. The product-owned `vpnctl-wg` interface may
+therefore be absent when the retained pre-guard sysctls are restored. Restore
+probes that exact interface: when present, its retained rp-filter value remains
+mandatory; when positively absent, only that interface-scoped value is omitted
+because the kernel has removed its `/proc/sys` entry. Host-wide and underlay
+interface sysctls remain mandatory, and an ambiguous interface probe fails.
+
 ### 6. Recover the one old candidate with a narrow prerequisite, then normal flows
 
 The old candidate's updater already compares component pins and file SHA values,

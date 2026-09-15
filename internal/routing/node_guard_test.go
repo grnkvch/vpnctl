@@ -459,6 +459,67 @@ func TestPersistentNodeRoutingGuardRestoresExactOriginalAndConsumesSnapshot(t *t
 	}
 }
 
+func TestPersistentNodeRoutingGuardRestoreOmitsOnlyAbsentProductInterfaceSysctl(t *testing.T) {
+	t.Parallel()
+
+	paths, err := store.NewPaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := newNodeRoutingGuardRunner()
+	manager, err := NewPersistentNodeRoutingGuardManager(paths, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := nodeRoutingGuardFixture(t).Config()
+	config.ActiveTransport = model.TransportStandard
+	config.GatewayOverlayIPv4 = "10.67.0.1"
+	candidate, err := RenderNodeRoutingGuardConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Install(context.Background(), candidate); err != nil {
+		t.Fatal(err)
+	}
+	runner.standardInterfacePresent = false
+	runner.calls = nil
+	if err := manager.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	joined := runner.joinedCalls()
+	if !strings.Contains(joined, "ip -o link show dev vpnctl-wg") || !strings.Contains(joined, "sysctl -q -w net.ipv4.conf.all.rp_filter=0") {
+		t.Fatalf("restore omitted required probes or sysctls:\n%s", joined)
+	}
+	if strings.Contains(joined, "sysctl -q -w net.ipv4.conf.vpnctl-wg.rp_filter=") {
+		t.Fatalf("restore wrote a sysctl for the confirmed-absent product interface:\n%s", joined)
+	}
+}
+
+func TestNodeRoutingGuardRestoreRejectsAmbiguousProductInterfaceProbe(t *testing.T) {
+	t.Parallel()
+
+	runner := newNodeRoutingGuardRunner()
+	runner.standardInterfaceProbeFailure = true
+	manager, err := NewNodeRoutingGuardManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := linuxplatform.NetworkSnapshot{
+		SchemaVersion: linuxplatform.NetworkSnapshotSchemaVersion,
+		Routes:        []linuxplatform.Route{},
+		PolicyRules:   []linuxplatform.PolicyRule{},
+		Sysctls: []linuxplatform.SysctlSnapshot{{
+			Name: "net.ipv4.conf.vpnctl-wg.rp_filter", Value: "0",
+		}},
+	}
+	if _, err := manager.prepareRestoreSnapshot(context.Background(), original); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("ambiguous interface probe error = %v", err)
+	}
+}
+
 func TestNodeRoutingGuardNFTablesParsesWithNativeNFT(t *testing.T) {
 	binary := os.Getenv("VPNCTL_NFT")
 	if binary == "" {
@@ -589,18 +650,22 @@ func mustAtoi(t *testing.T, value string) int {
 }
 
 type nodeRoutingGuardRunner struct {
-	calls           []linuxplatform.ProbeCommand
-	tableDefinition string
-	lastAppliedNFT  []byte
-	failNFTApply    bool
-	rulesInstalled  bool
-	tunReady        bool
-	dnsReady        bool
-	ipv6CounterJSON []byte
-	ipv6SetJSON     []byte
+	calls                         []linuxplatform.ProbeCommand
+	tableDefinition               string
+	lastAppliedNFT                []byte
+	failNFTApply                  bool
+	rulesInstalled                bool
+	tunReady                      bool
+	dnsReady                      bool
+	standardInterfacePresent      bool
+	standardInterfaceProbeFailure bool
+	ipv6CounterJSON               []byte
+	ipv6SetJSON                   []byte
 }
 
-func newNodeRoutingGuardRunner() *nodeRoutingGuardRunner { return &nodeRoutingGuardRunner{} }
+func newNodeRoutingGuardRunner() *nodeRoutingGuardRunner {
+	return &nodeRoutingGuardRunner{standardInterfacePresent: true}
+}
 
 func (runner *nodeRoutingGuardRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
 	runner.calls = append(runner.calls, linuxplatform.ProbeCommand{Name: command.Name, Args: append([]string(nil), command.Args...), Stdin: append([]byte(nil), command.Stdin...)})
@@ -649,6 +714,14 @@ func (runner *nodeRoutingGuardRunner) Run(_ context.Context, command linuxplatfo
 		return linuxplatform.ProbeResult{Stdout: []byte("[]")}, nil
 	case strings.HasPrefix(key, "sysctl -n "):
 		return linuxplatform.ProbeResult{Stdout: []byte("0\n")}, nil
+	case key == "ip -o link show dev vpnctl-wg":
+		if runner.standardInterfaceProbeFailure {
+			return linuxplatform.ProbeResult{ExitCode: 2, Stderr: []byte("permission denied")}, nil
+		}
+		if !runner.standardInterfacePresent {
+			return linuxplatform.ProbeResult{ExitCode: 1, Stderr: []byte("Device \"vpnctl-wg\" does not exist.")}, nil
+		}
+		return linuxplatform.ProbeResult{Stdout: []byte("7: vpnctl-wg: <POINTOPOINT,UP> mtu 1420 state UNKNOWN\n")}, nil
 	case strings.HasPrefix(key, "ip -4 rule add "):
 		runner.rulesInstalled = true
 		return linuxplatform.ProbeResult{}, nil
