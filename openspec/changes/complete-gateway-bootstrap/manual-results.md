@@ -72,6 +72,34 @@ result-contract check passed, but the exact winning invocation was not retained.
 Both attempts remain disclosed in `docs/v2/HOST_CHANGELOG.md`; this is not used
 as evidence of an additional product behavior.
 
+## 8.3 Focused automated enrollment
+
+Result: **PASS**
+
+- The focused entrypoint ran against the same final product source
+  `c23bf3dcf595e8c237ee49d9b98fd940a5ca6095` and reproduced its exact binary,
+  bundle and checksum-metadata hashes recorded above. The passing orchestration
+  commit was `5f6754b7d972ba671efcb4a57dac2c61963c8f04`.
+- Clean no-nginx Gateway bootstrap, fresh-session network confirmation, Node
+  initialization, one secret-safe public join, and joined validation, clean
+  plan, passive status and active doctors passed. The selected Telegram request
+  returned HTTP `302` and increased aggregate WireGuard transfer by 752 bytes.
+- Stopping nginx made public health fail closed, passive status degraded and
+  plan report availability drift. Confirmed repair required no network-watchdog
+  transaction, restored nginx/readiness, and both roles again reported clean
+  plans and healthy active checks.
+- Public typed purge completed Node first and Gateway second. Exact task paths,
+  TEST-NET routing/address, nginx package and product resources were removed;
+  UFW and the fixture package/swap baseline were restored; both exact VM
+  profiles returned to `Stopped`.
+- Three preceding focused attempts remain retained and visible: one lacked
+  actionable preflight diagnostics, one rejected systemd's valid zero-match
+  unit result, and one queried transfer counters on the routing TUN rather than
+  WireGuard. A fourth reached successful repair but rejected its correctly
+  absent optional watchdog ID. Each failure triggered owner-scoped cleanup and
+  was followed only by a direct harness fix, fast regression tests and this
+  same focused loop; no general release gate or capacity run was invoked.
+
 ## Redaction and evidence boundary
 
 - The manual record contains only public artifact hashes, stable resource IDs,
