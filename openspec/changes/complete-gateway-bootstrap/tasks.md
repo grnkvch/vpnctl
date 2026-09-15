@@ -38,6 +38,7 @@
 - [x] 5.6 Retry complete post-restart Gateway join readiness every 100 ms for at most 20 seconds inside the fixed enrollment budget, and map exhausted readiness to public `503 unavailable`; verify a transient identity mismatch converges while a persistent health failure rolls back and is not misclassified as invalid credentials.
 - [x] 5.7 Permit `AF_NETLINK` in the resident Gateway controller's address-family sandbox for its existing read-only `wg`/`ip` candidate observers while retaining no IPv6 or package/nginx/system-unit write path; verify the rendered unit contract exactly binds the three permitted families.
 - [x] 5.8 Make every Node role unit create the shared private `/run/vpnctl` runtime directory and retry each unit's start/readiness within one fixed bounded activation window before advancing; verify a transient routing-guard startup race converges while a persistent failure keeps the join result activation-pending and fail-closed.
+- [x] 5.9 Include the candidate active-identity firewall in the pre-commit Gateway join transaction; verify it atomically replaces only the existing owned table, is retained on commit, and restores the exact prior table on readiness, convergence, or state failure.
 
 ## 6. Complete the no-VM verification checkpoint
 

@@ -221,6 +221,15 @@ without relaxing any health invariant. Exhaustion rolls back the exact staged
 candidate and returns the non-oracular fixed `503 unavailable`, not a `404`
 credential rejection.
 
+The candidate transaction also renders the Gateway identity firewall from the
+same candidate state and atomically replaces only the already-owned
+`inet/vpnctl` table before readiness is observed. It snapshots that exact table
+first and retains the rollback handle until authoritative invite/Node state is
+committed. A readiness, convergence, credential, or state-commit failure
+restores the exact prior table; a successful or provably committed join retains
+the candidate table. The update never creates an absent ownership claim and
+does not touch routes, policy rules, sysctls, or foreign nftables tables.
+
 After the Node has durably committed the assignment, its systemd activation is
 still a recoverable local convergence step. Every Node role unit declares the
 same private `RuntimeDirectory=vpnctl`, so a reboot cannot fail its namespace

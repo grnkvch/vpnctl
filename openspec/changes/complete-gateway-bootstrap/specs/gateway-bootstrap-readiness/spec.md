@@ -154,6 +154,11 @@ Post-restart Gateway candidate readiness SHALL retry the complete unchanged
 health contract every 100 milliseconds for no more than 20 seconds inside the
 shared response budget. Exhaustion SHALL restore the exact prior runtime and
 return fixed `503 unavailable`; it MUST NOT be classified as an invalid invite.
+The pre-commit candidate SHALL atomically replace only the existing vpnctl-owned
+Gateway firewall with the candidate active identities before readiness is
+observed. Until authoritative invite/Node commit, it SHALL retain and restore
+the exact prior owned table on readiness, convergence, credential, or state
+failure; a committed join SHALL retain the candidate table.
 After the Node commits a valid assignment, each Node role unit SHALL create the
 shared private runtime directory through systemd and the local activator SHALL
 retry the current unit's start/readiness for no more than 20 seconds before
@@ -175,6 +180,10 @@ disable the fail-closed routing boundary.
 #### Scenario: Service activation precedes candidate readiness
 - **WHEN** systemd reports the staged Gateway services started before WireGuard or a required listener reaches the exact candidate state
 - **THEN** join retries the complete readiness report for at most 20 seconds, commits only an exact healthy result, and otherwise rolls back and reports enrollment unavailable
+
+#### Scenario: Candidate Node becomes an active firewall identity
+- **WHEN** Gateway join stages a valid Node before consuming the invite
+- **THEN** the candidate Node address is present in the owned active-identity firewall during readiness, successful commit retains it, and any rejected join restores the exact prior owned table
 
 #### Scenario: Node runtime or routing guard is transiently unavailable
 - **WHEN** a joined Node boots without a pre-existing `/run/vpnctl` directory or the routing guard's first start races the WireGuard interface

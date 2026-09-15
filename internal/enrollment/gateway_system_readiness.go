@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vgrinkevich/vpnctl/internal/control"
 	"github.com/vgrinkevich/vpnctl/internal/model"
 	linuxplatform "github.com/vgrinkevich/vpnctl/internal/platform/linux"
 	"github.com/vgrinkevich/vpnctl/internal/restricted"
@@ -39,6 +40,10 @@ type GatewayJoinConvergencePreparer interface {
 	PrepareActiveGatewayGeneration(context.Context, uint64, linuxplatform.RoleInstallationRequest) (GatewayJoinConvergencePreparation, error)
 }
 
+type GatewayJoinFirewallPreparer interface {
+	PrepareGatewayFirewallUpdate(context.Context, linuxplatform.GatewayFirewallArtifact) (linuxplatform.GatewayFirewallUpdate, error)
+}
+
 // SystemGatewayJoinReadiness publishes one complete gateway-side join
 // candidate before the authoritative invite/node transition. The returned
 // preparation owns an exact file snapshot and the serialization lock until
@@ -49,6 +54,7 @@ type SystemGatewayJoinReadiness struct {
 	roles       *linuxplatform.RoleSystemdInstaller
 	runner      linuxplatform.ProbeRunner
 	keyRunner   wireguard.Runner
+	firewall    GatewayJoinFirewallPreparer
 	convergence GatewayJoinConvergencePreparer
 	mutationMu  *sync.Mutex
 	binaryPath  string
@@ -64,7 +70,8 @@ func NewSystemGatewayJoinReadiness(
 	convergence GatewayJoinConvergencePreparer,
 ) (*SystemGatewayJoinReadiness, error) {
 	return newSystemGatewayJoinReadiness(
-		paths, secrets, mutationMu, convergence, linuxplatform.OSProbeRunner{}, wireguard.ExecRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
+		paths, secrets, mutationMu, convergence, linuxplatform.OSProbeRunner{}, wireguard.ExecRunner{}, linuxplatform.NewOSNetworkManager(),
+		linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 }
 
@@ -75,9 +82,10 @@ func newSystemGatewayJoinReadiness(
 	convergence GatewayJoinConvergencePreparer,
 	runner linuxplatform.ProbeRunner,
 	keyRunner wireguard.Runner,
+	firewall GatewayJoinFirewallPreparer,
 	binaryPath string,
 ) (*SystemGatewayJoinReadiness, error) {
-	if secrets == nil || mutationMu == nil || convergence == nil || runner == nil || keyRunner == nil {
+	if secrets == nil || mutationMu == nil || convergence == nil || runner == nil || keyRunner == nil || firewall == nil {
 		return nil, fmt.Errorf("system gateway join readiness dependencies are incomplete")
 	}
 	roles, err := linuxplatform.NewRoleSystemdInstaller(paths.Root, paths.ConfigDir, runner)
@@ -88,7 +96,7 @@ func newSystemGatewayJoinReadiness(
 		return nil, err
 	}
 	return &SystemGatewayJoinReadiness{
-		paths: paths, secrets: secrets, roles: roles, runner: runner, keyRunner: keyRunner, convergence: convergence,
+		paths: paths, secrets: secrets, roles: roles, runner: runner, keyRunner: keyRunner, firewall: firewall, convergence: convergence,
 		mutationMu: mutationMu, binaryPath: binaryPath,
 	}, nil
 }
@@ -110,7 +118,7 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 		return nil, fmt.Errorf("context is required")
 	}
 	if readiness == nil || readiness.secrets == nil || readiness.roles == nil || readiness.runner == nil ||
-		readiness.keyRunner == nil || readiness.convergence == nil || readiness.mutationMu == nil {
+		readiness.keyRunner == nil || readiness.firewall == nil || readiness.convergence == nil || readiness.mutationMu == nil {
 		return nil, fmt.Errorf("system gateway join readiness is incomplete")
 	}
 	readiness.mutationMu.Lock()
@@ -165,6 +173,14 @@ func (readiness *SystemGatewayJoinReadiness) Prepare(
 	}
 	if _, err := readiness.roles.Apply(ctx, request); err != nil {
 		return rollback(fmt.Errorf("publish gateway join candidate: %w", err))
+	}
+	firewall, err := renderSystemGatewayJoinFirewall(candidate.State)
+	if err != nil {
+		return rollback(fmt.Errorf("render gateway join candidate firewall: %w", err))
+	}
+	preparation.firewall, err = readiness.firewall.PrepareGatewayFirewallUpdate(ctx, firewall)
+	if err != nil {
+		return rollback(fmt.Errorf("publish gateway join candidate firewall: %w", err))
 	}
 	if err := readiness.restartCandidateServices(ctx); err != nil {
 		return rollback(err)
@@ -469,6 +485,7 @@ type systemGatewayJoinPreparation struct {
 	snapshots   []gatewayJoinConfigSnapshot
 	report      JoinReadinessReport
 	convergence GatewayJoinConvergencePreparation
+	firewall    linuxplatform.GatewayFirewallUpdate
 	finished    bool
 }
 
@@ -495,6 +512,10 @@ func (preparation *systemGatewayJoinPreparation) Commit() {
 		preparation.convergence.Commit()
 		preparation.convergence = nil
 	}
+	if preparation.firewall != nil {
+		preparation.firewall.Commit()
+		preparation.firewall = nil
+	}
 	clearGatewayJoinSnapshots(preparation.snapshots)
 	preparation.snapshots = nil
 	preparation.runtime.mutationMu.Unlock()
@@ -520,6 +541,10 @@ func (preparation *systemGatewayJoinPreparation) rollbackLocked(ctx context.Cont
 		preparation.snapshots = nil
 	}()
 	var result error
+	if preparation.firewall != nil {
+		result = errors.Join(result, preparation.firewall.Rollback(ctx))
+		preparation.firewall = nil
+	}
 	for _, snapshot := range preparation.snapshots {
 		if err := restoreGatewayJoinConfig(snapshot); err != nil {
 			result = errors.Join(result, err)
@@ -536,6 +561,15 @@ func (preparation *systemGatewayJoinPreparation) rollbackLocked(ctx context.Cont
 	}
 	preparation.convergence = nil
 	return result
+}
+
+func renderSystemGatewayJoinFirewall(state model.State) (linuxplatform.GatewayFirewallArtifact, error) {
+	return linuxplatform.RenderGatewayIdentityFirewall(state, linuxplatform.GatewayIdentityFirewallServices{
+		ClientTCPPorts: []int{routing.GatewayDNSPort},
+		ClientUDPPorts: []int{routing.GatewayDNSPort},
+		NodeTCPPorts:   []int{routing.GatewayDNSPort, control.RPCControlTCPPort, tunnel.FRPServerPort},
+		NodeUDPPorts:   []int{routing.GatewayDNSPort},
+	})
 }
 
 func snapshotGatewayJoinConfigs(paths store.Paths, configs []linuxplatform.RoleConfigFile) ([]gatewayJoinConfigSnapshot, error) {

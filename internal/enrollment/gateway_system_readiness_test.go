@@ -62,6 +62,9 @@ func TestSystemGatewayJoinReadinessPublishesAndRetainsCommittedCandidate(t *test
 	if convergence.stages != 1 || convergence.commits != 1 || convergence.rollbacks != 0 || convergence.generation != 3 || len(convergence.request.Configs) != 12 {
 		t.Fatalf("gateway convergence transaction = %+v", convergence)
 	}
+	if !strings.Contains(runner.firewallDefinition, "elements = { 10.67.0.2 }") || len(runner.firewallApplications) != 1 {
+		t.Fatalf("committed gateway firewall does not contain the joined node: applications=%d definition=%q", len(runner.firewallApplications), runner.firewallDefinition)
+	}
 }
 
 func TestSystemGatewayJoinReadinessFailureRestoresExactBaseline(t *testing.T) {
@@ -86,6 +89,7 @@ func TestSystemGatewayJoinReadinessFailureRestoresExactBaseline(t *testing.T) {
 	if convergence.stages != 0 || convergence.commits != 0 || convergence.rollbacks != 0 {
 		t.Fatalf("failed readiness touched convergence: %+v", convergence)
 	}
+	assertGatewayJoinFirewallRolledBack(t, runner)
 }
 
 func TestSystemGatewayJoinConvergenceFailureRestoresExactRuntime(t *testing.T) {
@@ -111,6 +115,7 @@ func TestSystemGatewayJoinConvergenceFailureRestoresExactRuntime(t *testing.T) {
 	if !runner.sawSequence([][]string{{"restart", "vpnctl-standard.service"}, {"restart", "vpnctl-restricted.service"}, {"restart", "vpnctl-tunnel-server.service"}}) {
 		t.Fatalf("restored services were not restarted: %v", runner.systemctl)
 	}
+	assertGatewayJoinFirewallRolledBack(t, runner)
 	assertRejectedJoinHasNoPartialNode(t, fixture)
 }
 
@@ -119,7 +124,7 @@ func TestSystemGatewayJoinStateCommitFailureRollsBackRuntimeAndConvergence(t *te
 	fixture := newJoinFixture(t, late)
 	defer fixture.destroy()
 	ensureJoinFixtureFRPComponent(fixture)
-	paths, _, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	paths, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
 	baseline := readGatewayJoinTestTree(t, filepath.Join(paths.ConfigDir, "generated", "gateway"))
 	fixture.manager.state = &faultingGatewayJoinState{base: fixture.gatewayState}
 	late.target = readiness
@@ -134,6 +139,7 @@ func TestSystemGatewayJoinStateCommitFailureRollsBackRuntimeAndConvergence(t *te
 	if convergence.stages != 1 || convergence.commits != 0 || convergence.rollbacks != 1 {
 		t.Fatalf("state failure convergence transaction = %+v", convergence)
 	}
+	assertGatewayJoinFirewallRolledBack(t, runner)
 	assertRejectedJoinHasNoPartialNode(t, fixture)
 }
 
@@ -142,7 +148,7 @@ func TestSystemGatewayJoinUncertainCommittedStateRetainsRuntimeAndConvergence(t 
 	fixture := newJoinFixture(t, late)
 	defer fixture.destroy()
 	ensureJoinFixtureFRPComponent(fixture)
-	_, _, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
+	_, runner, readiness, convergence := newGatewayJoinReadinessFixture(t, fixture.gatewaySecrets)
 	fixture.manager.state = &faultingGatewayJoinState{base: fixture.gatewayState, commit: true}
 	late.target = readiness
 
@@ -156,6 +162,9 @@ func TestSystemGatewayJoinUncertainCommittedStateRetainsRuntimeAndConvergence(t 
 	gateway, err := fixture.gatewayState.Load()
 	if err != nil || gateway.Generation != 3 || len(gateway.Nodes) != 1 {
 		t.Fatalf("uncertain committed gateway = %+v, %v", gateway, err)
+	}
+	if !strings.Contains(runner.firewallDefinition, "elements = { 10.67.0.2 }") || len(runner.firewallApplications) != 1 {
+		t.Fatalf("uncertain committed gateway did not retain candidate firewall: applications=%d definition=%q", len(runner.firewallApplications), runner.firewallDefinition)
 	}
 }
 
@@ -216,8 +225,14 @@ func newGatewayJoinReadinessFixture(
 	}
 	runner.systemctl = nil
 	convergence := &recordingGatewayJoinConvergence{}
+	network, err := linuxplatform.NewNetworkManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.firewallDefinition = "table inet vpnctl {\n}\n"
+	runner.baselineFirewallDefinition = runner.firewallDefinition
 	readiness, err := newSystemGatewayJoinReadiness(
-		paths, secrets, &sync.Mutex{}, convergence, runner, &joinWireGuardRunner{}, linuxplatform.DefaultVPNCTLBinaryPath,
+		paths, secrets, &sync.Mutex{}, convergence, runner, &joinWireGuardRunner{}, network, linuxplatform.DefaultVPNCTLBinaryPath,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -243,9 +258,28 @@ type gatewayJoinReadinessProbeRunner struct {
 	peerPublicKey               string
 	failStandardPublicKeyChecks int
 	standardPublicKeyChecks     int
+	firewallDefinition          string
+	baselineFirewallDefinition  string
+	firewallApplications        [][]byte
 }
 
 func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command linuxplatform.ProbeCommand) (linuxplatform.ProbeResult, error) {
+	key := command.Name + " " + strings.Join(command.Args, " ")
+	switch key {
+	case "nft --json list tables":
+		return linuxplatform.ProbeResult{Stdout: []byte(`{"nftables":[{"table":{"family":"inet","name":"vpnctl"}}]}`)}, nil
+	case "nft --stateless -nn list table inet vpnctl":
+		return linuxplatform.ProbeResult{Stdout: []byte(runner.firewallDefinition)}, nil
+	case "nft --check --file -":
+		return linuxplatform.ProbeResult{}, nil
+	case "nft --file -":
+		batch := append([]byte(nil), command.Stdin...)
+		runner.firewallApplications = append(runner.firewallApplications, batch)
+		definition := string(batch)
+		definition = strings.TrimPrefix(definition, "delete table inet vpnctl\n")
+		runner.firewallDefinition = definition
+		return linuxplatform.ProbeResult{}, nil
+	}
 	if command.Name == "systemctl" {
 		runner.systemctl = append(runner.systemctl, append([]string(nil), command.Args...))
 		if reflect.DeepEqual(command.Args, []string{"is-active", "--quiet", "vpnctl-tunnel-server.service"}) && runner.failTunnelHealth {
@@ -253,9 +287,11 @@ func (runner *gatewayJoinReadinessProbeRunner) Run(_ context.Context, command li
 		}
 		return linuxplatform.ProbeResult{}, nil
 	}
-	key := command.Name + " " + strings.Join(command.Args, " ")
 	switch key {
 	case "wg show vpnctl-wg public-key":
+		if len(runner.firewallApplications) != 0 && !strings.Contains(runner.firewallDefinition, "10.67.0.2") {
+			return linuxplatform.ProbeResult{}, fmt.Errorf("candidate gateway firewall is not active")
+		}
 		runner.standardPublicKeyChecks++
 		if runner.failStandardPublicKeyChecks > 0 {
 			runner.failStandardPublicKeyChecks--
@@ -310,6 +346,16 @@ func readGatewayJoinTestTree(t *testing.T, directory string) map[string]string {
 		result[entry.Name()] = string(content)
 	}
 	return result
+}
+
+func assertGatewayJoinFirewallRolledBack(t *testing.T, runner *gatewayJoinReadinessProbeRunner) {
+	t.Helper()
+	if runner.firewallDefinition != runner.baselineFirewallDefinition {
+		t.Fatalf("gateway firewall differs after rollback:\nwant=%q\ngot=%q", runner.baselineFirewallDefinition, runner.firewallDefinition)
+	}
+	if len(runner.firewallApplications) != 2 {
+		t.Fatalf("gateway firewall applications = %d, want candidate plus rollback", len(runner.firewallApplications))
+	}
 }
 
 type lateGatewayJoinReadiness struct {

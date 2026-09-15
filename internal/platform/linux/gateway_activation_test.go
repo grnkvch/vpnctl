@@ -109,6 +109,81 @@ func TestActivateGatewayReplacingOwnedCreatesWhenOwnedTableIsAbsent(t *testing.T
 	}
 }
 
+func TestPrepareGatewayFirewallUpdateAppliesCandidateAndRestoresExactSnapshot(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingGatewayActivationRunner{ownedTablePresent: true}
+	manager, err := NewNetworkManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := RenderGatewayFirewall(GatewayFirewallInput{
+		ExternalInterface: "eth0", SSHPort: 22,
+		ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24", ActiveNodeIPv4: []string{"10.67.0.2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	update, err := manager.PrepareGatewayFirewallUpdate(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.stdins) != 2 || !strings.HasPrefix(string(runner.stdins[0]), "delete table inet vpnctl\n") ||
+		!strings.Contains(string(runner.stdins[0]), "elements = { 10.67.0.2 }") {
+		t.Fatalf("candidate update batches = %q", runner.stdins)
+	}
+	if err := update.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.stdins) != 4 || string(runner.stdins[2]) != string(runner.stdins[3]) ||
+		string(runner.stdins[2]) != "delete table inet vpnctl\ntable inet vpnctl {\n}\n" {
+		t.Fatalf("exact rollback batches = %q", runner.stdins)
+	}
+}
+
+func TestPrepareGatewayFirewallUpdateRequiresExistingOwnedTable(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingGatewayActivationRunner{}
+	manager, err := NewNetworkManager(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := RenderGatewayFirewall(GatewayFirewallInput{
+		ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.PrepareGatewayFirewallUpdate(context.Background(), artifact); err == nil {
+		t.Fatal("PrepareGatewayFirewallUpdate() claimed an absent table")
+	}
+	if len(runner.stdins) != 0 {
+		t.Fatalf("absent table was mutated: %q", runner.stdins)
+	}
+}
+
+func TestCommittedGatewayFirewallUpdateCannotRollBack(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingGatewayActivationRunner{ownedTablePresent: true}
+	manager, _ := NewNetworkManager(runner)
+	artifact, _ := RenderGatewayFirewall(GatewayFirewallInput{
+		ExternalInterface: "eth0", SSHPort: 22, ClientCIDR: "10.66.0.0/24", NodeCIDR: "10.67.0.0/24",
+	})
+	update, err := manager.PrepareGatewayFirewallUpdate(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	update.Commit()
+	if err := update.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.stdins) != 2 {
+		t.Fatalf("committed update was rolled back: %q", runner.stdins)
+	}
+}
+
 func TestGatewayInitNetworkScopeMatchesCandidate(t *testing.T) {
 	t.Parallel()
 
