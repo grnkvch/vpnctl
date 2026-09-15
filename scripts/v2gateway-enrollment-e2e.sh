@@ -370,14 +370,14 @@ capture_health() {
 
 selected_request() {
   local before after status
-  before=$(guest "$node_instance" sudo wg show vpnctl0 transfer | awk '{rx += $2; tx += $3} END {print rx + tx + 0}')
+  before=$(guest "$node_instance" sudo wg show vpnctl-wg transfer | awk '{rx += $2; tx += $3} END {print rx + tx + 0}')
   status=$(guest "$node_instance" curl -sS --connect-timeout 5 --max-time 20 -o /dev/null -w '%{http_code}' \
     https://api.telegram.org/)
   case "$status" in
     2??|3??|4??) ;;
     *) echo "selected request did not return HTTP" >&2; exit 4 ;;
   esac
-  after=$(guest "$node_instance" sudo wg show vpnctl0 transfer | awk '{rx += $2; tx += $3} END {print rx + tx + 0}')
+  after=$(guest "$node_instance" sudo wg show vpnctl-wg transfer | awk '{rx += $2; tx += $3} END {print rx + tx + 0}')
   [ "$after" -gt "$before" ] || {
     echo "selected request did not move WireGuard counters" >&2
     exit 4
