@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -28,6 +28,7 @@ candidate_metadata_sha=
 installer_sha=
 helper_sha=
 run_root=
+current_phase=source-preflight
 
 usage() {
   cat <<'EOF'
@@ -38,6 +39,16 @@ The directory must contain exactly the three checksum-governed v2 release
 assets. The check uses only the fixed stopped disposable Lima pair and restores
 both fixtures to Stopped. It is not a release gate and has no resume mode.
 EOF
+}
+
+enter_phase() {
+  current_phase=$1
+  printf 'running focused enrollment: %s\n' "$current_phase"
+}
+
+report_error() {
+  local code=$1 line=$2
+  printf 'focused enrollment failed: phase=%s line=%s exit=%s\n' "$current_phase" "$line" "$code" >&2
 }
 
 sha256_file() {
@@ -120,9 +131,18 @@ assert_no_task_root() {
 assert_guest_clean() {
   local instance=$1 role=$2 unit_count
   assert_no_task_root "$instance"
-  guest "$instance" sudo test ! -e /usr/local/bin/vpnctl
-  guest "$instance" sudo test ! -e /etc/vpnctl
-  guest "$instance" sudo test ! -e /var/lib/vpnctl/state.json
+  guest "$instance" sudo test ! -e /usr/local/bin/vpnctl || {
+    echo "vpnctl binary exists before E2E on $instance" >&2
+    return 3
+  }
+  guest "$instance" sudo test ! -e /etc/vpnctl || {
+    echo "vpnctl configuration exists before E2E on $instance" >&2
+    return 3
+  }
+  guest "$instance" sudo test ! -e /var/lib/vpnctl/state.json || {
+    echo "vpnctl authoritative state exists before E2E on $instance" >&2
+    return 3
+  }
   guest "$instance" sudo nft list table inet vpnctl >/dev/null 2>&1 && {
     echo "owned product nftables table exists before E2E on $instance" >&2
     exit 3
@@ -135,12 +155,21 @@ assert_guest_clean() {
   done
   unit_count=$(guest "$instance" systemctl list-unit-files --no-legend 'vpnctl*.service' 2>/dev/null | wc -l | tr -d ' ')
   [ "$unit_count" = 0 ] || {
-    echo "owned product units exist before E2E on $instance" >&2
-    exit 3
+    echo "owned product units exist before E2E on $instance: count=$unit_count" >&2
+    return 3
   }
-  guest "$instance" systemctl is-enabled --quiet ufw
-  guest "$instance" systemctl is-active --quiet ufw
-  guest "$instance" swapon --noheadings --show=NAME | grep -Fxq /var/lib/vpnctl-v2-lab.swap
+  guest "$instance" systemctl is-enabled --quiet ufw || {
+    echo "fixture UFW is not enabled before E2E on $instance" >&2
+    return 3
+  }
+  guest "$instance" systemctl is-active --quiet ufw || {
+    echo "fixture UFW is not active before E2E on $instance" >&2
+    return 3
+  }
+  guest "$instance" swapon --noheadings --show=NAME | grep -Fxq /var/lib/vpnctl-v2-lab.swap || {
+    echo "fixture swap is not active before E2E on $instance" >&2
+    return 3
+  }
   if guest "$instance" pgrep -x apt-get >/dev/null || guest "$instance" pgrep -x dpkg >/dev/null; then
     echo "package manager is busy on $instance" >&2
     exit 4
@@ -516,6 +545,7 @@ write_safe_diagnostics() {
   [ -n "$run_root" ] || return
   : > "$run_root/diagnostics.txt"
   chmod 0600 "$run_root/diagnostics.txt"
+  printf 'phase=%s\n' "$current_phase" >> "$run_root/diagnostics.txt"
   for instance in "$gateway_instance" "$node_instance"; do
     printf 'instance=%s status=%s\n' "$instance" "$(instance_status "$instance" 2>/dev/null || echo unavailable)" >> "$run_root/diagnostics.txt"
     if [ "$(instance_status "$instance" 2>/dev/null || true)" = Running ]; then
@@ -532,7 +562,7 @@ write_safe_diagnostics() {
 
 cleanup_on_exit() {
   local status=$? cleanup_status=0
-  trap - EXIT INT TERM HUP
+  trap - EXIT INT TERM HUP ERR
   set +e
   write_safe_diagnostics
   if [ "$(instance_status "$node_instance" 2>/dev/null || true)" = Running ] && owned_guest_root "$node_instance"; then
@@ -612,38 +642,55 @@ verify() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap 'exit 129' HUP
+  trap 'report_error "$?" "$LINENO"' ERR
+  enter_phase start-gateway
   start_fixture "$gateway_instance" gateway_started
+  enter_phase start-node
   start_fixture "$node_instance" node_started
 
+  enter_phase preflight-gateway
   assert_guest_clean "$gateway_instance" gateway
+  enter_phase preflight-node
   assert_guest_clean "$node_instance" node
   if package_installed "$gateway_instance" nginx-common; then
     gateway_common_initial=installed
   else
     gateway_common_initial=absent
   fi
+  enter_phase stage-gateway-candidate
   copy_candidate "$gateway_instance"
   guest "$gateway_instance" sudo sh -c "umask 077; printf '%s\\n' '$gateway_common_initial' > '$guest_root/nginx-common.initial'"
+  enter_phase stage-node-candidate
   copy_candidate "$node_instance"
+  enter_phase install-gateway-candidate
   install_candidate "$gateway_instance"
+  enter_phase install-node-candidate
   install_candidate "$node_instance"
+  enter_phase prepare-network
   prepare_network
+  enter_phase initialize-roles
   run_initialization
+  enter_phase enroll-node
   create_invite_and_join
+  enter_phase verify-joined-health
   capture_health joined
+  enter_phase verify-selected-request
   selected_request
+  enter_phase repair-missing-ingress
   repair_missing_ingress
 
+  enter_phase cleanup-products
   purge_role "$node_instance" purge-node "$run_root/cleanup-node.json"
   purge_role "$gateway_instance" purge-gateway "$run_root/cleanup-gateway.json"
   restore_fixture_baseline
   remove_owned_guest_root "$node_instance"
   remove_owned_guest_root "$gateway_instance"
   assert_final_clean
+  enter_phase stop-fixtures
   stop_started_fixtures
   assert_instance_contract "$gateway_instance" Stopped
   assert_instance_contract "$node_instance" Stopped
-  trap - EXIT INT TERM HUP
+  trap - EXIT INT TERM HUP ERR
   write_summary
   printf 'gateway enrollment E2E result: %s\n' "$run_root/summary.json"
 }

@@ -27,7 +27,8 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 		"assert_instance_contract \"$gateway_instance\" Stopped",
 		"assert_instance_contract \"$node_instance\" Stopped",
 		"go run ./cmd/vpnctl-release-verify",
-		"gateway-enrollment-e2e-v1", "trap cleanup_on_exit", "write_safe_diagnostics",
+		"gateway-enrollment-e2e-v1", "trap cleanup_on_exit", `trap 'report_error "$?" "$LINENO"' ERR`,
+		"write_safe_diagnostics", "phase=%s", "running focused enrollment",
 		"owned_guest_root", `grep -Fxq "$owner_value" "$guest_root/.owner"`, "assert_final_clean",
 		"purge_role \"$node_instance\" purge-node",
 		"purge_role \"$gateway_instance\" purge-gateway",
@@ -70,6 +71,9 @@ func TestV2GatewayEnrollmentE2EContract(t *testing.T) {
 	}
 	if strings.Contains(script, "set -x") {
 		t.Fatal("secret-bearing orchestration must not enable shell tracing")
+	}
+	if strings.Contains(script, "$BASH_COMMAND") {
+		t.Fatal("failure diagnostics must not render the possibly secret-bearing shell command")
 	}
 
 	helperPath := filepath.Join(repositoryRoot, "test", "v2lab", "gateway-enrollment-e2e", "pty_secret.py")
