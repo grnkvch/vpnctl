@@ -56,8 +56,8 @@
 
 - [x] 7.1 Verify the existing `vpnctl-v2-gateway` and `vpnctl-v2-node` fixture identity, image, resource profile, ownership, and stopped clean state, then journal every host/VM mutation in `docs/v2/HOST_CHANGELOG.md`; verify no production host and no old evidence directory is touched.
 - [x] 7.2 Build a non-release candidate and run the fresh scenario from a clean no-nginx Gateway through Gateway init, Node init, invite creation, public join, and one selected request; verify nginx/package/readiness postconditions, single invite consumption, and final service/firewall health before owner-scoped cleanup returns both fixtures to stopped state.
-- [ ] 7.3 Recreate the exact incomplete unpublished-candidate shape with a retained WireGuard client, rehearse the hash-bound pinned-nginx prerequisite and same-version manifest/SHA transition, then run confirmed repair; verify final artifact hashes, client continuity, public join, readiness, audit distinction, reversal boundary, and stopped owner-clean fixture state.
-- [ ] 7.4 Save only redacted diagnostics and an explicit manual result for each scenario without changing immutable historical evidence; verify no token, token hash, private key, authorization header, or secret configuration appears in tracked files or logs.
+- [x] 7.3 Recreate the exact incomplete unpublished-candidate shape with a retained WireGuard client, rehearse the hash-bound pinned-nginx prerequisite and same-version manifest/SHA transition, then run confirmed repair; verify final artifact hashes, client continuity, public join, readiness, audit distinction, reversal boundary, and stopped owner-clean fixture state.
+- [x] 7.4 Save only redacted diagnostics and an explicit manual result for each scenario without changing immutable historical evidence; verify no token, token hash, private key, authorization header, or secret configuration appears in tracked files or logs.
 
 ## 8. Add one narrow automated enrollment check
 
