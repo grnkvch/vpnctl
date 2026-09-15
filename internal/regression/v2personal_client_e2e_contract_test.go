@@ -13,11 +13,11 @@ func TestV2PersonalClientE2EContract(t *testing.T) {
 	repositoryRoot := filepath.Join("..", "..")
 	fixtureRoot := filepath.Join(repositoryRoot, "test", "v2lab", "personal")
 	var manifest struct {
-		Status           string `json:"status"`
-		Scope            string `json:"scope"`
-		ActualClashMi    string `json:"actual_ios_clash_mi"`
-		Delivery         string `json:"delivery"`
-		Mihomo           struct {
+		Status        string `json:"status"`
+		Scope         string `json:"scope"`
+		ActualClashMi string `json:"actual_ios_clash_mi"`
+		Delivery      string `json:"delivery"`
+		Mihomo        struct {
 			Version       string `json:"version"`
 			ArchiveSHA256 string `json:"archive_sha256"`
 		} `json:"mihomo"`
