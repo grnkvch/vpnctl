@@ -40,6 +40,7 @@
 - [x] 5.8 Make every Node role unit create the shared private `/run/vpnctl` runtime directory and retry each unit's start/readiness within one fixed bounded activation window before advancing; verify a transient routing-guard startup race converges while a persistent failure keeps the join result activation-pending and fail-closed.
 - [x] 5.9 Include the candidate active-identity firewall in the pre-commit Gateway join transaction; verify it atomically replaces only the existing owned table, is retained on commit, and restores the exact prior table on readiness, convergence, or state failure.
 - [x] 5.10 Preserve the unique most-specific main-table route to the public Gateway endpoint when compiling the Node recovery table, with the best default only as fallback; verify explicit host-route selection and ambiguous/invalid fail-closed behavior.
+- [x] 5.11 Retry the complete unchanged joined-Node routing and FRP readiness contract inside the fixed 20-second activation bound before publishing active convergence; verify a transient post-start failure converges while persistent failure retains activation-pending and fail-closed state.
 
 ## 6. Complete the no-VM verification checkpoint
 

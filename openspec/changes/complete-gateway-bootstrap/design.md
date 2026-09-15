@@ -240,6 +240,14 @@ transient WireGuard/routing-guard ordering race without skipping the failed
 unit; exhaustion retains the existing activation-pending, fail-closed result
 instead of claiming a successful join.
 
+After all units report active, the activator retries the complete unchanged
+routing-and-FRP readiness check within the same fixed 20-second bound before
+publishing the active convergence generation. This closes the remaining
+`Type=simple` post-start race without weakening any readiness invariant. If
+the bound expires, authoritative Node assignment and the fail-closed runtime
+remain intact, active convergence is not published, and repair remains the
+explicit recovery path.
+
 The recovery-table route for the public Gateway endpoint is derived from the
 unique route Linux would use in the unmodified main table. Longest-prefix match
 precedes metric, with the best default used only when no more-specific route

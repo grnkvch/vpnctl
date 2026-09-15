@@ -87,6 +87,40 @@ func TestNodeConfigurationActivatorRetriesTransientSystemdStartFailure(t *testin
 	}
 }
 
+func TestNodeConfigurationActivatorRetriesTransientCompleteReadinessFailure(t *testing.T) {
+	configuration := compiledNodeActivationFixture(t)
+	readiness := &nodeActivationReadiness{failures: 1}
+	activator, err := NewNodeConfigurationActivator(
+		"/usr/local/bin/vpnctl", &nodeActivationInstaller{}, &nodeActivationRunner{}, readiness,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activator.retryWait = func(context.Context, time.Duration) error { return nil }
+	if err := activator.Activate(context.Background(), configuration); err != nil {
+		t.Fatalf("Activate() transient complete readiness failure = %v", err)
+	}
+	if readiness.calls != 2 {
+		t.Fatalf("complete readiness calls = %d, want 2", readiness.calls)
+	}
+}
+
+func TestNodeConfigurationActivatorBoundsPersistentCompleteReadinessFailure(t *testing.T) {
+	configuration := compiledNodeActivationFixture(t)
+	readiness := &nodeActivationReadiness{err: errors.New("not-ready")}
+	activator, err := NewNodeConfigurationActivator(
+		"/usr/local/bin/vpnctl", &nodeActivationInstaller{}, &nodeActivationRunner{}, readiness,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activator.unitTimeout = time.Nanosecond
+	err = activator.Activate(context.Background(), configuration)
+	if !errors.Is(err, ErrNodeActivationPending) || !strings.Contains(err.Error(), "not-ready") {
+		t.Fatalf("Activate() persistent complete readiness failure = %v", err)
+	}
+}
+
 func compiledNodeActivationFixture(t *testing.T) NodeConfiguration {
 	return compiledNodeActivationFixtureFor(t, model.TransportRestricted)
 }
@@ -156,11 +190,20 @@ func (runner *nodeActivationRunner) Run(_ context.Context, command linuxplatform
 type nodeActivationReadiness struct {
 	calls      int
 	generation uint64
+	failures   int
+	err        error
 }
 
 func (readiness *nodeActivationReadiness) Check(_ context.Context, configuration NodeConfiguration) error {
 	readiness.calls++
 	readiness.generation = configuration.StateGeneration()
+	if readiness.failures > 0 {
+		readiness.failures--
+		return errors.New("transient-not-ready")
+	}
+	if readiness.err != nil {
+		return readiness.err
+	}
 	if configuration.TunnelCandidate().Descriptor().Provider != tunnel.FRPProviderName {
 		return errors.New("unexpected tunnel provider")
 	}

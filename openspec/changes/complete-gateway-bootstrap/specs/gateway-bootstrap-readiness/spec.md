@@ -164,6 +164,11 @@ shared private runtime directory through systemd and the local activator SHALL
 retry the current unit's start/readiness for no more than 20 seconds before
 advancing. Exhaustion MUST retain activation-pending semantics and MUST NOT
 disable the fail-closed routing boundary.
+After all units report active, the activator SHALL retry the complete unchanged
+Node routing and FRP readiness contract for no more than the same fixed
+20-second bound before publishing the active convergence generation. A failed
+or exhausted check MUST retain activation-pending semantics and MUST NOT
+publish an active baseline for an unverified runtime.
 The Node recovery table SHALL preserve the unique most-specific usable
 main-table route to the public Gateway IPv4 endpoint, using the unique
 best-metric default only as a fallback. Equal-priority ambiguity or an invalid
@@ -192,6 +197,10 @@ next hop MUST fail before local activation rather than guessing a route.
 #### Scenario: Node runtime or routing guard is transiently unavailable
 - **WHEN** a joined Node boots without a pre-existing `/run/vpnctl` directory or the routing guard's first start races the WireGuard interface
 - **THEN** systemd recreates the private runtime directory, activation retries that same unit within the fixed bound, and success is reported only after every required Node unit is active
+
+#### Scenario: Active Node services precede complete readiness
+- **WHEN** all joined Node units report active but the first complete routing or FRP readiness observation is not yet healthy
+- **THEN** activation retries the complete readiness contract inside the fixed 20-second bound and publishes active convergence only after an exact healthy result
 
 #### Scenario: Public Gateway has an explicit host route
 - **WHEN** the Node main table contains both a default route and a more-specific route to the public Gateway endpoint

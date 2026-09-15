@@ -96,10 +96,32 @@ func (activator *NodeConfigurationActivator) Activate(ctx context.Context, confi
 			return errors.Join(ErrNodeActivationPending, err)
 		}
 	}
-	if err := activator.readiness.Check(ctx, configuration); err != nil {
+	if err := activator.awaitReadiness(ctx, configuration); err != nil {
 		return errors.Join(ErrNodeActivationPending, fmt.Errorf("verify joined node service generation: %w", err))
 	}
 	return nil
+}
+
+func (activator *NodeConfigurationActivator) awaitReadiness(ctx context.Context, configuration NodeConfiguration) error {
+	if activator.unitTimeout <= 0 || activator.retryWait == nil {
+		return fmt.Errorf("node activation retry contract is invalid")
+	}
+	readinessContext, cancel := context.WithTimeout(ctx, activator.unitTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		if err := activator.readiness.Check(readinessContext, configuration); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if err := activator.retryWait(readinessContext, nodeActivationUnitRetryInterval); err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+			return fmt.Errorf("reach complete node readiness within %s: %w", activator.unitTimeout, lastErr)
+		}
+	}
 }
 
 func (activator *NodeConfigurationActivator) activateUnit(ctx context.Context, unit string) error {
