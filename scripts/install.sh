@@ -5,7 +5,7 @@ umask 077
 LC_ALL=C
 export LC_ALL
 
-repo="${VPNCTL_REPO:-vgrinkevich/vpnctl}"
+repo="${VPNCTL_REPO:-grnkvch/vpnctl}"
 version="${VPNCTL_VERSION:-latest}"
 binary_asset="vpnctl-linux-amd64"
 bundle_asset="vpnctl-v2-linux-amd64.bundle"

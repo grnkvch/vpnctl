@@ -212,6 +212,44 @@ func TestV2InstallerUsesHTTPSAndChecksumsWithoutReleaseSigning(t *testing.T) {
 	}
 }
 
+func TestV2DistributionRepositoryIsCanonical(t *testing.T) {
+	t.Parallel()
+	const repository = "grnkvch/vpnctl"
+	const oldRepository = "vgrinkevich/vpnctl"
+
+	installer, err := os.ReadFile(filepath.Join("..", "..", "scripts", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRepository := `repo="${VPNCTL_REPO:-` + repository + `}"`
+	if !strings.Contains(string(installer), defaultRepository) {
+		t.Fatalf("v2 installer does not default to canonical repository %q", repository)
+	}
+	if strings.Contains(string(installer), `repo="${VPNCTL_REPO:-`+oldRepository+`}"`) {
+		t.Fatalf("v2 installer still defaults to obsolete repository %q", oldRepository)
+	}
+
+	wantReleaseURL := "https://github.com/" + repository + "/releases"
+	if lifecycle.DefaultReleaseRepositoryURL != wantReleaseURL {
+		t.Fatalf("updater release repository = %q, want %q", lifecycle.DefaultReleaseRepositoryURL, wantReleaseURL)
+	}
+
+	wantInstallerURL := "https://raw.githubusercontent.com/" + repository + "/master/scripts/install.sh"
+	oldInstallerURL := "https://raw.githubusercontent.com/" + oldRepository + "/master/scripts/install.sh"
+	for _, relative := range []string{"README.md", filepath.Join("docs", "v2", "INSTALLATION.md")} {
+		content, err := os.ReadFile(filepath.Join("..", "..", relative))
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		if !strings.Contains(string(content), wantInstallerURL) {
+			t.Errorf("%s does not reference canonical installer URL %q", relative, wantInstallerURL)
+		}
+		if strings.Contains(string(content), oldInstallerURL) {
+			t.Errorf("%s still references obsolete installer URL %q", relative, oldInstallerURL)
+		}
+	}
+}
+
 func TestV2ReleaseScriptBuildsOnlyTheThreeChecksumGovernedAssets(t *testing.T) {
 	t.Parallel()
 	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "release.sh"))

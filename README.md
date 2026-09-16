@@ -33,13 +33,13 @@ After a v2 release is published, install its binary and retained bundle
 on each server:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/grnkvch/vpnctl/master/scripts/install.sh | sudo sh
 ```
 
 Install an explicit version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo VPNCTL_VERSION=v2.0.0 sh
+curl -fsSL https://raw.githubusercontent.com/grnkvch/vpnctl/master/scripts/install.sh | sudo VPNCTL_VERSION=v2.0.0 sh
 ```
 
 The bootstrap verifies canonical version, size, and SHA-256 metadata before

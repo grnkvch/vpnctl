@@ -37,13 +37,13 @@ and authentication checks.
 Run the installer as root on Ubuntu 24.04 amd64:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/grnkvch/vpnctl/master/scripts/install.sh | sudo sh
 ```
 
 For an explicit version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vgrinkevich/vpnctl/master/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/grnkvch/vpnctl/master/scripts/install.sh \
   | sudo VPNCTL_VERSION=v2.0.0 sh
 ```
 
