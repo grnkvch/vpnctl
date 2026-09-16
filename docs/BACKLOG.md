@@ -3,6 +3,12 @@
 This backlog records features and ideas that are intentionally not required for
 the first server-local MVP.
 
+Engineering workflow, agent guidance, release-gate orchestration, and local
+development infrastructure improvements are tracked separately in
+[`DEVELOPMENT_PROCESS_BACKLOG.md`](DEVELOPMENT_PROCESS_BACKLOG.md). Keeping
+them separate prevents product scope and process maintenance from obscuring
+each other.
+
 ## Future Features
 
 ### Remote SSH Apply
