@@ -174,7 +174,7 @@ func TestV2TunnelReleaseGateContract(t *testing.T) {
 	}
 	harness := readContractFile(t, harnessPath)
 	for _, required := range []string{
-		"release gate requires a clean source tree",
+		`v2_test_source_revision "release gate"`, "scripts/lib/v2-test-source.sh",
 		"assert_lab_instance", "assert_tunnel_fixture_absent", "assert_owned_path",
 		"TestFRPNativeConfigsWithPinnedBinaries",
 		"TestFRPNativeLoginUsesProductionAuthorizerAndEffectiveZeroPool",

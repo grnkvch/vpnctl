@@ -233,7 +233,7 @@ func TestV2CapacityE2EContract(t *testing.T) {
 
 	harness := readContractFile(t, filepath.Join(repositoryRoot, "scripts", "v2capacity-e2e.sh"))
 	for _, required := range []string{
-		"capacity E2E requires a clean source tree", "--requests 45 --delay-ms 3000",
+		`v2_test_source_revision "capacity E2E"`, "scripts/lib/v2-test-source.sh", "--requests 45 --delay-ms 3000",
 		"v2restricted-spike.sh\" prepare > \"$run_root/restricted-prepare.log\" 2>&1",
 		"v2tunnel-spike.sh\" prepare > \"$run_root/tunnel-prepare.log\" 2>&1",
 		"v2ingress-spike.sh\" prepare \"$gateway_ip\" > \"$run_root/ingress-prepare.log\" 2>&1",

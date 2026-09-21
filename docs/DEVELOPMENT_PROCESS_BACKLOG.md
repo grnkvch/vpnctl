@@ -21,10 +21,12 @@ not a full release cycle after each edit. Git SHA is optional provenance during
 development/discovery; changing a commit alone does not invalidate observations.
 Keep exact tested inputs and artifact checksums, failed attempts and cleanup.
 
-The [release-gate guide](v2/DEPLOYED_RELEASE_GATE.md) separates this workflow
-from the current strict final runner. Its commit/tree enforcement is not yet
-changed. No new fingerprint framework, journal migration or preflight system is
-required to use the development policy; those implementations remain deferred.
+The [release-gate guide](v2/DEPLOYED_RELEASE_GATE.md) documents the implemented
+`run-dev <stage>` entry: current working files, selected prerequisites, private
+content snapshots and non-release results, without requiring Git commits.
+The existing final runner's commit/tree enforcement remains strict. No new
+fingerprint framework, journal migration or preflight system is required;
+those larger implementations remain deferred.
 
 ## Working rules
 
@@ -140,6 +142,10 @@ host results and later documentation. Development/discovery does not require a
 frozen checkout or a commit before testing. This task is deferred tooling work,
 not a condition for starting discovery.
 
+The separate `run-dev` path now implements working-file execution and isolated
+development observations. This does not complete the final-candidate/operations
+migration described by the remaining deliverables below.
+
 Deliverables:
 
 - exact candidate artifacts and relevant source/helper/configuration inputs;
@@ -224,6 +230,9 @@ dependency fails before any VM starts.
 
 Deferred: do not build a caching/fingerprint framework to unblock ordinary
 development. First prove that a smaller change cannot remove the observed cost.
+The implemented `run-dev` path already removes commit prerequisites for selected
+development checks without automatic cross-run reuse. That is not completion
+of the remaining final-runner fingerprint work below.
 
 Move provider hashes, Go build targets, cache contracts, fixture roles,
 dependencies, and cleanup adapters into the versioned stage registry or a

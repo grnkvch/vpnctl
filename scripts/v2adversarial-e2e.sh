@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/adversarial-e2e"
 cache_root="$repository_root/artifacts/v2lab/cache"
@@ -317,11 +318,8 @@ verify() {
   local stamp source_commit control_evidence backup_evidence routing_evidence dns_evidence
   VPNCTL_V2_TIMING_PRODUCER=adversarial
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "adversarial E2E requires a clean source tree" >&2
-    exit 3
-  fi
-  source_commit=$(git rev-parse HEAD)
+  v2_test_source_revision "adversarial E2E" >/dev/null
+  source_commit=$(v2_test_source_revision)
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root="$artifact_root/run-$stamp"
   control_evidence="$run_root/control"

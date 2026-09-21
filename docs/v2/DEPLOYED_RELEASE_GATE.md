@@ -47,15 +47,60 @@ local/VPS acceptance without workarounds. Keep agreed real Telegram/iOS actions
 at the end and preserve their setup until then. Publication requires separate
 permission. None of these process rules grants external-operation authority.
 
-### Current automation boundary
+### Development execution
 
-This documentation-only change adds no new command or automatic cache. Existing
-release commands still enforce clean/same-commit and full-tree fingerprints,
-including for `--resume`; they cannot resume across commits. Run discovery
-through supported targeted checks and the authorized existing VPS plan, outside
-final gate evidence, without editing receipts or pretending a bypass is a pass.
-Use a strict-only command as a deliberate acceptance check when needed, not as
-an implicit prerequisite for the next independent discovery scenario.
+Run a selected registered stage directly from the current working files:
+
+```text
+scripts/v2deployed-release-gate.sh run-dev update-restore
+scripts/v2deployed-release-gate.sh run-dev node-transport
+scripts/v2deployed-release-gate.sh run-dev failure
+```
+
+`run-dev <stage>` requires an initialized Git repository for file inventory,
+but no commit (even the first), clean tree, fixed HEAD, prepared release
+candidate, or completed fast phase. It runs only the selected command and its
+registry prerequisites. For example, `failure` includes `tunnel-release` and
+`ingress-release`, not the entire gate. Capacity runs only when explicitly
+selected as `run-dev capacity`; it is never an implicit dependency.
+
+Each invocation creates a fresh private directory beneath
+`artifacts/v2lab/development-runs/`. It retains current tracked/untracked,
+non-ignored repository inputs from the explicit source, script, test, OpenSpec,
+documentation and Go-module roots in `inputs.tar`, plus their modes/checksums in
+`inputs.json`. Root-local files such as `bot_token`, ignored artifacts and Python
+bytecode caches are excluded. `input.json` identifies the selected commands and
+snapshot hashes. The runner compares the input manifest after execution;
+detected drift makes the overall observation non-passing. Do not edit the
+captured inputs while a check is running. This is a small provenance snapshot,
+not a hermetic build, per-stage cache or proof of an unchanged environment.
+Python 3 and the existing Git/jq/hash utilities are needed on the development host.
+
+Nested harnesses use a validated repository-scoped development context; their
+legacy `source_commit` field contains the literal `development`, never a fake
+Git SHA. Existing provider-archive checksums, fixture ownership/readiness,
+clean-state witnesses and cleanup remain required. Host-only stages never invoke
+Lima. VM stages still require authorized use of the exact stopped lab fixtures
+and restore them to Stopped on success, failure or handled interruption. This
+command neither connects to real VPS nor provisions/recreates the fixtures.
+
+`development.json` records `mode: development`, `source_commit: null`, status,
+exit code and `production_ready: false`. It does not create `candidate.json`,
+`automated.json` or `final-summary.json`. Retry a selected stage with a new
+`run-dev` invocation; there is no `--resume`, cross-run reuse or rewriting of
+earlier failed attempts. After safe cleanup, another independent stage can run
+without first fixing an unrelated failure. The selected harness may still build
+or run its own suites: this command removes the outer qualification prerequisite,
+not the actual work within that stage.
+
+### Final automation boundary
+
+Existing final release commands still enforce clean/same-commit and full-tree
+fingerprints, including for `--resume`; they cannot resume across commits.
+They discard inherited development context and reject development directories.
+Use them for explicit final qualification, not as an implicit prerequisite for
+the next independent discovery scenario. Preserve the separately authorized VPS
+plan; `run-dev` is not a replacement for its real-host or manual checks.
 
 Reducing the final runner's Git coupling is deferred implementation work in
 [PROC-002/GATE-002](../DEVELOPMENT_PROCESS_BACKLOG.md), not a prerequisite for

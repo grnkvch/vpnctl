@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 spike_script="$repository_root/scripts/v2ingress-spike.sh"
 fixture_root="$repository_root/test/v2lab/ingress"
@@ -224,7 +225,7 @@ validate_spike_summaries() {
 
 write_summary() {
   local source_commit harness_sha256
-  source_commit=$(git rev-parse HEAD)
+  source_commit=$(v2_test_source_revision)
   harness_sha256=$(shasum -a 256 "$evidence_dir/telegram-webhook-gate.py" | awk '{print $1}')
   jq -n \
     --arg source_commit "$source_commit" \
@@ -261,10 +262,7 @@ run_gate() {
   local instance public_ip
   VPNCTL_V2_TIMING_PRODUCER=ingress-release
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "ingress release gate requires a clean source tree" >&2
-    exit 3
-  fi
+  v2_test_source_revision "ingress release gate" >/dev/null
   for instance in "$gateway_instance" "$node_instance"; do
     assert_lab_instance "$instance"
   done

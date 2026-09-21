@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 fixture_root=$repository_root/test/v2lab/capacity
 manifest=$fixture_root/manifest.json
@@ -981,11 +982,8 @@ verify() {
   local stamp source_commit duration fault_after elapsed remaining step reconnect_status=0 load_status=0
   VPNCTL_V2_TIMING_PRODUCER=capacity
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "capacity E2E requires a clean source tree" >&2
-    exit 3
-  fi
-  source_commit=$(git rev-parse HEAD)
+  v2_test_source_revision "capacity E2E" >/dev/null
+  source_commit=$(v2_test_source_revision)
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root=$artifact_root/run-$stamp
   (umask 077; mkdir -p "$run_root")
