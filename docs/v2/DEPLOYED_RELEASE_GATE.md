@@ -1,9 +1,68 @@
 # Deployed-service v2.0 release gate
 
-Task 16.11 is the only gate that can turn the development candidate into a
-production-ready v2.0 release. It binds all evidence to the same clean Git commit
-and one explicit stable version. It does not weaken the earlier automated
-gates and it never labels or publishes a release.
+Task 16.11 qualifies a finalized development candidate as a production-ready
+v2.0 release. It is not the default development workflow and it never labels or
+publishes a release. The current gate implementation binds final evidence to
+the same clean Git commit and one explicit stable version; this implementation
+constraint does not apply to ordinary development or exploratory VPS checks.
+
+## Development/discovery is the default — approved 2026-09-21
+
+Follow the repository [working rules](../../AGENTS.md). Until final acceptance
+is explicitly started, aim for a working end-to-end MVP and early discovery of
+material blockers, not a fully green qualification run after every edit.
+
+- Exercise the available end-to-end path, including an authorized early VPS
+  pass, before polishing isolated failures. Local gate completion is not an
+  automatic prerequisite for exploratory VPS work. Verify ownership, recovery
+  access, necessary backups and a safe starting state first.
+- Stage numbering is not a strict execution order. Respect actual dependencies,
+  safety/cleanup boundaries and separately agreed manual or publication gates;
+  continue independent safe scenarios after a nonblocking failure. Record
+  dependent scenarios as BLOCKED, not PASS.
+- Fix immediately only a safety/data/recovery threat or a blocker preventing a
+  substantial part of the path. Otherwise retain observations, classify them
+  as product, fixture, environment, orchestration or unknown, and group fixes
+  after the discovery pass. Deferred scope stays in the backlog; only agreed
+  deferred cases are SKIP. No result is made green by changing its label.
+- Git commit/hash is optional provenance for discovery, not a run prerequisite
+  or a result-validity key. A clean tree, a new commit, a frozen worktree and an
+  unchanged HEAD are not required merely to continue development. Keep a small
+  record of the scenario, outcome, actual input artifacts/helper/configuration
+  and relevant environment; retain artifact checksums and a source patch or
+  snapshot when testing modified source. A binary checksum alone does not
+  identify a changed test oracle.
+- Review the impact of each correction and repeat affected checks. A new Git
+  SHA, branch, journal entry or documentation edit alone does not require a new
+  build, fixture or full rerun. Changes to the product, test predicates/helpers,
+  configuration, dependencies or environment can invalidate affected results;
+  unknown input equivalence cannot establish reuse.
+- Keep original failures and input identities. Workarounds/hot-swaps are useful
+  discovery observations when labelled and safely cleaned up, but do not
+  establish the final product happy-path. Discovery coverage and release
+  readiness are separate statuses in the existing checklist, not new trackers.
+
+After the grouped fixes, freeze the final candidate and complete all mandatory
+local/VPS acceptance without workarounds. Keep agreed real Telegram/iOS actions
+at the end and preserve their setup until then. Publication requires separate
+permission. None of these process rules grants external-operation authority.
+
+### Current automation boundary
+
+This documentation-only change adds no new command or automatic cache. Existing
+release commands still enforce clean/same-commit and full-tree fingerprints,
+including for `--resume`; they cannot resume across commits. Run discovery
+through supported targeted checks and the authorized existing VPS plan, outside
+final gate evidence, without editing receipts or pretending a bypass is a pass.
+Use a strict-only command as a deliberate acceptance check when needed, not as
+an implicit prerequisite for the next independent discovery scenario.
+
+Reducing the final runner's Git coupling is deferred implementation work in
+[PROC-002/GATE-002](../DEVELOPMENT_PROCESS_BACKLOG.md), not a prerequisite for
+discovery and not a claim that current scripts already use per-stage inputs.
+OpenSpec release requirements and sealed evidence formats remain unchanged.
+
+## Final acceptance workflow
 
 The gate intentionally exposes separate preparation, mandatory execution,
 on-demand capacity, status, and finalization commands:
@@ -30,9 +89,10 @@ scripts/v2gateway-enrollment-e2e.sh verify <absolute-release-assets-directory>
 That development check proves clean no-nginx Gateway bootstrap, public Node
 join, selected traffic and missing-ingress repair on the fixed stopped Lima
 pair. It is not a release-gate stage, cannot resume, does not write or satisfy
-`automated.json`, and never runs capacity or migration. If it fails, remain in
-that focused loop; do not create a new general evidence directory merely to
-debug its immediate cause.
+`automated.json`, and never runs capacity or migration. A failure prevents final
+qualification, not independent safe discovery. Diagnose the affected path and
+retain the failure; do not start a new full gate merely to debug it or remain
+in an unbounded fix-and-rerun loop before the first end-to-end observations.
 
 `prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
 server. `run-fast` executes the host-only checks without resolving, inspecting,
@@ -94,8 +154,9 @@ scripts/v2deployed-release-gate.sh run-fast --resume <absolute-evidence-director
 scripts/v2deployed-release-gate.sh run-vm --resume <absolute-evidence-directory>
 ```
 
-Resume validates the complete attempt ledger and reuses a passing result only
-when the source commit, release version, stage command contract, tracked-input
+The current final-gate resume implementation validates the complete attempt
+ledger and reuses a passing result only when the source commit, release version,
+stage command contract, tracked-input
 SHA-256, and required Lima image digest still match. The tracked-input digest
 is intentionally conservative: it covers the complete Git tree, including all
 relevant scripts, fixtures, configuration, specs, and tests. A mismatching,
