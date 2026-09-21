@@ -7,4 +7,4 @@
 ## 2. Verification and handoff
 
 - [x] 2.1 Cover HEAD changes, input drift, invalid selection and immutable earlier observations; run focused development/final gate regression tests and shell syntax checks.
-- [ ] 2.2 Update AGENTS, release guide and backlog to describe implemented behavior and limitations; validate OpenSpec, review the scoped diff and update PR #1.
+- [x] 2.2 Update AGENTS, release guide and backlog to describe implemented behavior and limitations; validate OpenSpec, review the scoped diff and update PR #1.
