@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 artifact_root="$repository_root/artifacts/v2lab/failure-e2e"
 cache_root="$repository_root/artifacts/v2lab/cache"
@@ -282,11 +283,8 @@ verify() {
   local stamp source_commit tunnel_evidence ingress_evidence
   VPNCTL_V2_TIMING_PRODUCER=failure-full
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "failure E2E requires a clean source tree" >&2
-    exit 3
-  fi
-  source_commit=$(git rev-parse HEAD)
+  v2_test_source_revision "failure E2E" >/dev/null
+  source_commit=$(v2_test_source_revision)
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root="$artifact_root/run-$stamp"
   tunnel_evidence="$repository_root/artifacts/v2lab/tunnel-release-gate/task-16.6-$stamp"
@@ -346,6 +344,9 @@ validated_dependency_summary() {
   local result=$1 expected_sha=$2 expected_stage=$3 source_commit=$4 actual_sha summary summary_sha
   case "$result" in
     "$repository_root"/artifacts/v2lab/deployed-release-gate/*/automated-attempts/"$expected_stage"/attempt-[0-9][0-9][0-9][0-9]/result.json) ;;
+    "${VPNCTL_V2_DEVELOPMENT_RUN:-}"/automated-attempts/"$expected_stage"/attempt-[0-9][0-9][0-9][0-9]/result.json)
+      [ "$source_commit" = development ] || { echo "development dependency requires a development context" >&2; return 3; }
+      ;;
     *) echo "failure dependency is outside its canonical attempt ledger: $expected_stage" >&2; return 3 ;;
   esac
   [ -f "$result" ] && [ ! -L "$result" ] && [ "$(path_mode "$result")" = 400 ] && \
@@ -377,11 +378,8 @@ verify_dependencies() {
   local tunnel_result=$1 tunnel_sha=$2 ingress_result=$3 ingress_sha=$4 source_commit stamp tunnel_summary ingress_summary
   VPNCTL_V2_TIMING_PRODUCER=failure-dependencies
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "failure E2E requires a clean source tree" >&2
-    exit 3
-  fi
-  source_commit=$(git rev-parse HEAD)
+  v2_test_source_revision "failure E2E" >/dev/null
+  source_commit=$(v2_test_source_revision)
   tunnel_summary=$(validated_dependency_summary "$tunnel_result" "$tunnel_sha" tunnel-release "$source_commit")
   ingress_summary=$(validated_dependency_summary "$ingress_result" "$ingress_sha" ingress-release "$source_commit")
   [ "$(jq -er '.release_version' "$tunnel_result")" = "$(jq -er '.release_version' "$ingress_result")" ] || {

@@ -8,8 +8,25 @@ infrastructure. It is intentionally separate from the product backlog in
 The baseline for this list is the completed `complete-gateway-bootstrap`
 candidate `04cb94c371ba44a7f4a51b63d6705468c06b27fa` and its passed 18-stage
 deployed release gate. These items do not change that candidate retroactively.
-Each item should be implemented as a bounded reviewed change after the current
-real-VPS rollout reaches an explicit pause or completion boundary.
+These are optional, separately scoped improvements, not an additional MVP or
+discovery gate. Choose work by an observed current cost or risk, not merely its
+presence in this backlog. Avoid disturbing an active rollout.
+
+## Process decision — 2026-09-21
+
+The root [AGENTS.md](../AGENTS.md) defines development/discovery as the default:
+cover the available end-to-end path, retain independent failures, then group
+nonblocking fixes. Use targeted regressions and explicit final qualification,
+not a full release cycle after each edit. Git SHA is optional provenance during
+development/discovery; changing a commit alone does not invalidate observations.
+Keep exact tested inputs and artifact checksums, failed attempts and cleanup.
+
+The [release-gate guide](v2/DEPLOYED_RELEASE_GATE.md) documents the implemented
+`run-dev <stage>` entry: current working files, selected prerequisites, private
+content snapshots and non-release results, without requiring Git commits.
+The existing final runner's commit/tree enforcement remains strict. No new
+fingerprint framework, journal migration or preflight system is required;
+those larger implementations remain deferred.
 
 ## Working rules
 
@@ -21,9 +38,10 @@ real-VPS rollout reaches an explicit pause or completion boundary.
   make a new workflow appear cleaner.
 - Prefer an automated invariant in a script or test over duplicating detailed
   shell instructions in `AGENTS.md`.
-- A process change is complete only when its documentation, deterministic
-  verification, migration boundary, and rollback or compatibility behavior are
-  all explicit.
+- Verify process changes in proportion to their impact: documentation needs
+  diff, link and consistency review; runtime/evidence tooling also needs focused
+  tests and explicit compatibility/rollback boundaries. Do not require a VM
+  run or new infrastructure to finish a documentation-only rule.
 
 ## Priority order
 
@@ -31,7 +49,7 @@ real-VPS rollout reaches an explicit pause or completion boundary.
 | --- | --- | --- | --- |
 | `REL-001` | P0 | Canonical release repository and distribution endpoints | release/docs/tests |
 | `REL-002` | P0 | Publication-tool and remote-state preflight | release tooling |
-| `PROC-001` | P1 | Root `AGENTS.md` and authority map | repository guidance |
+| `PROC-001` | P1 | ~~Root `AGENTS.md` and authority map~~ — completed | repository guidance |
 | `PROC-002` | P1 | Candidate and operations workspace separation | Git/evidence contract |
 | `PROC-003` | P1 | Host-journal archival and compact active ledger | documentation/evidence |
 | `GATE-001` | P1 | Hermetic VM release-gate plan and preflight | gate orchestration |
@@ -44,10 +62,10 @@ real-VPS rollout reaches an explicit pause or completion boundary.
 | `TOOL-002` | P2 | Owner-safe cache cleanup and no-write validation | helper/test |
 | `PROC-005` | P2 | Bounded output and long-operation status protocol | guidance/skill |
 
-P0 items are release-readiness defects and must be resolved before public
-release publication. P1 items should be addressed before the next large
-candidate cycle. P2 items improve reliability and feedback cost but do not
-block the current controlled VPS rollout by themselves.
+Unresolved P0 release-readiness defects must be resolved before publication.
+P1/P2 express relative priority, not deadlines or mandatory prerequisites for
+the next candidate cycle. Schedule them only when their benefit justifies the
+cost; neither class blocks an authorized discovery pass by itself.
 
 ## Release readiness
 
@@ -99,6 +117,13 @@ one can prove the complete remote pre-state without mutation.
 
 ### PROC-001 — Root `AGENTS.md` and authority map
 
+Status: completed 2026-09-21 in the separately authorized documentation task.
+The root [AGENTS.md](../AGENTS.md) supplies the authority map and stable safety,
+discovery-versus-acceptance, nonblocking-failure, candidate and journal rules.
+Document/link review is the verification; no new agent session, product test,
+VM/VPS action or journal migration is claimed. `PROC-002` through `PROC-005`
+retain their separate implementation/verification requirements.
+
 Create a concise root `AGENTS.md` containing only stable repository rules:
 worktree safety, test escalation, candidate identity, host/VM ownership,
 evidence and secret handling, communication cadence, and stopping conditions.
@@ -112,20 +137,27 @@ transcripts, and a review finds no dynamic project state in the file.
 
 ### PROC-002 — Candidate and operations workspace separation
 
-Define a workflow in which the frozen source candidate remains read-only while
-operation plans, evidence, host results, and later documentation continue to
-evolve.
+For final qualification, separate immutable tested inputs from operation plans,
+host results and later documentation. Development/discovery does not require a
+frozen checkout or a commit before testing. This task is deferred tooling work,
+not a condition for starting discovery.
+
+The separate `run-dev` path now implements working-file execution and isolated
+development observations. This does not complete the final-candidate/operations
+migration described by the remaining deliverables below.
 
 Deliverables:
 
-- exact candidate commit and tree fingerprint;
-- dedicated candidate checkout/worktree;
+- exact candidate artifacts and relevant source/helper/configuration inputs;
+  Git commit/tree hashes may be retained as provenance, not the sole validity key;
+- a dedicated candidate checkout/worktree when needed for final qualification;
 - run-local pre/post operation record inside the evidence directory;
 - optional separate operations worktree when tracked pre-entries are required;
-- explicit rule that a later metadata commit is not the tested source
-  candidate;
-- tooling that refuses to run a candidate gate from a dirty or mismatched
-  checkout without deleting user changes.
+- later metadata commits must not relabel evidence or invalidate unchanged
+  tested inputs solely because HEAD moved;
+- tooling that detects drift in actual tested inputs without deleting user
+  changes or rejecting an unrelated documentation edit. The existing strict
+  final runner remains unchanged until this is implemented and verified.
 
 Done when release evidence, operational records, and tracked summaries can all
 advance without split-brain paths or mutation of the frozen checkout.
@@ -196,14 +228,31 @@ dependency fails before any VM starts.
 
 ### GATE-002 — Declarative stage prerequisites and fingerprints
 
+Deferred: do not build a caching/fingerprint framework to unblock ordinary
+development. First prove that a smaller change cannot remove the observed cost.
+The implemented `run-dev` path already removes commit prerequisites for selected
+development checks without automatic cross-run reuse. That is not completion
+of the remaining final-runner fingerprint work below.
+
 Move provider hashes, Go build targets, cache contracts, fixture roles,
 dependencies, and cleanup adapters into the versioned stage registry or a
 referenced manifest. A prerequisite or command change must alter the stage
 contract fingerprint and invalidate incompatible reuse.
 
+Target identity is the actual per-stage inputs, not HEAD or the complete Git
+tree. Git commit hashes should be optional provenance rather than independent
+reuse blockers. Preserve exact product assets, test oracle/helper/configuration,
+dependency/environment inputs and original failed attempts. Identical product
+binaries do not permit reuse after a relevant test predicate changed: rerun
+that predicate and its consumers. Missing input equivalence cannot establish
+reuse. The final runner still enforces its existing same-source contract until
+a separately implemented and tested change updates code and OpenSpec together.
+
 Done when preflight derives its checks from the same versioned data used by
 execution, with regression coverage for fingerprint invalidation and no
-second hand-maintained prerequisite list.
+second hand-maintained prerequisite list. Include unchanged inputs under a new
+commit, unrelated docs-only edits, changed test predicates and missing input
+identity. Do not silently migrate or relabel old sealed receipts.
 
 ### GATE-003 — Fixture baseline and package-actor guard
 
@@ -261,14 +310,16 @@ explicit owner-scoped directory.
 Done when read-only checks create no unexpected files and a deliberately
 read-only Go module cache can be removed without broad permissions or globs.
 
-## Suggested implementation sequence
+## Optional implementation order
 
-After the real-VPS rollout reaches a safe boundary:
+This is a menu for separately selected work after a safe boundary, not a
+waterfall the product must finish before continuing:
 
 1. Complete `REL-001` and `REL-002` if they were not already resolved as
    release blockers.
-2. Implement `PROC-001`, `PROC-002`, and `PROC-003` together as one reviewed
-   documentation/evidence-boundary change.
+2. `PROC-001` is complete. Select the remaining `PROC-002` or `PROC-003` only
+   when their evidence/journal work is justified; guidance creation does not
+   make those migrations complete.
 3. Implement `GATE-001`, `GATE-002`, and `GATE-003` through a dedicated
    OpenSpec change with deterministic fixtures.
 4. Implement `REL-003` and `REL-004` as a release-tooling change.

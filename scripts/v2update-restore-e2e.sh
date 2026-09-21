@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 artifact_root="$repository_root/artifacts/v2lab/update-restore-e2e"
 
 usage() {
@@ -26,11 +27,8 @@ assert_tests_passed() {
 
 verify() {
   local stamp run_root source_commit
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "update/restore E2E requires a clean source tree" >&2
-    exit 3
-  fi
-  source_commit=$(git rev-parse HEAD)
+  v2_test_source_revision "update/restore E2E" >/dev/null
+  source_commit=$(v2_test_source_revision)
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_root="$artifact_root/run-$stamp"
   if [ -e "$run_root" ]; then

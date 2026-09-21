@@ -663,6 +663,8 @@ func newDeployedGateFixture(t *testing.T) deployedGateFixture {
 	copyTestFile(t, filepath.Join("..", "..", "test", "v2lab", "deployed-release-gate", "deployment.example.json"), filepath.Join(repository, "test", "v2lab", "deployed-release-gate", "deployment.example.json"), 0o644)
 	copyTestFile(t, filepath.Join("..", "..", "test", "v2lab", "deployed-release-gate", "clash-mi.example.json"), filepath.Join(repository, "test", "v2lab", "deployed-release-gate", "clash-mi.example.json"), 0o644)
 	for _, path := range []string{
+		"scripts/lib/v2-dev-inputs.py",
+		"scripts/lib/v2-test-source.sh",
 		"test/v2lab/fixtures.json",
 		"test/v2lab/lima.yaml",
 		"test/v2lab/lima-node.yaml",

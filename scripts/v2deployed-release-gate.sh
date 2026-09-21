@@ -47,12 +47,15 @@ current_short_commit=
 current_run_id=
 current_attempt_name=
 current_attempt_directory=
+development_stage=
+development_stages=
 
 cd "$repository_root"
 
 usage() {
   cat <<'EOF'
 Usage:
+  scripts/v2deployed-release-gate.sh run-dev <stage>
   scripts/v2deployed-release-gate.sh prepare <vMAJOR.MINOR.PATCH> [evidence-directory]
   scripts/v2deployed-release-gate.sh run-fast <evidence-directory>
   scripts/v2deployed-release-gate.sh run-fast --resume <evidence-directory>
@@ -66,8 +69,10 @@ Usage:
   scripts/v2deployed-release-gate.sh finalize <evidence-directory> <absolute-release-assets-directory>
 
 prepare/status/finalize never contact Telegram or mutate a deployed server.
+run-dev runs one registered stage and its prerequisites from working files, without a commit.
+Its separate development evidence cannot qualify a release; no cross-run resume is performed.
 run-fast runs host-only checks and never invokes Lima. run-vm runs mandatory Lima checks.
-run-automated composes both mandatory phases. Capacity runs only through explicit run-capacity.
+run-automated composes both mandatory phases. Capacity requires run-capacity or run-dev capacity.
 Every VM invocation restores the exact fixtures to Stopped.
 Real Clash Mi and Telegram evidence is collected manually as documented in
 docs/v2/DEPLOYED_RELEASE_GATE.md.
@@ -482,12 +487,120 @@ execute_stage() {
   command=$(render_stage_command "$stage" "$attempt")
   [ "$stage" = go-race ] && cache=/private/tmp/vpnctl-go-race-cache
   [ "$stage" = go-vet ] && cache=/private/tmp/vpnctl-go-vet-cache
+  local development_context=
+  if [ "$current_gate_command" = run-dev ]; then development_context=$evidence_dir; fi
   if stage_uses_lima "$stage"; then
     env GOCACHE="$cache" VPNCTL_V2_TIMING_OUTPUT="$current_attempt_directory/child-timing.json" \
+      VPNCTL_V2_DEVELOPMENT_RUN="$development_context" \
       VPNCTL_V2_SHARED_LIMA_SESSION=true bash -c "cd \"$repository_root\" && $command"
   else
     env -u VPNCTL_V2_TIMING_OUTPUT -u VPNCTL_V2_SHARED_LIMA_SESSION GOCACHE="$cache" \
+      VPNCTL_V2_DEVELOPMENT_RUN="$development_context" \
       bash -c "cd \"$repository_root\" && $command"
+  fi
+}
+
+print_continue_command() {
+  if [ "$current_gate_command" = run-dev ]; then
+    printf 'continue with a new observation: scripts/v2deployed-release-gate.sh run-dev %s\n' "$development_stage" >&2
+  else
+    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+  fi
+}
+
+install_development_traps() {
+  trap 'finish_development_run $?' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+clear_fixture_traps() {
+  trap - EXIT INT TERM
+  if [ "$current_gate_command" = run-dev ]; then install_development_traps; fi
+}
+
+development_dependencies() {
+  local stage=$1 dependency
+  case " $development_stages " in *" $stage "*) return 0 ;; esac
+  for dependency in $(stage_record "$stage" | jq -r '.dependencies[]'); do
+    development_dependencies "$dependency"
+  done
+  development_stages="${development_stages:+$development_stages }$stage"
+}
+
+finish_development_run() {
+  local exit_status=$1 inputs_unchanged=false status=failed
+  trap - EXIT INT TERM
+  set +e
+  if python3 "$evidence_dir/capture-inputs.py" "$repository_root" "$evidence_dir/inputs-after.json" &&
+     cmp -s "$evidence_dir/inputs.json" "$evidence_dir/inputs-after.json" &&
+     [ "$(sha256_file "$evidence_dir/inputs.json")" = "$current_source_tree_sha256" ] &&
+     [ "$(sha256_file "$evidence_dir/inputs.tar")" = "$(jq -r '.snapshot_sha256' "$evidence_dir/input.json")" ]; then
+    inputs_unchanged=true
+  else
+    echo "development inputs changed or could not be verified; observation is non-passing" >&2
+    [ "$exit_status" -ne 0 ] || exit_status=3
+  fi
+  [ "$exit_status" -eq 0 ] && status=passed
+  jq -n --arg status "$status" --arg stage "$development_stage" \
+    --argjson exit_code "$exit_status" --argjson unchanged "$inputs_unchanged" \
+    --arg input_sha "$(sha256_file "$evidence_dir/input.json")" \
+    --arg finished_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{
+      schema_version:1,mode:"development",production_ready:false,source_commit:null,
+      stage:$stage,status:$status,exit_code:$exit_code,inputs_unchanged:$unchanged,
+      input_sha256:$input_sha,finished_at:$finished_at
+    }' > "$evidence_dir/development.json" || exit_status=3
+  chmod 0400 "$evidence_dir/development.json" "$evidence_dir/inputs-after.json" 2>/dev/null || exit_status=3
+  printf 'development observation (%s, not release evidence): %s/development.json\n' "$status" "$evidence_dir"
+  exit "$exit_status"
+}
+
+run_development_stage() {
+  development_stage=$1
+  if ! stage_record "$development_stage" >/dev/null; then
+    echo "unknown development stage: $development_stage" >&2
+    return 2
+  fi
+  validate_stage_registry
+  development_dependencies "$development_stage"
+  local root="$repository_root/artifacts/v2lab/development-runs" stage commands
+  [ ! -L "$root" ] || { echo "development root must not be a symlink" >&2; return 3; }
+  mkdir -p "$root"
+  evidence_dir=$(mktemp -d "$root/run-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+  printf '%s\n' vpnctl-v2-development-run-v1 > "$evidence_dir/.owner"
+  mkdir "$evidence_dir/$attempts_directory_name" "$evidence_dir/$fixture_sessions_directory_name"
+  install -m 0400 "$repository_root/scripts/lib/v2-dev-inputs.py" "$evidence_dir/capture-inputs.py"
+  python3 "$evidence_dir/capture-inputs.py" "$repository_root" "$evidence_dir/inputs.json" "$evidence_dir/inputs.tar"
+  python3 "$evidence_dir/capture-inputs.py" "$repository_root" "$evidence_dir/inputs-check.json"
+  if ! cmp -s "$evidence_dir/inputs.json" "$evidence_dir/inputs-check.json"; then
+    echo "development inputs changed during snapshot; no stage started" >&2
+    return 3
+  fi
+  current_gate_command=run-dev
+  current_source_commit=development
+  current_release_version=development
+  current_short_commit=dev
+  current_source_tree_sha256=$(sha256_file "$evidence_dir/inputs.json")
+  current_run_id=$(basename -- "$evidence_dir")
+  commands=$(for stage in $development_stages; do stage_record "$stage"; done | jq -sc '.')
+  jq -n --arg repository "$repository_root" --arg stage "$development_stage" \
+    --arg inputs "$current_source_tree_sha256" --arg snapshot "$(sha256_file "$evidence_dir/inputs.tar")" \
+    --argjson commands "$commands" --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{
+      schema_version:1,mode:"development",production_ready:false,source_commit:null,
+      repository:$repository,stage:$stage,commands:$commands,started_at:$started_at,
+      inputs_sha256:$inputs,snapshot_sha256:$snapshot
+    }' > "$evidence_dir/input.json"
+  chmod 0400 "$evidence_dir/input.json" "$evidence_dir/inputs.json" "$evidence_dir/inputs.tar" "$evidence_dir/inputs-check.json"
+  install_development_traps
+  printf 'development stages: %s\ninputs and observations: %s\n' "$development_stages" "$evidence_dir"
+  if stage_uses_lima "$development_stage"; then
+    if [ "$development_stage" = capacity ]; then
+      run_vm_stages capacity "$development_stages"
+    else
+      run_vm_stages vm "$development_stages"
+    fi
+  else
+    for stage in $development_stages; do run_stage_attempt "$stage"; done
   fi
 }
 
@@ -899,7 +1012,7 @@ run_stage_attempt() {
   if [ "$exit_status" -ne 0 ]; then
     printf 'release gate stage failed: %s (%s)\n' "$stage" "$current_attempt_name" >&2
     printf 'inspect: %s/output.log\n' "$current_attempt_directory" >&2
-    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    print_continue_command
     return "$exit_status"
   fi
 }
@@ -1099,6 +1212,7 @@ cleanup_started_fixtures() {
   fi
   seal_fixture_session || cleanup_status=$?
   [ "$cleanup_status" -eq 0 ] || status=$cleanup_status
+  if [ "$current_gate_command" = run-dev ]; then finish_development_run "$status"; fi
   exit "$status"
 }
 
@@ -1130,7 +1244,7 @@ run_vm_stages() {
   if [ "$stage_status" -ne 0 ]; then
     printf 'release fixture startup failed: gateway/%s\n' "$gateway_instance" >&2
     printf 'inspect: %s\n' "$fixture_session_log" >&2
-    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    print_continue_command
     return "$stage_status"
   fi
   node_started=true
@@ -1148,7 +1262,7 @@ run_vm_stages() {
   if [ "$stage_status" -ne 0 ]; then
     printf 'release fixture startup failed: node/%s\n' "$node_instance" >&2
     printf 'inspect: %s\n' "$fixture_session_log" >&2
-    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    print_continue_command
     return "$stage_status"
   fi
   if install_session_helpers; then
@@ -1161,7 +1275,7 @@ run_vm_stages() {
   if [ "$stage_status" -ne 0 ]; then
     printf 'release fixture helper setup failed\n' >&2
     printf 'inspect: %s\n' "$fixture_session_log" >&2
-    printf 'continue: scripts/v2deployed-release-gate.sh %s --resume %s\n' "$current_gate_command" "$evidence_dir" >&2
+    print_continue_command
     return "$stage_status"
   fi
   current_post_witness_sha256=
@@ -1178,7 +1292,7 @@ run_vm_stages() {
       fi
       write_fixture_session_result "$stage_status" failed || cleanup_status=$?
       seal_fixture_session || cleanup_status=$?
-      trap - EXIT INT TERM
+      clear_fixture_traps
       [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
       return "$stage_status"
     fi
@@ -1193,7 +1307,7 @@ run_vm_stages() {
     write_fixture_session_result "$cleanup_status" failed || true
   fi
   seal_fixture_session || cleanup_status=$?
-  trap - EXIT INT TERM
+  clear_fixture_traps
   [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
 }
 
@@ -1630,7 +1744,13 @@ finalize_gate() {
 }
 
 command=${1:-}
+# A dev context can reach nested tests, but must never relax a final invocation.
+unset VPNCTL_V2_DEVELOPMENT_RUN
 case "$command" in
+  run-dev)
+    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+    run_development_stage "$2"
+    ;;
   prepare)
     [ "$#" -ge 2 ] && [ "$#" -le 3 ] || { usage >&2; exit 2; }
     prepare_gate "$2" "${3:-}"

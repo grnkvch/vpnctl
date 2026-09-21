@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$repository_root/scripts/lib/v2-test-source.sh"
 . "$repository_root/scripts/lib/v2-stage-timing.sh"
 spike_script="$repository_root/scripts/v2tunnel-spike.sh"
 restricted_script="$repository_root/scripts/v2restricted-spike.sh"
@@ -232,7 +233,7 @@ validate_spike_summary() {
 
 write_summary() {
   local source_commit
-  source_commit=$(git rev-parse HEAD)
+  source_commit=$(v2_test_source_revision)
   jq -n \
     --arg source_commit "$source_commit" \
     --arg archive_sha256 "$(manifest_value '.frp.sha256')" \
@@ -253,10 +254,7 @@ run_gate() {
   local instance port
   VPNCTL_V2_TIMING_PRODUCER=tunnel-release
   v2_timing_begin
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "release gate requires a clean source tree" >&2
-    exit 3
-  fi
+  v2_test_source_revision "release gate" >/dev/null
   for instance in "$gateway_instance" "$node_instance"; do
     assert_lab_instance "$instance"
   done

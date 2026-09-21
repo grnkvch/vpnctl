@@ -330,7 +330,7 @@ func TestV2IngressReleaseGateContract(t *testing.T) {
 	}
 	harness := readContractFile(t, harnessPath)
 	for _, required := range []string{
-		"ingress release gate requires a clean source tree", "assert_lab_instance", "assert_ingress_fixture_absent",
+		`v2_test_source_revision "ingress release gate"`, "scripts/lib/v2-test-source.sh", "assert_lab_instance", "assert_ingress_fixture_absent",
 		"TestNginxConfigParsesWithPinnedNginx", "TestNginxRuntimeDoesNotReplayNonIdempotentRequests",
 		"TestNginxProductionRuntimeRegression", "VPNCTL_NGINX_PRODUCTION_SUMMARY", "production-native.json",
 		"path_query_headers_body == true", ".safe_concurrent == 32", ".expose_accepted == 40",

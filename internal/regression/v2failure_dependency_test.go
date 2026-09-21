@@ -34,6 +34,49 @@ func TestV2FailureE2ERejectsTamperedDependencyHash(t *testing.T) {
 	}
 }
 
+func TestV2FailureE2EDevelopmentDependenciesRemainContentBound(t *testing.T) {
+	repository, fakeBin, tunnelResult, _, ingressResult, _ := newFailureDependencyFixture(t)
+	context := filepath.Join(repository, "artifacts", "v2lab", "development-runs", "run-test")
+	writeTestFile(t, filepath.Join(context, ".owner"), "vpnctl-v2-development-run-v1\n", 0o600)
+	writeTestFile(t, filepath.Join(context, "inputs.json"), "{\"schema_version\":1,\"files\":[]}\n", 0o400)
+	writeTestFile(t, filepath.Join(context, "inputs.tar"), strings.Repeat("\x00", 1024), 0o400)
+	writeJSONAny(t, filepath.Join(context, "input.json"), map[string]any{
+		"schema_version": 1, "mode": "development", "production_ready": false,
+		"repository": repository, "source_commit": nil,
+		"inputs_sha256":   fileSHA256(t, filepath.Join(context, "inputs.json")),
+		"snapshot_sha256": fileSHA256(t, filepath.Join(context, "inputs.tar")),
+	}, 0o400)
+	results := []string{}
+	for _, original := range []string{tunnelResult, ingressResult} {
+		result := readJSONObject(t, original)
+		result["source_commit"] = "development"
+		result["release_version"] = "development"
+		path := filepath.Join(context, "automated-attempts", result["stage"].(string), "attempt-0001", "result.json")
+		writeJSONAny(t, path, result, 0o400)
+		if err := os.Chmod(filepath.Dir(path), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, path)
+	}
+	writeTestFile(t, filepath.Join(repository, "uncommitted.txt"), "dirty source\n", 0o644)
+	command := exec.Command(filepath.Join(repository, "scripts", "v2failure-e2e.sh"),
+		"verify-dependencies", results[0], fileSHA256(t, results[0]), results[1], fileSHA256(t, results[1]))
+	command.Dir = repository
+	command.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VPNCTL_V2_DEVELOPMENT_RUN="+context)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("content-bound development dependencies: %v: %s", err, output)
+	}
+	command = exec.Command(filepath.Join(repository, "scripts", "v2failure-e2e.sh"),
+		"verify-dependencies", results[0], strings.Repeat("0", 64), results[1], fileSHA256(t, results[1]))
+	command.Dir = repository
+	command.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VPNCTL_V2_DEVELOPMENT_RUN="+context)
+	if output, err := command.CombinedOutput(); err == nil || !strings.Contains(string(output), "result hash mismatch") {
+		t.Fatalf("development accepted wrong artifact hash: %v: %s", err, output)
+	}
+}
+
 func TestV2FailureE2EStandaloneModeRetainsProviderCoverage(t *testing.T) {
 	t.Parallel()
 	script := readContractFile(t, filepath.Join("..", "..", "scripts", "v2failure-e2e.sh"))
@@ -144,6 +187,7 @@ func newFailureDependencyFixture(t *testing.T) (repository, fakeBin, tunnelResul
 	}
 	copyTestFile(t, filepath.Join("..", "..", "scripts", "v2failure-e2e.sh"), filepath.Join(repository, "scripts", "v2failure-e2e.sh"), 0o755)
 	copyTestFile(t, filepath.Join("..", "..", "scripts", "lib", "v2-stage-timing.sh"), filepath.Join(repository, "scripts", "lib", "v2-stage-timing.sh"), 0o644)
+	copyTestFile(t, filepath.Join("..", "..", "scripts", "lib", "v2-test-source.sh"), filepath.Join(repository, "scripts", "lib", "v2-test-source.sh"), 0o644)
 	writeTestFile(t, filepath.Join(repository, ".gitignore"), "artifacts/\n", 0o644)
 	writeTestFile(t, filepath.Join(fakeBin, "go"), failureDependencyFakeGo(), 0o755)
 	runGit := func(arguments ...string) {

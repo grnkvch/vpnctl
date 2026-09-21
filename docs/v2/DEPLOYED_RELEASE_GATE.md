@@ -1,9 +1,113 @@
 # Deployed-service v2.0 release gate
 
-Task 16.11 is the only gate that can turn the development candidate into a
-production-ready v2.0 release. It binds all evidence to the same clean Git commit
-and one explicit stable version. It does not weaken the earlier automated
-gates and it never labels or publishes a release.
+Task 16.11 qualifies a finalized development candidate as a production-ready
+v2.0 release. It is not the default development workflow and it never labels or
+publishes a release. The current gate implementation binds final evidence to
+the same clean Git commit and one explicit stable version; this implementation
+constraint does not apply to ordinary development or exploratory VPS checks.
+
+## Development/discovery is the default — approved 2026-09-21
+
+Follow the repository [working rules](../../AGENTS.md). Until final acceptance
+is explicitly started, aim for a working end-to-end MVP and early discovery of
+material blockers, not a fully green qualification run after every edit.
+
+- Exercise the available end-to-end path, including an authorized early VPS
+  pass, before polishing isolated failures. Local gate completion is not an
+  automatic prerequisite for exploratory VPS work. Verify ownership, recovery
+  access, necessary backups and a safe starting state first.
+- Stage numbering is not a strict execution order. Respect actual dependencies,
+  safety/cleanup boundaries and separately agreed manual or publication gates;
+  continue independent safe scenarios after a nonblocking failure. Record
+  dependent scenarios as BLOCKED, not PASS.
+- Fix immediately only a safety/data/recovery threat or a blocker preventing a
+  substantial part of the path. Otherwise retain observations, classify them
+  as product, fixture, environment, orchestration or unknown, and group fixes
+  after the discovery pass. Deferred scope stays in the backlog; only agreed
+  deferred cases are SKIP. No result is made green by changing its label.
+- Git commit/hash is optional provenance for discovery, not a run prerequisite
+  or a result-validity key. A clean tree, a new commit, a frozen worktree and an
+  unchanged HEAD are not required merely to continue development. Keep a small
+  record of the scenario, outcome, actual input artifacts/helper/configuration
+  and relevant environment; retain artifact checksums and a source patch or
+  snapshot when testing modified source. A binary checksum alone does not
+  identify a changed test oracle.
+- Review the impact of each correction and repeat affected checks. A new Git
+  SHA, branch, journal entry or documentation edit alone does not require a new
+  build, fixture or full rerun. Changes to the product, test predicates/helpers,
+  configuration, dependencies or environment can invalidate affected results;
+  unknown input equivalence cannot establish reuse.
+- Keep original failures and input identities. Workarounds/hot-swaps are useful
+  discovery observations when labelled and safely cleaned up, but do not
+  establish the final product happy-path. Discovery coverage and release
+  readiness are separate statuses in the existing checklist, not new trackers.
+
+After the grouped fixes, freeze the final candidate and complete all mandatory
+local/VPS acceptance without workarounds. Keep agreed real Telegram/iOS actions
+at the end and preserve their setup until then. Publication requires separate
+permission. None of these process rules grants external-operation authority.
+
+### Development execution
+
+Run a selected registered stage directly from the current working files:
+
+```text
+scripts/v2deployed-release-gate.sh run-dev update-restore
+scripts/v2deployed-release-gate.sh run-dev node-transport
+scripts/v2deployed-release-gate.sh run-dev failure
+```
+
+`run-dev <stage>` requires an initialized Git repository for file inventory,
+but no commit (even the first), clean tree, fixed HEAD, prepared release
+candidate, or completed fast phase. It runs only the selected command and its
+registry prerequisites. For example, `failure` includes `tunnel-release` and
+`ingress-release`, not the entire gate. Capacity runs only when explicitly
+selected as `run-dev capacity`; it is never an implicit dependency.
+
+Each invocation creates a fresh private directory beneath
+`artifacts/v2lab/development-runs/`. It retains current tracked/untracked,
+non-ignored repository inputs from the explicit source, script, test, OpenSpec,
+documentation and Go-module roots in `inputs.tar`, plus their modes/checksums in
+`inputs.json`. Root-local files such as `bot_token`, ignored artifacts and Python
+bytecode caches are excluded. `input.json` identifies the selected commands and
+snapshot hashes. The runner compares the input manifest after execution;
+detected drift makes the overall observation non-passing. Do not edit the
+captured inputs while a check is running. This is a small provenance snapshot,
+not a hermetic build, per-stage cache or proof of an unchanged environment.
+Python 3 and the existing Git/jq/hash utilities are needed on the development host.
+
+Nested harnesses use a validated repository-scoped development context; their
+legacy `source_commit` field contains the literal `development`, never a fake
+Git SHA. Existing provider-archive checksums, fixture ownership/readiness,
+clean-state witnesses and cleanup remain required. Host-only stages never invoke
+Lima. VM stages still require authorized use of the exact stopped lab fixtures
+and restore them to Stopped on success, failure or handled interruption. This
+command neither connects to real VPS nor provisions/recreates the fixtures.
+
+`development.json` records `mode: development`, `source_commit: null`, status,
+exit code and `production_ready: false`. It does not create `candidate.json`,
+`automated.json` or `final-summary.json`. Retry a selected stage with a new
+`run-dev` invocation; there is no `--resume`, cross-run reuse or rewriting of
+earlier failed attempts. After safe cleanup, another independent stage can run
+without first fixing an unrelated failure. The selected harness may still build
+or run its own suites: this command removes the outer qualification prerequisite,
+not the actual work within that stage.
+
+### Final automation boundary
+
+Existing final release commands still enforce clean/same-commit and full-tree
+fingerprints, including for `--resume`; they cannot resume across commits.
+They discard inherited development context and reject development directories.
+Use them for explicit final qualification, not as an implicit prerequisite for
+the next independent discovery scenario. Preserve the separately authorized VPS
+plan; `run-dev` is not a replacement for its real-host or manual checks.
+
+Reducing the final runner's Git coupling is deferred implementation work in
+[PROC-002/GATE-002](../DEVELOPMENT_PROCESS_BACKLOG.md), not a prerequisite for
+discovery and not a claim that current scripts already use per-stage inputs.
+OpenSpec release requirements and sealed evidence formats remain unchanged.
+
+## Final acceptance workflow
 
 The gate intentionally exposes separate preparation, mandatory execution,
 on-demand capacity, status, and finalization commands:
@@ -30,9 +134,10 @@ scripts/v2gateway-enrollment-e2e.sh verify <absolute-release-assets-directory>
 That development check proves clean no-nginx Gateway bootstrap, public Node
 join, selected traffic and missing-ingress repair on the fixed stopped Lima
 pair. It is not a release-gate stage, cannot resume, does not write or satisfy
-`automated.json`, and never runs capacity or migration. If it fails, remain in
-that focused loop; do not create a new general evidence directory merely to
-debug its immediate cause.
+`automated.json`, and never runs capacity or migration. A failure prevents final
+qualification, not independent safe discovery. Diagnose the affected path and
+retain the failure; do not start a new full gate merely to debug it or remain
+in an unbounded fix-and-rerun loop before the first end-to-end observations.
 
 `prepare`, `status`, and `finalize` do not contact Telegram and do not mutate a
 server. `run-fast` executes the host-only checks without resolving, inspecting,
@@ -94,8 +199,9 @@ scripts/v2deployed-release-gate.sh run-fast --resume <absolute-evidence-director
 scripts/v2deployed-release-gate.sh run-vm --resume <absolute-evidence-directory>
 ```
 
-Resume validates the complete attempt ledger and reuses a passing result only
-when the source commit, release version, stage command contract, tracked-input
+The current final-gate resume implementation validates the complete attempt
+ledger and reuses a passing result only when the source commit, release version,
+stage command contract, tracked-input
 SHA-256, and required Lima image digest still match. The tracked-input digest
 is intentionally conservative: it covers the complete Git tree, including all
 relevant scripts, fixtures, configuration, specs, and tests. A mismatching,
